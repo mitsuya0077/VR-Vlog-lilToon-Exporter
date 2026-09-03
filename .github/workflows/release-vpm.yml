@@ -1,0 +1,85 @@
+name: Release VPM Packages
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: Exporter version without the v prefix
+        required: true
+        default: 0.3.0
+      univrm_version:
+        description: Pinned UniVRM version
+        required: true
+        default: 0.131.0
+
+permissions:
+  contents: write
+  actions: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Verify versions
+        env:
+          EXPORTER_VERSION: ${{ inputs.version }}
+          UNIVRM_VERSION: ${{ inputs.univrm_version }}
+        run: |
+          python3 - <<'PY'
+          import json, os
+          package = json.load(open("package.json", encoding="utf-8"))
+          assert package["version"] == os.environ["EXPORTER_VERSION"]
+          assert os.environ["UNIVRM_VERSION"] == "0.131.0"
+          PY
+      - name: Build exporter package
+        env:
+          VERSION: ${{ inputs.version }}
+        run: |
+          mkdir -p artifacts/exporter
+          rsync -a --exclude .git --exclude artifacts --exclude Website --exclude source.json ./ artifacts/exporter/
+          (cd artifacts/exporter && zip -qr ../com.vrvlog.liltoon-vrm-exporter-${VERSION}.zip .)
+      - name: Build UniVRM dependency packages
+        env:
+          UNIVRM_VERSION: ${{ inputs.univrm_version }}
+          UNIVRM_COMMIT: 3b99078d26b362733ad9bf463f98c83b8a1b4c9f
+        run: |
+          curl --fail --location --retry 3 "https://github.com/vrm-c/UniVRM/archive/${UNIVRM_COMMIT}.tar.gz" -o /tmp/univrm.tar.gz
+          mkdir -p /tmp/univrm artifacts/unigltf artifacts/vrm10
+          tar -xzf /tmp/univrm.tar.gz -C /tmp/univrm --strip-components=1
+          rsync -a /tmp/univrm/Packages/UniGLTF/ artifacts/unigltf/
+          rsync -a /tmp/univrm/Packages/VRM10/ artifacts/vrm10/
+          cp /tmp/univrm/LICENSE.txt artifacts/unigltf/UPSTREAM-LICENSE.txt
+          cp /tmp/univrm/LICENSE.txt artifacts/vrm10/UPSTREAM-LICENSE.txt
+          python3 - <<'PY'
+          import json, os
+          gltf = json.load(open("artifacts/unigltf/package.json", encoding="utf-8-sig"))
+          vrm = json.load(open("artifacts/vrm10/package.json", encoding="utf-8-sig"))
+          assert gltf["name"] == "com.vrmc.gltf"
+          assert vrm["name"] == "com.vrmc.vrm"
+          assert gltf["version"] == os.environ["UNIVRM_VERSION"]
+          assert vrm["version"] == os.environ["UNIVRM_VERSION"]
+          assert vrm["dependencies"]["com.vrmc.gltf"] == os.environ["UNIVRM_VERSION"]
+          assert "com.vrmc.vrmshaders" not in gltf.get("dependencies", {})
+          assert "com.vrmc.vrmshaders" not in vrm.get("dependencies", {})
+          PY
+          (cd artifacts/unigltf && zip -qr ../com.vrmc.gltf-${UNIVRM_VERSION}.zip .)
+          (cd artifacts/vrm10 && zip -qr ../com.vrmc.vrm-${UNIVRM_VERSION}.zip .)
+      - name: Publish release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VERSION: ${{ inputs.version }}
+          UNIVRM_VERSION: ${{ inputs.univrm_version }}
+        run: |
+          if git ls-remote --exit-code --tags origin "refs/tags/v${VERSION}" >/dev/null 2>&1; then
+            echo "Refusing to publish: tag v${VERSION} already exists and is not owned by this run." >&2
+            exit 1
+          fi
+          gh release create "v${VERSION}" \
+            "artifacts/com.vrvlog.liltoon-vrm-exporter-${VERSION}.zip" \
+            "artifacts/com.vrmc.gltf-${UNIVRM_VERSION}.zip" \
+            "artifacts/com.vrmc.vrm-${UNIVRM_VERSION}.zip" \
+            --title "VR Vlog lilToon VRM Exporter ${VERSION}" \
+            --target "${GITHUB_SHA}" \
+            --notes "VPM release. Includes the exporter and unmodified UniVRM ${UNIVRM_VERSION} package contents with the upstream MIT license."
+          gh workflow run build-listing.yml --ref main

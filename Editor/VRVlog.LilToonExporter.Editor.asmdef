@@ -1,0 +1,9 @@
+{
+  "name": "VRVlog.LilToonExporter.Editor",
+  "rootNamespace": "VRVlog.LilToonExporter",
+  "references": ["UniGLTF", "UniGLTF.Editor", "VRM10", "VRM10.MToon10"],
+  "includePlatforms": ["Editor"],
+  "autoReferenced": true,
+  "overrideReferences": false,
+  "noEngineReferences": false
+}

@@ -1,0 +1,15 @@
+{
+  "name": "com.vrvlog.liltoon-vrm-exporter",
+  "version": "0.3.0",
+  "displayName": "VR Vlog lilToon VRM Exporter",
+  "description": "Exports a VRM 1.0 MToon fallback and validated lilToon extension in one step.",
+  "unity": "2022.3",
+  "keywords": ["vrm", "liltoon", "exporter", "vpm"],
+  "vpmDependencies": {
+    "com.vrmc.gltf": "0.131.x",
+    "com.vrmc.vrm": "0.131.x"
+  },
+  "author": {
+    "name": "VR Vlog"
+  }
+}

@@ -1,0 +1,17 @@
+{
+  "name": "VR Vlog Packages",
+  "id": "com.vrvlog.packages",
+  "url": "https://mitsuya0077.github.io/VR-Vlog-lilToon-Exporter/index.json",
+  "author": {
+    "name": "VR Vlog",
+    "url": "https://github.com/mitsuya0077/VR-Vlog-lilToon-Exporter"
+  },
+  "description": "VR Vlog avatar export tools and their tested dependencies.",
+  "infoLink": {
+    "url": "https://github.com/mitsuya0077/VR-Vlog-lilToon-Exporter",
+    "text": "Source and documentation"
+  },
+  "githubRepos": [
+    "mitsuya0077/VR-Vlog-lilToon-Exporter"
+  ]
+}
