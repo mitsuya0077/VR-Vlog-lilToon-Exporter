@@ -7,7 +7,7 @@ namespace VRVlog.LilToonExporter
     public sealed class LilToonExtensionRoot
     {
         public int schemaMajor = LilToonMobileProfile.SchemaMajor;
-        public int schemaMinor;
+        public int schemaMinor = LilToonMobileProfile.SchemaMinor;
         public string exporterVersion = "";
         public string sourceLilToonVersion = "";
         public List<LilToonMaterialRecord> materials = new List<LilToonMaterialRecord>();

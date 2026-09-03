@@ -6,14 +6,14 @@ namespace VRVlog.LilToonExporter
 {
     internal static class LilToonMaterialReader
     {
-        private static readonly string[] FloatNames = { "_Cutoff", "_ShadowStrength", "_ShadowBorder", "_ShadowBlur", "_BumpScale", "_EmissionBlend", "_RimBorder", "_RimBlur", "_RimFresnelPower", "_MatCapBlend", "_OutlineWidth", "_OutlineEnableLighting" };
-        private static readonly string[] ColorNames = { "_Color", "_ShadowColor", "_EmissionColor", "_RimColor", "_MatCapColor", "_OutlineColor" };
+        private static readonly string[] FloatNames = { "_Cutoff", "_ShadowStrength", "_ShadowBorder", "_ShadowBlur", "_BacklightMainStrength", "_BacklightNormalStrength", "_BacklightBorder", "_BacklightBlur", "_BacklightDirectivity", "_BacklightViewStrength", "_BacklightReceiveShadow", "_BacklightBackfaceMask", "_BumpScale", "_EmissionBlend", "_RimBorder", "_RimBlur", "_RimFresnelPower", "_MatCapBlend", "_OutlineWidth", "_OutlineEnableLighting" };
+        private static readonly string[] ColorNames = { "_Color", "_ShadowColor", "_BacklightColor", "_EmissionColor", "_RimColor", "_MatCapColor", "_OutlineColor" };
         private static readonly (string Name, string Semantic)[] TextureNames = {
             ("_MainTex", "mainColor"), ("_ShadowColorTex", "shadow"), ("_BumpMap", "normalMap"),
             ("_EmissionMap", "emission"), ("_RimColorTex", "rimLight"), ("_MatCapTex", "matCap"), ("_OutlineTex", "outline")
         };
         private static readonly string[] UnsupportedFeatureToggles = {
-            "_UseMain2ndTex", "_UseMain3rdTex", "_UseAnisotropy", "_UseBacklight",
+            "_UseMain2ndTex", "_UseMain3rdTex", "_UseAnisotropy",
             "_UseReflection", "_UseRefraction", "_UseFur", "_UseGem", "_UseAudioLink",
             "_UseDissolve", "_UseDistanceFade", "_UseGlitter", "_UseParallax", "_UseTessellation",
             "_UseEmission2nd", "_UseBump2ndMap", "_UseMatCap2nd", "_AlphaMaskMode"
@@ -27,12 +27,15 @@ namespace VRVlog.LilToonExporter
                 throw new NotSupportedException($"Unsupported lilToon shader: {material.shader.name}.");
             foreach (var toggle in UnsupportedFeatureToggles)
                 if (Enabled(material, toggle)) throw new NotSupportedException($"Unsupported enabled lilToon feature: {toggle}.");
+            if (Enabled(material, "_UseBacklight") && HasCustomBacklightTexture(material))
+                throw new NotSupportedException("バックライトのカスタム色テクスチャにはまだ対応していません。色と数値設定だけを使用してください。");
             var record = new LilToonMaterialRecord {
                 materialIndex = materialIndex, shaderFamily = family, renderMode = RenderMode(material),
                 renderQueue = material.renderQueue, cullMode = CullMode(material)
             };
             AddFeature(record, "mainColor", true);
             AddFeature(record, "shadow", Enabled(material, "_UseShadow"));
+            AddFeature(record, "backlight", Enabled(material, "_UseBacklight"));
             AddFeature(record, "normalMap", EnabledOrTexture(material, "_UseBumpMap", "_BumpMap"));
             AddFeature(record, "emission", EnabledOrTexture(material, "_UseEmission", "_EmissionMap"));
             AddFeature(record, "rimLight", Enabled(material, "_UseRim"));
@@ -66,6 +69,12 @@ namespace VRVlog.LilToonExporter
         private static bool Enabled(Material m, string p) => m.HasProperty(p) && m.GetFloat(p) > 0.5f;
         private static bool EnabledOrTexture(Material m, string enable, string texture) => m.HasProperty(enable) ? Enabled(m, enable) : HasTexture(m, texture);
         private static bool HasTexture(Material m, string p) => m.HasProperty(p) && m.GetTexture(p) != null;
+        private static bool HasCustomBacklightTexture(Material material)
+        {
+            if (!material.HasProperty("_BacklightColorTex")) return false;
+            var texture = material.GetTexture("_BacklightColorTex");
+            return texture != null && texture != Texture2D.whiteTexture;
+        }
         private static bool TextureFeatureEnabled(Material material, string semantic)
         {
             switch (semantic)

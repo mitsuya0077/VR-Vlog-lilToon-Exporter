@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.3.3
+
+- Added support for lilToon backlight color and numeric settings.
+- Added a portable MToon rim-light approximation for backlight.
+- Reject custom backlight color textures with a specific message instead of
+  silently dropping them.
+
 ## 0.3.2
 
 - Localized the exporter window and user-facing errors into Japanese.

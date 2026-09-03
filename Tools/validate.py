@@ -18,7 +18,7 @@ listing = json.loads((root / "source.json").read_text(encoding="utf-8"))
 
 assert package["name"] == "com.vrvlog.liltoon-vrm-exporter"
 assert package["unity"] == "2022.3"
-assert package["version"] == "0.3.2"
+assert package["version"] == "0.3.3"
 assert package["vpmDependencies"] == {
     "com.vrmc.gltf": "0.131.x",
     "com.vrmc.vrm": "0.131.x",
@@ -29,6 +29,8 @@ assert listing["author"]["url"] == "https://github.com/mitsuya0077/VR-Vlog-lilTo
 assert listing["infoLink"]["url"] == "https://github.com/mitsuya0077/VR-Vlog-lilToon-Exporter"
 assert listing["githubRepos"] == ["mitsuya0077/VR-Vlog-lilToon-Exporter"]
 assert schema["properties"]["schemaMajor"]["const"] == 1
+assert schema["$id"].endswith("/1.1/schema.json")
+assert 'backlight' in schema["$defs"]["material"]["properties"]["features"]["items"]["enum"]
 assert schema["properties"]["materials"]["maxItems"] == 64
 assert "VRVLOG_materials_liltoon" in profile
 assert "new HashSet<int>()" in validator
@@ -77,6 +79,14 @@ assert "Unsupported lilToon transparent mode" in reader
 assert "EnabledOrTexture" in reader
 assert "UnsupportedFeatureToggles" in reader
 assert "Unsupported enabled lilToon feature" in reader
+assert 'AddFeature(record, "backlight", Enabled(material, "_UseBacklight"))' in reader
+assert '"_UseBacklight"' not in reader.split("UnsupportedFeatureToggles", 1)[1].split("};", 1)[0]
+for backlight_property in ("_BacklightColor", "_BacklightMainStrength", "_BacklightNormalStrength", "_BacklightBorder", "_BacklightBlur", "_BacklightDirectivity", "_BacklightViewStrength", "_BacklightReceiveShadow", "_BacklightBackfaceMask"):
+    assert f'"{backlight_property}"' in reader
+assert "HasCustomBacklightTexture" in reader
+assert "texture != null && texture != Texture2D.whiteTexture" in reader
+assert 'texture.name, "white"' not in reader
+assert "バックライトのカスタム色テクスチャにはまだ対応していません" in reader
 for unsupported_toggle in ("_UseEmission2nd", "_UseBump2ndMap", "_UseMatCap2nd", "_AlphaMaskMode"):
     assert f'"{unsupported_toggle}"' in reader
 assert "TextureFeatureEnabled" in reader
@@ -186,7 +196,9 @@ assert "Never copy contact information" in one_click
 assert "NormalTextureScale = normalEnabled ?" in one_click
 assert "EmissiveFactorLinear = emissionEnabled ?" in one_click
 assert "MatcapColorFactorSrgb = matcapEnabled ?" in one_click
-assert "ParametricRimColorFactorSrgb = rimEnabled ?" in one_click
+assert "ParametricRimColorFactorSrgb = rimEnabled" in one_click
+assert 'backlightEnabled ? Color(source, "_BacklightColor"' in one_click
+assert 'backlightEnabled ? Float(source, "_BacklightDirectivity"' in one_click
 assert "ShadeColorFactorSrgb = shadowEnabled ?" in one_click
 assert "ShadeColorTexture = shadowEnabled ?" in one_click
 for gated_texture in ("NormalTexture", "EmissiveTexture", "MatcapTexture", "RimMultiplyTexture", "OutlineWidthMultiplyTexture"):

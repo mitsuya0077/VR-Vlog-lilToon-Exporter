@@ -7,6 +7,7 @@ namespace VRVlog.LilToonExporter
     {
         public const string ExtensionName = "VRVLOG_materials_liltoon";
         public const int SchemaMajor = 1;
+        public const int SchemaMinor = 1;
         public const int DefaultMaximumTextureSize = 1024;
         public const int MaximumTextureSize = 2048;
         public const int MaximumMaterials = 64;
@@ -24,6 +25,7 @@ namespace VRVlog.LilToonExporter
             {
                 "mainColor",
                 "shadow",
+                "backlight",
                 "normalMap",
                 "emission",
                 "rimLight",
