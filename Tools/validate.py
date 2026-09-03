@@ -155,6 +155,7 @@ assert "\n  push:" not in listing_workflow
 assert "check-listing-builder:" in listing_workflow
 assert "if: github.event_name == 'pull_request'" in listing_workflow
 assert "github.event.release.prerelease == false" in listing_workflow
+assert "types: [published, released]" in listing_workflow
 assert listing_workflow.index("github.event.release.prerelease == false") < listing_workflow.index("environment:")
 assert "Build listing tool" in listing_workflow
 assert "Generate VPM listing" in listing_workflow

@@ -130,7 +130,7 @@ namespace VRVlog.LilToonExporter
             foreach(var boneName in RequiredHumanBones)if(!bones.ContainsKey(boneName))throw new InvalidOperationException($"VRMC_vrm required human bone '{boneName}' is missing.");
             ValidateHumanBoneHierarchy(root,boneNodes);
             if(!vrm.TryGetValue("meta",out var rawMeta)||!(rawMeta is Dictionary<string,object> meta)||!meta.TryGetValue("name",out var rawName)||!(rawName is string name)||string.IsNullOrWhiteSpace(name)||!meta.TryGetValue("authors",out var rawAuthors)||!(rawAuthors is List<object> authors)||authors.Count==0||!AllNonEmptyStrings(authors))throw new InvalidOperationException("VRMC_vrm meta must contain a name and at least one author.");
-            RequireEnum(meta,"avatarPermission","onlyAuthor","everyone");
+            RequireEnum(meta,"avatarPermission","onlyAuthor","onlySeparatelyLicensedPerson","everyone");
             RequireBoolean(meta,"allowExcessivelyViolentUsage");RequireBoolean(meta,"allowExcessivelySexualUsage");
             RequireEnum(meta,"commercialUsage","personalNonProfit","personalProfit","corporation");
             RequireBoolean(meta,"allowPoliticalOrReligiousUsage");RequireBoolean(meta,"allowAntisocialOrHateUsage");
