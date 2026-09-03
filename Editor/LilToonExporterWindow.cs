@@ -10,54 +10,83 @@ namespace VRVlog.LilToonExporter
     {
         private const string SupportedLilToonVersion = "2.3.4";
         private GameObject avatar;
-        private string avatarName = "";
         private string author = "";
         private string outputPath = "";
         private string fallbackPath = "";
         private bool showAdvanced;
 
-        [MenuItem("VR Vlog/Export lilToon VRM 1.0")]
-        public static void Open() => GetWindow<LilToonExporterWindow>(true, "VR Vlog lilToon Exporter");
+        [MenuItem("VR Vlog/lilToon VRM 1.0を書き出す")]
+        public static void Open()
+        {
+            var window = GetWindow<LilToonExporterWindow>(true, "VR Vlog VRM書き出し");
+            window.minSize = new Vector2(430f, 300f);
+        }
 
         private void OnGUI()
         {
             EditorGUILayout.HelpBox(
-                "Select the avatar and export one VRM. VR Vlog creates the VRM 1.0 MToon fallback and adds the supported lilToon data automatically.",
+                "アバターを選び、作者名を入力するだけでVRMを書き出せます。\nMToon互換データとlilToonデータは自動で追加されます。",
                 MessageType.Info);
-            avatar = (GameObject)EditorGUILayout.ObjectField("Avatar root", avatar, typeof(GameObject), true);
-            avatarName = EditorGUILayout.TextField("Avatar name", avatarName);
-            author = EditorGUILayout.TextField("Author", author);
-            PathField("Output VRM", ref outputPath, true);
+            EditorGUILayout.Space(4f);
+            avatar = (GameObject)EditorGUILayout.ObjectField(
+                new GUIContent("① アバター（必須）", "Hierarchyにあるアバターの一番上のオブジェクトを指定します。"),
+                avatar,
+                typeof(GameObject),
+                true);
+            EditorGUILayout.HelpBox("Hierarchyから、書き出したいアバターの一番上のオブジェクトを指定してください。", MessageType.None);
+
+            author = EditorGUILayout.TextField(
+                new GUIContent("② 作者名（必須）", "VRMファイルに記録される作者名です。"),
+                author);
+            EditorGUILayout.HelpBox("VRMファイルに記録する作者名を入力してください。", MessageType.None);
+
+            EditorGUILayout.Space(4f);
+            using (new EditorGUI.DisabledScope(avatar == null || string.IsNullOrWhiteSpace(author)))
+                if (GUILayout.Button("③ 保存先を選んでVRMを書き出す", GUILayout.Height(32f))) ExportOneClick();
+
+            if (avatar == null || string.IsNullOrWhiteSpace(author))
+                EditorGUILayout.HelpBox("上の2項目を入力すると書き出せます。", MessageType.Warning);
+
+            EditorGUILayout.Space(8f);
+            EditorGUILayout.LabelField("動作環境", EditorStyles.boldLabel);
             EditorGUILayout.LabelField("lilToon", InstalledLilToonStatus());
-            EditorGUILayout.LabelField("UniVRM", UniVrmOneClickExporter.SupportedUniVrmSeries + ".x (installed automatically by VCC/ALCOM)");
+            EditorGUILayout.LabelField("UniVRM", UniVrmOneClickExporter.SupportedUniVrmSeries + ".x（VCC／ALCOMが自動インストール）");
 
-            using (new EditorGUI.DisabledScope(avatar == null || string.IsNullOrWhiteSpace(outputPath) || string.IsNullOrWhiteSpace(avatarName) || string.IsNullOrWhiteSpace(author)))
-                if (GUILayout.Button("Export VR Vlog VRM")) ExportOneClick();
-
-            showAdvanced = EditorGUILayout.Foldout(showAdvanced, "Advanced: inject into an existing VRM 1.0");
+            EditorGUILayout.Space(8f);
+            showAdvanced = EditorGUILayout.Foldout(showAdvanced, "上級者向け：既存のVRM 1.0へlilToonデータを追加");
             if (!showAdvanced) return;
-            EditorGUILayout.HelpBox("Use this only when you already have a compatible UniVRM VRM 1.0 MToon fallback.", MessageType.None);
-            PathField("Fallback VRM 1.0", ref fallbackPath, false);
+            EditorGUILayout.HelpBox("通常は使用しません。UniVRM互換のMToonデータを持つVRM 1.0が既にある場合だけ使用してください。元のVRMは変更されません。", MessageType.Warning);
+            PathField("元にするVRM 1.0", ref fallbackPath, false);
+            PathField("保存先", ref outputPath, true);
             using (new EditorGUI.DisabledScope(avatar == null || string.IsNullOrWhiteSpace(fallbackPath) || string.IsNullOrWhiteSpace(outputPath)))
-                if (GUILayout.Button("Inject lilToon extension")) ExportExistingFallback();
+                if (GUILayout.Button("lilToonデータを追加して別名保存")) ExportExistingFallback();
         }
 
         private void ExportOneClick()
         {
+            outputPath = EditorUtility.SaveFilePanel("VRMの保存先", "", DefaultFileName(), "vrm");
+            if (string.IsNullOrEmpty(outputPath)) return;
             ExportAtomically(() =>
             {
-                var fallback = UniVrmOneClickExporter.Export(avatar, avatarName, author);
+                var fallback = UniVrmOneClickExporter.Export(avatar, avatar.name, author);
                 return LilToonGlbExtension.Inject(fallback, avatar, PackageVersion(), RequireSupportedLilToon());
             });
+        }
+
+        private string DefaultFileName()
+        {
+            var name = avatar != null && !string.IsNullOrWhiteSpace(avatar.name) ? avatar.name.Trim() : "avatar";
+            foreach (var invalid in Path.GetInvalidFileNameChars()) name = name.Replace(invalid, '-');
+            return name + "-liltoon.vrm";
         }
 
         private void ExportExistingFallback()
         {
             ExportAtomically(() =>
             {
-                if (!File.Exists(fallbackPath)) throw new FileNotFoundException("Fallback VRM does not exist.", fallbackPath);
+                if (!File.Exists(fallbackPath)) throw new FileNotFoundException("元にするVRMが見つかりません。", fallbackPath);
                 if (string.Equals(Path.GetFullPath(fallbackPath), Path.GetFullPath(outputPath), StringComparison.OrdinalIgnoreCase))
-                    throw new InvalidOperationException("Output must differ from the fallback VRM so the source remains untouched.");
+                    throw new InvalidOperationException("元のVRMを保護するため、別の保存先を指定してください。");
                 return LilToonGlbExtension.Inject(File.ReadAllBytes(fallbackPath), avatar, PackageVersion(), RequireSupportedLilToon());
             });
         }
@@ -66,10 +95,10 @@ namespace VRVlog.LilToonExporter
         {
             try
             {
-                if (File.Exists(outputPath) && !EditorUtility.DisplayDialog("Replace output?", outputPath, "Replace", "Cancel")) return;
+                if (File.Exists(outputPath) && !EditorUtility.DisplayDialog("ファイルを上書きしますか？", outputPath, "上書き", "キャンセル")) return;
                 var bytes = create();
                 var directory = Path.GetDirectoryName(Path.GetFullPath(outputPath));
-                if (string.IsNullOrEmpty(directory)) throw new InvalidOperationException("Output directory is invalid.");
+                if (string.IsNullOrEmpty(directory)) throw new InvalidOperationException("保存先フォルダーが正しくありません。");
                 Directory.CreateDirectory(directory);
                 var temporary = Path.Combine(directory, "." + Path.GetFileName(outputPath) + "." + Guid.NewGuid().ToString("N") + ".tmp");
                 try
@@ -80,12 +109,12 @@ namespace VRVlog.LilToonExporter
                 }
                 finally { if (File.Exists(temporary)) File.Delete(temporary); }
                 EditorUtility.RevealInFinder(outputPath);
-                EditorUtility.DisplayDialog("Export complete", $"Wrote {bytes.Length:N0} bytes.\nThe file contains an MToon fallback and optional VR Vlog lilToon data.", "OK");
+                EditorUtility.DisplayDialog("書き出し完了", $"VRMを書き出しました（{bytes.Length:N0}バイト）。\nMToon互換データとVR Vlog用lilToonデータが含まれています。", "閉じる");
             }
             catch (Exception exception)
             {
                 Debug.LogException(exception);
-                EditorUtility.DisplayDialog("Export failed", exception.Message, "OK");
+                EditorUtility.DisplayDialog("書き出しに失敗しました", exception.Message, "閉じる");
             }
         }
 
@@ -93,7 +122,7 @@ namespace VRVlog.LilToonExporter
         {
             EditorGUILayout.BeginHorizontal();
             value = EditorGUILayout.TextField(label, value);
-            if (GUILayout.Button("Browse", GUILayout.Width(70)))
+            if (GUILayout.Button("選択…", GUILayout.Width(70)))
             {
                 var chosen = save
                     ? EditorUtility.SaveFilePanel(label, "", "avatar-liltoon.vrm", "vrm")
@@ -112,14 +141,14 @@ namespace VRVlog.LilToonExporter
         private static string InstalledLilToonStatus()
         {
             var package = FindLilToonPackage();
-            return package == null ? "not installed as UPM/VPM package" : package.version;
+            return package == null ? "未インストール（VCC／ALCOMで追加してください）" : package.version;
         }
 
         private static string RequireSupportedLilToon()
         {
             var package = FindLilToonPackage();
             if (package == null || !string.Equals(package.version, SupportedLilToonVersion, StringComparison.Ordinal))
-                throw new InvalidOperationException($"lilToon {SupportedLilToonVersion} is required. Installed package version: {package?.version ?? "unknown"}.");
+                throw new InvalidOperationException($"lilToon {SupportedLilToonVersion} が必要です。現在のバージョン：{package?.version ?? "不明"}");
             return package.version;
         }
 

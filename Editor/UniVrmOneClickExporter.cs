@@ -15,8 +15,8 @@ namespace VRVlog.LilToonExporter
         public static byte[] Export(GameObject source, string avatarName, string author)
         {
             if (source == null) throw new ArgumentNullException(nameof(source));
-            if (string.IsNullOrWhiteSpace(avatarName)) throw new InvalidOperationException("Avatar name is required by VRM 1.0.");
-            if (string.IsNullOrWhiteSpace(author)) throw new InvalidOperationException("Author is required by VRM 1.0.");
+            if (string.IsNullOrWhiteSpace(avatarName)) throw new InvalidOperationException("アバター名を取得できませんでした。");
+            if (string.IsNullOrWhiteSpace(author)) throw new InvalidOperationException("作者名を入力してください。");
 
             EnsureUniVrmVersion();
             var clone = UnityEngine.Object.Instantiate(source);
@@ -44,7 +44,7 @@ namespace VRVlog.LilToonExporter
             var package = PackageManagerPackageInfo.FindForAssembly(typeof(Vrm10Exporter).Assembly);
             var version = package != null ? package.version : null;
             if (string.IsNullOrWhiteSpace(version) || !version.StartsWith(SupportedUniVrmSeries + ".", StringComparison.Ordinal))
-                throw new InvalidOperationException($"UniVRM {SupportedUniVrmSeries}.x is required. Installed package version: {version ?? "unknown"}.");
+                throw new InvalidOperationException($"UniVRM {SupportedUniVrmSeries}.x が必要です。現在のバージョン：{version ?? "不明"}");
         }
 
         private static VRM10ObjectMeta CreateMeta(string avatarName, string author)
@@ -82,7 +82,7 @@ namespace VRVlog.LilToonExporter
                 }
                 if (changed) renderer.sharedMaterials = materials;
             }
-            if (converted.Count == 0) throw new InvalidOperationException("The selected avatar has no supported lilToon materials.");
+            if (converted.Count == 0) throw new InvalidOperationException("選択したアバターに対応するlilToonマテリアルがありません。");
         }
 
         private static Material CreateMToonFallback(Material source, List<Material> created)
@@ -90,7 +90,7 @@ namespace VRVlog.LilToonExporter
             // Validate the full mobile subset before producing any fallback output.
             LilToonMaterialReader.Read(source, 0, _ => 0);
             var shader = Shader.Find(MToon10Meta.UnityShaderName);
-            if (shader == null) throw new InvalidOperationException("UniVRM MToon10 shader is unavailable.");
+            if (shader == null) throw new InvalidOperationException("UniVRMのMToon10シェーダーを利用できません。");
             var material = new Material(shader) { name = source.name };
             created.Add(material);
             var shadowEnabled = source.HasProperty("_UseShadow") && source.GetFloat("_UseShadow") > 0.5f;
