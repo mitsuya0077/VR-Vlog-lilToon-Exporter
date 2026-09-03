@@ -22,16 +22,20 @@ the confirmation screen before installation.
 
 ## Workflow
 
-1. Open **VR Vlog > Export lilToon VRM 1.0**.
-2. Select the avatar root, enter the required VRM name and author, and choose an
-   output path.
-3. Press **Export VR Vlog VRM**. The exporter creates a temporary cloned avatar,
+1. Open **VR Vlog > lilToon VRM 1.0を書き出す**.
+2. In **① アバター（必須）**, select the top-level avatar object from the
+   Hierarchy. In **② 作者名（必須）**, enter the author name stored in the VRM.
+   Those are the only required fields; the VRM name is taken from the selected
+   object automatically.
+3. Press **③ 保存先を選んでVRMを書き出す**, then choose the destination in the
+   save dialog. The exporter creates a temporary cloned avatar,
    maps supported lilToon materials to a portable MToon10 fallback, exports VRM
    1.0 through the public UniVRM API, injects the optional lilToon extension,
    validates the complete GLB, and atomically commits one output file.
 
 The source avatar, materials, textures, and importer settings are never
-modified. The old existing-fallback workflow remains under **Advanced**.
+modified. The old existing-fallback workflow remains under **上級者向け：既存のVRM
+1.0へlilToonデータを追加**.
 
 No texture is duplicated by the extension: it references the already optimized
 texture indices produced by UniVRM. Optimize or resize textures in the UniVRM
