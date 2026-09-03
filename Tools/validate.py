@@ -113,8 +113,7 @@ assert "IsNodeDescendant" in injector
 assert "BonesRequiringDirectParent" in injector
 assert 'meta.TryGetValue("name",out var rawName)' in injector
 assert 'meta.TryGetValue("authors",out var rawAuthors)' in injector
-assert 'meta.TryGetValue("licenseUrl",out var rawLicenseUrl)' in injector
-assert "string.IsNullOrWhiteSpace(licenseUrl)" in injector
+assert 'meta.TryGetValue("licenseUrl"' not in injector
 assert "does not declare VRMC_materials_mtoon in extensionsUsed" in injector
 assert "ValidateEncodedTexture(glb, texture.textureIndex, textureSources)" in injector
 assert "Unexpected extension property" in injector
