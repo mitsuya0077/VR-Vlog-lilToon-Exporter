@@ -88,7 +88,7 @@ namespace VRVlog.LilToonExporter
         private static Material CreateMToonFallback(Material source, List<Material> created)
         {
             // Validate the full mobile subset before producing any fallback output.
-            LilToonMaterialReader.Read(source, 0, _ => 0);
+            LilToonMaterialReader.Read(source, 0, (_, __) => 0);
             var shader = Shader.Find(MToon10Meta.UnityShaderName);
             if (shader == null) throw new InvalidOperationException("UniVRMのMToon10シェーダーを利用できません。");
             var material = new Material(shader) { name = source.name };
