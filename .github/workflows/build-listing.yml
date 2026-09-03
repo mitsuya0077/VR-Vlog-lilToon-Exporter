@@ -44,7 +44,7 @@ jobs:
       - uses: actions/setup-dotnet@v4
         with:
           dotnet-version: 8.0.x
-      - name: Build package listing
+      - name: Build listing tool
         run: |
           dotnet build ${{ env.pathToCi }}/PackageBuilder/PackageBuilder.csproj \
             --framework net8.0 \
@@ -53,6 +53,9 @@ jobs:
             /nodeReuse:false \
             /p:UseSharedCompilation=false \
             --nologo
+      - name: Generate VPM listing
+        if: github.event_name != 'pull_request'
+        run: |
           dotnet run \
             --project ${{ env.pathToCi }}/PackageBuilder/PackageBuilder.csproj \
             --no-build \
