@@ -68,14 +68,19 @@ namespace VRVlog.LilToonExporter
             if (string.IsNullOrEmpty(outputPath)) return;
             ExportAtomically(() =>
             {
-                var fallback = UniVrmOneClickExporter.Export(avatar, avatar.name, author);
+                var fallback = UniVrmOneClickExporter.Export(avatar, AvatarName(), author);
                 return LilToonGlbExtension.Inject(fallback, avatar, PackageVersion(), RequireSupportedLilToon());
             });
         }
 
+        private string AvatarName()
+        {
+            return avatar != null && !string.IsNullOrWhiteSpace(avatar.name) ? avatar.name.Trim() : "avatar";
+        }
+
         private string DefaultFileName()
         {
-            var name = avatar != null && !string.IsNullOrWhiteSpace(avatar.name) ? avatar.name.Trim() : "avatar";
+            var name = AvatarName();
             foreach (var invalid in Path.GetInvalidFileNameChars()) name = name.Replace(invalid, '-');
             return name + "-liltoon.vrm";
         }

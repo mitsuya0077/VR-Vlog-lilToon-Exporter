@@ -193,7 +193,9 @@ for gated_texture in ("NormalTexture", "EmissiveTexture", "MatcapTexture", "RimM
     assert f"{gated_texture} =" in one_click and "? Texture(source," in one_click
 assert 'private string author = "";' in window
 assert 'private string avatarName = "";' not in window
-assert 'UniVrmOneClickExporter.Export(avatar, avatar.name, author)' in window
+assert 'UniVrmOneClickExporter.Export(avatar, AvatarName(), author)' in window
+assert 'return avatar != null && !string.IsNullOrWhiteSpace(avatar.name) ? avatar.name.Trim() : "avatar";' in window
+assert 'var name = AvatarName();' in window
 assert 'EditorUtility.SaveFilePanel("VRMの保存先", "", DefaultFileName(), "vrm")' in window
 assert 'new GUIContent("① アバター（必須）"' in window
 assert 'new GUIContent("② 作者名（必須）"' in window
