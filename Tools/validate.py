@@ -105,6 +105,9 @@ assert "fallbackTextureCount" in injector
 assert 'addedTextures.TryGetValue(texture' in injector
 assert injector.index('if(!isBacklight)') < injector.index('addedTextures.TryGetValue(texture')
 assert 'FindTexture(texture.name,imageNames,textureSources,fallbackTextureCount,out var ambiguous)' in injector
+assert 'string.Equals(semantic,"normalMap",StringComparison.Ordinal)' in injector
+assert 'MaterialTexture(glb.Json,materialIndex,"normalTexture")' in injector
+assert injector.index('MaterialTexture(glb.Json,materialIndex,"normalTexture")') < injector.index('var png=EncodePng(source)')
 assert 'if(!ambiguous)return existing;' in injector
 assert "同名候補が複数あるため、元画像を直接埋め込みました" in injector
 assert "source.mipmapCount>1" in injector
