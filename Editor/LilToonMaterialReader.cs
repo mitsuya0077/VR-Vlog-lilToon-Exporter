@@ -73,7 +73,7 @@ namespace VRVlog.LilToonExporter
         {
             if (!material.HasProperty("_BacklightColorTex")) return false;
             var texture = material.GetTexture("_BacklightColorTex");
-            return texture != null && texture != Texture2D.whiteTexture && !string.Equals(texture.name, "white", StringComparison.OrdinalIgnoreCase);
+            return texture != null && texture != Texture2D.whiteTexture;
         }
         private static bool TextureFeatureEnabled(Material material, string semantic)
         {

@@ -84,6 +84,8 @@ assert '"_UseBacklight"' not in reader.split("UnsupportedFeatureToggles", 1)[1].
 for backlight_property in ("_BacklightColor", "_BacklightMainStrength", "_BacklightNormalStrength", "_BacklightBorder", "_BacklightBlur", "_BacklightDirectivity", "_BacklightViewStrength", "_BacklightReceiveShadow", "_BacklightBackfaceMask"):
     assert f'"{backlight_property}"' in reader
 assert "HasCustomBacklightTexture" in reader
+assert "texture != null && texture != Texture2D.whiteTexture" in reader
+assert 'texture.name, "white"' not in reader
 assert "バックライトのカスタム色テクスチャにはまだ対応していません" in reader
 for unsupported_toggle in ("_UseEmission2nd", "_UseBump2ndMap", "_UseMatCap2nd", "_AlphaMaskMode"):
     assert f'"{unsupported_toggle}"' in reader
