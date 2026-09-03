@@ -72,6 +72,8 @@ assert "Validate(output, extension.materials.Count)" in injector
 assert "GetComponentsInChildren<Renderer>(true)" in injector
 assert "_MainTex" in reader and "_UseShadow" in reader and "_UseOutline" in reader
 assert "特殊シェーダーは標準lilToonとして近似しました" in reader
+assert 'item.Semantic == "mainColor"' in reader
+assert "メイン画像 '{texture.name}' を元のVRMへ対応付けできません" in reader
 assert 'EndsWith("Outline"' in reader
 assert 'material.shader.name.EndsWith("Outline"' in reader
 assert "未対応の透明モード" in reader

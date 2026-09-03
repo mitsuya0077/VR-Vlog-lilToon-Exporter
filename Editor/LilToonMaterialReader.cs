@@ -48,7 +48,12 @@ namespace VRVlog.LilToonExporter
                 if (!material.HasProperty(item.Name)) continue; var texture = material.GetTexture(item.Name); if (texture == null) continue;
                 if (item.Name == "_BacklightColorTex" && texture == Texture2D.whiteTexture) continue;
                 var index = textureIndex(texture, item.Semantic);
-                if (index < 0) { AddWarning(warnings, $"{material.name}: {item.Name} はVRMへ対応付けできないため省略しました。"); continue; }
+                if (index < 0)
+                {
+                    if (item.Semantic == "mainColor") throw new InvalidOperationException($"メイン画像 '{texture.name}' を元のVRMへ対応付けできません。");
+                    AddWarning(warnings, $"{material.name}: {item.Name} はVRMへ対応付けできないため省略しました。");
+                    continue;
+                }
                 var scale = material.GetTextureScale(item.Name); var offset = material.GetTextureOffset(item.Name);
                 record.textures.Add(new LilToonTextureProperty { name = item.Name, semantic = item.Semantic, textureIndex = index, scaleX = scale.x, scaleY = scale.y, offsetX = offset.x, offsetY = offset.y });
             }
