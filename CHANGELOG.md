@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.3.7
+
+- Accept UniVRM 0.131 VRM 1.0 output when its empty `extensionsRequired` array
+  is omitted from the serialized GLB.
+- Continue validating `VRMC_vrm` in `extensionsUsed`, its root object,
+  specification version, humanoid hierarchy, metadata, and MToon fallbacks.
+
 ## 0.3.6
 
 - Recognize optional lilToon shader names whose leaf is prefixed with labels
