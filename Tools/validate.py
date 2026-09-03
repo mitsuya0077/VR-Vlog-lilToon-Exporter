@@ -99,7 +99,8 @@ assert "outside the GLB textures array" in injector
 assert "RequireMToonFallback(glb.Json, material.materialIndex)" in injector
 assert "VRMC_materials_mtoon 1.0 fallback" in injector
 assert "RequireVrm10Root(glb.Json);" in injector
-assert "Fallback GLB has no valid VRMC_vrm 1.0 root extension" in injector
+assert 'required==null||!Contains(required,"VRMC_vrm")' in injector
+assert "Fallback GLB has no valid required VRMC_vrm 1.0 root extension" in injector
 assert "does not declare VRMC_materials_mtoon in extensionsUsed" in injector
 assert "ValidateEncodedTexture(glb, texture.textureIndex, textureSources)" in injector
 assert "Unexpected extension property" in injector
