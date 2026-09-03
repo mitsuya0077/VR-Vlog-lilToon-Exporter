@@ -100,11 +100,12 @@ assert "RequireMToonFallback(glb.Json, material.materialIndex)" in injector
 assert "VRMC_materials_mtoon 1.0 fallback" in injector
 assert "RequireVrm10Root(glb.Json);" in injector
 assert 'required==null||!Contains(required,"VRMC_vrm")' in injector
-assert '!vrm.TryGetValue("humanoid",out var humanoid)' in injector
-assert 'humanoid is Dictionary<string,object>' in injector
-assert '!vrm.TryGetValue("meta",out var meta)' in injector
-assert 'meta is Dictionary<string,object>' in injector
-assert "with humanoid and meta objects" in injector
+assert 'humanoid.TryGetValue("humanBones",out var rawBones)' in injector
+assert "RequiredHumanBones" in injector
+assert "has no valid node" in injector
+assert 'meta.TryGetValue("name",out var rawName)' in injector
+assert 'meta.TryGetValue("authors",out var rawAuthors)' in injector
+assert 'meta.TryGetValue("licenseUrl",out var rawLicenseUrl)' in injector
 assert "does not declare VRMC_materials_mtoon in extensionsUsed" in injector
 assert "ValidateEncodedTexture(glb, texture.textureIndex, textureSources)" in injector
 assert "Unexpected extension property" in injector
@@ -136,7 +137,10 @@ assert "--disable-build-servers" in listing_workflow
 assert "--maxcpucount:1" in listing_workflow
 assert "${{ env.pathToCi }}/.nuke/temp" not in listing_workflow
 assert "pull_request:" in listing_workflow
+assert "check-listing-builder:" in listing_workflow
+assert "if: github.event_name == 'pull_request'" in listing_workflow
 assert "if: github.event_name != 'pull_request'" in listing_workflow
+assert listing_workflow.index("if: github.event_name != 'pull_request'") < listing_workflow.index("environment:")
 assert "Build listing tool" in listing_workflow
 assert "Generate VPM listing" in listing_workflow
 assert "3b99078d26b362733ad9bf463f98c83b8a1b4c9f" in release_workflow
