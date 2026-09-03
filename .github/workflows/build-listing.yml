@@ -2,6 +2,8 @@ name: Build VPM Listing
 
 on:
   workflow_dispatch:
+  pull_request:
+    paths: [.github/workflows/build-listing.yml, source.json, Website/**]
   release:
     types: [published]
   push:
@@ -62,8 +64,11 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
       - uses: actions/configure-pages@v5
+        if: github.event_name != 'pull_request'
       - uses: actions/upload-pages-artifact@v3
+        if: github.event_name != 'pull_request'
         with:
           path: ${{ env.listPublishDirectory }}
       - id: deployment
         uses: actions/deploy-pages@v4
+        if: github.event_name != 'pull_request'
