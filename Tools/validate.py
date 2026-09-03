@@ -18,7 +18,7 @@ listing = json.loads((root / "source.json").read_text(encoding="utf-8"))
 
 assert package["name"] == "com.vrvlog.liltoon-vrm-exporter"
 assert package["unity"] == "2022.3"
-assert package["version"] == "0.3.1"
+assert package["version"] == "0.3.2"
 assert package["vpmDependencies"] == {
     "com.vrmc.gltf": "0.131.x",
     "com.vrmc.vrm": "0.131.x",

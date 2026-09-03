@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.3.2
+
+- Localized the exporter window and user-facing errors into Japanese.
+- Reduced the normal workflow to the avatar and author fields, deriving the
+  VRM name automatically and asking for the destination only during export.
+- Added inline guidance and moved existing-VRM injection into an advanced
+  section.
+- Kept automatic avatar naming consistent for VRM metadata and filenames.
+
 ## 0.3.1
 
 - Fixed package installation compilation on Unity versions that also expose
