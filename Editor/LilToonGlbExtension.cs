@@ -130,8 +130,16 @@ namespace VRVlog.LilToonExporter
             foreach(var boneName in RequiredHumanBones)if(!bones.ContainsKey(boneName))throw new InvalidOperationException($"VRMC_vrm required human bone '{boneName}' is missing.");
             ValidateHumanBoneHierarchy(root,boneNodes);
             if(!vrm.TryGetValue("meta",out var rawMeta)||!(rawMeta is Dictionary<string,object> meta)||!meta.TryGetValue("name",out var rawName)||!(rawName is string name)||string.IsNullOrWhiteSpace(name)||!meta.TryGetValue("authors",out var rawAuthors)||!(rawAuthors is List<object> authors)||authors.Count==0||!AllNonEmptyStrings(authors))throw new InvalidOperationException("VRMC_vrm meta must contain a name and at least one author.");
+            RequireEnum(meta,"avatarPermission","onlyAuthor","everyone");
+            RequireBoolean(meta,"allowExcessivelyViolentUsage");RequireBoolean(meta,"allowExcessivelySexualUsage");
+            RequireEnum(meta,"commercialUsage","personalNonProfit","personalProfit","corporation");
+            RequireBoolean(meta,"allowPoliticalOrReligiousUsage");RequireBoolean(meta,"allowAntisocialOrHateUsage");
+            RequireEnum(meta,"creditNotation","required","unnecessary");RequireBoolean(meta,"allowRedistribution");
+            RequireEnum(meta,"modification","prohibited","allowModification","allowModificationRedistribution");
         }
         private static bool AllNonEmptyStrings(List<object> values){foreach(var value in values)if(!(value is string text)||string.IsNullOrWhiteSpace(text))return false;return true;}
+        private static void RequireBoolean(Dictionary<string,object> value,string key){if(!value.TryGetValue(key,out var raw)||!(raw is bool))throw new InvalidOperationException($"VRMC_vrm meta.{key} must be a boolean.");}
+        private static void RequireEnum(Dictionary<string,object> value,string key,params string[] allowed){if(!value.TryGetValue(key,out var raw)||!(raw is string text)||System.Array.IndexOf(allowed,text)<0)throw new InvalidOperationException($"VRMC_vrm meta.{key} has an invalid value.");}
         private static void ValidateHumanBoneHierarchy(Dictionary<string,object> root,Dictionary<string,long> boneNodes)
         {
             var nodes=Array(root,"nodes",false)??new List<object>();

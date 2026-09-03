@@ -114,6 +114,10 @@ assert "BonesRequiringDirectParent" in injector
 assert 'meta.TryGetValue("name",out var rawName)' in injector
 assert 'meta.TryGetValue("authors",out var rawAuthors)' in injector
 assert 'meta.TryGetValue("licenseUrl"' not in injector
+for required_meta in ("avatarPermission", "allowExcessivelyViolentUsage", "allowExcessivelySexualUsage", "commercialUsage", "allowPoliticalOrReligiousUsage", "allowAntisocialOrHateUsage", "creditNotation", "allowRedistribution", "modification"):
+    assert f'"{required_meta}"' in injector
+assert "RequireBoolean" in injector
+assert "RequireEnum" in injector
 assert "does not declare VRMC_materials_mtoon in extensionsUsed" in injector
 assert "ValidateEncodedTexture(glb, texture.textureIndex, textureSources)" in injector
 assert "Unexpected extension property" in injector
@@ -150,8 +154,8 @@ assert "pull_request:" in listing_workflow
 assert "\n  push:" not in listing_workflow
 assert "check-listing-builder:" in listing_workflow
 assert "if: github.event_name == 'pull_request'" in listing_workflow
-assert "if: github.event_name != 'pull_request'" in listing_workflow
-assert listing_workflow.index("if: github.event_name != 'pull_request'") < listing_workflow.index("environment:")
+assert "github.event.release.prerelease == false" in listing_workflow
+assert listing_workflow.index("github.event.release.prerelease == false") < listing_workflow.index("environment:")
 assert "Build listing tool" in listing_workflow
 assert "Generate VPM listing" in listing_workflow
 assert "Generate listing from a local release fixture" in listing_workflow

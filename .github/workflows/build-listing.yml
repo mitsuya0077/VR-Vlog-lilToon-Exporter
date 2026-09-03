@@ -72,7 +72,7 @@ jobs:
           test -s "$fixture/output/index.json"
 
   build-listing:
-    if: github.event_name != 'pull_request'
+    if: github.event_name == 'workflow_dispatch' || (github.event_name == 'release' && github.event.release.prerelease == false)
     concurrency:
       group: pages
       cancel-in-progress: true
