@@ -77,7 +77,7 @@ namespace VRVlog.LilToonExporter
         private static int ResolveTexture(GlbDocument glb,Texture texture,string semantic,List<string> imageNames,List<int> textureSources,int fallbackTextureCount,Dictionary<Texture,int> addedTextures)
         {
             if(addedTextures.TryGetValue(texture,out var cached))return cached;
-            if(!string.Equals(semantic,"backlight",StringComparison.Ordinal)){var existing=FindTexture(texture.name,imageNames,textureSources,fallbackTextureCount);if(existing>=0)return existing;}
+            if(!string.Equals(semantic,"backlight",StringComparison.Ordinal)){var existing=FindTexture(texture.name,imageNames,textureSources,fallbackTextureCount);return existing;}
             if(textureSources.Count>=LilToonMobileProfile.MaximumTextures)throw new InvalidOperationException("Adding the lilToon texture would exceed the mobile texture limit.");
             if(!(texture is Texture2D source))throw new NotSupportedException($"Texture '{texture.name}' must be a Texture2D.");
             if(source.width<=0||source.height<=0||source.width>LilToonMobileProfile.MaximumTextureSize||source.height>LilToonMobileProfile.MaximumTextureSize)
