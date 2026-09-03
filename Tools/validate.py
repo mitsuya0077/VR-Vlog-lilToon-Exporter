@@ -172,6 +172,7 @@ assert "Generate listing from a local release fixture" in listing_workflow
 assert "--package-listing-source-folder" in listing_workflow
 assert 'test -s "$fixture/output/index.json"' in listing_workflow
 assert "3b99078d26b362733ad9bf463f98c83b8a1b4c9f" in release_workflow
+assert f"default: {package['version']}" in release_workflow
 assert '--target "${GITHUB_SHA}"' in release_workflow
 assert 'os.environ["UNIVRM_VERSION"] == "0.131.0"' in release_workflow
 assert 'tag v${VERSION} already exists' in release_workflow
