@@ -2,27 +2,80 @@ name: Build VPM Listing
 
 on:
   workflow_dispatch:
+  pull_request:
+    paths: [.github/workflows/build-listing.yml, package.json, source.json, Website/**]
   release:
-    types: [published]
-  push:
-    branches: [main]
-    paths: [source.json, Website/**, .github/workflows/build-listing.yml]
+    types: [published, released]
 
 permissions:
   contents: read
   pages: write
   id-token: write
 
-concurrency:
-  group: pages
-  cancel-in-progress: true
-
 env:
   listPublishDirectory: Website
   pathToCi: ci
 
 jobs:
+  check-listing-builder:
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/checkout@v4
+        with:
+          repository: vrchat-community/package-list-action
+          ref: cb31c3b5d17d1070d7741c61de2ca1b219224039
+          path: ${{ env.pathToCi }}
+          clean: false
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: 8.0.x
+      - name: Build listing tool
+        run: |
+          dotnet build ${{ env.pathToCi }}/PackageBuilder/PackageBuilder.csproj \
+            --framework net8.0 \
+            --disable-build-servers \
+            --maxcpucount:1 \
+            /nodeReuse:false \
+            /p:UseSharedCompilation=false \
+            --nologo
+      - name: Generate listing from a local release fixture
+        run: |
+          fixture=$RUNNER_TEMP/listing-fixture
+          mkdir -p "$fixture/release" "$fixture/output" "$fixture/package"
+          cp source.json "$fixture/source.json"
+          cp -R Website "$fixture/Website"
+          cp package.json "$fixture/package/package.json"
+          (cd "$fixture/package" && zip -qr "$fixture/release/package.zip" .)
+          python3 - <<'PY'
+          import json, os
+          from pathlib import Path
+          source = Path(os.environ["RUNNER_TEMP"]) / "listing-fixture/source.json"
+          data = json.loads(source.read_text(encoding="utf-8"))
+          data.pop("githubRepos", None)
+          data["packages"] = [{"id": "com.vrvlog.liltoon-vrm-exporter", "releases": ["http://127.0.0.1:8765/listing-fixture/release/package.zip"]}]
+          source.write_text(json.dumps(data), encoding="utf-8")
+          PY
+          python3 -m http.server 8765 --bind 127.0.0.1 --directory "$RUNNER_TEMP" >/tmp/vpm-listing-http.log 2>&1 &
+          server_pid=$!
+          trap 'kill "$server_pid"' EXIT
+          dotnet run \
+            --project ${{ env.pathToCi }}/PackageBuilder/PackageBuilder.csproj \
+            --no-build \
+            --framework net8.0 \
+            -- \
+            BuildMultiPackageListing \
+            --root ${{ env.pathToCi }} \
+            --package-listing-source-folder "$fixture" \
+            --list-publish-directory "$fixture/output"
+          test -s "$fixture/output/index.json"
+
   build-listing:
+    if: github.event_name == 'workflow_dispatch' || (github.event_name == 'release' && github.event.release.prerelease == false)
+    concurrency:
+      group: pages
+      cancel-in-progress: true
     environment:
       name: github-pages
       url: ${{ steps.deployment.outputs.page_url }}
@@ -37,12 +90,30 @@ jobs:
           clean: false
       - uses: actions/cache@v4
         with:
-          path: |
-            ${{ env.pathToCi }}/.nuke/temp
-            ~/.nuget/packages
+          path: ~/.nuget/packages
           key: ${{ runner.os }}-${{ hashFiles('**/global.json', '**/*.csproj') }}
-      - name: Build package listing
-        run: ${{ env.pathToCi }}/build.cmd BuildMultiPackageListing --root ${{ env.pathToCi }} --list-publish-directory $GITHUB_WORKSPACE/${{ env.listPublishDirectory }}
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: 8.0.x
+      - name: Build listing tool
+        run: |
+          dotnet build ${{ env.pathToCi }}/PackageBuilder/PackageBuilder.csproj \
+            --framework net8.0 \
+            --disable-build-servers \
+            --maxcpucount:1 \
+            /nodeReuse:false \
+            /p:UseSharedCompilation=false \
+            --nologo
+      - name: Generate VPM listing
+        run: |
+          dotnet run \
+            --project ${{ env.pathToCi }}/PackageBuilder/PackageBuilder.csproj \
+            --no-build \
+            --framework net8.0 \
+            -- \
+            BuildMultiPackageListing \
+            --root ${{ env.pathToCi }} \
+            --list-publish-directory $GITHUB_WORKSPACE/${{ env.listPublishDirectory }}
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
       - uses: actions/configure-pages@v5

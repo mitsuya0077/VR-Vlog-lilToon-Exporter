@@ -100,7 +100,24 @@ assert "RequireMToonFallback(glb.Json, material.materialIndex)" in injector
 assert "VRMC_materials_mtoon 1.0 fallback" in injector
 assert "RequireVrm10Root(glb.Json);" in injector
 assert 'required==null||!Contains(required,"VRMC_vrm")' in injector
-assert "Fallback GLB has no valid required VRMC_vrm 1.0 root extension" in injector
+assert 'humanoid.TryGetValue("humanBones",out var rawBones)' in injector
+assert "RequiredHumanBones" in injector
+assert "has no valid node" in injector
+assert "new HashSet<long>()" in injector
+assert "!assignedNodes.Add(node)" in injector
+assert "foreach(var pair in bones)" in injector
+assert "bones.ContainsKey(boneName)" in injector
+assert "HumanBoneParents.ContainsKey(pair.Key)" in injector
+assert "ValidateHumanBoneHierarchy(root,boneNodes)" in injector
+assert "IsNodeDescendant" in injector
+assert "BonesRequiringDirectParent" in injector
+assert 'meta.TryGetValue("name",out var rawName)' in injector
+assert 'meta.TryGetValue("authors",out var rawAuthors)' in injector
+assert 'meta.TryGetValue("licenseUrl"' not in injector
+for required_meta in ("avatarPermission", "allowExcessivelyViolentUsage", "allowExcessivelySexualUsage", "commercialUsage", "allowPoliticalOrReligiousUsage", "allowAntisocialOrHateUsage", "creditNotation", "allowRedistribution", "modification"):
+    assert f'"{required_meta}"' in injector
+assert "RequireBoolean" in injector
+assert "RequireEnum" in injector
 assert "does not declare VRMC_materials_mtoon in extensionsUsed" in injector
 assert "ValidateEncodedTexture(glb, texture.textureIndex, textureSources)" in injector
 assert "Unexpected extension property" in injector
@@ -124,9 +141,28 @@ assert "PackageInfo.FindForAssembly" in one_click
 assert 'version.StartsWith(SupportedUniVrmSeries + "."' in one_click
 assert (root / ".github/workflows/build-listing.yml").is_file()
 assert (root / ".github/workflows/release-vpm.yml").is_file()
+assert (root / "Website/index.html").is_file()
+assert (root / "Website/app.js").is_file()
 listing_workflow = (root / ".github/workflows/build-listing.yml").read_text(encoding="utf-8")
 release_workflow = (root / ".github/workflows/release-vpm.yml").read_text(encoding="utf-8")
 assert "cb31c3b5d17d1070d7741c61de2ca1b219224039" in listing_workflow
+assert "dotnet-version: 8.0.x" in listing_workflow
+assert "--disable-build-servers" in listing_workflow
+assert "--maxcpucount:1" in listing_workflow
+assert "${{ env.pathToCi }}/.nuke/temp" not in listing_workflow
+assert "pull_request:" in listing_workflow
+assert "package.json, source.json" in listing_workflow
+assert "\n  push:" not in listing_workflow
+assert "check-listing-builder:" in listing_workflow
+assert "if: github.event_name == 'pull_request'" in listing_workflow
+assert "github.event.release.prerelease == false" in listing_workflow
+assert "types: [published, released]" in listing_workflow
+assert listing_workflow.index("github.event.release.prerelease == false") < listing_workflow.index("environment:")
+assert "Build listing tool" in listing_workflow
+assert "Generate VPM listing" in listing_workflow
+assert "Generate listing from a local release fixture" in listing_workflow
+assert "--package-listing-source-folder" in listing_workflow
+assert 'test -s "$fixture/output/index.json"' in listing_workflow
 assert "3b99078d26b362733ad9bf463f98c83b8a1b4c9f" in release_workflow
 assert '--target "${GITHUB_SHA}"' in release_workflow
 assert 'os.environ["UNIVRM_VERSION"] == "0.131.0"' in release_workflow
