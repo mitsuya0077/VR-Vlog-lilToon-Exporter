@@ -145,7 +145,10 @@ namespace VRVlog.LilToonExporter
         {
             var shaderName = material.shader != null ? material.shader.name : "";
             if (shaderName.IndexOf("Cutout", StringComparison.OrdinalIgnoreCase) >= 0) return MToon10AlphaMode.Cutout;
-            if (shaderName.IndexOf("Transparent", StringComparison.OrdinalIgnoreCase) >= 0) return MToon10AlphaMode.Transparent;
+            if (shaderName.IndexOf("Transparent", StringComparison.OrdinalIgnoreCase) >= 0 ||
+                shaderName.IndexOf("Refraction", StringComparison.OrdinalIgnoreCase) >= 0 ||
+                shaderName.IndexOf("Gem", StringComparison.OrdinalIgnoreCase) >= 0 ||
+                shaderName.IndexOf("Fur", StringComparison.OrdinalIgnoreCase) >= 0) return MToon10AlphaMode.Transparent;
             var mode = Mathf.RoundToInt(Float(material, "_TransparentMode", 0f));
             return mode == 1 ? MToon10AlphaMode.Cutout : mode == 2 ? MToon10AlphaMode.Transparent : MToon10AlphaMode.Opaque;
         }

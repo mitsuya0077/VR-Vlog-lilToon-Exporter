@@ -77,6 +77,9 @@ assert "メイン画像 '{texture.name}' を元のVRMへ対応付けできませ
 assert 'EndsWith("Outline"' in reader
 assert 'material.shader.name.EndsWith("Outline"' in reader
 assert "未対応の透明モード" in reader
+for transparent_variant in ("Refraction", "Gem", "Fur"):
+    assert f'n.IndexOf("{transparent_variant}"' in reader
+    assert f'shaderName.IndexOf("{transparent_variant}"' in one_click
 assert "EnabledOrTexture" in reader
 assert "UnsupportedFeatureToggles" in reader
 assert "未対応機能 {toggle} は省略" in reader
