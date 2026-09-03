@@ -1,5 +1,6 @@
 using System;
 using System.IO;
+using System.Collections.Generic;
 using UnityEditor;
 using UnityEngine;
 using PackageManagerPackageInfo = UnityEditor.PackageManager.PackageInfo;
@@ -66,11 +67,12 @@ namespace VRVlog.LilToonExporter
         {
             outputPath = EditorUtility.SaveFilePanel("VRMの保存先", "", DefaultFileName(), "vrm");
             if (string.IsNullOrEmpty(outputPath)) return;
+            var warnings = new List<string>();
             ExportAtomically(() =>
             {
-                var fallback = UniVrmOneClickExporter.Export(avatar, AvatarName(), author);
-                return LilToonGlbExtension.Inject(fallback, avatar, PackageVersion(), RequireSupportedLilToon());
-            });
+                var fallback = UniVrmOneClickExporter.Export(avatar, AvatarName(), author, warnings);
+                return LilToonGlbExtension.Inject(fallback, avatar, PackageVersion(), RequireSupportedLilToon(), warnings);
+            }, warnings);
         }
 
         private string AvatarName()
@@ -87,16 +89,17 @@ namespace VRVlog.LilToonExporter
 
         private void ExportExistingFallback()
         {
+            var warnings = new List<string>();
             ExportAtomically(() =>
             {
                 if (!File.Exists(fallbackPath)) throw new FileNotFoundException("元にするVRMが見つかりません。", fallbackPath);
                 if (string.Equals(Path.GetFullPath(fallbackPath), Path.GetFullPath(outputPath), StringComparison.OrdinalIgnoreCase))
                     throw new InvalidOperationException("元のVRMを保護するため、別の保存先を指定してください。");
-                return LilToonGlbExtension.Inject(File.ReadAllBytes(fallbackPath), avatar, PackageVersion(), RequireSupportedLilToon());
-            });
+                return LilToonGlbExtension.Inject(File.ReadAllBytes(fallbackPath), avatar, PackageVersion(), RequireSupportedLilToon(), warnings);
+            }, warnings);
         }
 
-        private void ExportAtomically(Func<byte[]> create)
+        private void ExportAtomically(Func<byte[]> create, ICollection<string> warnings)
         {
             try
             {
@@ -114,7 +117,8 @@ namespace VRVlog.LilToonExporter
                 }
                 finally { if (File.Exists(temporary)) File.Delete(temporary); }
                 EditorUtility.RevealInFinder(outputPath);
-                EditorUtility.DisplayDialog("書き出し完了", $"VRMを書き出しました（{bytes.Length:N0}バイト）。\nMToon互換データとVR Vlog用lilToonデータが含まれています。", "閉じる");
+                var warningText = warnings != null && warnings.Count > 0 ? $"\n\n近似・省略した項目：\n・{string.Join("\n・", warnings)}" : "";
+                EditorUtility.DisplayDialog("書き出し完了", $"VRMを書き出しました（{bytes.Length:N0}バイト）。\nMToon互換データとVR Vlog用lilToonデータが含まれています。{warningText}", "閉じる");
             }
             catch (Exception exception)
             {
@@ -140,7 +144,7 @@ namespace VRVlog.LilToonExporter
         private static string PackageVersion()
         {
             var info = PackageManagerPackageInfo.FindForAssembly(typeof(LilToonExporterWindow).Assembly);
-            return info != null && !string.IsNullOrWhiteSpace(info.version) ? info.version : "0.3.4";
+            return info != null && !string.IsNullOrWhiteSpace(info.version) ? info.version : "0.3.5";
         }
 
         private static string InstalledLilToonStatus()

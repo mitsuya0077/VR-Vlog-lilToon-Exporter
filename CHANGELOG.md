@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.3.5
+
+- Export unsupported lilToon variants, including `lilToonFakeShadow`, using the
+  closest standard lilToon/MToon representation instead of aborting.
+- Skip unsupported feature details and unmatched optional textures while
+  reporting every approximation in the successful export dialog.
+- Keep structural corruption, invalid VRM data, and mobile safety limits as
+  hard export errors.
+
 ## 0.3.4
 
 - Added full `_BacklightColorTex` export with non-destructive PNG encoding.

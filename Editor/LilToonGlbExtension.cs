@@ -6,7 +6,7 @@ namespace VRVlog.LilToonExporter
 {
     internal static class LilToonGlbExtension
     {
-        public static byte[] Inject(byte[] source, GameObject avatar, string exporterVersion, string lilToonVersion)
+        public static byte[] Inject(byte[] source, GameObject avatar, string exporterVersion, string lilToonVersion, ICollection<string> warnings = null)
         {
             if (avatar == null) throw new ArgumentNullException(nameof(avatar));
             var glb = GlbDocument.Read(source);
@@ -28,7 +28,7 @@ namespace VRVlog.LilToonExporter
                 var index = UniqueIndex(materialNames, material.name, "material");
                 if (!seen.Add(index)) continue;
                 RequireMToonFallback(glb.Json, index);
-                var record = LilToonMaterialReader.Read(material, index, (texture, semantic) => ResolveTexture(glb, texture, semantic, imageNames, textureSources, fallbackTextureCount, addedTextures));
+                var record = LilToonMaterialReader.Read(material, index, (texture, semantic) => ResolveTexture(glb, texture, semantic, imageNames, textureSources, fallbackTextureCount, addedTextures), warnings);
                 foreach (var texture in record.textures) ValidateEncodedTexture(glb, texture.textureIndex, textureSources);
                 extension.materials.Add(record);
             }
