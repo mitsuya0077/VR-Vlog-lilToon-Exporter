@@ -10,8 +10,8 @@ namespace VRVlog.LilToonExporter
     {
         private const string SupportedLilToonVersion = "2.3.4";
         private GameObject avatar;
-        private string avatarName = "Avatar";
-        private string author = "Author";
+        private string avatarName = "";
+        private string author = "";
         private string outputPath = "";
         private string fallbackPath = "";
         private bool showAdvanced;

@@ -96,8 +96,9 @@ namespace VRVlog.LilToonExporter
             var shadowEnabled = source.HasProperty("_UseShadow") && source.GetFloat("_UseShadow") > 0.5f;
             var normalEnabled = EnabledOrTexture(source, "_UseBumpMap", "_BumpMap");
             var emissionEnabled = EnabledOrTexture(source, "_UseEmission", "_EmissionMap");
-            var matcapEnabled = EnabledOrTexture(source, "_UseMatCap", "_MatCapTex");
-            var rimEnabled = EnabledOrTexture(source, "_UseRim", "_RimColorTex");
+            var matcapEnabled = source.HasProperty("_UseMatCap") && source.GetFloat("_UseMatCap") > 0.5f;
+            var rimEnabled = source.HasProperty("_UseRim") && source.GetFloat("_UseRim") > 0.5f;
+            var outlineEnabled = Float(source, "_UseOutline", 0f) > 0.5f || source.shader.name.EndsWith("Outline", StringComparison.Ordinal);
             var context = new MToon10Context(material)
             {
                 AlphaMode = AlphaMode(source),
@@ -109,18 +110,18 @@ namespace VRVlog.LilToonExporter
                 BaseColorTexture = Texture(source, "_MainTex"),
                 ShadeColorFactorSrgb = shadowEnabled ? Color(source, "_ShadowColor", UnityEngine.Color.gray) : Color(source, "_Color", UnityEngine.Color.white),
                 ShadeColorTexture = shadowEnabled ? Texture(source, "_ShadowColorTex") : null,
-                NormalTexture = Texture(source, "_BumpMap"),
+                NormalTexture = normalEnabled ? Texture(source, "_BumpMap") : null,
                 NormalTextureScale = normalEnabled ? Float(source, "_BumpScale", 1f) : 0f,
                 EmissiveFactorLinear = emissionEnabled ? Color(source, "_EmissionColor", UnityEngine.Color.black).linear : UnityEngine.Color.black,
-                EmissiveTexture = Texture(source, "_EmissionMap"),
+                EmissiveTexture = emissionEnabled ? Texture(source, "_EmissionMap") : null,
                 MatcapColorFactorSrgb = matcapEnabled ? Color(source, "_MatCapColor", UnityEngine.Color.white) : UnityEngine.Color.black,
-                MatcapTexture = Texture(source, "_MatCapTex"),
+                MatcapTexture = matcapEnabled ? Texture(source, "_MatCapTex") : null,
                 ParametricRimColorFactorSrgb = rimEnabled ? Color(source, "_RimColor", UnityEngine.Color.black) : UnityEngine.Color.black,
                 ParametricRimFresnelPowerFactor = Mathf.Max(0f, Float(source, "_RimFresnelPower", 1f)),
-                RimMultiplyTexture = Texture(source, "_RimColorTex"),
-                OutlineWidthMode = Float(source, "_UseOutline", 0f) > 0.5f ? MToon10OutlineMode.World : MToon10OutlineMode.None,
+                RimMultiplyTexture = rimEnabled ? Texture(source, "_RimColorTex") : null,
+                OutlineWidthMode = outlineEnabled ? MToon10OutlineMode.World : MToon10OutlineMode.None,
                 OutlineWidthFactor = Mathf.Max(0f, Float(source, "_OutlineWidth", 0f)),
-                OutlineWidthMultiplyTexture = Texture(source, "_OutlineTex"),
+                OutlineWidthMultiplyTexture = outlineEnabled ? Texture(source, "_OutlineTex") : null,
                 OutlineColorFactorSrgb = Color(source, "_OutlineColor", UnityEngine.Color.black),
                 OutlineLightingMixFactor = Mathf.Clamp01(Float(source, "_OutlineEnableLighting", 0f)),
             };

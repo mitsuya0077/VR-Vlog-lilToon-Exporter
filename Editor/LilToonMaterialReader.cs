@@ -12,6 +12,11 @@ namespace VRVlog.LilToonExporter
             ("_MainTex", "mainColor"), ("_ShadowColorTex", "shadow"), ("_BumpMap", "normalMap"),
             ("_EmissionMap", "emission"), ("_RimColorTex", "rimLight"), ("_MatCapTex", "matCap"), ("_OutlineTex", "outline")
         };
+        private static readonly string[] UnsupportedFeatureToggles = {
+            "_UseMain2ndTex", "_UseMain3rdTex", "_UseAnisotropy", "_UseBacklight",
+            "_UseReflection", "_UseRefraction", "_UseFur", "_UseGem", "_UseAudioLink",
+            "_UseDissolve", "_UseDistanceFade", "_UseGlitter", "_UseParallax", "_UseTessellation"
+        };
 
         public static LilToonMaterialRecord Read(Material material, int materialIndex, Func<Texture, int> textureIndex)
         {
@@ -19,6 +24,8 @@ namespace VRVlog.LilToonExporter
             var family = ShaderFamily(material.shader.name);
             if (!LilToonMobileProfile.IsSupportedShaderFamily(family))
                 throw new NotSupportedException($"Unsupported lilToon shader: {material.shader.name}.");
+            foreach (var toggle in UnsupportedFeatureToggles)
+                if (Enabled(material, toggle)) throw new NotSupportedException($"Unsupported enabled lilToon feature: {toggle}.");
             var record = new LilToonMaterialRecord {
                 materialIndex = materialIndex, shaderFamily = family, renderMode = RenderMode(material),
                 renderQueue = material.renderQueue, cullMode = CullMode(material)
@@ -35,9 +42,7 @@ namespace VRVlog.LilToonExporter
             foreach (var name in ColorNames) if (material.HasProperty(name)) { var c = material.GetColor(name); record.colors.Add(new LilToonColorProperty { name = name, r = c.r, g = c.g, b = c.b, a = c.a }); }
             foreach (var item in TextureNames)
             {
-                // Disabled shadow data must not force a non-neutral MToon
-                // fallback or be advertised as an active extension texture.
-                if (item.Semantic == "shadow" && !Enabled(material, "_UseShadow")) continue;
+                if (!TextureFeatureEnabled(material, item.Semantic)) continue;
                 if (!material.HasProperty(item.Name)) continue; var texture = material.GetTexture(item.Name); if (texture == null) continue;
                 var index = textureIndex(texture); if (index < 0) throw new InvalidOperationException($"Texture '{texture.name}' is not present in the fallback VRM.");
                 var scale = material.GetTextureScale(item.Name); var offset = material.GetTextureOffset(item.Name);
@@ -60,6 +65,20 @@ namespace VRVlog.LilToonExporter
         private static bool Enabled(Material m, string p) => m.HasProperty(p) && m.GetFloat(p) > 0.5f;
         private static bool EnabledOrTexture(Material m, string enable, string texture) => m.HasProperty(enable) ? Enabled(m, enable) : HasTexture(m, texture);
         private static bool HasTexture(Material m, string p) => m.HasProperty(p) && m.GetTexture(p) != null;
+        private static bool TextureFeatureEnabled(Material material, string semantic)
+        {
+            switch (semantic)
+            {
+                case "mainColor": return true;
+                case "shadow": return Enabled(material, "_UseShadow");
+                case "normalMap": return EnabledOrTexture(material, "_UseBumpMap", "_BumpMap");
+                case "emission": return EnabledOrTexture(material, "_UseEmission", "_EmissionMap");
+                case "rimLight": return Enabled(material, "_UseRim");
+                case "matCap": return Enabled(material, "_UseMatCap");
+                case "outline": return Enabled(material, "_UseOutline") || material.shader.name.EndsWith("Outline", StringComparison.Ordinal);
+                default: throw new NotSupportedException($"Unsupported texture semantic: {semantic}.");
+            }
+        }
         private static void AddFeature(LilToonMaterialRecord r, string name, bool enabled) { if (enabled) r.features.Add(name); }
         private static string RenderMode(Material m) { var n = m.shader.name; if (n.IndexOf("Cutout", StringComparison.OrdinalIgnoreCase) >= 0) return "cutout"; if (n.IndexOf("Transparent", StringComparison.OrdinalIgnoreCase) >= 0) return "transparent"; if (m.HasProperty("_TransparentMode")) { var v = Mathf.RoundToInt(m.GetFloat("_TransparentMode")); if (v == 1) return "cutout"; if (v == 2) return "transparent"; if (v != 0) throw new NotSupportedException($"Unsupported lilToon transparent mode: {v}."); } return "opaque"; }
         private static string CullMode(Material m) { if (!m.HasProperty("_Cull")) return "back"; switch (Mathf.RoundToInt(m.GetFloat("_Cull"))) { case 0: return "off"; case 1: return "front"; default: return "back"; } }

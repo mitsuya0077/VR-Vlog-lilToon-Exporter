@@ -75,6 +75,9 @@ assert 'EndsWith("Outline"' in reader
 assert 'material.shader.name.EndsWith("Outline"' in reader
 assert "Unsupported lilToon transparent mode" in reader
 assert "EnabledOrTexture" in reader
+assert "UnsupportedFeatureToggles" in reader
+assert "Unsupported enabled lilToon feature" in reader
+assert "TextureFeatureEnabled" in reader
 assert "ValidateEncodedTexture" in injector
 assert "Encoded fallback texture is" in injector
 assert "PNG dimensions must be positive" in injector
@@ -136,7 +139,10 @@ assert "MatcapColorFactorSrgb = matcapEnabled ?" in one_click
 assert "ParametricRimColorFactorSrgb = rimEnabled ?" in one_click
 assert "ShadeColorFactorSrgb = shadowEnabled ?" in one_click
 assert "ShadeColorTexture = shadowEnabled ?" in one_click
-assert 'item.Semantic == "shadow" && !Enabled(material, "_UseShadow")' in reader
+for gated_texture in ("NormalTexture", "EmissiveTexture", "MatcapTexture", "RimMultiplyTexture", "OutlineWidthMultiplyTexture"):
+    assert f"{gated_texture} =" in one_click and "? Texture(source," in one_click
+assert 'private string avatarName = "";' in window
+assert 'private string author = "";' in window
 assert "ValidateAllEncodedTextures(glb, textureSources);" in injector
 assert "materialCount > LilToonMobileProfile.MaximumMaterials" in injector
 assert (root / "Tests/Editor/GlbDocumentTests.cs").is_file()
