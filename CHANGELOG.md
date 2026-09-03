@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.3.6
+
+- Recognize optional lilToon shader names whose leaf is prefixed with labels
+  such as `[Optional]`, including `lilToonFakeShadow`.
+- Match lilToon family names case-insensitively before applying the standard
+  approximation and warning behavior.
+
 ## 0.3.5
 
 - Export unsupported lilToon variants, including `lilToonFakeShadow`, using the

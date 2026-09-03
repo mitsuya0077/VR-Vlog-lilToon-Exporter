@@ -64,8 +64,10 @@ namespace VRVlog.LilToonExporter
         private static string ShaderFamily(string name, ICollection<string> warnings)
         {
             var leaf = name.Substring(name.LastIndexOf('/') + 1);
-            var family = leaf.StartsWith("lilToonLite", StringComparison.Ordinal) ? "lilToonLite" : leaf.StartsWith("lilToonMulti", StringComparison.Ordinal) ? "lilToonMulti" : leaf.StartsWith("lilToon", StringComparison.Ordinal) ? "lilToon" : "";
-            var suffix = family.Length == 0 ? "" : leaf.Substring(family.Length);
+            var lilToonStart = leaf.IndexOf("lilToon", StringComparison.OrdinalIgnoreCase);
+            var variant = lilToonStart >= 0 ? leaf.Substring(lilToonStart) : "";
+            var family = variant.StartsWith("lilToonLite", StringComparison.OrdinalIgnoreCase) ? "lilToonLite" : variant.StartsWith("lilToonMulti", StringComparison.OrdinalIgnoreCase) ? "lilToonMulti" : variant.StartsWith("lilToon", StringComparison.OrdinalIgnoreCase) ? "lilToon" : "";
+            var suffix = family.Length == 0 ? "" : variant.Substring(family.Length);
             var renderSuffix = suffix.EndsWith("Outline", StringComparison.Ordinal) ? suffix.Substring(0, suffix.Length - "Outline".Length) : suffix;
             if (family.Length == 0)
                 throw new NotSupportedException($"Unsupported lilToon shader: {name}.");
