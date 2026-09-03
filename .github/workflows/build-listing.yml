@@ -3,7 +3,7 @@ name: Build VPM Listing
 on:
   workflow_dispatch:
   pull_request:
-    paths: [.github/workflows/build-listing.yml, source.json, Website/**]
+    paths: [.github/workflows/build-listing.yml, package.json, source.json, Website/**]
   release:
     types: [published, released]
 
