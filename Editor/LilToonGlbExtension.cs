@@ -76,8 +76,9 @@ namespace VRVlog.LilToonExporter
         private static List<int> TextureSources(Dictionary<string, object> root) { var r=new List<int>(); var list=Array(root,"textures",false)??new List<object>(); foreach(var x in list){var o=x as Dictionary<string,object>; r.Add(o!=null&&o.TryGetValue("source",out var s)?Convert.ToInt32(s):-1);} return r; }
         private static int ResolveTexture(GlbDocument glb,Texture texture,string semantic,List<string> imageNames,List<int> textureSources,int fallbackTextureCount,Dictionary<Texture,int> addedTextures)
         {
-            if(addedTextures.TryGetValue(texture,out var cached))return cached;
-            if(!string.Equals(semantic,"backlight",StringComparison.Ordinal)){var existing=FindTexture(texture.name,imageNames,textureSources,fallbackTextureCount);return existing;}
+            var isBacklight=string.Equals(semantic,"backlight",StringComparison.Ordinal);
+            if(isBacklight&&addedTextures.TryGetValue(texture,out var cached))return cached;
+            if(!isBacklight)return FindTexture(texture.name,imageNames,textureSources,fallbackTextureCount);
             if(textureSources.Count>=LilToonMobileProfile.MaximumTextures)throw new InvalidOperationException("Adding the lilToon texture would exceed the mobile texture limit.");
             if(!(texture is Texture2D source))throw new NotSupportedException($"Texture '{texture.name}' must be a Texture2D.");
             if(source.width<=0||source.height<=0||source.width>LilToonMobileProfile.MaximumTextureSize||source.height>LilToonMobileProfile.MaximumTextureSize)

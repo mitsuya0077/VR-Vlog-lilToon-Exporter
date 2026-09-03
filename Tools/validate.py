@@ -92,8 +92,8 @@ assert "ImageConversion.EncodeToPNG(copy)" in injector
 assert "RenderTexture.ReleaseTemporary(temporary)" in injector
 assert "addedTextures.TryGetValue" in injector
 assert "fallbackTextureCount" in injector
-assert '!string.Equals(semantic,"backlight",StringComparison.Ordinal)' in injector
-assert 'var existing=FindTexture(texture.name,imageNames,textureSources,fallbackTextureCount);return existing;' in injector
+assert 'isBacklight&&addedTextures.TryGetValue(texture' in injector
+assert 'if(!isBacklight)return FindTexture(texture.name,imageNames,textureSources,fallbackTextureCount);' in injector
 assert "source.mipmapCount>1" in injector
 for gltf_filter in ("9984L", "9985L", "9987L"):
     assert gltf_filter in injector
