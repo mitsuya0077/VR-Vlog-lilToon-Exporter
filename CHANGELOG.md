@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.3.8
+
+- Resolve duplicate fallback texture names by embedding the exact source Unity
+  texture instead of aborting the export.
+- Reuse already embedded source textures and report the exceptional embedding
+  in the successful export warnings, limiting file-size growth to ambiguous
+  cases.
+
 ## 0.3.7
 
 - Accept UniVRM 0.131 VRM 1.0 output when its empty `extensionsRequired` array
