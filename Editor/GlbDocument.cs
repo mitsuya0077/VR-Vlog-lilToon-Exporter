@@ -74,6 +74,20 @@ namespace VRVlog.LilToonExporter
             return stream.ToArray();
         }
 
+        internal int AppendBinary(byte[] payload)
+        {
+            if (payload == null || payload.Length == 0) throw new ArgumentException("Binary payload is required.", nameof(payload));
+            if (!Json.TryGetValue("buffers", out var rawBuffers) || !(rawBuffers is List<object> buffers) || buffers.Count != 1 || !(buffers[0] is Dictionary<string, object> buffer))
+                throw new InvalidDataException("GLB must contain exactly one buffer before binary data can be appended.");
+            var offset = checked((Binary.Length + 3) & ~3);
+            var combined = new byte[checked(offset + payload.Length)];
+            Buffer.BlockCopy(Binary, 0, combined, 0, Binary.Length);
+            Buffer.BlockCopy(payload, 0, combined, offset, payload.Length);
+            Binary = combined;
+            buffer["byteLength"] = (long)Binary.Length;
+            return offset;
+        }
+
         private static byte[] Pad(byte[] source, byte value)
         {
             var length = (source.Length + 3) & ~3;

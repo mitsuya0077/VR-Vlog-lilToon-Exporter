@@ -37,17 +37,19 @@ The source avatar, materials, textures, and importer settings are never
 modified. The old existing-fallback workflow remains under **上級者向け：既存のVRM
 1.0へlilToonデータを追加**.
 
-No texture is duplicated by the extension: it references the already optimized
-texture indices produced by UniVRM. Optimize or resize textures in the UniVRM
-export step (1024 px recommended, 2048 px maximum for the mobile profile).
+Most extension textures reference the already optimized texture indices produced
+by UniVRM. A custom backlight color texture is instead copied into the extension
+as a PNG so it cannot be confused with a same-named fallback texture. This may
+increase the VRM file size. Resize it beforehand when needed (1024 px recommended,
+2048 px maximum for the mobile profile).
 
 ## Supported material subset
 
-Main color, shadow, backlight color/settings, normal map, emission, rim light,
-matcap, and outline are preserved. Backlight uses an MToon rim-light
-approximation in fallback viewers; custom backlight color textures are not yet
-supported. Fur, refraction, gem, tessellation, AudioLink, custom shaders,
-ambiguous names, and extension textures absent from the fallback are rejected.
+Main color, shadow, backlight color/settings/texture, normal map, emission, rim
+light, matcap, and outline are preserved. Backlight uses an MToon rim-light
+approximation in fallback viewers. Fur, refraction, gem, tessellation,
+AudioLink, custom shaders, ambiguous names, and non-backlight extension textures
+absent from the fallback are rejected.
 The failure is intentional: the exporter never emits a partially interpretable
 extension.
 

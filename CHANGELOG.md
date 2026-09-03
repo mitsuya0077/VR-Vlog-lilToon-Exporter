@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.3.4
+
+- Added full `_BacklightColorTex` export with non-destructive PNG encoding.
+- Deduplicate newly embedded source textures by Unity object identity.
+- Preserve texture filtering and wrapping while enforcing the mobile texture
+  count and 2048 px dimension limits.
+
 ## 0.3.3
 
 - Added support for lilToon backlight color and numeric settings.

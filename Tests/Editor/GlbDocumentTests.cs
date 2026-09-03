@@ -18,6 +18,25 @@ namespace VRVlog.LilToonExporter.Tests
             CollectionAssert.AreEqual(new byte[] { 1, 2, 3, 4 }, roundTrip.Binary);
         }
 
+        [Test]
+        public void AppendBinaryAlignsPayloadAndUpdatesDeclaredLength()
+        {
+            var json = new Dictionary<string, object>
+            {
+                { "asset", new Dictionary<string, object> { { "version", "2.0" } } },
+                { "buffers", new List<object> { new Dictionary<string, object> { { "byteLength", 3L } } } }
+            };
+            var document = GlbDocument.Read(Build(json, new byte[] { 1, 2, 3 }));
+
+            var offset = document.AppendBinary(new byte[] { 4, 5 });
+            var roundTrip = GlbDocument.Read(document.Write());
+            var buffer = (Dictionary<string, object>)((List<object>)roundTrip.Json["buffers"])[0];
+
+            Assert.AreEqual(4, offset);
+            Assert.AreEqual(6L, buffer["byteLength"]);
+            CollectionAssert.AreEqual(new byte[] { 1, 2, 3, 0, 4, 5, 0, 0 }, roundTrip.Binary);
+        }
+
         [TestCase(0x46546C66u)] [TestCase(0x46546C67u)]
         public void RejectsInvalidHeader(uint magic)
         {

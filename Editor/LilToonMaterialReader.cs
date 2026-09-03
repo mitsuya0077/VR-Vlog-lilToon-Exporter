@@ -10,7 +10,7 @@ namespace VRVlog.LilToonExporter
         private static readonly string[] ColorNames = { "_Color", "_ShadowColor", "_BacklightColor", "_EmissionColor", "_RimColor", "_MatCapColor", "_OutlineColor" };
         private static readonly (string Name, string Semantic)[] TextureNames = {
             ("_MainTex", "mainColor"), ("_ShadowColorTex", "shadow"), ("_BumpMap", "normalMap"),
-            ("_EmissionMap", "emission"), ("_RimColorTex", "rimLight"), ("_MatCapTex", "matCap"), ("_OutlineTex", "outline")
+            ("_BacklightColorTex", "backlight"), ("_EmissionMap", "emission"), ("_RimColorTex", "rimLight"), ("_MatCapTex", "matCap"), ("_OutlineTex", "outline")
         };
         private static readonly string[] UnsupportedFeatureToggles = {
             "_UseMain2ndTex", "_UseMain3rdTex", "_UseAnisotropy",
@@ -19,7 +19,7 @@ namespace VRVlog.LilToonExporter
             "_UseEmission2nd", "_UseBump2ndMap", "_UseMatCap2nd", "_AlphaMaskMode"
         };
 
-        public static LilToonMaterialRecord Read(Material material, int materialIndex, Func<Texture, int> textureIndex)
+        public static LilToonMaterialRecord Read(Material material, int materialIndex, Func<Texture, string, int> textureIndex)
         {
             if (material == null || material.shader == null) throw new ArgumentException("Material and shader are required.");
             var family = ShaderFamily(material.shader.name);
@@ -27,8 +27,6 @@ namespace VRVlog.LilToonExporter
                 throw new NotSupportedException($"Unsupported lilToon shader: {material.shader.name}.");
             foreach (var toggle in UnsupportedFeatureToggles)
                 if (Enabled(material, toggle)) throw new NotSupportedException($"Unsupported enabled lilToon feature: {toggle}.");
-            if (Enabled(material, "_UseBacklight") && HasCustomBacklightTexture(material))
-                throw new NotSupportedException("バックライトのカスタム色テクスチャにはまだ対応していません。色と数値設定だけを使用してください。");
             var record = new LilToonMaterialRecord {
                 materialIndex = materialIndex, shaderFamily = family, renderMode = RenderMode(material),
                 renderQueue = material.renderQueue, cullMode = CullMode(material)
@@ -48,7 +46,8 @@ namespace VRVlog.LilToonExporter
             {
                 if (!TextureFeatureEnabled(material, item.Semantic)) continue;
                 if (!material.HasProperty(item.Name)) continue; var texture = material.GetTexture(item.Name); if (texture == null) continue;
-                var index = textureIndex(texture); if (index < 0) throw new InvalidOperationException($"Texture '{texture.name}' is not present in the fallback VRM.");
+                if (item.Name == "_BacklightColorTex" && texture == Texture2D.whiteTexture) continue;
+                var index = textureIndex(texture, item.Semantic); if (index < 0) throw new InvalidOperationException($"Texture '{texture.name}' is not present in the fallback VRM.");
                 var scale = material.GetTextureScale(item.Name); var offset = material.GetTextureOffset(item.Name);
                 record.textures.Add(new LilToonTextureProperty { name = item.Name, semantic = item.Semantic, textureIndex = index, scaleX = scale.x, scaleY = scale.y, offsetX = offset.x, offsetY = offset.y });
             }
@@ -69,18 +68,13 @@ namespace VRVlog.LilToonExporter
         private static bool Enabled(Material m, string p) => m.HasProperty(p) && m.GetFloat(p) > 0.5f;
         private static bool EnabledOrTexture(Material m, string enable, string texture) => m.HasProperty(enable) ? Enabled(m, enable) : HasTexture(m, texture);
         private static bool HasTexture(Material m, string p) => m.HasProperty(p) && m.GetTexture(p) != null;
-        private static bool HasCustomBacklightTexture(Material material)
-        {
-            if (!material.HasProperty("_BacklightColorTex")) return false;
-            var texture = material.GetTexture("_BacklightColorTex");
-            return texture != null && texture != Texture2D.whiteTexture;
-        }
         private static bool TextureFeatureEnabled(Material material, string semantic)
         {
             switch (semantic)
             {
                 case "mainColor": return true;
                 case "shadow": return Enabled(material, "_UseShadow");
+                case "backlight": return Enabled(material, "_UseBacklight");
                 case "normalMap": return EnabledOrTexture(material, "_UseBumpMap", "_BumpMap");
                 case "emission": return EnabledOrTexture(material, "_UseEmission", "_EmissionMap");
                 case "rimLight": return Enabled(material, "_UseRim");
