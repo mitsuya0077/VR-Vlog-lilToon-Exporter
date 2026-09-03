@@ -94,6 +94,7 @@ namespace VRVlog.LilToonExporter
             var material = new Material(shader) { name = source.name };
             created.Add(material);
             var shadowEnabled = source.HasProperty("_UseShadow") && source.GetFloat("_UseShadow") > 0.5f;
+            var backlightEnabled = source.HasProperty("_UseBacklight") && source.GetFloat("_UseBacklight") > 0.5f;
             var normalEnabled = EnabledOrTexture(source, "_UseBumpMap", "_BumpMap");
             var emissionEnabled = EnabledOrTexture(source, "_UseEmission", "_EmissionMap");
             var matcapEnabled = source.HasProperty("_UseMatCap") && source.GetFloat("_UseMatCap") > 0.5f;
@@ -116,8 +117,14 @@ namespace VRVlog.LilToonExporter
                 EmissiveTexture = emissionEnabled ? Texture(source, "_EmissionMap") : null,
                 MatcapColorFactorSrgb = matcapEnabled ? Color(source, "_MatCapColor", UnityEngine.Color.white) : UnityEngine.Color.black,
                 MatcapTexture = matcapEnabled ? Texture(source, "_MatCapTex") : null,
-                ParametricRimColorFactorSrgb = rimEnabled ? Color(source, "_RimColor", UnityEngine.Color.black) : UnityEngine.Color.black,
-                ParametricRimFresnelPowerFactor = Mathf.Max(0f, Float(source, "_RimFresnelPower", 1f)),
+                // MToon has no directional backlight. When lilToon rim light is
+                // unused, its parametric rim is the closest portable fallback.
+                ParametricRimColorFactorSrgb = rimEnabled
+                    ? Color(source, "_RimColor", UnityEngine.Color.black)
+                    : backlightEnabled ? Color(source, "_BacklightColor", UnityEngine.Color.black) : UnityEngine.Color.black,
+                ParametricRimFresnelPowerFactor = Mathf.Max(0f, rimEnabled
+                    ? Float(source, "_RimFresnelPower", 1f)
+                    : backlightEnabled ? Float(source, "_BacklightDirectivity", 5f) : 1f),
                 RimMultiplyTexture = rimEnabled ? Texture(source, "_RimColorTex") : null,
                 OutlineWidthMode = outlineEnabled ? MToon10OutlineMode.World : MToon10OutlineMode.None,
                 OutlineWidthFactor = Mathf.Max(0f, Float(source, "_OutlineWidth", 0f)),

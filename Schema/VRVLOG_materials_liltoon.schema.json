@@ -1,6 +1,6 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://vrvlog.app/schema/VRVLOG_materials_liltoon/1.0/schema.json",
+  "$id": "https://vrvlog.app/schema/VRVLOG_materials_liltoon/1.1/schema.json",
   "title": "VR Vlog lilToon material extension",
   "type": "object",
   "additionalProperties": false,
@@ -68,7 +68,7 @@
           "type": "array",
           "uniqueItems": true,
           "maxItems": 16,
-          "items": {"enum": ["mainColor", "shadow", "normalMap", "emission", "rimLight", "matCap", "outline"]}
+        "items": {"enum": ["mainColor", "shadow", "backlight", "normalMap", "emission", "rimLight", "matCap", "outline"]}
         },
         "floats": {"type": "array", "description": "Property names must be unique; enforced by LilToonExtensionValidator.", "maxItems": 128, "items": {"$ref": "#/$defs/namedFloat"}},
         "colors": {"type": "array", "description": "Property names must be unique; enforced by LilToonExtensionValidator.", "maxItems": 32, "items": {"$ref": "#/$defs/color"}},
