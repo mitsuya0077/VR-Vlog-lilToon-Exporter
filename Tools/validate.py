@@ -77,6 +77,8 @@ assert "Unsupported lilToon transparent mode" in reader
 assert "EnabledOrTexture" in reader
 assert "UnsupportedFeatureToggles" in reader
 assert "Unsupported enabled lilToon feature" in reader
+for unsupported_toggle in ("_UseEmission2nd", "_UseBump2ndMap", "_UseMatCap2nd", "_AlphaMaskMode"):
+    assert f'"{unsupported_toggle}"' in reader
 assert "TextureFeatureEnabled" in reader
 assert "ValidateEncodedTexture" in injector
 assert "Encoded fallback texture is" in injector
@@ -96,6 +98,8 @@ assert "outside the GLB materials array" in injector
 assert "outside the GLB textures array" in injector
 assert "RequireMToonFallback(glb.Json, material.materialIndex)" in injector
 assert "VRMC_materials_mtoon 1.0 fallback" in injector
+assert "RequireVrm10Root(glb.Json);" in injector
+assert "Fallback GLB has no valid VRMC_vrm 1.0 root extension" in injector
 assert "does not declare VRMC_materials_mtoon in extensionsUsed" in injector
 assert "ValidateEncodedTexture(glb, texture.textureIndex, textureSources)" in injector
 assert "Unexpected extension property" in injector

@@ -15,7 +15,8 @@ namespace VRVlog.LilToonExporter
         private static readonly string[] UnsupportedFeatureToggles = {
             "_UseMain2ndTex", "_UseMain3rdTex", "_UseAnisotropy", "_UseBacklight",
             "_UseReflection", "_UseRefraction", "_UseFur", "_UseGem", "_UseAudioLink",
-            "_UseDissolve", "_UseDistanceFade", "_UseGlitter", "_UseParallax", "_UseTessellation"
+            "_UseDissolve", "_UseDistanceFade", "_UseGlitter", "_UseParallax", "_UseTessellation",
+            "_UseEmission2nd", "_UseBump2ndMap", "_UseMatCap2nd", "_AlphaMaskMode"
         };
 
         public static LilToonMaterialRecord Read(Material material, int materialIndex, Func<Texture, int> textureIndex)

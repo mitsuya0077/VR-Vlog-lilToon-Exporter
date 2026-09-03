@@ -10,6 +10,7 @@ namespace VRVlog.LilToonExporter
         {
             if (avatar == null) throw new ArgumentNullException(nameof(avatar));
             var glb = GlbDocument.Read(source);
+            RequireVrm10Root(glb.Json);
             var materialNames = Names(glb.Json, "materials");
             var imageNames = Names(glb.Json, "images");
             var textureSources = TextureSources(glb.Json);
@@ -47,6 +48,7 @@ namespace VRVlog.LilToonExporter
         public static void Validate(byte[] bytes, int expectedMaterials = -1)
         {
             var glb = GlbDocument.Read(bytes); var extensions = Object(glb.Json, "extensions", false);
+            RequireVrm10Root(glb.Json);
             if (extensions == null || !extensions.TryGetValue(LilToonMobileProfile.ExtensionName, out var raw) || !(raw is Dictionary<string, object> root)) throw new InvalidOperationException("lilToon extension is missing after round trip.");
             var extension = FromDom(root);
             if (!LilToonExtensionValidator.TryValidate(extension, out var error)) throw new InvalidOperationException(error);
@@ -107,6 +109,7 @@ namespace VRVlog.LilToonExporter
         private static uint Crc32(byte[] data,int offset,int length){uint crc=0xffffffff;for(var i=0;i<length;i++){crc^=data[offset+i];for(var bit=0;bit<8;bit++)crc=(crc&1)!=0?(crc>>1)^0xedb88320:crc>>1;}return crc^0xffffffff;}
         private static int BigEndian(byte[] data,int i)=>(data[i]<<24)|(data[i+1]<<16)|(data[i+2]<<8)|data[i+3];
         private static void RequireMToonFallback(Dictionary<string,object> root,int index){var used=Array(root,"extensionsUsed",false);if(used==null||!Contains(used,"VRMC_materials_mtoon"))throw new InvalidOperationException("Fallback VRM does not declare VRMC_materials_mtoon in extensionsUsed.");var materials=Array(root,"materials",false);if(materials==null||index>=materials.Count||!(materials[index] is Dictionary<string,object> material)){throw new InvalidOperationException($"Fallback material {index} is missing.");}var extensions=Object(material,"extensions",false);if(extensions==null||!extensions.TryGetValue("VRMC_materials_mtoon",out var raw)||!(raw is Dictionary<string,object> mtoon)||!mtoon.TryGetValue("specVersion",out var version)||!(version is string text)||text!="1.0")throw new InvalidOperationException($"Material {index} has no valid VRMC_materials_mtoon 1.0 fallback.");}
+        private static void RequireVrm10Root(Dictionary<string,object> root){var used=Array(root,"extensionsUsed",false);var extensions=Object(root,"extensions",false);if(used==null||!Contains(used,"VRMC_vrm")||extensions==null||!extensions.TryGetValue("VRMC_vrm",out var raw)||!(raw is Dictionary<string,object> vrm)||!vrm.TryGetValue("specVersion",out var version)||!(version is string text)||text!="1.0")throw new InvalidOperationException("Fallback GLB has no valid VRMC_vrm 1.0 root extension.");}
         private static int UniqueIndex(List<string> names,string name,string kind){var found=-1;for(var i=0;i<names.Count;i++)if(SameName(names[i],name)){if(found>=0)throw new InvalidOperationException($"Ambiguous {kind} name '{name}'.");found=i;}if(found<0)throw new InvalidOperationException($"{kind} '{name}' is not present in fallback VRM.");return found;}
         private static bool SameName(string a,string b)=>string.Equals(Strip(a),Strip(b),StringComparison.Ordinal); private static string Strip(string n)=>n!=null&&n.EndsWith(" (Instance)",StringComparison.Ordinal)?n.Substring(0,n.Length-11):n??"";
         private static Dictionary<string,object> Object(Dictionary<string,object> r,string k,bool create){if(r.TryGetValue(k,out var x)){if(x is Dictionary<string,object> o)return o;throw new InvalidOperationException($"glTF '{k}' must be an object.");}if(!create)return null;var created=new Dictionary<string,object>(StringComparer.Ordinal);r[k]=created;return created;}
