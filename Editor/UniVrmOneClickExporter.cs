@@ -2,9 +2,9 @@ using System;
 using System.Collections.Generic;
 using UniGLTF;
 using UniVRM10;
-using UnityEditor.PackageManager;
 using UnityEngine;
 using VRM10.MToon10;
+using PackageManagerPackageInfo = UnityEditor.PackageManager.PackageInfo;
 
 namespace VRVlog.LilToonExporter
 {
@@ -41,7 +41,7 @@ namespace VRVlog.LilToonExporter
 
         private static void EnsureUniVrmVersion()
         {
-            var package = PackageInfo.FindForAssembly(typeof(Vrm10Exporter).Assembly);
+            var package = PackageManagerPackageInfo.FindForAssembly(typeof(Vrm10Exporter).Assembly);
             var version = package != null ? package.version : null;
             if (string.IsNullOrWhiteSpace(version) || !version.StartsWith(SupportedUniVrmSeries + ".", StringComparison.Ordinal))
                 throw new InvalidOperationException($"UniVRM {SupportedUniVrmSeries}.x is required. Installed package version: {version ?? "unknown"}.");
