@@ -61,7 +61,10 @@ requires the matching UniVRM packages to already be present.
 
 ## Compatibility
 
-- Unity 2022.3+
+- Unity 2022.3 or later. VRChat creators should use VRChat's currently
+  supported editor (2022.3.22f1 at the time of this release); later editor
+  versions are source-compatible but are not a substitute for VRChat's
+  required upload version.
 - UniVRM 0.131.x (`com.vrmc.gltf` and `com.vrmc.vrm`)
 - lilToon materials whose shader names identify lilToon, Lite, or Multi
 - One-click export uses UniVRM's public `Vrm10Exporter.Export` API. New UniVRM

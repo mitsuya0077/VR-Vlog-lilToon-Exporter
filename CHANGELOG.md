@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.3.1
+
+- Fixed package installation compilation on Unity versions that also expose
+  `UnityEditor.PackageInfo` by explicitly using
+  `UnityEditor.PackageManager.PackageInfo`.
+- Added validation that prevents ambiguous `PackageInfo` references from being
+  reintroduced.
+
 ## 0.3.0
 
 - Added VCC/ALCOM VPM dependency declarations for tested UniVRM 0.131.x packages.

@@ -18,7 +18,7 @@ listing = json.loads((root / "source.json").read_text(encoding="utf-8"))
 
 assert package["name"] == "com.vrvlog.liltoon-vrm-exporter"
 assert package["unity"] == "2022.3"
-assert package["version"] == "0.3.0"
+assert package["version"] == "0.3.1"
 assert package["vpmDependencies"] == {
     "com.vrmc.gltf": "0.131.x",
     "com.vrmc.vrm": "0.131.x",
@@ -128,6 +128,12 @@ assert "UniVrmOneClickExporter.Export" in window
 assert 'SupportedLilToonVersion = "2.3.4"' in window
 assert 'package.name, "jp.lilxyzw.liltoon"' in window
 assert "RequireSupportedLilToon()" in window
+assert 'return info != null && !string.IsNullOrWhiteSpace(info.version) ? info.version : package["version"]' not in window
+assert f'? info.version : "{package["version"]}"' in window
+assert "using UnityEditor.PackageManager;" not in window
+assert "using PackageManagerPackageInfo = UnityEditor.PackageManager.PackageInfo;" in window
+assert "PackageManagerPackageInfo FindLilToonPackage()" in window
+assert "PackageManagerPackageInfo.GetAllRegisteredPackages()" in window
 assert "Vrm10Exporter.Export" in one_click
 assert "UnityEngine.Object.Instantiate(source)" in one_click
 assert "ReplaceLilToonMaterials(clone" in one_click
@@ -137,7 +143,9 @@ assert "CreateMToonFallback(source, created)" in one_click
 assert "created.Add(material)" in one_click
 assert 'Float(source, "_Cull", 2f) == 2f' in one_click
 assert "context.Validate()" in one_click
-assert "PackageInfo.FindForAssembly" in one_click
+assert "using UnityEditor.PackageManager;" not in one_click
+assert "using PackageManagerPackageInfo = UnityEditor.PackageManager.PackageInfo;" in one_click
+assert "PackageManagerPackageInfo.FindForAssembly" in one_click
 assert 'version.StartsWith(SupportedUniVrmSeries + "."' in one_click
 assert (root / ".github/workflows/build-listing.yml").is_file()
 assert (root / ".github/workflows/release-vpm.yml").is_file()
@@ -164,6 +172,7 @@ assert "Generate listing from a local release fixture" in listing_workflow
 assert "--package-listing-source-folder" in listing_workflow
 assert 'test -s "$fixture/output/index.json"' in listing_workflow
 assert "3b99078d26b362733ad9bf463f98c83b8a1b4c9f" in release_workflow
+assert f"default: {package['version']}" in release_workflow
 assert '--target "${GITHUB_SHA}"' in release_workflow
 assert 'os.environ["UNIVRM_VERSION"] == "0.131.0"' in release_workflow
 assert 'tag v${VERSION} already exists' in release_workflow

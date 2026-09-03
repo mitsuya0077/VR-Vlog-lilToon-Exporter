@@ -1,8 +1,8 @@
 using System;
 using System.IO;
 using UnityEditor;
-using UnityEditor.PackageManager;
 using UnityEngine;
+using PackageManagerPackageInfo = UnityEditor.PackageManager.PackageInfo;
 
 namespace VRVlog.LilToonExporter
 {
@@ -105,8 +105,8 @@ namespace VRVlog.LilToonExporter
 
         private static string PackageVersion()
         {
-            var info = UnityEditor.PackageManager.PackageInfo.FindForAssembly(typeof(LilToonExporterWindow).Assembly);
-            return info != null && !string.IsNullOrWhiteSpace(info.version) ? info.version : "0.3.0";
+            var info = PackageManagerPackageInfo.FindForAssembly(typeof(LilToonExporterWindow).Assembly);
+            return info != null && !string.IsNullOrWhiteSpace(info.version) ? info.version : "0.3.1";
         }
 
         private static string InstalledLilToonStatus()
@@ -123,9 +123,9 @@ namespace VRVlog.LilToonExporter
             return package.version;
         }
 
-        private static PackageInfo FindLilToonPackage()
+        private static PackageManagerPackageInfo FindLilToonPackage()
         {
-            foreach (var package in PackageInfo.GetAllRegisteredPackages())
+            foreach (var package in PackageManagerPackageInfo.GetAllRegisteredPackages())
                 if (string.Equals(package.name, "jp.lilxyzw.liltoon", StringComparison.Ordinal)) return package;
             return null;
         }
