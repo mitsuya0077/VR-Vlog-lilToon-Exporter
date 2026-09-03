@@ -43,6 +43,36 @@ jobs:
             /nodeReuse:false \
             /p:UseSharedCompilation=false \
             --nologo
+      - name: Generate listing from a local release fixture
+        run: |
+          fixture=$RUNNER_TEMP/listing-fixture
+          mkdir -p "$fixture/release" "$fixture/output" "$fixture/package"
+          cp source.json "$fixture/source.json"
+          cp -R Website "$fixture/Website"
+          cp package.json "$fixture/package/package.json"
+          (cd "$fixture/package" && zip -qr "$fixture/release/package.zip" .)
+          python3 - <<'PY'
+          import json, os
+          from pathlib import Path
+          source = Path(os.environ["RUNNER_TEMP"]) / "listing-fixture/source.json"
+          data = json.loads(source.read_text(encoding="utf-8"))
+          data.pop("githubRepos", None)
+          data["packages"] = [{"id": "com.vrvlog.liltoon-vrm-exporter", "releases": ["http://127.0.0.1:8765/listing-fixture/release/package.zip"]}]
+          source.write_text(json.dumps(data), encoding="utf-8")
+          PY
+          python3 -m http.server 8765 --bind 127.0.0.1 --directory "$RUNNER_TEMP" >/tmp/vpm-listing-http.log 2>&1 &
+          server_pid=$!
+          trap 'kill "$server_pid"' EXIT
+          dotnet run \
+            --project ${{ env.pathToCi }}/PackageBuilder/PackageBuilder.csproj \
+            --no-build \
+            --framework net8.0 \
+            -- \
+            BuildMultiPackageListing \
+            --root ${{ env.pathToCi }} \
+            --package-listing-source-folder "$fixture" \
+            --list-publish-directory "$fixture/output"
+          test -s "$fixture/output/index.json"
 
   build-listing:
     if: github.event_name != 'pull_request'

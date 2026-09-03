@@ -103,9 +103,12 @@ assert 'required==null||!Contains(required,"VRMC_vrm")' in injector
 assert 'humanoid.TryGetValue("humanBones",out var rawBones)' in injector
 assert "RequiredHumanBones" in injector
 assert "has no valid node" in injector
+assert "new HashSet<long>()" in injector
+assert "!assignedNodes.Add(node)" in injector
 assert 'meta.TryGetValue("name",out var rawName)' in injector
 assert 'meta.TryGetValue("authors",out var rawAuthors)' in injector
 assert 'meta.TryGetValue("licenseUrl",out var rawLicenseUrl)' in injector
+assert "string.IsNullOrWhiteSpace(licenseUrl)" in injector
 assert "does not declare VRMC_materials_mtoon in extensionsUsed" in injector
 assert "ValidateEncodedTexture(glb, texture.textureIndex, textureSources)" in injector
 assert "Unexpected extension property" in injector
@@ -143,6 +146,9 @@ assert "if: github.event_name != 'pull_request'" in listing_workflow
 assert listing_workflow.index("if: github.event_name != 'pull_request'") < listing_workflow.index("environment:")
 assert "Build listing tool" in listing_workflow
 assert "Generate VPM listing" in listing_workflow
+assert "Generate listing from a local release fixture" in listing_workflow
+assert "--package-listing-source-folder" in listing_workflow
+assert 'test -s "$fixture/output/index.json"' in listing_workflow
 assert "3b99078d26b362733ad9bf463f98c83b8a1b4c9f" in release_workflow
 assert '--target "${GITHUB_SHA}"' in release_workflow
 assert 'os.environ["UNIVRM_VERSION"] == "0.131.0"' in release_workflow
