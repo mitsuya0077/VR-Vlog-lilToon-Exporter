@@ -87,6 +87,7 @@ assert '("_BacklightColorTex", "backlight")' in reader
 assert 'case "backlight": return Enabled(material, "_UseBacklight")' in reader
 assert 'item.Name == "_BacklightColorTex" && texture == Texture2D.whiteTexture' in reader
 assert "ResolveTexture(glb, texture" in injector
+assert 'LilToonMaterialReader.Read(source, 0, (_, __) => 0);' in one_click
 assert "glb.AppendBinary(png)" in injector
 assert "ImageConversion.EncodeToPNG(copy)" in injector
 assert "RenderTexture.ReleaseTemporary(temporary)" in injector
