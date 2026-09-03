@@ -152,8 +152,8 @@ namespace VRVlog.LilToonExporter
         private static readonly HashSet<string> BonesRequiringDirectParent=new HashSet<string>(StringComparer.Ordinal){"upperChest","leftThumbProximal","leftThumbDistal","leftIndexIntermediate","leftIndexDistal","leftMiddleIntermediate","leftMiddleDistal","leftRingIntermediate","leftRingDistal","leftLittleIntermediate","leftLittleDistal","rightThumbProximal","rightThumbDistal","rightIndexIntermediate","rightIndexDistal","rightMiddleIntermediate","rightMiddleDistal","rightRingIntermediate","rightRingDistal","rightLittleIntermediate","rightLittleDistal"};
         private static void RequireVrm10Root(Dictionary<string,object> root)
         {
-            var used=Array(root,"extensionsUsed",false);var required=Array(root,"extensionsRequired",false);var extensions=Object(root,"extensions",false);
-            if(used==null||!Contains(used,"VRMC_vrm")||required==null||!Contains(required,"VRMC_vrm")||extensions==null||!extensions.TryGetValue("VRMC_vrm",out var raw)||!(raw is Dictionary<string,object> vrm)||!vrm.TryGetValue("specVersion",out var version)||!(version is string text)||text!="1.0")throw new InvalidOperationException("Fallback GLB has no valid required VRMC_vrm 1.0 root extension.");
+            var used=Array(root,"extensionsUsed",false);var extensions=Object(root,"extensions",false);
+            if(used==null||!Contains(used,"VRMC_vrm")||extensions==null||!extensions.TryGetValue("VRMC_vrm",out var raw)||!(raw is Dictionary<string,object> vrm)||!vrm.TryGetValue("specVersion",out var version)||!(version is string text)||text!="1.0")throw new InvalidOperationException("Fallback GLB has no valid VRMC_vrm 1.0 root extension.");
             if(!vrm.TryGetValue("humanoid",out var rawHumanoid)||!(rawHumanoid is Dictionary<string,object> humanoid)||!humanoid.TryGetValue("humanBones",out var rawBones)||!(rawBones is Dictionary<string,object> bones))throw new InvalidOperationException("VRMC_vrm humanoid.humanBones is missing.");
             var nodeCount=(Array(root,"nodes",false)??new List<object>()).Count;
             var assignedNodes=new HashSet<long>();

@@ -18,7 +18,7 @@ listing = json.loads((root / "source.json").read_text(encoding="utf-8"))
 
 assert package["name"] == "com.vrvlog.liltoon-vrm-exporter"
 assert package["unity"] == "2022.3"
-assert package["version"] == "0.3.6"
+assert package["version"] == "0.3.7"
 assert package["vpmDependencies"] == {
     "com.vrmc.gltf": "0.131.x",
     "com.vrmc.vrm": "0.131.x",
@@ -134,7 +134,10 @@ assert "outside the GLB textures array" in injector
 assert "RequireMToonFallback(glb.Json, material.materialIndex)" in injector
 assert "VRMC_materials_mtoon 1.0 fallback" in injector
 assert "RequireVrm10Root(glb.Json);" in injector
-assert 'required==null||!Contains(required,"VRMC_vrm")' in injector
+vrm_root_guard = injector.split("private static void RequireVrm10Root", 1)[1].split("private static bool AllNonEmptyStrings", 1)[0]
+assert 'Contains(used,"VRMC_vrm")' in vrm_root_guard
+assert 'extensionsRequired' not in vrm_root_guard
+assert 'text!="1.0"' in vrm_root_guard
 assert 'humanoid.TryGetValue("humanBones",out var rawBones)' in injector
 assert "RequiredHumanBones" in injector
 assert "has no valid node" in injector
