@@ -92,6 +92,10 @@ assert "ImageConversion.EncodeToPNG(copy)" in injector
 assert "RenderTexture.ReleaseTemporary(temporary)" in injector
 assert "addedTextures.TryGetValue" in injector
 assert "fallbackTextureCount" in injector
+assert '!string.Equals(semantic,"backlight",StringComparison.Ordinal)' in injector
+assert "source.mipmapCount>1" in injector
+for gltf_filter in ("9984L", "9985L", "9987L"):
+    assert gltf_filter in injector
 assert 'Array(glb.Json,"bufferViews",true)' in injector
 assert 'Array(glb.Json,"images",true)' in injector
 assert 'Array(glb.Json,"samplers",true)' in injector

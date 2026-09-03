@@ -19,7 +19,7 @@ namespace VRVlog.LilToonExporter
             "_UseEmission2nd", "_UseBump2ndMap", "_UseMatCap2nd", "_AlphaMaskMode"
         };
 
-        public static LilToonMaterialRecord Read(Material material, int materialIndex, Func<Texture, int> textureIndex)
+        public static LilToonMaterialRecord Read(Material material, int materialIndex, Func<Texture, string, int> textureIndex)
         {
             if (material == null || material.shader == null) throw new ArgumentException("Material and shader are required.");
             var family = ShaderFamily(material.shader.name);
@@ -47,7 +47,7 @@ namespace VRVlog.LilToonExporter
                 if (!TextureFeatureEnabled(material, item.Semantic)) continue;
                 if (!material.HasProperty(item.Name)) continue; var texture = material.GetTexture(item.Name); if (texture == null) continue;
                 if (item.Name == "_BacklightColorTex" && texture == Texture2D.whiteTexture) continue;
-                var index = textureIndex(texture); if (index < 0) throw new InvalidOperationException($"Texture '{texture.name}' is not present in the fallback VRM.");
+                var index = textureIndex(texture, item.Semantic); if (index < 0) throw new InvalidOperationException($"Texture '{texture.name}' is not present in the fallback VRM.");
                 var scale = material.GetTextureScale(item.Name); var offset = material.GetTextureOffset(item.Name);
                 record.textures.Add(new LilToonTextureProperty { name = item.Name, semantic = item.Semantic, textureIndex = index, scaleX = scale.x, scaleY = scale.y, offsetX = offset.x, offsetY = offset.y });
             }

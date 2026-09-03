@@ -28,7 +28,7 @@ namespace VRVlog.LilToonExporter
                 var index = UniqueIndex(materialNames, material.name, "material");
                 if (!seen.Add(index)) continue;
                 RequireMToonFallback(glb.Json, index);
-                var record = LilToonMaterialReader.Read(material, index, texture => ResolveTexture(glb, texture, imageNames, textureSources, fallbackTextureCount, addedTextures));
+                var record = LilToonMaterialReader.Read(material, index, (texture, semantic) => ResolveTexture(glb, texture, semantic, imageNames, textureSources, fallbackTextureCount, addedTextures));
                 foreach (var texture in record.textures) ValidateEncodedTexture(glb, texture.textureIndex, textureSources);
                 extension.materials.Add(record);
             }
@@ -74,10 +74,10 @@ namespace VRVlog.LilToonExporter
         }
         private static List<string> Names(Dictionary<string, object> root, string key) { var r = new List<string>(); var list = Array(root,key,false) ?? new List<object>(); foreach (var x in list) { var o=x as Dictionary<string,object>; r.Add(o != null && o.TryGetValue("name",out var n) ? n as string ?? "" : ""); } return r; }
         private static List<int> TextureSources(Dictionary<string, object> root) { var r=new List<int>(); var list=Array(root,"textures",false)??new List<object>(); foreach(var x in list){var o=x as Dictionary<string,object>; r.Add(o!=null&&o.TryGetValue("source",out var s)?Convert.ToInt32(s):-1);} return r; }
-        private static int ResolveTexture(GlbDocument glb,Texture texture,List<string> imageNames,List<int> textureSources,int fallbackTextureCount,Dictionary<Texture,int> addedTextures)
+        private static int ResolveTexture(GlbDocument glb,Texture texture,string semantic,List<string> imageNames,List<int> textureSources,int fallbackTextureCount,Dictionary<Texture,int> addedTextures)
         {
             if(addedTextures.TryGetValue(texture,out var cached))return cached;
-            var existing=FindTexture(texture.name,imageNames,textureSources,fallbackTextureCount);if(existing>=0)return existing;
+            if(!string.Equals(semantic,"backlight",StringComparison.Ordinal)){var existing=FindTexture(texture.name,imageNames,textureSources,fallbackTextureCount);if(existing>=0)return existing;}
             if(textureSources.Count>=LilToonMobileProfile.MaximumTextures)throw new InvalidOperationException("Adding the lilToon texture would exceed the mobile texture limit.");
             if(!(texture is Texture2D source))throw new NotSupportedException($"Texture '{texture.name}' must be a Texture2D.");
             if(source.width<=0||source.height<=0||source.width>LilToonMobileProfile.MaximumTextureSize||source.height>LilToonMobileProfile.MaximumTextureSize)
@@ -88,7 +88,7 @@ namespace VRVlog.LilToonExporter
             var images=Array(glb.Json,"images",true);var imageIndex=images.Count;
             images.Add(new Dictionary<string,object>{{"name",source.name},{"mimeType","image/png"},{"bufferView",(long)viewIndex}});
             var samplers=Array(glb.Json,"samplers",true);var samplerIndex=samplers.Count;
-            samplers.Add(new Dictionary<string,object>{{"magFilter",MagFilter(source.filterMode)},{"minFilter",MinFilter(source.filterMode)},{"wrapS",Wrap(source.wrapModeU)},{"wrapT",Wrap(source.wrapModeV)}});
+            samplers.Add(new Dictionary<string,object>{{"magFilter",MagFilter(source.filterMode)},{"minFilter",MinFilter(source.filterMode,source.mipmapCount>1)},{"wrapS",Wrap(source.wrapModeU)},{"wrapT",Wrap(source.wrapModeV)}});
             var textures=Array(glb.Json,"textures",true);var textureIndex=textures.Count;
             textures.Add(new Dictionary<string,object>{{"source",(long)imageIndex},{"sampler",(long)samplerIndex}});
             imageNames.Add(source.name);textureSources.Add(imageIndex);addedTextures.Add(texture,textureIndex);
@@ -102,7 +102,7 @@ namespace VRVlog.LilToonExporter
             finally{RenderTexture.active=previous;if(copy!=null)UnityEngine.Object.DestroyImmediate(copy);RenderTexture.ReleaseTemporary(temporary);}
         }
         private static long MagFilter(FilterMode mode)=>mode==FilterMode.Point?9728L:9729L;
-        private static long MinFilter(FilterMode mode)=>mode==FilterMode.Point?9728L:mode==FilterMode.Trilinear?9987L:9729L;
+        private static long MinFilter(FilterMode mode,bool mipmapped){if(!mipmapped)return mode==FilterMode.Point?9728L:9729L;return mode==FilterMode.Point?9984L:mode==FilterMode.Trilinear?9987L:9985L;}
         private static long Wrap(TextureWrapMode mode){switch(mode){case TextureWrapMode.Clamp:return 33071L;case TextureWrapMode.Mirror:return 33648L;case TextureWrapMode.Repeat:return 10497L;default:throw new NotSupportedException($"Texture wrap mode '{mode}' is not supported.");}}
         private static void ValidateAllEncodedTextures(GlbDocument glb,List<int> sources){for(var i=0;i<sources.Count;i++)ValidateEncodedTexture(glb,i,sources);}
         private static void ValidateEncodedTexture(GlbDocument glb,int textureIndex,List<int> sources)
