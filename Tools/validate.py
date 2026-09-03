@@ -18,7 +18,7 @@ listing = json.loads((root / "source.json").read_text(encoding="utf-8"))
 
 assert package["name"] == "com.vrvlog.liltoon-vrm-exporter"
 assert package["unity"] == "2022.3"
-assert package["version"] == "0.3.5"
+assert package["version"] == "0.3.6"
 assert package["vpmDependencies"] == {
     "com.vrmc.gltf": "0.131.x",
     "com.vrmc.vrm": "0.131.x",
@@ -72,6 +72,10 @@ assert "Validate(output, extension.materials.Count)" in injector
 assert "GetComponentsInChildren<Renderer>(true)" in injector
 assert "_MainTex" in reader and "_UseShadow" in reader and "_UseOutline" in reader
 assert "特殊シェーダーは標準lilToonとして近似しました" in reader
+assert 'const string optionalPrefix = "[Optional]";' in reader
+assert 'leaf.StartsWith(optionalPrefix, StringComparison.OrdinalIgnoreCase)' in reader
+assert 'return leaf.StartsWith("lilToon", StringComparison.OrdinalIgnoreCase) ? leaf : "";' in reader
+assert 'ShaderVariant(material.shader.name).Length > 0' in reader
 assert 'item.Semantic == "mainColor"' in reader
 assert "メイン画像 '{texture.name}' を元のVRMへ対応付けできません" in reader
 assert 'EndsWith("Outline"' in reader

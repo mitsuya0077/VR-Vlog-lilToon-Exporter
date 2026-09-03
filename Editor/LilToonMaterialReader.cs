@@ -60,18 +60,25 @@ namespace VRVlog.LilToonExporter
             return record;
         }
 
-        public static bool IsLilToon(Material material) => material != null && material.shader != null && material.shader.name.IndexOf("lilToon", StringComparison.OrdinalIgnoreCase) >= 0;
+        public static bool IsLilToon(Material material) => material != null && material.shader != null && ShaderVariant(material.shader.name).Length > 0;
         private static string ShaderFamily(string name, ICollection<string> warnings)
         {
-            var leaf = name.Substring(name.LastIndexOf('/') + 1);
-            var family = leaf.StartsWith("lilToonLite", StringComparison.Ordinal) ? "lilToonLite" : leaf.StartsWith("lilToonMulti", StringComparison.Ordinal) ? "lilToonMulti" : leaf.StartsWith("lilToon", StringComparison.Ordinal) ? "lilToon" : "";
-            var suffix = family.Length == 0 ? "" : leaf.Substring(family.Length);
+            var variant = ShaderVariant(name);
+            var family = variant.StartsWith("lilToonLite", StringComparison.OrdinalIgnoreCase) ? "lilToonLite" : variant.StartsWith("lilToonMulti", StringComparison.OrdinalIgnoreCase) ? "lilToonMulti" : variant.StartsWith("lilToon", StringComparison.OrdinalIgnoreCase) ? "lilToon" : "";
+            var suffix = family.Length == 0 ? "" : variant.Substring(family.Length);
             var renderSuffix = suffix.EndsWith("Outline", StringComparison.Ordinal) ? suffix.Substring(0, suffix.Length - "Outline".Length) : suffix;
             if (family.Length == 0)
                 throw new NotSupportedException($"Unsupported lilToon shader: {name}.");
             if (renderSuffix != "" && renderSuffix != "Cutout" && renderSuffix != "Transparent" && renderSuffix != "OnePassTransparent" && renderSuffix != "TwoPassTransparent")
                 AddWarning(warnings, $"{name}: 特殊シェーダーは標準lilToonとして近似しました。");
             return family;
+        }
+        private static string ShaderVariant(string name)
+        {
+            var leaf = name.Substring(name.LastIndexOf('/') + 1).TrimStart();
+            const string optionalPrefix = "[Optional]";
+            if (leaf.StartsWith(optionalPrefix, StringComparison.OrdinalIgnoreCase)) leaf = leaf.Substring(optionalPrefix.Length).TrimStart();
+            return leaf.StartsWith("lilToon", StringComparison.OrdinalIgnoreCase) ? leaf : "";
         }
         private static bool Enabled(Material m, string p) => m.HasProperty(p) && m.GetFloat(p) > 0.5f;
         private static bool EnabledOrTexture(Material m, string enable, string texture) => m.HasProperty(enable) ? Enabled(m, enable) : HasTexture(m, texture);
