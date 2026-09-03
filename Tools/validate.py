@@ -107,6 +107,10 @@ assert "new HashSet<long>()" in injector
 assert "!assignedNodes.Add(node)" in injector
 assert "foreach(var pair in bones)" in injector
 assert "bones.ContainsKey(boneName)" in injector
+assert "HumanBoneParents.ContainsKey(pair.Key)" in injector
+assert "ValidateHumanBoneHierarchy(root,boneNodes)" in injector
+assert "IsNodeDescendant" in injector
+assert "BonesRequiringDirectParent" in injector
 assert 'meta.TryGetValue("name",out var rawName)' in injector
 assert 'meta.TryGetValue("authors",out var rawAuthors)' in injector
 assert 'meta.TryGetValue("licenseUrl",out var rawLicenseUrl)' in injector
