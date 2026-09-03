@@ -148,6 +148,7 @@ assert "--disable-build-servers" in listing_workflow
 assert "--maxcpucount:1" in listing_workflow
 assert "${{ env.pathToCi }}/.nuke/temp" not in listing_workflow
 assert "pull_request:" in listing_workflow
+assert "\n  push:" not in listing_workflow
 assert "check-listing-builder:" in listing_workflow
 assert "if: github.event_name == 'pull_request'" in listing_workflow
 assert "if: github.event_name != 'pull_request'" in listing_workflow

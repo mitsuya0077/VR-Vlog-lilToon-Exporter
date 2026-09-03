@@ -6,9 +6,6 @@ on:
     paths: [.github/workflows/build-listing.yml, source.json, Website/**]
   release:
     types: [published]
-  push:
-    branches: [main]
-    paths: [source.json, Website/**, .github/workflows/build-listing.yml]
 
 permissions:
   contents: read
