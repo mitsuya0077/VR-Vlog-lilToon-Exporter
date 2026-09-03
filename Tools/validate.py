@@ -132,6 +132,8 @@ assert "PackageInfo.FindForAssembly" in one_click
 assert 'version.StartsWith(SupportedUniVrmSeries + "."' in one_click
 assert (root / ".github/workflows/build-listing.yml").is_file()
 assert (root / ".github/workflows/release-vpm.yml").is_file()
+assert (root / "Website/index.html").is_file()
+assert (root / "Website/app.js").is_file()
 listing_workflow = (root / ".github/workflows/build-listing.yml").read_text(encoding="utf-8")
 release_workflow = (root / ".github/workflows/release-vpm.yml").read_text(encoding="utf-8")
 assert "cb31c3b5d17d1070d7741c61de2ca1b219224039" in listing_workflow

@@ -1,0 +1,37 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>{{ listingInfo.Name }}</title>
+  <style>
+    :root { color-scheme: light dark; font-family: system-ui, sans-serif; }
+    body { max-width: 52rem; margin: 3rem auto; padding: 0 1rem; line-height: 1.5; }
+    code, input { font-family: ui-monospace, monospace; }
+    .listing { display: flex; gap: .5rem; }
+    input { flex: 1; padding: .65rem; }
+    button, a.button { padding: .65rem 1rem; cursor: pointer; }
+    article { border: 1px solid #8888; border-radius: .5rem; padding: 1rem; margin-top: 1rem; }
+  </style>
+</head>
+<body>
+  <h1>{{ listingInfo.Name }}</h1>
+  <p>{{ listingInfo.Description }}</p>
+  <p>Published by <a href="{{ listingInfo.Author.Url }}">{{ listingInfo.Author.Name }}</a>.</p>
+  <h2>VPM repository</h2>
+  <div class="listing">
+    <input id="listing-url" readonly value="{{ listingInfo.Url }}" aria-label="VPM repository URL">
+    <button id="copy-url" type="button">Copy</button>
+    <a class="button" href="vcc://vpm/addRepo?url={{ listingInfo.Url }}">Add to VCC</a>
+  </div>
+  <h2>Packages</h2>
+  {{~ for package in packages ~}}
+  <article>
+    <strong>{{ package.DisplayName }}</strong> <code>{{ package.Name }}</code> v{{ package.Version }}
+    <p>{{ package.Description }}</p>
+    <a href="{{ package.ZipUrl }}">Download package</a>
+  </article>
+  {{~ end ~}}
+  <script src="app.js"></script>
+</body>
+</html>
