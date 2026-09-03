@@ -37,12 +37,28 @@ jobs:
           clean: false
       - uses: actions/cache@v4
         with:
-          path: |
-            ${{ env.pathToCi }}/.nuke/temp
-            ~/.nuget/packages
+          path: ~/.nuget/packages
           key: ${{ runner.os }}-${{ hashFiles('**/global.json', '**/*.csproj') }}
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: 8.0.x
       - name: Build package listing
-        run: ${{ env.pathToCi }}/build.cmd BuildMultiPackageListing --root ${{ env.pathToCi }} --list-publish-directory $GITHUB_WORKSPACE/${{ env.listPublishDirectory }}
+        run: |
+          dotnet build ${{ env.pathToCi }}/PackageBuilder/PackageBuilder.csproj \
+            --framework net8.0 \
+            --disable-build-servers \
+            --maxcpucount:1 \
+            /nodeReuse:false \
+            /p:UseSharedCompilation=false \
+            --nologo
+          dotnet run \
+            --project ${{ env.pathToCi }}/PackageBuilder/PackageBuilder.csproj \
+            --no-build \
+            --framework net8.0 \
+            -- \
+            BuildMultiPackageListing \
+            --root ${{ env.pathToCi }} \
+            --list-publish-directory $GITHUB_WORKSPACE/${{ env.listPublishDirectory }}
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
       - uses: actions/configure-pages@v5

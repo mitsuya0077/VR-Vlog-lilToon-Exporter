@@ -100,7 +100,11 @@ assert "RequireMToonFallback(glb.Json, material.materialIndex)" in injector
 assert "VRMC_materials_mtoon 1.0 fallback" in injector
 assert "RequireVrm10Root(glb.Json);" in injector
 assert 'required==null||!Contains(required,"VRMC_vrm")' in injector
-assert "Fallback GLB has no valid required VRMC_vrm 1.0 root extension" in injector
+assert '!vrm.TryGetValue("humanoid",out var humanoid)' in injector
+assert 'humanoid is Dictionary<string,object>' in injector
+assert '!vrm.TryGetValue("meta",out var meta)' in injector
+assert 'meta is Dictionary<string,object>' in injector
+assert "with humanoid and meta objects" in injector
 assert "does not declare VRMC_materials_mtoon in extensionsUsed" in injector
 assert "ValidateEncodedTexture(glb, texture.textureIndex, textureSources)" in injector
 assert "Unexpected extension property" in injector
@@ -127,6 +131,10 @@ assert (root / ".github/workflows/release-vpm.yml").is_file()
 listing_workflow = (root / ".github/workflows/build-listing.yml").read_text(encoding="utf-8")
 release_workflow = (root / ".github/workflows/release-vpm.yml").read_text(encoding="utf-8")
 assert "cb31c3b5d17d1070d7741c61de2ca1b219224039" in listing_workflow
+assert "dotnet-version: 8.0.x" in listing_workflow
+assert "--disable-build-servers" in listing_workflow
+assert "--maxcpucount:1" in listing_workflow
+assert "${{ env.pathToCi }}/.nuke/temp" not in listing_workflow
 assert "3b99078d26b362733ad9bf463f98c83b8a1b4c9f" in release_workflow
 assert '--target "${GITHUB_SHA}"' in release_workflow
 assert 'os.environ["UNIVRM_VERSION"] == "0.131.0"' in release_workflow
