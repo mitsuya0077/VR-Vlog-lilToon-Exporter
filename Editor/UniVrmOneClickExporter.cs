@@ -12,7 +12,7 @@ namespace VRVlog.LilToonExporter
     {
         internal const string SupportedUniVrmSeries = "0.131";
 
-        public static byte[] Export(GameObject source, string avatarName, string author)
+        public static byte[] Export(GameObject source, string avatarName, string author, ICollection<string> warnings = null)
         {
             if (source == null) throw new ArgumentNullException(nameof(source));
             if (string.IsNullOrWhiteSpace(avatarName)) throw new InvalidOperationException("アバター名を取得できませんでした。");
@@ -24,7 +24,7 @@ namespace VRVlog.LilToonExporter
             var temporaryMaterials = new List<Material>();
             try
             {
-                ReplaceLilToonMaterials(clone, temporaryMaterials);
+                ReplaceLilToonMaterials(clone, temporaryMaterials, warnings);
                 return Vrm10Exporter.Export(
                     new GltfExportSettings(),
                     clone,
@@ -61,7 +61,7 @@ namespace VRVlog.LilToonExporter
             };
         }
 
-        private static void ReplaceLilToonMaterials(GameObject clone, List<Material> created)
+        private static void ReplaceLilToonMaterials(GameObject clone, List<Material> created, ICollection<string> warnings)
         {
             var converted = new Dictionary<Material, Material>();
             foreach (var renderer in clone.GetComponentsInChildren<Renderer>(true))
@@ -74,7 +74,7 @@ namespace VRVlog.LilToonExporter
                     if (!LilToonMaterialReader.IsLilToon(source)) continue;
                     if (!converted.TryGetValue(source, out var fallback))
                     {
-                        fallback = CreateMToonFallback(source, created);
+                        fallback = CreateMToonFallback(source, created, warnings);
                         converted.Add(source, fallback);
                     }
                     materials[i] = fallback;
@@ -85,10 +85,10 @@ namespace VRVlog.LilToonExporter
             if (converted.Count == 0) throw new InvalidOperationException("選択したアバターに対応するlilToonマテリアルがありません。");
         }
 
-        private static Material CreateMToonFallback(Material source, List<Material> created)
+        private static Material CreateMToonFallback(Material source, List<Material> created, ICollection<string> warnings)
         {
             // Validate the full mobile subset before producing any fallback output.
-            LilToonMaterialReader.Read(source, 0, (_, __) => 0);
+            LilToonMaterialReader.Read(source, 0, (_, __) => 0, warnings);
             var shader = Shader.Find(MToon10Meta.UnityShaderName);
             if (shader == null) throw new InvalidOperationException("UniVRMのMToon10シェーダーを利用できません。");
             var material = new Material(shader) { name = source.name };
@@ -145,7 +145,10 @@ namespace VRVlog.LilToonExporter
         {
             var shaderName = material.shader != null ? material.shader.name : "";
             if (shaderName.IndexOf("Cutout", StringComparison.OrdinalIgnoreCase) >= 0) return MToon10AlphaMode.Cutout;
-            if (shaderName.IndexOf("Transparent", StringComparison.OrdinalIgnoreCase) >= 0) return MToon10AlphaMode.Transparent;
+            if (shaderName.IndexOf("Transparent", StringComparison.OrdinalIgnoreCase) >= 0 ||
+                shaderName.IndexOf("Refraction", StringComparison.OrdinalIgnoreCase) >= 0 ||
+                shaderName.IndexOf("Gem", StringComparison.OrdinalIgnoreCase) >= 0 ||
+                shaderName.IndexOf("Fur", StringComparison.OrdinalIgnoreCase) >= 0) return MToon10AlphaMode.Transparent;
             var mode = Mathf.RoundToInt(Float(material, "_TransparentMode", 0f));
             return mode == 1 ? MToon10AlphaMode.Cutout : mode == 2 ? MToon10AlphaMode.Transparent : MToon10AlphaMode.Opaque;
         }

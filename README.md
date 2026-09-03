@@ -47,11 +47,12 @@ increase the VRM file size. Resize it beforehand when needed (1024 px recommende
 
 Main color, shadow, backlight color/settings/texture, normal map, emission, rim
 light, matcap, and outline are preserved. Backlight uses an MToon rim-light
-approximation in fallback viewers. Fur, refraction, gem, tessellation,
-AudioLink, custom shaders, ambiguous names, and non-backlight extension textures
-absent from the fallback are rejected.
-The failure is intentional: the exporter never emits a partially interpretable
-extension.
+approximation in fallback viewers. Optional variants such as FakeShadow and
+unsupported effects such as fur, refraction, gem, tessellation, and AudioLink
+are reduced to the closest standard lilToon/MToon representation. Any omitted
+details are listed as warnings after a successful export. Invalid VRM structure,
+ambiguous material matching, corrupt image data, and mobile safety-limit
+violations still stop the export.
 
 ## Install during development
 
@@ -63,7 +64,7 @@ requires the matching UniVRM packages to already be present.
 - Never modify source materials, textures, or importer settings.
 - Export only temporary copies.
 - Always emit an MToon fallback.
-- Reject unknown schema majors and unsupported shader families.
+- Reject unknown schema majors and invalid non-lilToon shader data.
 - Bound material counts, texture counts, dimensions, and expanded memory.
 - Do not claim pixel-identical output across render pipelines or devices.
 

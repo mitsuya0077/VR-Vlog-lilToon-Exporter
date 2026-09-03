@@ -19,16 +19,16 @@ namespace VRVlog.LilToonExporter
             "_UseEmission2nd", "_UseBump2ndMap", "_UseMatCap2nd", "_AlphaMaskMode"
         };
 
-        public static LilToonMaterialRecord Read(Material material, int materialIndex, Func<Texture, string, int> textureIndex)
+        public static LilToonMaterialRecord Read(Material material, int materialIndex, Func<Texture, string, int> textureIndex, ICollection<string> warnings = null)
         {
             if (material == null || material.shader == null) throw new ArgumentException("Material and shader are required.");
-            var family = ShaderFamily(material.shader.name);
+            var family = ShaderFamily(material.shader.name, warnings);
             if (!LilToonMobileProfile.IsSupportedShaderFamily(family))
                 throw new NotSupportedException($"Unsupported lilToon shader: {material.shader.name}.");
             foreach (var toggle in UnsupportedFeatureToggles)
-                if (Enabled(material, toggle)) throw new NotSupportedException($"Unsupported enabled lilToon feature: {toggle}.");
+                if (Enabled(material, toggle)) AddWarning(warnings, $"{material.name}: 未対応機能 {toggle} は省略し、対応部分だけを書き出しました。");
             var record = new LilToonMaterialRecord {
-                materialIndex = materialIndex, shaderFamily = family, renderMode = RenderMode(material),
+                materialIndex = materialIndex, shaderFamily = family, renderMode = RenderMode(material, warnings),
                 renderQueue = material.renderQueue, cullMode = CullMode(material)
             };
             AddFeature(record, "mainColor", true);
@@ -47,7 +47,13 @@ namespace VRVlog.LilToonExporter
                 if (!TextureFeatureEnabled(material, item.Semantic)) continue;
                 if (!material.HasProperty(item.Name)) continue; var texture = material.GetTexture(item.Name); if (texture == null) continue;
                 if (item.Name == "_BacklightColorTex" && texture == Texture2D.whiteTexture) continue;
-                var index = textureIndex(texture, item.Semantic); if (index < 0) throw new InvalidOperationException($"Texture '{texture.name}' is not present in the fallback VRM.");
+                var index = textureIndex(texture, item.Semantic);
+                if (index < 0)
+                {
+                    if (item.Semantic == "mainColor") throw new InvalidOperationException($"メイン画像 '{texture.name}' を元のVRMへ対応付けできません。");
+                    AddWarning(warnings, $"{material.name}: {item.Name} はVRMへ対応付けできないため省略しました。");
+                    continue;
+                }
                 var scale = material.GetTextureScale(item.Name); var offset = material.GetTextureOffset(item.Name);
                 record.textures.Add(new LilToonTextureProperty { name = item.Name, semantic = item.Semantic, textureIndex = index, scaleX = scale.x, scaleY = scale.y, offsetX = offset.x, offsetY = offset.y });
             }
@@ -55,14 +61,16 @@ namespace VRVlog.LilToonExporter
         }
 
         public static bool IsLilToon(Material material) => material != null && material.shader != null && material.shader.name.IndexOf("lilToon", StringComparison.OrdinalIgnoreCase) >= 0;
-        private static string ShaderFamily(string name)
+        private static string ShaderFamily(string name, ICollection<string> warnings)
         {
             var leaf = name.Substring(name.LastIndexOf('/') + 1);
             var family = leaf.StartsWith("lilToonLite", StringComparison.Ordinal) ? "lilToonLite" : leaf.StartsWith("lilToonMulti", StringComparison.Ordinal) ? "lilToonMulti" : leaf.StartsWith("lilToon", StringComparison.Ordinal) ? "lilToon" : "";
             var suffix = family.Length == 0 ? "" : leaf.Substring(family.Length);
             var renderSuffix = suffix.EndsWith("Outline", StringComparison.Ordinal) ? suffix.Substring(0, suffix.Length - "Outline".Length) : suffix;
-            if (family.Length == 0 || (renderSuffix != "" && renderSuffix != "Cutout" && renderSuffix != "Transparent" && renderSuffix != "OnePassTransparent" && renderSuffix != "TwoPassTransparent"))
-                throw new NotSupportedException($"Unsupported lilToon shader variant: {name}.");
+            if (family.Length == 0)
+                throw new NotSupportedException($"Unsupported lilToon shader: {name}.");
+            if (renderSuffix != "" && renderSuffix != "Cutout" && renderSuffix != "Transparent" && renderSuffix != "OnePassTransparent" && renderSuffix != "TwoPassTransparent")
+                AddWarning(warnings, $"{name}: 特殊シェーダーは標準lilToonとして近似しました。");
             return family;
         }
         private static bool Enabled(Material m, string p) => m.HasProperty(p) && m.GetFloat(p) > 0.5f;
@@ -84,7 +92,8 @@ namespace VRVlog.LilToonExporter
             }
         }
         private static void AddFeature(LilToonMaterialRecord r, string name, bool enabled) { if (enabled) r.features.Add(name); }
-        private static string RenderMode(Material m) { var n = m.shader.name; if (n.IndexOf("Cutout", StringComparison.OrdinalIgnoreCase) >= 0) return "cutout"; if (n.IndexOf("Transparent", StringComparison.OrdinalIgnoreCase) >= 0) return "transparent"; if (m.HasProperty("_TransparentMode")) { var v = Mathf.RoundToInt(m.GetFloat("_TransparentMode")); if (v == 1) return "cutout"; if (v == 2) return "transparent"; if (v != 0) throw new NotSupportedException($"Unsupported lilToon transparent mode: {v}."); } return "opaque"; }
+        private static string RenderMode(Material m, ICollection<string> warnings) { var n = m.shader.name; if (n.IndexOf("Cutout", StringComparison.OrdinalIgnoreCase) >= 0) return "cutout"; if (n.IndexOf("Transparent", StringComparison.OrdinalIgnoreCase) >= 0 || n.IndexOf("Refraction", StringComparison.OrdinalIgnoreCase) >= 0 || n.IndexOf("Gem", StringComparison.OrdinalIgnoreCase) >= 0 || n.IndexOf("Fur", StringComparison.OrdinalIgnoreCase) >= 0) return "transparent"; if (m.HasProperty("_TransparentMode")) { var v = Mathf.RoundToInt(m.GetFloat("_TransparentMode")); if (v == 1) return "cutout"; if (v == 2) return "transparent"; if (v != 0) AddWarning(warnings, $"{m.name}: 未対応の透明モード {v} は不透明として近似しました。"); } return "opaque"; }
+        private static void AddWarning(ICollection<string> warnings, string message) { if (warnings != null && !warnings.Contains(message)) warnings.Add(message); }
         private static string CullMode(Material m) { if (!m.HasProperty("_Cull")) return "back"; switch (Mathf.RoundToInt(m.GetFloat("_Cull"))) { case 0: return "off"; case 1: return "front"; default: return "back"; } }
     }
 }

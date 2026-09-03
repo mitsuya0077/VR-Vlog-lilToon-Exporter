@@ -18,7 +18,7 @@ listing = json.loads((root / "source.json").read_text(encoding="utf-8"))
 
 assert package["name"] == "com.vrvlog.liltoon-vrm-exporter"
 assert package["unity"] == "2022.3"
-assert package["version"] == "0.3.4"
+assert package["version"] == "0.3.5"
 assert package["vpmDependencies"] == {
     "com.vrmc.gltf": "0.131.x",
     "com.vrmc.vrm": "0.131.x",
@@ -71,14 +71,18 @@ assert "must be an array" in injector and "must be an object" in injector
 assert "Validate(output, extension.materials.Count)" in injector
 assert "GetComponentsInChildren<Renderer>(true)" in injector
 assert "_MainTex" in reader and "_UseShadow" in reader and "_UseOutline" in reader
-assert "Texture '{texture.name}' is not present" in reader
-assert "Unsupported lilToon shader variant" in reader
+assert "特殊シェーダーは標準lilToonとして近似しました" in reader
+assert 'item.Semantic == "mainColor"' in reader
+assert "メイン画像 '{texture.name}' を元のVRMへ対応付けできません" in reader
 assert 'EndsWith("Outline"' in reader
 assert 'material.shader.name.EndsWith("Outline"' in reader
-assert "Unsupported lilToon transparent mode" in reader
+assert "未対応の透明モード" in reader
+for transparent_variant in ("Refraction", "Gem", "Fur"):
+    assert f'n.IndexOf("{transparent_variant}"' in reader
+    assert f'shaderName.IndexOf("{transparent_variant}"' in one_click
 assert "EnabledOrTexture" in reader
 assert "UnsupportedFeatureToggles" in reader
-assert "Unsupported enabled lilToon feature" in reader
+assert "未対応機能 {toggle} は省略" in reader
 assert 'AddFeature(record, "backlight", Enabled(material, "_UseBacklight"))' in reader
 assert '"_UseBacklight"' not in reader.split("UnsupportedFeatureToggles", 1)[1].split("};", 1)[0]
 for backlight_property in ("_BacklightColor", "_BacklightMainStrength", "_BacklightNormalStrength", "_BacklightBorder", "_BacklightBlur", "_BacklightDirectivity", "_BacklightViewStrength", "_BacklightReceiveShadow", "_BacklightBackfaceMask"):
@@ -87,7 +91,8 @@ assert '("_BacklightColorTex", "backlight")' in reader
 assert 'case "backlight": return Enabled(material, "_UseBacklight")' in reader
 assert 'item.Name == "_BacklightColorTex" && texture == Texture2D.whiteTexture' in reader
 assert "ResolveTexture(glb, texture" in injector
-assert 'LilToonMaterialReader.Read(source, 0, (_, __) => 0);' in one_click
+assert 'LilToonMaterialReader.Read(source, 0, (_, __) => 0, warnings);' in one_click
+assert '近似・省略した項目' in window
 assert "glb.AppendBinary(png)" in injector
 assert "ImageConversion.EncodeToPNG(copy)" in injector
 assert "RenderTexture.ReleaseTemporary(temporary)" in injector
@@ -165,7 +170,7 @@ assert "UnityEngine.Object.Instantiate(source)" in one_click
 assert "ReplaceLilToonMaterials(clone" in one_click
 assert "DestroyImmediate(clone)" in one_click
 assert "MToon10Meta.UnityShaderName" in one_click
-assert "CreateMToonFallback(source, created)" in one_click
+assert "CreateMToonFallback(source, created, warnings)" in one_click
 assert "created.Add(material)" in one_click
 assert 'Float(source, "_Cull", 2f) == 2f' in one_click
 assert "context.Validate()" in one_click
@@ -221,7 +226,7 @@ for gated_texture in ("NormalTexture", "EmissiveTexture", "MatcapTexture", "RimM
     assert f"{gated_texture} =" in one_click and "? Texture(source," in one_click
 assert 'private string author = "";' in window
 assert 'private string avatarName = "";' not in window
-assert 'UniVrmOneClickExporter.Export(avatar, AvatarName(), author)' in window
+assert 'UniVrmOneClickExporter.Export(avatar, AvatarName(), author, warnings)' in window
 assert 'return avatar != null && !string.IsNullOrWhiteSpace(avatar.name) ? avatar.name.Trim() : "avatar";' in window
 assert 'var name = AvatarName();' in window
 assert 'EditorUtility.SaveFilePanel("VRMの保存先", "", DefaultFileName(), "vrm")' in window
