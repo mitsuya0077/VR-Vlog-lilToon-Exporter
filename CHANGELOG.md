@@ -1,0 +1,31 @@
+# Changelog
+
+## 0.3.0
+
+- Added VCC/ALCOM VPM dependency declarations for tested UniVRM 0.131.x packages.
+- Added one-click VRM 1.0 fallback generation and lilToon-extension injection.
+- Added non-destructive lilToon-to-MToon10 fallback material mapping.
+- Added GitHub Release packaging and GitHub Pages VPM listing automation.
+- Kept existing-fallback injection as an advanced workflow.
+
+## 0.2.0
+
+- Added the complete editor export window and atomic output workflow.
+- Added lilToon material/feature/property extraction.
+- Added GLB 2.0 parsing, lossless BIN preservation, extension injection, and round-trip validation.
+- Reused UniVRM fallback texture indices instead of duplicating textures.
+- Added fail-closed material and texture name matching.
+
+## Unreleased
+
+- Reject empty, unknown, and unsupported shader families during extension validation.
+- Keep root metadata, render-state, and feature-list validation aligned with the JSON Schema.
+- Validate material property collection limits and every float, color, and texture record.
+- Reject duplicate property names within float, color, and texture collections.
+
+## 0.1.0-preview.1
+
+- Add the initial application-owned extension schema.
+- Add a conservative mobile material compatibility profile.
+- Add schema and package validation.
+- Reject duplicate material indices and unsupported material features.

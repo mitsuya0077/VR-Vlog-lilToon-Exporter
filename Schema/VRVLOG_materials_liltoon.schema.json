@@ -1,0 +1,79 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://vrvlog.app/schema/VRVLOG_materials_liltoon/1.0/schema.json",
+  "title": "VR Vlog lilToon material extension",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schemaMajor", "schemaMinor", "exporterVersion", "sourceLilToonVersion", "materials"],
+  "properties": {
+    "schemaMajor": {"const": 1},
+    "schemaMinor": {"type": "integer", "minimum": 0},
+    "exporterVersion": {"type": "string", "minLength": 1, "maxLength": 64},
+    "sourceLilToonVersion": {"type": "string", "minLength": 1, "maxLength": 64},
+    "materials": {
+      "type": "array",
+      "description": "materialIndex uniqueness is additionally enforced by LilToonExtensionValidator because JSON Schema cannot express uniqueness by one object property.",
+      "maxItems": 64,
+      "items": {"$ref": "#/$defs/material"}
+    }
+  },
+  "$defs": {
+    "finiteNumber": {"type": "number"},
+    "namedFloat": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["name", "value"],
+      "properties": {
+        "name": {"type": "string", "minLength": 1, "maxLength": 96},
+        "value": {"$ref": "#/$defs/finiteNumber"}
+      }
+    },
+    "color": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["name", "r", "g", "b", "a"],
+      "properties": {
+        "name": {"type": "string", "minLength": 1, "maxLength": 96},
+        "r": {"$ref": "#/$defs/finiteNumber"},
+        "g": {"$ref": "#/$defs/finiteNumber"},
+        "b": {"$ref": "#/$defs/finiteNumber"},
+        "a": {"$ref": "#/$defs/finiteNumber"}
+      }
+    },
+    "texture": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["name", "textureIndex", "semantic", "scaleX", "scaleY", "offsetX", "offsetY"],
+      "properties": {
+        "name": {"type": "string", "minLength": 1, "maxLength": 96},
+        "textureIndex": {"type": "integer", "minimum": 0, "maximum": 127},
+        "semantic": {"type": "string", "minLength": 1, "maxLength": 32},
+        "scaleX": {"$ref": "#/$defs/finiteNumber"},
+        "scaleY": {"$ref": "#/$defs/finiteNumber"},
+        "offsetX": {"$ref": "#/$defs/finiteNumber"},
+        "offsetY": {"$ref": "#/$defs/finiteNumber"}
+      }
+    },
+    "material": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["materialIndex", "shaderFamily", "renderMode", "renderQueue", "cullMode", "features", "floats", "colors", "textures"],
+      "properties": {
+        "materialIndex": {"type": "integer", "minimum": 0},
+        "shaderFamily": {"enum": ["lilToon", "lilToonLite", "lilToonMulti"]},
+        "renderMode": {"enum": ["opaque", "cutout", "transparent"]},
+        "renderQueue": {"type": "integer", "minimum": -1, "maximum": 5000},
+        "cullMode": {"enum": ["off", "front", "back"]},
+        "features": {
+          "type": "array",
+          "uniqueItems": true,
+          "maxItems": 16,
+          "items": {"enum": ["mainColor", "shadow", "normalMap", "emission", "rimLight", "matCap", "outline"]}
+        },
+        "floats": {"type": "array", "description": "Property names must be unique; enforced by LilToonExtensionValidator.", "maxItems": 128, "items": {"$ref": "#/$defs/namedFloat"}},
+        "colors": {"type": "array", "description": "Property names must be unique; enforced by LilToonExtensionValidator.", "maxItems": 32, "items": {"$ref": "#/$defs/color"}},
+        "textures": {"type": "array", "description": "Property names must be unique; enforced by LilToonExtensionValidator.", "maxItems": 32, "items": {"$ref": "#/$defs/texture"}}
+      }
+    }
+  }
+}

@@ -1,0 +1,8 @@
+{
+  "name": "VRVlog.LilToonExporter.Editor.Tests",
+  "rootNamespace": "VRVlog.LilToonExporter.Tests",
+  "references": ["VRVlog.LilToonExporter.Editor"],
+  "includePlatforms": ["Editor"],
+  "optionalUnityReferences": ["TestAssemblies"],
+  "autoReferenced": false
+}
