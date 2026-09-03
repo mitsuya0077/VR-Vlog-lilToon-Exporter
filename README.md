@@ -50,8 +50,9 @@ light, matcap, and outline are preserved. Backlight uses an MToon rim-light
 approximation in fallback viewers. Optional variants such as FakeShadow and
 unsupported effects such as fur, refraction, gem, tessellation, and AudioLink
 are reduced to the closest standard lilToon/MToon representation. Any omitted
-details are listed as warnings after a successful export. Invalid VRM structure,
-ambiguous material matching, corrupt image data, and mobile safety-limit
+details are listed as warnings after a successful export. Ambiguous texture
+names are resolved by embedding the exact source texture only for those cases.
+Invalid VRM structure, ambiguous material matching, corrupt image data, and mobile safety-limit
 violations still stop the export.
 
 ## Install during development

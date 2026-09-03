@@ -28,7 +28,7 @@ namespace VRVlog.LilToonExporter
                 var index = UniqueIndex(materialNames, material.name, "material");
                 if (!seen.Add(index)) continue;
                 RequireMToonFallback(glb.Json, index);
-                var record = LilToonMaterialReader.Read(material, index, (texture, semantic) => ResolveTexture(glb, texture, semantic, imageNames, textureSources, fallbackTextureCount, addedTextures), warnings);
+                var record = LilToonMaterialReader.Read(material, index, (texture, semantic) => ResolveTexture(glb, texture, semantic, imageNames, textureSources, fallbackTextureCount, addedTextures, warnings), warnings);
                 foreach (var texture in record.textures) ValidateEncodedTexture(glb, texture.textureIndex, textureSources);
                 extension.materials.Add(record);
             }
@@ -74,11 +74,16 @@ namespace VRVlog.LilToonExporter
         }
         private static List<string> Names(Dictionary<string, object> root, string key) { var r = new List<string>(); var list = Array(root,key,false) ?? new List<object>(); foreach (var x in list) { var o=x as Dictionary<string,object>; r.Add(o != null && o.TryGetValue("name",out var n) ? n as string ?? "" : ""); } return r; }
         private static List<int> TextureSources(Dictionary<string, object> root) { var r=new List<int>(); var list=Array(root,"textures",false)??new List<object>(); foreach(var x in list){var o=x as Dictionary<string,object>; r.Add(o!=null&&o.TryGetValue("source",out var s)?Convert.ToInt32(s):-1);} return r; }
-        private static int ResolveTexture(GlbDocument glb,Texture texture,string semantic,List<string> imageNames,List<int> textureSources,int fallbackTextureCount,Dictionary<Texture,int> addedTextures)
+        private static int ResolveTexture(GlbDocument glb,Texture texture,string semantic,List<string> imageNames,List<int> textureSources,int fallbackTextureCount,Dictionary<Texture,int> addedTextures,ICollection<string> warnings)
         {
             var isBacklight=string.Equals(semantic,"backlight",StringComparison.Ordinal);
-            if(isBacklight&&addedTextures.TryGetValue(texture,out var cached))return cached;
-            if(!isBacklight)return FindTexture(texture.name,imageNames,textureSources,fallbackTextureCount);
+            if(!isBacklight)
+            {
+                var existing=FindTexture(texture.name,imageNames,textureSources,fallbackTextureCount,out var ambiguous);
+                if(!ambiguous)return existing;
+                AddWarning(warnings,$"テクスチャ '{texture.name}' は同名候補が複数あるため、元画像を直接埋め込みました。");
+            }
+            if(addedTextures.TryGetValue(texture,out var cached))return cached;
             if(textureSources.Count>=LilToonMobileProfile.MaximumTextures)throw new InvalidOperationException("Adding the lilToon texture would exceed the mobile texture limit.");
             if(!(texture is Texture2D source))throw new NotSupportedException($"Texture '{texture.name}' must be a Texture2D.");
             if(source.width<=0||source.height<=0||source.width>LilToonMobileProfile.MaximumTextureSize||source.height>LilToonMobileProfile.MaximumTextureSize)
@@ -95,7 +100,8 @@ namespace VRVlog.LilToonExporter
             imageNames.Add(source.name);textureSources.Add(imageIndex);addedTextures.Add(texture,textureIndex);
             return textureIndex;
         }
-        private static int FindTexture(string name,List<string> images,List<int> sources,int limit){var found=-1;for(var t=0;t<sources.Count&&t<limit;t++){var s=sources[t];if(s>=0&&s<images.Count&&SameName(images[s],name)){if(found>=0)throw new InvalidOperationException($"Ambiguous texture name '{name}'.");found=t;}}return found;}
+        private static int FindTexture(string name,List<string> images,List<int> sources,int limit,out bool ambiguous){var found=-1;ambiguous=false;for(var t=0;t<sources.Count&&t<limit;t++){var s=sources[t];if(s>=0&&s<images.Count&&SameName(images[s],name)){if(found>=0){ambiguous=true;return -1;}found=t;}}return found;}
+        private static void AddWarning(ICollection<string> warnings,string message){if(warnings!=null&&!warnings.Contains(message))warnings.Add(message);}
         private static byte[] EncodePng(Texture2D source)
         {
             var temporary=RenderTexture.GetTemporary(source.width,source.height,0,RenderTextureFormat.ARGB32,RenderTextureReadWrite.sRGB);var previous=RenderTexture.active;Texture2D copy=null;

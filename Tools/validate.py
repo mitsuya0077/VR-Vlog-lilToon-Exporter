@@ -18,7 +18,7 @@ listing = json.loads((root / "source.json").read_text(encoding="utf-8"))
 
 assert package["name"] == "com.vrvlog.liltoon-vrm-exporter"
 assert package["unity"] == "2022.3"
-assert package["version"] == "0.3.7"
+assert package["version"] == "0.3.8"
 assert package["vpmDependencies"] == {
     "com.vrmc.gltf": "0.131.x",
     "com.vrmc.vrm": "0.131.x",
@@ -102,8 +102,11 @@ assert "ImageConversion.EncodeToPNG(copy)" in injector
 assert "RenderTexture.ReleaseTemporary(temporary)" in injector
 assert "addedTextures.TryGetValue" in injector
 assert "fallbackTextureCount" in injector
-assert 'isBacklight&&addedTextures.TryGetValue(texture' in injector
-assert 'if(!isBacklight)return FindTexture(texture.name,imageNames,textureSources,fallbackTextureCount);' in injector
+assert 'addedTextures.TryGetValue(texture' in injector
+assert injector.index('if(!isBacklight)') < injector.index('addedTextures.TryGetValue(texture')
+assert 'FindTexture(texture.name,imageNames,textureSources,fallbackTextureCount,out var ambiguous)' in injector
+assert 'if(!ambiguous)return existing;' in injector
+assert "同名候補が複数あるため、元画像を直接埋め込みました" in injector
 assert "source.mipmapCount>1" in injector
 for gltf_filter in ("9984L", "9985L", "9987L"):
     assert gltf_filter in injector
@@ -125,7 +128,7 @@ assert "JPEG SOS segment is invalid" in injector
 assert "MIME type does not match" in injector
 assert "PNG chunk CRC is invalid" in injector
 assert "PNG IDAT/IEND structure is invalid" in injector
-assert "Ambiguous texture name" in injector
+assert "ambiguous=true;return -1" in injector
 assert "FromDom(root)" in injector
 assert "LilToonExtensionValidator.TryValidate(extension" in injector
 assert "Extension is missing from extensionsUsed" in injector
