@@ -105,6 +105,8 @@ assert "RequiredHumanBones" in injector
 assert "has no valid node" in injector
 assert "new HashSet<long>()" in injector
 assert "!assignedNodes.Add(node)" in injector
+assert "foreach(var pair in bones)" in injector
+assert "bones.ContainsKey(boneName)" in injector
 assert 'meta.TryGetValue("name",out var rawName)' in injector
 assert 'meta.TryGetValue("authors",out var rawAuthors)' in injector
 assert 'meta.TryGetValue("licenseUrl",out var rawLicenseUrl)' in injector
