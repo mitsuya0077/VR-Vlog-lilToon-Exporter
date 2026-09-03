@@ -43,10 +43,10 @@ export step (1024 px recommended, 2048 px maximum for the mobile profile).
 
 ## Supported material subset
 
-Main color, shadow, backlight color/settings, normal map, emission, rim light,
-matcap, and outline are preserved. Backlight uses an MToon rim-light
-approximation in fallback viewers; custom backlight color textures are not yet
-supported. Fur, refraction, gem, tessellation, AudioLink, custom shaders,
+Main color, shadow, backlight color/settings/texture, normal map, emission, rim
+light, matcap, and outline are preserved. Backlight uses an MToon rim-light
+approximation in fallback viewers. Fur, refraction, gem, tessellation,
+AudioLink, custom shaders,
 ambiguous names, and extension textures absent from the fallback are rejected.
 The failure is intentional: the exporter never emits a partially interpretable
 extension.

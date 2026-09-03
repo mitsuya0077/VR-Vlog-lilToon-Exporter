@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.3.4
+
+- Added full `_BacklightColorTex` export with non-destructive PNG encoding.
+- Reuse existing GLB textures and deduplicate newly embedded source textures.
+- Preserve texture filtering and wrapping while enforcing the mobile texture
+  count and 2048 px dimension limits.
+
 ## 0.3.3
 
 - Added support for lilToon backlight color and numeric settings.

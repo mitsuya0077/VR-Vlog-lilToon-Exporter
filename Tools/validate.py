@@ -18,7 +18,7 @@ listing = json.loads((root / "source.json").read_text(encoding="utf-8"))
 
 assert package["name"] == "com.vrvlog.liltoon-vrm-exporter"
 assert package["unity"] == "2022.3"
-assert package["version"] == "0.3.3"
+assert package["version"] == "0.3.4"
 assert package["vpmDependencies"] == {
     "com.vrmc.gltf": "0.131.x",
     "com.vrmc.vrm": "0.131.x",
@@ -83,10 +83,20 @@ assert 'AddFeature(record, "backlight", Enabled(material, "_UseBacklight"))' in 
 assert '"_UseBacklight"' not in reader.split("UnsupportedFeatureToggles", 1)[1].split("};", 1)[0]
 for backlight_property in ("_BacklightColor", "_BacklightMainStrength", "_BacklightNormalStrength", "_BacklightBorder", "_BacklightBlur", "_BacklightDirectivity", "_BacklightViewStrength", "_BacklightReceiveShadow", "_BacklightBackfaceMask"):
     assert f'"{backlight_property}"' in reader
-assert "HasCustomBacklightTexture" in reader
-assert "texture != null && texture != Texture2D.whiteTexture" in reader
-assert 'texture.name, "white"' not in reader
-assert "バックライトのカスタム色テクスチャにはまだ対応していません" in reader
+assert '("_BacklightColorTex", "backlight")' in reader
+assert 'case "backlight": return Enabled(material, "_UseBacklight")' in reader
+assert 'item.Name == "_BacklightColorTex" && texture == Texture2D.whiteTexture' in reader
+assert "ResolveTexture(glb, texture" in injector
+assert "glb.AppendBinary(png)" in injector
+assert "ImageConversion.EncodeToPNG(copy)" in injector
+assert "RenderTexture.ReleaseTemporary(temporary)" in injector
+assert "addedTextures.TryGetValue" in injector
+assert "fallbackTextureCount" in injector
+assert 'Array(glb.Json,"bufferViews",true)' in injector
+assert 'Array(glb.Json,"images",true)' in injector
+assert 'Array(glb.Json,"samplers",true)' in injector
+assert 'Array(glb.Json,"textures",true)' in injector
+assert 'buffer["byteLength"] = (long)Binary.Length' in glb
 for unsupported_toggle in ("_UseEmission2nd", "_UseBump2ndMap", "_UseMatCap2nd", "_AlphaMaskMode"):
     assert f'"{unsupported_toggle}"' in reader
 assert "TextureFeatureEnabled" in reader
