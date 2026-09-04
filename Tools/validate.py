@@ -18,7 +18,7 @@ listing = json.loads((root / "source.json").read_text(encoding="utf-8"))
 
 assert package["name"] == "com.vrvlog.liltoon-vrm-exporter"
 assert package["unity"] == "2022.3"
-assert package["version"] == "0.3.8"
+assert package["version"] == "0.3.9"
 assert package["vpmDependencies"] == {
     "com.vrmc.gltf": "0.131.x",
     "com.vrmc.vrm": "0.131.x",
@@ -235,8 +235,11 @@ assert 'backlightEnabled ? Color(source, "_BacklightColor"' in one_click
 assert 'backlightEnabled ? Float(source, "_BacklightDirectivity"' in one_click
 assert "ShadeColorFactorSrgb = shadowEnabled ?" in one_click
 assert "ShadeColorTexture = shadowEnabled ?" in one_click
-for gated_texture in ("NormalTexture", "EmissiveTexture", "MatcapTexture", "RimMultiplyTexture", "OutlineWidthMultiplyTexture"):
+for gated_texture in ("NormalTexture", "EmissiveTexture", "MatcapTexture", "RimMultiplyTexture"):
     assert f"{gated_texture} =" in one_click and "? Texture(source," in one_click
+assert 'Float(source, "_OutlineWidth", 0f)) * 0.01f' in one_click
+assert "OutlineWidthMultiplyTexture = null" in one_click
+assert 'OutlineWidthMultiplyTexture = outlineEnabled ? Texture(source, "_OutlineTex")' not in one_click
 assert 'private string author = "";' in window
 assert 'private string avatarName = "";' not in window
 assert 'UniVrmOneClickExporter.Export(avatar, AvatarName(), author, warnings)' in window

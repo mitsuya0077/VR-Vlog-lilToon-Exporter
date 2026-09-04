@@ -6,7 +6,7 @@ on:
       version:
         description: Exporter version without the v prefix
         required: true
-        default: 0.3.8
+        default: 0.3.9
       univrm_version:
         description: Pinned UniVRM version
         required: true
