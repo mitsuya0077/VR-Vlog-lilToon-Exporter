@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.3.9
+
+- Convert lilToon outline width to MToon10 world units at one-hundredth scale.
+- Stop treating lilToon's outline-color texture as MToon's green-channel outline-width mask.
+
 ## 0.3.8
 
 - Resolve duplicate fallback texture names by embedding the exact source Unity

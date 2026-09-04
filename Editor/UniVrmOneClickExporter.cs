@@ -127,8 +127,13 @@ namespace VRVlog.LilToonExporter
                     : backlightEnabled ? Float(source, "_BacklightDirectivity", 5f) : 1f),
                 RimMultiplyTexture = rimEnabled ? Texture(source, "_RimColorTex") : null,
                 OutlineWidthMode = outlineEnabled ? MToon10OutlineMode.World : MToon10OutlineMode.None,
-                OutlineWidthFactor = Mathf.Max(0f, Float(source, "_OutlineWidth", 0f)),
-                OutlineWidthMultiplyTexture = outlineEnabled ? Texture(source, "_OutlineTex") : null,
+                // lilToon stores this UI value in centimetre-like units and
+                // multiplies it by 0.01 in the outline vertex shader. MToon10
+                // world-coordinate width is already expressed in metres.
+                OutlineWidthFactor = Mathf.Max(0f, Float(source, "_OutlineWidth", 0f)) * 0.01f,
+                // lilToon's _OutlineTex colors the outline; MToon's texture is
+                // a green-channel width mask, so they are not interchangeable.
+                OutlineWidthMultiplyTexture = null,
                 OutlineColorFactorSrgb = Color(source, "_OutlineColor", UnityEngine.Color.black),
                 OutlineLightingMixFactor = Mathf.Clamp01(Float(source, "_OutlineEnableLighting", 0f)),
             };

@@ -55,6 +55,10 @@ names are resolved by embedding the exact source texture only for those cases.
 Invalid VRM structure, ambiguous material matching, corrupt image data, and mobile safety-limit
 violations still stop the export.
 
+The portable MToon fallback converts lilToon's outline width to metres at
+one-hundredth scale. `_OutlineTex` is retained for lilToon restoration but is
+not reused as MToon's unrelated green-channel outline-width mask.
+
 ## Install during development
 
 Use VCC/ALCOM for a dependency-complete installation. Local package development
