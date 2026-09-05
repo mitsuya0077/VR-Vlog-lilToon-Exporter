@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.6.0
+
+- Import supported VRChat Expressions Menu Buttons/Toggles as named, composed VRM expressions, including submenu gates and FX BlendTrees. Individual raw BlendShapes are not listed as expressions.
+- Add a menu checklist with per-item conversion results. Re-read live menu/controller assets on each export and report unsupported puppets, non-morph animation and VRChat state drivers without silently exporting incomplete faces.
+- Bake composed expressions relative to the customized rest face, including partial and decreasing weights and multiple renderers, without editing source meshes or scene values. Preserve existing VRM clips and bind only verified final export targets.
+- Add executable menu traversal, geometry and VRM binding regressions, plus Unity Editor tests for actual Animator/BlendTree evaluation. Unity and device checks remain separate from command-line validation.
+
 ## 0.5.1
 
 - Preserve MatCap color alpha and blend strength in the portable MToon light contribution, reducing excessive view-dependent highlights.

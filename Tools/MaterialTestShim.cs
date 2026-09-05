@@ -9,6 +9,8 @@ namespace UnityEngine
         public static T Instantiate<T>(T value) where T : Object => throw new System.NotSupportedException("Unity cloning is covered by Editor tests.");
     }
     public class Texture : Object { public string name; }
+    public class Component : Object { }
+    public class RuntimeAnimatorController : Object { }
     public class Texture2D : Texture
     {
         public static readonly Texture2D whiteTexture = new Texture2D();
@@ -23,6 +25,7 @@ namespace UnityEngine
     // Flat renderer inventory; hierarchy behavior is covered by Unity tests.
     public class GameObject
     {
+        public T[] GetComponents<T>() => throw new System.NotSupportedException("Unity descriptor lookup requires Editor tests.");
         public Transform transform;
         public bool activeInHierarchy = true;
         public readonly System.Collections.Generic.List<Renderer> Renderers = new System.Collections.Generic.List<Renderer>();
