@@ -17,3 +17,6 @@ jobs:
         with:
           python-version: "3.12"
       - run: python3 Tools/validate.py
+      - name: Run exporter behavior checks
+        shell: pwsh
+        run: ./Tools/run-behavior-tests.ps1

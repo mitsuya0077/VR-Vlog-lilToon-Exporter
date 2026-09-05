@@ -6,7 +6,7 @@ namespace VRVlog.LilToonExporter
 {
     internal static class LilToonGlbExtension
     {
-        public static byte[] Inject(byte[] source, GameObject avatar, string exporterVersion, string lilToonVersion, ICollection<string> warnings = null)
+        public static byte[] Inject(byte[] source, GameObject avatar, string exporterVersion, string lilToonVersion, ICollection<string> warnings = null, bool suppressSharedTextureEmission = true)
         {
             if (avatar == null) throw new ArgumentNullException(nameof(avatar));
             var glb = GlbDocument.Read(source);
@@ -28,7 +28,15 @@ namespace VRVlog.LilToonExporter
                 var index = UniqueIndex(materialNames, material.name, "material");
                 if (!seen.Add(index)) continue;
                 RequireMToonFallback(glb.Json, index);
-                var record = LilToonMaterialReader.Read(material, index, (texture, semantic) => ResolveTexture(glb, texture, semantic, index, imageNames, textureSources, fallbackTextureCount, addedTextures, warnings), warnings);
+                var record = LilToonMaterialReader.Read(material, index, (texture, semantic) => ResolveTexture(glb, texture, semantic, index, imageNames, textureSources, fallbackTextureCount, addedTextures, warnings), warnings, suppressSharedTextureEmission);
+                if (LilToonEmissionPolicy.IsSuppressed(material, suppressSharedTextureEmission))
+                {
+                    // Keep ordinary MToon viewers and compatibility-enabled apps
+                    // consistent, including the existing-fallback workflow.
+                    var fallbackMaterial = (Dictionary<string, object>)Array(glb.Json, "materials", false)[index];
+                    fallbackMaterial["emissiveFactor"] = new List<object> { 0.0, 0.0, 0.0 };
+                    fallbackMaterial.Remove("emissiveTexture");
+                }
                 foreach (var texture in record.textures) ValidateEncodedTexture(glb, texture.textureIndex, textureSources);
                 extension.materials.Add(record);
             }
@@ -42,7 +50,7 @@ namespace VRVlog.LilToonExporter
             if (!Contains(used, LilToonMobileProfile.ExtensionName)) used.Add(LilToonMobileProfile.ExtensionName);
             var required = Array(glb.Json, "extensionsRequired", false);
             if (required != null && Contains(required, LilToonMobileProfile.ExtensionName)) throw new InvalidOperationException("Custom extension must not be required.");
-            var output = glb.Write();
+            var output = VrmExpressionBindings.AddMissing(glb.Write(), warnings);
             Validate(output, extension.materials.Count);
             return output;
         }

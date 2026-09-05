@@ -19,7 +19,7 @@ namespace VRVlog.LilToonExporter
             "_UseEmission2nd", "_UseBump2ndMap", "_UseMatCap2nd", "_AlphaMaskMode"
         };
 
-        public static LilToonMaterialRecord Read(Material material, int materialIndex, Func<Texture, string, int> textureIndex, ICollection<string> warnings = null)
+        public static LilToonMaterialRecord Read(Material material, int materialIndex, Func<Texture, string, int> textureIndex, ICollection<string> warnings = null, bool suppressSharedTextureEmission = true)
         {
             if (material == null || material.shader == null) throw new ArgumentException("Material and shader are required.");
             var family = ShaderFamily(material.shader.name, warnings);
@@ -31,22 +31,29 @@ namespace VRVlog.LilToonExporter
                 materialIndex = materialIndex, shaderFamily = family, renderMode = RenderMode(material, warnings),
                 renderQueue = material.renderQueue, cullMode = CullMode(material)
             };
+            var suppressEmission = LilToonEmissionPolicy.IsSuppressed(material, suppressSharedTextureEmission);
+            if (suppressEmission && EnabledOrTexture(material, "_UseEmission", "_EmissionMap"))
+                AddWarning(warnings, $"{material.name}: 白飛びを抑えるため、メイン画像と同じ画像を使う発光を省略しました。必要な場合は書き出し設定で解除できます。");
             AddFeature(record, "mainColor", true);
             AddFeature(record, "shadow", Enabled(material, "_UseShadow"));
             AddFeature(record, "backlight", Enabled(material, "_UseBacklight"));
             AddFeature(record, "normalMap", EnabledOrTexture(material, "_UseBumpMap", "_BumpMap"));
-            AddFeature(record, "emission", EnabledOrTexture(material, "_UseEmission", "_EmissionMap"));
+            AddFeature(record, "emission", !suppressEmission && EnabledOrTexture(material, "_UseEmission", "_EmissionMap"));
             AddFeature(record, "rimLight", Enabled(material, "_UseRim"));
             AddFeature(record, "matCap", Enabled(material, "_UseMatCap"));
             AddFeature(record, "outline", Enabled(material, "_UseOutline") || material.shader.name.EndsWith("Outline", StringComparison.Ordinal));
 
-            foreach (var name in FloatNames) if (material.HasProperty(name)) record.floats.Add(new LilToonFloatProperty { name = name, value = material.GetFloat(name) });
-            foreach (var name in ColorNames) if (material.HasProperty(name)) { var c = material.GetColor(name); record.colors.Add(new LilToonColorProperty { name = name, r = c.r, g = c.g, b = c.b, a = c.a }); }
+            foreach (var name in FloatNames) if (material.HasProperty(name)) record.floats.Add(new LilToonFloatProperty { name = name, value = suppressEmission && name == "_EmissionBlend" ? 0f : material.GetFloat(name) });
+            foreach (var name in ColorNames) if (material.HasProperty(name)) { var c = suppressEmission && name == "_EmissionColor" ? Color.black : material.GetColor(name); record.colors.Add(new LilToonColorProperty { name = name, r = c.r, g = c.g, b = c.b, a = c.a }); }
             foreach (var item in TextureNames)
             {
+                if (suppressEmission && item.Semantic == "emission") continue;
                 if (!TextureFeatureEnabled(material, item.Semantic)) continue;
                 if (!material.HasProperty(item.Name)) continue; var texture = material.GetTexture(item.Name); if (texture == null) continue;
                 if (item.Name == "_BacklightColorTex" && texture == Texture2D.whiteTexture) continue;
+                // Keep the base-image shade fallback when Unity exposes an
+                // unassigned lilToon shade map as its built-in white image.
+                if (item.Name == "_ShadowColorTex" && texture == Texture2D.whiteTexture) continue;
                 var index = textureIndex(texture, item.Semantic);
                 if (index < 0)
                 {

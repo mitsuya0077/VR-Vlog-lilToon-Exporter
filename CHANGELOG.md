@@ -1,5 +1,19 @@
 # Changelog
 
+## 0.4.0
+
+- Generate missing standard blink and vowel expression bindings from known
+  exported morph names, preserving authored VRM presets and custom expressions.
+- Preserve the base image on the MToon shade side when lilToon shadows are off
+  or no shade texture is assigned, preventing white shaded regions.
+- Add a default-on, opt-out mobile appearance option that suppresses emission
+  using the same texture object as the base image, with per-material warnings.
+  Apply the choice consistently to fallback materials and compatibility data.
+- Include the 0.3.9 outline unit/mask correction in one-click exports so their
+  fallback stays bounded without relying on an application-side legacy repair.
+- Add executable expression/material-reader regression checks to CI and Unity
+  material fallback tests. Target-device appearance remains a separate gate.
+
 ## 0.3.9
 
 - Convert lilToon outline width to MToon10 world units at one-hundredth scale.
