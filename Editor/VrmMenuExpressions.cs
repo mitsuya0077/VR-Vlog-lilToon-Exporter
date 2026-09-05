@@ -12,6 +12,19 @@ namespace VRVlog.LilToonExporter
             internal readonly List<string> Targets = new List<string>();
         }
 
+        internal static int CountRegistered(byte[] bytes)
+        {
+            var current = GlbDocument.Read(bytes).Json;
+            foreach (var key in new[] { "extensions", "VRMC_vrm", "expressions", "custom" })
+            {
+                if (!current.TryGetValue(key, out var value) || !(value is Dictionary<string, object> next)) return 0;
+                current = next;
+            }
+            return current.Count(p => p.Key.StartsWith("VRChat / ", StringComparison.Ordinal) &&
+                p.Value is Dictionary<string, object> expression && expression.TryGetValue("morphTargetBinds", out var binds) &&
+                binds is List<object> list && list.Count > 0);
+        }
+
         // Register only the composite targets made for actual menu entries. Raw
         // morph names are never promoted to selectable expressions.
         internal static byte[] Add(byte[] bytes, IList<Expression> expressions)

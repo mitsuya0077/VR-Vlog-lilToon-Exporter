@@ -29,6 +29,8 @@ namespace VRVlog.LilToonExporter.Tests
             expressions[0].Targets.AddRange(new[] { "composite-face", "composite-brow" });
             var bytes = GlbDocument.Create(root, binary).Write();
             var result = GlbDocument.Read(VrmMenuExpressions.Add(bytes, expressions));
+            check(VrmMenuExpressions.CountRegistered(bytes) == 0, "A blink preset and an unbound custom name are not exported selectable faces.");
+            check(VrmMenuExpressions.CountRegistered(result.Write()) == 1, "The export completion count comes from the actual bound VRM expressions.");
             var custom = Custom(result.Json);
             check(custom.Count == 2 && custom.ContainsKey("VRChat / 顔 / 笑顔 (2)"), "One composed menu entry is added; same-named authored expressions are retained.");
             check(!(bool)((Dictionary<string, object>)custom["VRChat / 顔 / 笑顔"])["isBinary"], "Existing expression settings remain unchanged.");

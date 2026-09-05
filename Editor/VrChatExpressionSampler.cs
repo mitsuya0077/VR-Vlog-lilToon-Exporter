@@ -14,7 +14,7 @@ namespace VRVlog.LilToonExporter
 {
     internal static class VrChatExpressionSampler
     {
-        internal static VrChatExpressionMenu.Source Analyze(GameObject avatar)
+        internal static VrChatExpressionMenu.Source Analyze(GameObject avatar, bool includeGestures = true)
         {
             var source = VrChatExpressionMenu.Read(avatar);
             try
@@ -28,6 +28,7 @@ namespace VRVlog.LilToonExporter
                     try { entry.Values.AddRange(Sample(avatar, source.Controller, source.Defaults, entry.Parameters)); }
                     catch (InvalidOperationException error) { entry.Error = error.Message; }
                 }
+                if (includeGestures) VrChatGestureExpressions.Add(avatar, source);
             }
             finally { EditorUtility.ClearProgressBar(); }
             return source;

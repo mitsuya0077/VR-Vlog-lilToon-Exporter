@@ -48,7 +48,8 @@ namespace VRVlog.LilToonExporter
                 }
                 if (expression.Targets.Count > 0) result.Add(expression);
             }
-            if (result.Count > 0) warnings?.Add($"VRChatメニューから{result.Count}個の表情を登録しました。選択中は顔の形を保つため瞬き・口・視線の自動変形を止めます。");
+            if (result.Count > 0) warnings?.Add($"VRChatから{result.Count}個の表情を登録しました。選択中は顔の形を保つため瞬き・口・視線の自動変形を止めます。");
+            else warnings?.Add("VRChatから追加できた表情は0件です。選択用の表情がVRMにない場合、アプリの表情ボタンは表示されません。");
             return result;
         }
     }
