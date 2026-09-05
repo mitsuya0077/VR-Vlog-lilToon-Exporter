@@ -102,6 +102,8 @@ namespace VRVlog.LilToonExporter
             var matcapEnabled = source.HasProperty("_UseMatCap") && source.GetFloat("_UseMatCap") > 0.5f;
             var rimEnabled = source.HasProperty("_UseRim") && source.GetFloat("_UseRim") > 0.5f;
             var outlineEnabled = Float(source, "_UseOutline", 0f) > 0.5f || source.shader.name.EndsWith("Outline", StringComparison.Ordinal);
+            var shadeTexture = Texture(source, "_ShadowColorTex");
+            if (shadeTexture == Texture2D.whiteTexture) shadeTexture = null;
             var context = new MToon10Context(material)
             {
                 AlphaMode = AlphaMode(source),
@@ -114,7 +116,7 @@ namespace VRVlog.LilToonExporter
                 ShadeColorFactorSrgb = shadowEnabled ? Color(source, "_ShadowColor", UnityEngine.Color.gray) : Color(source, "_Color", UnityEngine.Color.white),
                 // An unset MToon shade texture is white, not the base image.
                 ShadeColorTexture = shadowEnabled
-                    ? Texture(source, "_ShadowColorTex") ?? Texture(source, "_MainTex")
+                    ? shadeTexture ?? Texture(source, "_MainTex")
                     : Texture(source, "_MainTex"),
                 NormalTexture = normalEnabled ? Texture(source, "_BumpMap") : null,
                 NormalTextureScale = normalEnabled ? Float(source, "_BumpScale", 1f) : 0f,

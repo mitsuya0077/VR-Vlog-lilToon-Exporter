@@ -102,6 +102,15 @@ public static class ExporterBehaviorTests
         material.Properties["_EmissionMap"] = null;
         record = LilToonMaterialReader.Read(material, 0, (_, __) => 0);
         Check(record.features.Contains("emission"), "Scalar-only emission remains supported.");
+        material.Properties["_UseShadow"] = 1f;
+        material.Properties["_ShadowColorTex"] = UnityEngine.Texture2D.whiteTexture;
+        record = LilToonMaterialReader.Read(material, 0, (_, __) => 0);
+        Check(record.features.Contains("shadow") && !record.textures.Any(t => t.semantic == "shadow"),
+            "White shade placeholder must not override the fallback base image.");
+        Check(material.GetTexture("_ShadowColorTex") == UnityEngine.Texture2D.whiteTexture, "Leave the source shade placeholder unchanged.");
+        material.Properties["_ShadowColorTex"] = new UnityEngine.Texture { name = "authored-shade" };
+        record = LilToonMaterialReader.Read(material, 0, (_, __) => 0);
+        Check(record.textures.Any(t => t.semantic == "shadow"), "Preserve a separately authored shade image.");
     }
 
     // The private fixture is supplied locally; it is never checked in or copied

@@ -8,6 +8,38 @@ namespace VRVlog.LilToonExporter.Tests
     public sealed class MaterialFallbackTests
     {
         [Test]
+        public void EnabledShadowUsesBaseImageForNullOrBuiltInWhiteShadeMap()
+        {
+            var source = new Material(Shader.Find("Hidden/VRVlogTests/lilToon"));
+            var image = new Texture2D(2, 2);
+            var shade = new Texture2D(2, 2);
+            var created = new List<Material>();
+            try
+            {
+                source.SetTexture("_MainTex", image);
+                source.SetFloat("_UseShadow", 1f);
+                foreach (var unset in new Texture[] { null, Texture2D.whiteTexture })
+                {
+                    source.SetTexture("_ShadowColorTex", unset);
+                    var fallback = UniVrmOneClickExporter.CreateMToonFallback(source, created, null);
+                    Assert.AreSame(image, fallback.GetTexture("_ShadeTex"));
+                    Assert.AreSame(unset, source.GetTexture("_ShadowColorTex"));
+                    var record = LilToonMaterialReader.Read(source, 0, (_, __) => 0);
+                    Assert.IsFalse(record.textures.Any(t => t.semantic == "shadow"));
+                }
+                source.SetTexture("_ShadowColorTex", shade);
+                Assert.AreSame(shade, UniVrmOneClickExporter.CreateMToonFallback(source, created, null).GetTexture("_ShadeTex"));
+            }
+            finally
+            {
+                foreach (var material in created) Object.DestroyImmediate(material);
+                Object.DestroyImmediate(source);
+                Object.DestroyImmediate(image);
+                Object.DestroyImmediate(shade);
+            }
+        }
+
+        [Test]
         public void DefaultExportKeepsShadeImageAndSuppressesSharedEmissionWithoutChangingSource()
         {
             var source = new Material(Shader.Find("Hidden/VRVlogTests/lilToon"));

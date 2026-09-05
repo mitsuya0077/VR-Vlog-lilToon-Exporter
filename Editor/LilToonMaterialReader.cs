@@ -51,6 +51,9 @@ namespace VRVlog.LilToonExporter
                 if (!TextureFeatureEnabled(material, item.Semantic)) continue;
                 if (!material.HasProperty(item.Name)) continue; var texture = material.GetTexture(item.Name); if (texture == null) continue;
                 if (item.Name == "_BacklightColorTex" && texture == Texture2D.whiteTexture) continue;
+                // Keep the base-image shade fallback when Unity exposes an
+                // unassigned lilToon shade map as its built-in white image.
+                if (item.Name == "_ShadowColorTex" && texture == Texture2D.whiteTexture) continue;
                 var index = textureIndex(texture, item.Semantic);
                 if (index < 0)
                 {
