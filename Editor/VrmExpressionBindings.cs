@@ -11,11 +11,11 @@ namespace VRVlog.LilToonExporter
             ("blink", new[] { "eye_close", "Blink", "Fcl_EYE_Close", "まばたき" }),
             ("blinkLeft", new[] { "eye_close_left", "Blink_L", "BlinkLeft", "EyeBlinkLeft", "Fcl_EYE_Close_L" }),
             ("blinkRight", new[] { "eye_close_right", "Blink_R", "BlinkRight", "EyeBlinkRight", "Fcl_EYE_Close_R" }),
-            ("aa", new[] { "vrc.v.aa", "mouth_a", "Aa", "A", "Fcl_MTH_A" }),
-            ("ih", new[] { "vrc.v.ih", "mouth_i", "Ih", "I", "Fcl_MTH_I" }),
-            ("ou", new[] { "vrc.v.ou", "mouth_u", "Ou", "U", "Fcl_MTH_U" }),
-            ("ee", new[] { "vrc.v.e", "mouth_e", "Ee", "E", "Fcl_MTH_E" }),
-            ("oh", new[] { "vrc.v.oh", "mouth_o", "Oh", "O", "Fcl_MTH_O" }),
+            ("aa", new[] { "vrc.v.aa", "vrc.v_aa", "mouth_a", "Aa", "A", "Fcl_MTH_A" }),
+            ("ih", new[] { "vrc.v.ih", "vrc.v_ih", "mouth_i", "Ih", "I", "Fcl_MTH_I" }),
+            ("ou", new[] { "vrc.v.ou", "vrc.v_ou", "vrc.v.u", "vrc.v_u", "mouth_u", "Ou", "U", "Fcl_MTH_U" }),
+            ("ee", new[] { "vrc.v.e", "vrc.v_e", "mouth_e", "Ee", "E", "Fcl_MTH_E" }),
+            ("oh", new[] { "vrc.v.oh", "vrc.v_oh", "mouth_o", "Oh", "O", "Fcl_MTH_O" }),
         };
 
         public static byte[] AddMissing(byte[] bytes, ICollection<string> warnings = null)

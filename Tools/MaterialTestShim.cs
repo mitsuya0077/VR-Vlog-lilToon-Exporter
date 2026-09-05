@@ -53,13 +53,18 @@ namespace UnityEngine
     public static class ImageConversion { public static byte[] EncodeToPNG(Texture2D value) => throw new System.NotSupportedException(); }
     public class Shader { public string name; }
     public struct Vector2 { public float x, y; }
+
     public struct Color
     {
-        public float r, g, b, a;
-        public Color(float r, float g, float b, float a = 1) { this.r = r; this.g = g; this.b = b; this.a = a; }
-        public static Color black => new Color(0, 0, 0);
+        public float r,g,b,a;
+        public Color(float r,float g,float b,float a=1) { this.r=r;this.g=g;this.b=b;this.a=a; }
+        static float ToLinear(float v) => v <= .04045f ? v / 12.92f : (float)System.Math.Pow((v+.055f)/1.055f,2.4);
+        static float ToGamma(float v) => v <= .0031308f ? v * 12.92f : 1.055f*(float)System.Math.Pow(v,1/2.4)-.055f;
+        public Color linear => new Color(ToLinear(r),ToLinear(g),ToLinear(b),a);
+        public Color gamma => new Color(ToGamma(r),ToGamma(g),ToGamma(b),a);
+        public static Color black => new Color(0,0,0);
     }
-    public static class Mathf { public static int RoundToInt(float value) => (int)System.Math.Round(value); }
+    public static class Mathf { public static float Clamp01(float v) => System.Math.Clamp(v,0,1); public static int RoundToInt(float value) => (int)System.Math.Round(value); }
     public class Material
     {
         public string name;

@@ -8,6 +8,39 @@ namespace VRVlog.LilToonExporter.Tests
     public sealed class MaterialFallbackTests
     {
         [Test]
+        public void OutlineMaskConvertsRedToGreenAndRetainsSource()
+        {
+            var source = new Material(Shader.Find("Hidden/VRVlogTests/lilToon"));
+            var mask = new Texture2D(2, 2, TextureFormat.RGBA32, false, true);
+            var materials = new List<Material>();
+            var textures = new List<Texture2D>();
+            try
+            {
+                mask.SetPixels(new[] { new Color(.2f,.9f,1), Color.black, Color.white, Color.black });
+                mask.Apply();
+                source.SetTexture("_OutlineWidthMask", mask);
+                var fallback = UniVrmOneClickExporter.CreateMToonFallback(source, materials, null, true, textures);
+                var converted = (Texture2D)fallback.GetTexture("_OutlineWidthTex");
+                Assert.AreNotSame(mask, converted);
+                Assert.AreEqual(.2f, converted.GetPixels()[0].g, .01f);
+                Assert.AreSame(mask, source.GetTexture("_OutlineWidthMask"));
+                Assert.AreEqual(.9f, mask.GetPixels()[0].g, .01f);
+                source.SetFloat("_OutlineVertexR2Width", 1f);
+                var warnings = new List<string>();
+                fallback = UniVrmOneClickExporter.CreateMToonFallback(source, materials, warnings, true, textures);
+                Assert.AreEqual(0, fallback.GetInt("_OutlineWidthMode"));
+                Assert.IsFalse(LilToonMaterialReader.Read(source,0,(_,__)=>0).features.Contains("outline"));
+                Assert.IsNotEmpty(warnings);
+            }
+            finally
+            {
+                foreach (var material in materials) Object.DestroyImmediate(material);
+                foreach (var texture in textures) Object.DestroyImmediate(texture);
+                Object.DestroyImmediate(mask); Object.DestroyImmediate(source);
+            }
+        }
+
+        [Test]
         public void EnabledShadowUsesBaseImageForNullOrBuiltInWhiteShadeMap()
         {
             var source = new Material(Shader.Find("Hidden/VRVlogTests/lilToon"));
