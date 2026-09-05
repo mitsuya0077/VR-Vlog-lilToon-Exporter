@@ -22,6 +22,14 @@ the confirmation screen before installation.
 
 ## Workflow
 
+Only active objects with enabled renderers are exported, matching UniVRM's
+material selection. Hidden wardrobe objects may remain in the avatar; they are
+not converted or included in lilToon compatibility data. Enable the outfit you
+want before exporting. The avatar root and its parents must be active. Export
+never changes visibility, and missing materials on visible renderers still fail
+instead of being silently omitted. This also applies to the existing-fallback
+workflow, where the supplied VRM must match the currently enabled outfit.
+
 1. Open **VR Vlog > lilToon VRM 1.0を書き出す**.
 2. In **① アバター（必須）**, select the top-level avatar object from the
    Hierarchy. In **② 作者名（必須）**, enter the author name stored in the VRM.
@@ -81,9 +89,10 @@ shadows are enabled but no shade texture is assigned, the base image is reused.
 ## Development checks
 
 - `python Tools/validate.py`: package, schema, and source integration checks.
-- `pwsh -File Tools/run-behavior-tests.ps1`: compiles and executes the production
-  expression helper and material reader with synthetic inputs. The material
-  property-bag test double does not simulate Unity rendering.
+- `pwsh -File Tools/run-behavior-tests.ps1`: compiles and executes production
+  expression, material-reader, and injection code with synthetic inputs. The
+  property-bag test doubles do not simulate Unity hierarchy or rendering; GPU
+  operations throw if reached.
 - Unity Editor tests under `Tests/Editor`: material fallback, emission opt-out,
   and outline conversion against actual Unity/UniVRM materials. These require a
   dependency-complete Unity project; non-Unity checks cannot replace them.

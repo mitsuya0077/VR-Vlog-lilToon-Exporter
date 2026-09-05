@@ -42,6 +42,7 @@ namespace VRVlog.LilToonExporter
                 new GUIContent("② 作者名（必須）", "VRMファイルに記録される作者名です。"),
                 author);
             EditorGUILayout.HelpBox("VRMファイルに記録する作者名を入力してください。", MessageType.None);
+            EditorGUILayout.HelpBox("現在有効な衣装・オブジェクトを書き出します。非表示のオブジェクトや無効なRendererは含まれません。", MessageType.None);
 
             showAppearanceOptions = EditorGUILayout.Foldout(showAppearanceOptions, "書き出し設定");
             if (showAppearanceOptions)
@@ -154,7 +155,7 @@ namespace VRVlog.LilToonExporter
         private static string PackageVersion()
         {
             var info = PackageManagerPackageInfo.FindForAssembly(typeof(LilToonExporterWindow).Assembly);
-            return info != null && !string.IsNullOrWhiteSpace(info.version) ? info.version : "0.4.0";
+            return info != null && !string.IsNullOrWhiteSpace(info.version) ? info.version : "0.4.1";
         }
 
         private static string InstalledLilToonStatus()

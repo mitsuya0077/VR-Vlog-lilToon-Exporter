@@ -18,7 +18,7 @@ listing = json.loads((root / "source.json").read_text(encoding="utf-8"))
 
 assert package["name"] == "com.vrvlog.liltoon-vrm-exporter"
 assert package["unity"] == "2022.3"
-assert package["version"] == "0.4.0"
+assert package["version"] == "0.4.1"
 assert package["vpmDependencies"] == {
     "com.vrmc.gltf": "0.131.x",
     "com.vrmc.vrm": "0.131.x",
@@ -69,7 +69,9 @@ assert "Custom extension must not be required" in injector
 assert "already contains the lilToon extension" in injector
 assert "must be an array" in injector and "must be an object" in injector
 assert "Validate(output, extension.materials.Count)" in injector
-assert "GetComponentsInChildren<Renderer>(true)" in injector
+assert "ExportRendererSelection.Enumerate(avatar)" in injector
+assert "ExportRendererSelection.Enumerate(clone)" in one_click
+assert one_click.index("ExportRendererSelection.RequireActiveRoot(source)") < one_click.index("UnityEngine.Object.Instantiate(source)")
 assert "_MainTex" in reader and "_UseShadow" in reader and "_UseOutline" in reader
 assert "特殊シェーダーは標準lilToonとして近似しました" in reader
 assert 'const string optionalPrefix = "[Optional]";' in reader

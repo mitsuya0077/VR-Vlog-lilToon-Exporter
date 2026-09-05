@@ -15,6 +15,9 @@ namespace VRVlog.LilToonExporter
         public static byte[] Export(GameObject source, string avatarName, string author, ICollection<string> warnings = null, bool suppressSharedTextureEmission = true)
         {
             if (source == null) throw new ArgumentNullException(nameof(source));
+            // Cloning detaches the avatar from its parents. Reject an inactive
+            // source before the clone can accidentally become active.
+            ExportRendererSelection.RequireActiveRoot(source);
             if (string.IsNullOrWhiteSpace(avatarName)) throw new InvalidOperationException("アバター名を取得できませんでした。");
             if (string.IsNullOrWhiteSpace(author)) throw new InvalidOperationException("作者名を入力してください。");
 
@@ -65,7 +68,7 @@ namespace VRVlog.LilToonExporter
         private static void ReplaceLilToonMaterials(GameObject clone, List<Material> created, ICollection<string> warnings, bool suppressSharedTextureEmission)
         {
             var converted = new Dictionary<Material, Material>();
-            foreach (var renderer in clone.GetComponentsInChildren<Renderer>(true))
+            foreach (var renderer in ExportRendererSelection.Enumerate(clone))
             {
                 var materials = renderer.sharedMaterials;
                 var changed = false;

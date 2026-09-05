@@ -21,7 +21,7 @@ namespace VRVlog.LilToonExporter
             ValidateAllEncodedTextures(glb, textureSources);
             var extension = new LilToonExtensionRoot { exporterVersion = exporterVersion, sourceLilToonVersion = lilToonVersion };
             var seen = new HashSet<int>();
-            foreach (var renderer in avatar.GetComponentsInChildren<Renderer>(true))
+            foreach (var renderer in ExportRendererSelection.Enumerate(avatar))
             foreach (var material in renderer.sharedMaterials)
             {
                 if (!LilToonMaterialReader.IsLilToon(material)) continue;

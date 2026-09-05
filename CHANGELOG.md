@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.4.1
+
+- Match UniVRM's active-object and enabled-renderer selection when converting
+  materials and injecting compatibility data. Hidden wardrobe materials no
+  longer cause `material 'outfit' is not present in fallback VRM` errors.
+- Reject inactive avatar roots before cloning; preserve clothing visibility and
+  keep missing materials on visible renderers as explicit errors.
+- Add executable injection regressions and Unity hierarchy tests for hidden
+  objects, inactive parents, disabled renderers, and re-enabled outfits.
+
 ## 0.4.0
 
 - Generate missing standard blink and vowel expression bindings from known
