@@ -323,6 +323,32 @@ namespace VRVlog.LilToonExporter.Tests
             Assert.That(source.Entries, Is.Empty, "Muting the solo transition does not enable non-solo siblings.");
         }
 
+        [TestCase(false)]
+        [TestCase(true)]
+        public void GestureExitReachesTheParentExpression(bool nestedExit)
+        {
+            DiscreteController();
+            controller.AddParameter("GestureRight", AnimatorControllerParameterType.Int);
+            var root = controller.layers[0].stateMachine;
+            var smile = root.states.Single(s => s.state.name == "Smile").state;
+            var outer = root.AddStateMachine("Outer");
+            var sourceMachine = outer;
+            if (nestedExit)
+            {
+                sourceMachine = outer.AddStateMachine("Inner");
+                outer.AddStateMachineExitTransition(sourceMachine);
+            }
+            var gate = sourceMachine.AddState("Gesture gate");
+            sourceMachine.defaultState = gate;
+            gate.AddExitTransition().AddCondition(AnimatorConditionMode.Equals, 3, "GestureRight");
+            root.AddStateMachineTransition(outer, smile);
+            var source = new VrChatExpressionMenu.Source { Controller = controller };
+            VrChatGestureExpressions.Add(avatar, source);
+            Assert.That(source.Entries, Has.Count.EqualTo(1));
+            Assert.That(source.Entries[0].Name, Is.EqualTo("ジェスチャー / Smile"));
+            Assert.That(source.Entries[0].Values.Single(v => v.Shape == "Face size").Weight, Is.EqualTo(75));
+        }
+
         [Test]
         public void GestureBlendTreeLeavesAreNotRegisteredAsSeparateExpressions()
         {

@@ -84,14 +84,17 @@ namespace VRVlog.LilToonExporter
                 var paths = new Dictionary<AnimatorState, string>();
                 var targets = new HashSet<AnimatorState>();
                 var machines = new List<AnimatorStateMachine>();
-                void Index(AnimatorStateMachine machine, string path)
+                var parents = new Dictionary<AnimatorStateMachine, AnimatorStateMachine>();
+                void Index(AnimatorStateMachine machine, string path, AnimatorStateMachine parent)
                 {
                     machines.Add(machine);
+                    parents[machine] = parent;
                     foreach (var child in machine.states) paths[child.state] = path + "/" + child.state.name;
-                    foreach (var child in machine.stateMachines) Index(child.stateMachine, path + "/" + child.stateMachine.name);
+                    foreach (var child in machine.stateMachines) Index(child.stateMachine, path + "/" + child.stateMachine.name, machine);
                 }
-                Index(layers[sourceIndex].stateMachine, layers[layerIndex].name);
+                Index(layers[sourceIndex].stateMachine, layers[layerIndex].name, null);
                 var entering = new HashSet<AnimatorStateMachine>();
+                var exiting = new HashSet<AnimatorStateMachine>();
                 void Enter(AnimatorStateMachine machine)
                 {
                     if (!entering.Add(machine)) return;
@@ -99,7 +102,7 @@ namespace VRVlog.LilToonExporter
                     {
                         foreach (var entry in EnabledTransitions(machine.entryTransitions))
                         {
-                            Destination(entry);
+                            Destination(entry, machine);
                             // An unconditional entry takes precedence over later
                             // entries and over the default state.
                             if (entry.conditions.Length == 0) return;
@@ -108,23 +111,37 @@ namespace VRVlog.LilToonExporter
                     }
                     finally { entering.Remove(machine); }
                 }
-                void Destination(AnimatorTransitionBase transition)
+                void Exit(AnimatorStateMachine machine)
                 {
+                    if (!parents.TryGetValue(machine, out var parent) || parent == null || !exiting.Add(machine)) return;
+                    try
+                    {
+                        foreach (var transition in EnabledTransitions(parent.GetStateMachineTransitions(machine)))
+                        {
+                            Destination(transition, parent);
+                            if (transition.conditions.Length == 0) break;
+                        }
+                    }
+                    finally { exiting.Remove(machine); }
+                }
+                void Destination(AnimatorTransitionBase transition, AnimatorStateMachine owner)
+                {
+                    if (transition.isExit) { Exit(owner); return; }
                     if (transition.destinationState != null) targets.Add(transition.destinationState);
                     if (transition.destinationStateMachine != null) Enter(transition.destinationStateMachine);
                 }
-                void Inspect(AnimatorTransitionBase transition)
+                void Inspect(AnimatorTransitionBase transition, AnimatorStateMachine owner)
                 {
-                    if (!transition.mute && transition.conditions.Any(c => IsGesture(c.parameter))) Destination(transition);
+                    if (transition.conditions.Any(c => IsGesture(c.parameter))) Destination(transition, owner);
                 }
                 foreach (var machine in machines)
                 {
-                    foreach (var transition in EnabledTransitions(machine.anyStateTransitions)) Inspect(transition);
-                    foreach (var transition in EnabledTransitions(machine.entryTransitions)) Inspect(transition);
+                    foreach (var transition in EnabledTransitions(machine.anyStateTransitions)) Inspect(transition, machine);
+                    foreach (var transition in EnabledTransitions(machine.entryTransitions)) Inspect(transition, machine);
                     foreach (var child in machine.states)
-                        foreach (var transition in EnabledTransitions(child.state.transitions)) Inspect(transition);
+                        foreach (var transition in EnabledTransitions(child.state.transitions)) Inspect(transition, machine);
                     foreach (var child in machine.stateMachines)
-                        foreach (var transition in EnabledTransitions(machine.GetStateMachineTransitions(child.stateMachine))) Inspect(transition);
+                        foreach (var transition in EnabledTransitions(machine.GetStateMachineTransitions(child.stateMachine))) Inspect(transition, machine);
                 }
                 foreach (var state in targets.Where(paths.ContainsKey).OrderBy(s => paths[s], StringComparer.Ordinal))
                     yield return new Target { State = state, Layer = layerIndex, Path = layerIndex + "/" + paths[state] };
