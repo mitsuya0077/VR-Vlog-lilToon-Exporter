@@ -49,6 +49,23 @@ matched exactly, ignoring case; ambiguous duplicate names are skipped with a
 warning. The exporter reports generated presets and warns when it cannot
 configure blinking. Verify expression movement on the target model.
 
+### Select every BlendShape in the app (0.6.0)
+
+Every named BlendShape in the exported meshes is also registered as a VRM custom
+expression. The capture picker shows `part / original shape name`; duplicate
+labels receive a number, preserving distinct targets and separate mesh instances.
+No face-name whitelist is used. Clothing/body adjustments and named divider shapes
+are included too, so an author's shape is never silently discarded by a name guess.
+An individual choice applies that shape's existing final-frame endpoint; it does
+not invent a composite face from several shapes. Authored VRM clips retain their
+own combinations, material/UV bindings, and override flags.
+
+Re-export the avatar with this version to add the catalog to future files. The
+advanced existing-VRM workflow can add it when the named targets already exist.
+Geometry and textures are unchanged by catalog registration. The app's **表情**
+picker scrolls through the full list, works during recording, and **デフォルト**
+clears the choice. Its buttons and menu are outside the recorded content.
+
 Under **書き出し設定**, **目などの白飛びを抑える** defaults to ON. This mobile
 appearance option omits emission only when the same Unity texture object is
 assigned to both the base image and emission image. It affects both the ordinary

@@ -75,7 +75,10 @@ namespace VRVlog.LilToonExporter
             if (presets == null || (!presets.ContainsKey("blink") &&
                 !(presets.ContainsKey("blinkLeft") && presets.ContainsKey("blinkRight"))))
                 Warn(warnings, "瞬きのVRM設定を自動生成できませんでした。元アバターにVRMのBlink設定を追加してください。");
-            return changed ? glb.Write() : bytes;
+            var morphCount = VrmMorphExpressions.Add(vrm, nodes, meshes);
+            if (morphCount > 0)
+                Warn(warnings, $"{morphCount}個のBlendShapeを選択用の表情として登録しました。部位名 / 元の名前で表示します。");
+            return changed || morphCount > 0 ? glb.Write() : bytes;
         }
 
         // Alias order expresses a documented preference (e.g. authored VRChat

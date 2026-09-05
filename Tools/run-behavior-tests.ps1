@@ -5,6 +5,7 @@ $taskSources = @(
     (Join-Path $taskRepo 'Editor/JsonDom.cs'),
     (Join-Path $taskRepo 'Editor/GlbDocument.cs'),
     (Join-Path $taskRepo 'Editor/VrmExpressionBindings.cs'),
+    (Join-Path $taskRepo 'Editor/VrmMorphExpressions.cs'),
     (Join-Path $taskRepo 'Editor/LilToonEmissionPolicy.cs'),
     (Join-Path $taskRepo 'Editor/LilToonMaterialReader.cs'),
     (Join-Path $taskRepo 'Editor/LilToonExtensionModel.cs'),

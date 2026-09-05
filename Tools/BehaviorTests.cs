@@ -68,13 +68,18 @@ public static class ExporterBehaviorTests
             "blinkLeft", Obj(), "blinkRight", Obj());
         vrm["expressions"] = Obj("preset", preset, "custom", Obj("custom-expression", Obj("isBinary", true)));
         var authoredBytes = Encode(authored);
-        Check(VrmExpressionBindings.AddMissing(authoredBytes).SequenceEqual(authoredBytes), "Preserve authored, empty and custom expression settings.");
+        var authoredOutput = GlbDocument.Read(VrmExpressionBindings.AddMissing(authoredBytes));
+        Check(JsonDom.Serialize(Presets(authoredOutput.Json)) == JsonDom.Serialize(preset), "Preserve authored and explicitly empty presets.");
+        Check(JsonDom.Serialize(Custom(authoredOutput.Json)["custom-expression"]) == JsonDom.Serialize(Obj("isBinary", true)), "Preserve authored custom expression settings.");
         var warnings = new List<string>();
         var unknown = Encode(Fixture("eye_close_extra", "previewBlink", "mouth_anger"));
-        Check(VrmExpressionBindings.AddMissing(unknown, warnings).SequenceEqual(unknown), "Do not guess from substrings.");
+        var unknownResult = GlbDocument.Read(VrmExpressionBindings.AddMissing(unknown, warnings));
+        var unknownExpressions = (Dictionary<string,object>)((Dictionary<string,object>)((Dictionary<string,object>)unknownResult.Json["extensions"])["VRMC_vrm"])["expressions"];
+        Check(!unknownExpressions.ContainsKey("preset") && Custom(unknownResult.Json).Count == 3, "Do not guess presets from substrings; retain every named raw shape as custom.");
         Check(warnings.Any(x => x.Contains("Blink")), "Report when blink could not be configured.");
         var duplicate = Encode(Fixture("eye_close_left", "EYE_CLOSE_LEFT"));
-        Check(VrmExpressionBindings.AddMissing(duplicate, warnings).SequenceEqual(duplicate), "Reject ambiguous duplicate aliases.");
+        var duplicateResult = GlbDocument.Read(VrmExpressionBindings.AddMissing(duplicate, warnings));
+        Check(Custom(duplicateResult.Json).Count == 2 && !((Dictionary<string,object>)((Dictionary<string,object>)((Dictionary<string,object>)duplicateResult.Json["extensions"])["VRMC_vrm"])["expressions"]).ContainsKey("preset"), "Keep distinct targets while rejecting ambiguous procedural aliases.");
         var invalid = Fixture("eye_close");
         ((Dictionary<string, object>)((List<object>)invalid["nodes"])[1])["mesh"] = 999L;
         bool threw = false;
@@ -86,7 +91,42 @@ public static class ExporterBehaviorTests
         threw = false;
         try { VrmExpressionBindings.AddMissing(Encode(split)); } catch (InvalidOperationException) { threw = true; }
         Check(threw, "Reject inconsistent target counts across split primitives.");
+        CheckAllMorphExpressions();
         return $"Exporter behavior checks passed ({_assertions} assertions).";
+    }
+
+    private static Dictionary<string, object> Custom(Dictionary<string, object> root) =>
+        (Dictionary<string, object>)((Dictionary<string, object>)((Dictionary<string, object>)((Dictionary<string, object>)root["extensions"])["VRMC_vrm"])["expressions"])["custom"];
+
+    private static void CheckAllMorphExpressions()
+    {
+        var root = Fixture("笑い", "怒り", "EyeBlinkLeft", "BODY_off", "笑い", "", "   ");
+        var nodes = (List<object>)root["nodes"];
+        ((Dictionary<string,object>)nodes[1])["name"] = "Face";
+        nodes.Add(Obj("name", "Face", "mesh", 0L));
+        var authored = Obj("isBinary", true, "overrideBlink", "block", "materialColorBinds", Arr(Obj("material", 1L)));
+        ((Dictionary<string,object>)((Dictionary<string,object>)root["extensions"])["VRMC_vrm"])["expressions"] = Obj("custom",Obj("Face / 笑い",authored));
+        var bytes = VrmExpressionBindings.AddMissing(Encode(root));
+        var result = GlbDocument.Read(bytes);
+        var custom = Custom(result.Json);
+        Check(custom.Count == 11, "Every named target in both node instances is selectable, including duplicate names and non-facial names.");
+        Check(JsonDom.Serialize(custom["Face / 笑い"]) == JsonDom.Serialize(authored), "Never overwrite an authored expression on name collision.");
+        var targets = new HashSet<string>();
+        foreach (var entry in custom.Where(x=>x.Key!="Face / 笑い"))
+        {
+            var clip = (Dictionary<string,object>)entry.Value;
+            var bind = (Dictionary<string,object>)((List<object>)clip["morphTargetBinds"])[0];
+            targets.Add(bind["node"]+":"+bind["index"]);
+            Check(Convert.ToDouble(bind["weight"])==1 && Equals(clip["isBinary"],false), "Generated expressions select the source target endpoint.");
+        }
+        Check(targets.Count==10 && targets.Contains("1:0") && targets.Contains("2:4"), "Duplicate renderer and shape names cannot lose or combine targets.");
+        Check(bytes.SequenceEqual(VrmExpressionBindings.AddMissing(bytes)), "Duplicate names and authored collisions remain idempotent across export passes.");
+        var many = Fixture(Enumerable.Range(0,400).Select(i=>"表情"+i).ToArray());
+        Check(Custom(GlbDocument.Read(VrmExpressionBindings.AddMissing(Encode(many))).Json).Count==400, "Catalogs are not truncated by a small expression limit.");
+        var invalid = Fixture("Unknown facial shape");
+        ((Dictionary<string,object>)((List<object>)((Dictionary<string,object>)((List<object>)invalid["meshes"])[0])["primitives"])[0])["targets"] = Arr();
+        var rejected=false;try { VrmExpressionBindings.AddMissing(Encode(invalid)); } catch(InvalidOperationException) { rejected=true; }
+        Check(rejected,"Unrecognized names still validate actual target indices.");
     }
 
     private static void CheckMaterials()

@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.6.0
+
+- Register every named exported BlendShape as a selectable VRM custom expression, including names outside the blink/vowel alias list.
+- Show the exported part and original shape name; preserve duplicate target names and separate mesh instances with collision-safe labels.
+- Preserve authored preset/custom expressions, all base geometry, binary buffers, and existing material/UV bindings. Repeated injection does not duplicate generated expressions.
+- Add regressions for Japanese names, hundreds of shapes, authored-name collisions, duplicate node/target names, and invalid morph indices.
+
 ## 0.5.1
 
 - Preserve MatCap color alpha and blend strength in the portable MToon light contribution, reducing excessive view-dependent highlights.
