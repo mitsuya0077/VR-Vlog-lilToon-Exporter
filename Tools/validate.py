@@ -18,7 +18,7 @@ listing = json.loads((root / "source.json").read_text(encoding="utf-8"))
 
 assert package["name"] == "com.vrvlog.liltoon-vrm-exporter"
 assert package["unity"] == "2022.3"
-assert package["version"] == "0.5.0"
+assert package["version"] == "0.5.1"
 assert one_click.index("AvatarBaseShape.Preserve(source, clone,") < one_click.index("Vrm10Exporter.Export(")
 assert "foreach (var mesh in temporaryMeshes) UnityEngine.Object.DestroyImmediate(mesh);" in one_click
 assert package["vpmDependencies"] == {
@@ -83,7 +83,7 @@ assert 'ShaderVariant(material.shader.name).Length > 0' in reader
 assert 'item.Semantic == "mainColor"' in reader
 assert "メイン画像 '{texture.name}' を元のVRMへ対応付けできません" in reader
 assert 'EndsWith("Outline"' in reader
-assert 'material.shader.name.EndsWith("Outline"' in reader
+assert 'm.shader.name.EndsWith("Outline"' in reader
 assert "未対応の透明モード" in reader
 for transparent_variant in ("Refraction", "Gem", "Fur"):
     assert f'n.IndexOf("{transparent_variant}"' in reader
@@ -187,7 +187,7 @@ assert "UnityEngine.Object.Instantiate(source)" in one_click
 assert "ReplaceLilToonMaterials(clone" in one_click
 assert "DestroyImmediate(clone)" in one_click
 assert "MToon10Meta.UnityShaderName" in one_click
-assert "CreateMToonFallback(source, created, warnings, suppressSharedTextureEmission)" in one_click
+assert "CreateMToonFallback(source, created, warnings, suppressSharedTextureEmission, textures, outlineMasks)" in one_click
 assert "created.Add(material)" in one_click
 assert 'Float(source, "_Cull", 2f) == 2f' in one_click
 assert "context.Validate()" in one_click
@@ -242,7 +242,8 @@ assert "ShadeColorTexture = shadowEnabled" in one_click
 for gated_texture in ("NormalTexture", "EmissiveTexture", "MatcapTexture", "RimMultiplyTexture"):
     assert f"{gated_texture} =" in one_click and "? Texture(source," in one_click
 assert 'Float(source, "_OutlineWidth", 0f)) * 0.01f' in one_click
-assert "OutlineWidthMultiplyTexture = null" in one_click
+assert 'OutlineMaskTexture.Create(Texture(source, "_OutlineWidthMask"), textures, outlineMasks)' in one_click
+assert "HasPortableOutline(source)" in one_click
 assert 'OutlineWidthMultiplyTexture = outlineEnabled ? Texture(source, "_OutlineTex")' not in one_click
 assert 'private string author = "";' in window
 assert 'private string avatarName = "";' not in window

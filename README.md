@@ -136,3 +136,15 @@ requires the matching UniVRM packages to already be present.
 - One-click export uses UniVRM's public `Vrm10Exporter.Export` API. New UniVRM
   minor series must be tested and released explicitly rather than accepted
   silently.
+
+### 0.5.1: 光沢・口まわりの輪郭線
+
+MatCapの色のアルファと合成の強さをMToonへ反映します。角度で光沢が出る効果は残りますが、
+元の強さを無視して光を加算する不具合を修正しています。lilToonとMToonの合成方式の差は残ります。
+輪郭線の太さマスクは赤チャンネルからMToonの緑チャンネルへ変換して保存します。
+頂点カラーで輪郭の太さを調整している材質は、口や目への輪郭線の突き抜けを避けるため
+輪郭を省略し、書き出し時に警告します。元のUnityマテリアルや画像は変更しません。
+
+以前のVRMには太さ制御が保存されていないため、元のUnityアバターから再出力してください。
+修正版アプリの互換表示では、既知の旧版（0.3.8、0.4.0、0.4.1、0.5.0）の輪郭を抑制します。
+`vrc.v_aa`等のアンダースコア形式の口のBlendShapeもVRMの母音へ自動設定します。

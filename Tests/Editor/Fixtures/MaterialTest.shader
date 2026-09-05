@@ -14,6 +14,8 @@ Shader "Hidden/VRVlogTests/lilToon"
         _UseOutline ("Outline", Float) = 1
         _OutlineWidth ("Width", Float) = 0.14
         _OutlineTex ("Outline color image", 2D) = "white" {}
+        _OutlineWidthMask ("Outline width mask", 2D) = "white" {}
+        _OutlineVertexR2Width ("Vertex width control", Float) = 0
     }
     SubShader { Pass {} }
 }

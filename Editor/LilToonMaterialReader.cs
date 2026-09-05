@@ -41,7 +41,9 @@ namespace VRVlog.LilToonExporter
             AddFeature(record, "emission", !suppressEmission && EnabledOrTexture(material, "_UseEmission", "_EmissionMap"));
             AddFeature(record, "rimLight", Enabled(material, "_UseRim"));
             AddFeature(record, "matCap", Enabled(material, "_UseMatCap"));
-            AddFeature(record, "outline", Enabled(material, "_UseOutline") || material.shader.name.EndsWith("Outline", StringComparison.Ordinal));
+            AddFeature(record, "outline", HasPortableOutline(material));
+            if (HasOutline(material) && !HasPortableOutline(material))
+                AddWarning(warnings, $"{material.name}: 頂点カラーで太さを制御する輪郭線はMToonで再現できないため省略しました。口・目への輪郭線の突き抜けを防ぎます。");
 
             foreach (var name in FloatNames) if (material.HasProperty(name)) record.floats.Add(new LilToonFloatProperty { name = name, value = suppressEmission && name == "_EmissionBlend" ? 0f : material.GetFloat(name) });
             foreach (var name in ColorNames) if (material.HasProperty(name)) { var c = suppressEmission && name == "_EmissionColor" ? Color.black : material.GetColor(name); record.colors.Add(new LilToonColorProperty { name = name, r = c.r, g = c.g, b = c.b, a = c.a }); }
@@ -66,6 +68,10 @@ namespace VRVlog.LilToonExporter
             }
             return record;
         }
+
+        private static bool HasOutline(Material m) => Enabled(m, "_UseOutline") || m.shader.name.EndsWith("Outline", StringComparison.Ordinal);
+        internal static bool HasPortableOutline(Material m) => HasOutline(m) &&
+            (!m.HasProperty("_OutlineVertexR2Width") || m.GetFloat("_OutlineVertexR2Width") == 0f);
 
         public static bool IsLilToon(Material material) => material != null && material.shader != null && ShaderVariant(material.shader.name).Length > 0;
         private static string ShaderFamily(string name, ICollection<string> warnings)
@@ -101,7 +107,7 @@ namespace VRVlog.LilToonExporter
                 case "emission": return EnabledOrTexture(material, "_UseEmission", "_EmissionMap");
                 case "rimLight": return Enabled(material, "_UseRim");
                 case "matCap": return Enabled(material, "_UseMatCap");
-                case "outline": return Enabled(material, "_UseOutline") || material.shader.name.EndsWith("Outline", StringComparison.Ordinal);
+                case "outline": return HasPortableOutline(material);
                 default: throw new NotSupportedException($"Unsupported texture semantic: {semantic}.");
             }
         }

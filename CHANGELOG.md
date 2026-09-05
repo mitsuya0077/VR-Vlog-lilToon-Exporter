@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.5.1
+
+- Preserve MatCap color alpha and blend strength in the portable MToon light contribution, reducing excessive view-dependent highlights.
+- Encode lilToon outline-width masks into MToon green-channel masks without changing source textures. Keep outline color textures separate.
+- Omit outlines controlled by vertex colors, with an export warning: MToon cannot reproduce that width control, and uniform outlines can protrude through closed lips or eyelids.
+- Recognize underscore VRChat vowel names such as `vrc.v_aa`, retaining existing authored expression presets.
+- Add compiled conversion/viseme regressions and Unity mask-conversion tests.
+
 ## 0.5.0
 
 - Preserve authored SkinnedMeshRenderer BlendShape values in one-click VRM base

@@ -35,6 +35,18 @@ public static class ExporterBehaviorTests
         _assertions = 0;
         VRVlog.LilToonExporter.Tests.BaseShapeFixture.Run(Check);
         CheckMaterials();
+        var matcap = MobileMaterialMath.MatcapColor(new UnityEngine.Color(.65882355f,.5499329f,.478431284f,.574f),1);
+        Check(Math.Abs(matcap.linear.r / new UnityEngine.Color(.65882355f,0,0).linear.r - .574f)<.0001f, "MatCap retains authored alpha in linear light rather than replacing it with full strength.");
+        Check(MobileMaterialMath.MatcapColor(new UnityEngine.Color(1,1,1,0),1).r==0, "Transparent MatCap color cannot produce a white highlight.");
+        Check(MobileMaterialMath.OutlineMask(new UnityEngine.Color(.2f,.9f,1)).g==.2f, "MToon width reads source red, never unrelated green or outline color.");
+        var underscore = GlbDocument.Read(VrmExpressionBindings.AddMissing(Encode(Fixture("vrc.v_sil", "vrc.v_aa", "vrc.v_ih", "vrc.v_ou", "vrc.v_e", "vrc.v_oh"))));
+        var underscorePresets = Presets(underscore.Json);
+        Check(underscorePresets.Count==5, "Underscore VRChat visemes export all five vowels.");
+        Check((long)((Dictionary<string,object>)((List<object>)((Dictionary<string,object>)underscorePresets["aa"])["morphTargetBinds"])[0])["index"]==1, "Mouth open binds the authored viseme target, not silence.");
+        var vertexOutline = new UnityEngine.Material();
+        vertexOutline.Properties["_UseOutline"]=1f;vertexOutline.Properties["_OutlineVertexR2Width"]=1f;
+        var outlineWarnings=new List<string>();
+        Check(!LilToonMaterialReader.Read(vertexOutline,0,(_,__)=>0,outlineWarnings).features.Contains("outline") && outlineWarnings.Count>0, "An unsupported vertex outline mask cannot turn into a full-width mouth outline.");
         CheckHiddenMaterialInjection();
         var original = Encode(Fixture("unused", "eye_close", "eye_close_left", "eye_close_right", "mouth_a", "vrc.v.aa"));
         var output = VrmExpressionBindings.AddMissing(original);
