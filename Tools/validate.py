@@ -187,7 +187,7 @@ assert "UnityEngine.Object.Instantiate(source)" in one_click
 assert "ReplaceLilToonMaterials(clone" in one_click
 assert "DestroyImmediate(clone)" in one_click
 assert "MToon10Meta.UnityShaderName" in one_click
-assert "CreateMToonFallback(source, created, warnings, suppressSharedTextureEmission, textures)" in one_click
+assert "CreateMToonFallback(source, created, warnings, suppressSharedTextureEmission, textures, outlineMasks)" in one_click
 assert "created.Add(material)" in one_click
 assert 'Float(source, "_Cull", 2f) == 2f' in one_click
 assert "context.Validate()" in one_click
@@ -242,7 +242,7 @@ assert "ShadeColorTexture = shadowEnabled" in one_click
 for gated_texture in ("NormalTexture", "EmissiveTexture", "MatcapTexture", "RimMultiplyTexture"):
     assert f"{gated_texture} =" in one_click and "? Texture(source," in one_click
 assert 'Float(source, "_OutlineWidth", 0f)) * 0.01f' in one_click
-assert 'OutlineMaskTexture.Create(Texture(source, "_OutlineWidthMask"), textures)' in one_click
+assert 'OutlineMaskTexture.Create(Texture(source, "_OutlineWidthMask"), textures, outlineMasks)' in one_click
 assert "HasPortableOutline(source)" in one_click
 assert 'OutlineWidthMultiplyTexture = outlineEnabled ? Texture(source, "_OutlineTex")' not in one_click
 assert 'private string author = "";' in window

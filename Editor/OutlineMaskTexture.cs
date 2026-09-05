@@ -6,10 +6,11 @@ namespace VRVlog.LilToonExporter
 {
     internal static class OutlineMaskTexture
     {
-        internal static Texture2D Create(Texture source, ICollection<Texture2D> owned)
+        internal static Texture2D Create(Texture source, ICollection<Texture2D> owned, IDictionary<Texture, Texture2D> cache = null)
         {
             if (source == null || source == Texture2D.whiteTexture) return null;
             if (owned == null) throw new ArgumentNullException(nameof(owned));
+            if (cache != null && cache.TryGetValue(source, out var cached)) return cached;
             if (source.width <= 0 || source.height <= 0 ||
                 source.width > LilToonMobileProfile.MaximumTextureSize || source.height > LilToonMobileProfile.MaximumTextureSize)
                 throw new InvalidOperationException("輪郭線マスクがモバイルの画像サイズ上限を超えています。");
@@ -32,6 +33,7 @@ namespace VRVlog.LilToonExporter
                 for (var i = 0; i < pixels.Length; i++) pixels[i] = MobileMaterialMath.OutlineMask(pixels[i]);
                 copy.SetPixels(pixels);
                 copy.Apply(true, false);
+                if (cache != null) cache.Add(source, copy);
                 return copy;
             }
             finally

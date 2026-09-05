@@ -73,6 +73,9 @@ namespace VRVlog.LilToonExporter
         private static void ReplaceLilToonMaterials(GameObject clone, List<Material> created, List<Texture2D> textures, ICollection<string> warnings, bool suppressSharedTextureEmission)
         {
             var converted = new Dictionary<Material, Material>();
+            // Shared masks are converted once per export and owned until all
+            // fallback materials have been serialized. Never cache across exports.
+            var outlineMasks = new Dictionary<Texture, Texture2D>();
             foreach (var renderer in ExportRendererSelection.Enumerate(clone))
             {
                 var materials = renderer.sharedMaterials;
@@ -83,7 +86,7 @@ namespace VRVlog.LilToonExporter
                     if (!LilToonMaterialReader.IsLilToon(source)) continue;
                     if (!converted.TryGetValue(source, out var fallback))
                     {
-                        fallback = CreateMToonFallback(source, created, warnings, suppressSharedTextureEmission, textures);
+                        fallback = CreateMToonFallback(source, created, warnings, suppressSharedTextureEmission, textures, outlineMasks);
                         converted.Add(source, fallback);
                     }
                     materials[i] = fallback;
@@ -94,7 +97,7 @@ namespace VRVlog.LilToonExporter
             if (converted.Count == 0) throw new InvalidOperationException("選択したアバターに対応するlilToonマテリアルがありません。");
         }
 
-        internal static Material CreateMToonFallback(Material source, List<Material> created, ICollection<string> warnings, bool suppressSharedTextureEmission = true, List<Texture2D> textures = null)
+        internal static Material CreateMToonFallback(Material source, List<Material> created, ICollection<string> warnings, bool suppressSharedTextureEmission = true, List<Texture2D> textures = null, IDictionary<Texture, Texture2D> outlineMasks = null)
         {
             // Validate the full mobile subset before producing any fallback output.
             LilToonMaterialReader.Read(source, 0, (_, __) => 0, warnings, suppressSharedTextureEmission);
@@ -148,12 +151,14 @@ namespace VRVlog.LilToonExporter
                 OutlineWidthFactor = Mathf.Max(0f, Float(source, "_OutlineWidth", 0f)) * 0.01f,
                 // lilToon's _OutlineTex colors the outline; MToon's texture is
                 // a green-channel width mask, so they are not interchangeable.
-                OutlineWidthMultiplyTexture = outlineEnabled ? OutlineMaskTexture.Create(Texture(source, "_OutlineWidthMask"), textures) : null,
+                OutlineWidthMultiplyTexture = outlineEnabled ? OutlineMaskTexture.Create(Texture(source, "_OutlineWidthMask"), textures, outlineMasks) : null,
                 OutlineColorFactorSrgb = Color(source, "_OutlineColor", UnityEngine.Color.black),
                 OutlineLightingMixFactor = Mathf.Clamp01(Float(source, "_OutlineEnableLighting", 0f)),
             };
             if (source.HasProperty("_MainTex"))
             {
+                // lilToon 2.3.4 also samples its NoScaleOffset width mask with
+                // uvMain (_MainTex_ST), not a separate _OutlineWidthMask_ST.
                 context.TextureScale = source.GetTextureScale("_MainTex");
                 context.TextureOffset = source.GetTextureOffset("_MainTex");
             }
