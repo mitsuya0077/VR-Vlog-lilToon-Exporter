@@ -8,17 +8,12 @@ using UnityEngine;
 using UnityEngine.Animations;
 using UnityEngine.Playables;
 using UnityEngine.SceneManagement;
+using MorphValue = VRVlog.LilToonExporter.VrChatExpressionMenu.MorphValue;
 
 namespace VRVlog.LilToonExporter
 {
     internal static class VrChatExpressionSampler
     {
-        internal sealed class MorphValue
-        {
-            internal string Path, Shape;
-            internal float Weight;
-        }
-
         internal static VrChatExpressionMenu.Source Analyze(GameObject avatar)
         {
             var source = VrChatExpressionMenu.Read(avatar);
@@ -76,11 +71,15 @@ namespace VRVlog.LilToonExporter
                 output.SetSourcePlayable(playable);
                 SetParameters(playable, controller, defaults);
                 graph.Play();
-                Advance(graph, 120);
+                var history = new HashSet<EditorCurveBinding>();
+                var visitedClips = new HashSet<AnimationClip>();
+                Action remember = () => RememberBindings(playable, affected, history, visitedClips);
+                Advance(graph, 120, remember);
                 SetParameters(playable, controller, selected);
-                Advance(graph, 120);
+                Advance(graph, 120, remember);
+                ValidateFixedPose(playable, controller);
                 var bindings = ActiveBindings(playable, affected);
-                var values = Capture(avatar, clone, bindings);
+                var values = Capture(avatar, clone, history);
                 // A state transition, a changing curve or changing active clip
                 // set cannot be represented as one fixed VRM expression.
                 for (var checkpoint = 0; checkpoint < 3; checkpoint++)
@@ -88,8 +87,8 @@ namespace VRVlog.LilToonExporter
                     Advance(graph, 7 + checkpoint);
                     var nextBindings = ActiveBindings(playable, affected);
                     if (!bindings.SetEquals(nextBindings)) throw new InvalidOperationException("表情が時間で切り替わるため、固定表情に変換できません。");
-                    var next = Capture(avatar, clone, bindings);
-                    if (values.Where((v, i) => Math.Abs(v.Weight - next[i].Weight) > 0.01f).Any())
+                    var next = Capture(avatar, clone, history);
+                    if (values.Count != next.Count || values.Where((v, i) => v.Path != next[i].Path || v.Shape != next[i].Shape || Math.Abs(v.Weight - next[i].Weight) > 0.01f).Any())
                         throw new InvalidOperationException("表情のアニメーションが静止しません。固定表情のみ取り込めます。");
                 }
                 if (values.Count == 0) throw new InvalidOperationException("有効な顔のBlendShapeアニメーションがありません。");
@@ -103,9 +102,74 @@ namespace VRVlog.LilToonExporter
             }
         }
 
-        private static void Advance(PlayableGraph graph, int frames)
+        private static void Advance(PlayableGraph graph, int frames, Action afterFrame = null)
         {
-            for (var i = 0; i < frames; i++) graph.Evaluate(1f / 60f);
+            for (var i = 0; i < frames; i++) { graph.Evaluate(1f / 60f); afterFrame?.Invoke(); }
+        }
+
+        private static void RememberBindings(AnimatorControllerPlayable playable, int[] layers, HashSet<EditorCurveBinding> history, HashSet<AnimationClip> visited)
+        {
+            foreach (var layer in layers)
+                foreach (var info in playable.GetCurrentAnimatorClipInfo(layer).Concat(playable.GetNextAnimatorClipInfo(layer)))
+                {
+                    if (info.clip == null || info.weight <= 0.00001f || !visited.Add(info.clip)) continue;
+                    if (AnimationUtility.GetObjectReferenceCurveBindings(info.clip).Length > 0)
+                        throw new InvalidOperationException("表情への遷移にマテリアル・オブジェクトの差し替えが含まれます。");
+                    foreach (var binding in AnimationUtility.GetCurveBindings(info.clip))
+                    {
+                        if (binding.type != typeof(SkinnedMeshRenderer) || !binding.propertyName.StartsWith("blendShape.", StringComparison.Ordinal))
+                            throw new InvalidOperationException("表情への遷移にBlendShape以外の変化が含まれます: " + binding.propertyName);
+                        history.Add(binding);
+                    }
+                }
+        }
+
+        // Short samples alone cannot prove a fixed pose. Inspect every active
+        // state's possible timed exits and the entire lifetime of active morph
+        // and parameter curves, including delayed steps after the sample window.
+        private static void ValidateFixedPose(AnimatorControllerPlayable playable, AnimatorController controller)
+        {
+            var layers = controller.layers;
+            for (var layer = 0; layer < layers.Length; layer++)
+            {
+                if (layer > 0 && playable.GetLayerWeight(layer) <= 0.00001f) continue;
+                if (playable.IsInTransition(layer)) throw new InvalidOperationException("FXの状態遷移が静止していません。");
+                var hash = playable.GetCurrentAnimatorStateInfo(layer).fullPathHash;
+                if (hash == 0) continue;
+                var found = false;
+                void Visit(AnimatorStateMachine machine, string path, bool timedAncestor)
+                {
+                    var timed = timedAncestor || machine.anyStateTransitions.Any(t => !t.mute && t.hasExitTime);
+                    foreach (var child in machine.states)
+                    {
+                        if (Animator.StringToHash(path + "." + child.state.name) != hash) continue;
+                        if (found) throw new InvalidOperationException("FXの状態名を一意に特定できません。");
+                        found = true;
+                        if (timed || child.state.transitions.Any(t => !t.mute && t.hasExitTime))
+                            throw new InvalidOperationException("時間で遷移するFX状態は固定表情に変換できません: " + path + "." + child.state.name);
+                    }
+                    foreach (var child in machine.stateMachines) Visit(child.stateMachine, path + "." + child.stateMachine.name, timed);
+                }
+                Visit(layers[layer].stateMachine, layers[layer].name, false);
+                if (!found) throw new InvalidOperationException("評価中のFX状態を特定できません。");
+                foreach (var info in playable.GetCurrentAnimatorClipInfo(layer))
+                    if (info.clip != null && info.weight > 0.00001f)
+                        foreach (var binding in AnimationUtility.GetCurveBindings(info.clip))
+                        {
+                            if (binding.type != typeof(Animator) &&
+                                !(binding.type == typeof(SkinnedMeshRenderer) && binding.propertyName.StartsWith("blendShape.", StringComparison.Ordinal))) continue;
+                            var curve = AnimationUtility.GetEditorCurve(info.clip, binding);
+                            if (!IsConstant(curve)) throw new InvalidOperationException("時間で変わるBlendShape・パラメーター曲線は固定表情に変換できません。");
+                        }
+            }
+        }
+
+        private static bool IsConstant(AnimationCurve curve)
+        {
+            if (curve == null || curve.length == 0) return true;
+            var keys = curve.keys;
+            return keys.All(k => k.value == keys[0].value &&
+                (k.inTangent == 0 || float.IsInfinity(k.inTangent)) && (k.outTangent == 0 || float.IsInfinity(k.outTangent)));
         }
 
         private static void SetParameters(AnimatorControllerPlayable playable, AnimatorController controller, IDictionary<string, float> values)
@@ -140,9 +204,6 @@ namespace VRVlog.LilToonExporter
                     {
                         if (binding.type != typeof(SkinnedMeshRenderer) || !binding.propertyName.StartsWith("blendShape.", StringComparison.Ordinal))
                             throw new InvalidOperationException("BlendShape以外の変化を含みます: " + binding.propertyName);
-                        var curve = AnimationUtility.GetEditorCurve(info.clip, binding);
-                        if (info.clip.isLooping && curve != null && curve.keys.Any(k => Math.Abs(k.value - curve.keys[0].value) > 0.01f))
-                            throw new InvalidOperationException("ループする表情アニメーションは固定表情に変換できません。");
                         bindings.Add(binding);
                     }
                 }
@@ -152,8 +213,23 @@ namespace VRVlog.LilToonExporter
 
         private static List<MorphValue> Capture(GameObject source, GameObject clone, IEnumerable<EditorCurveBinding> bindings)
         {
+            var owned = new HashSet<EditorCurveBinding>(bindings);
+            // WD-Off values can outlive the clips that wrote them. Also capture
+            // evaluated morphs that differ from the authored scene, even when no
+            // currently active selected clip contains their bindings.
+            foreach (var renderer in source.GetComponentsInChildren<SkinnedMeshRenderer>(true))
+            {
+                if (!renderer.enabled || !renderer.gameObject.activeInHierarchy || renderer.sharedMesh == null) continue;
+                var path = AnimationUtility.CalculateTransformPath(renderer.transform, source.transform);
+                var animated = FindRenderer(clone, path);
+                if (animated.sharedMesh != renderer.sharedMesh)
+                    throw new InvalidOperationException("FXによるメッシュ差し替えは表情変換に未対応です: " + path);
+                for (var i = 0; i < renderer.sharedMesh.blendShapeCount; i++)
+                    if (animated.GetBlendShapeWeight(i) != renderer.GetBlendShapeWeight(i))
+                        owned.Add(EditorCurveBinding.FloatCurve(path, typeof(SkinnedMeshRenderer), "blendShape." + renderer.sharedMesh.GetBlendShapeName(i)));
+            }
             var result = new List<MorphValue>();
-            foreach (var binding in bindings.OrderBy(b => b.path, StringComparer.Ordinal).ThenBy(b => b.propertyName, StringComparer.Ordinal))
+            foreach (var binding in owned.OrderBy(b => b.path, StringComparer.Ordinal).ThenBy(b => b.propertyName, StringComparer.Ordinal))
             {
                 var original = FindRenderer(source, binding.path);
                 var animated = FindRenderer(clone, binding.path);

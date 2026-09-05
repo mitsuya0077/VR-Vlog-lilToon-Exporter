@@ -80,6 +80,45 @@ namespace VRVlog.LilToonExporter.Tests
         }
 
         [Test]
+        public void WriteDefaultsOffRetainsTheWholeEvaluatedFace()
+        {
+            DiscreteController();
+            var states = controller.layers[0].stateMachine.states;
+            var idle = (AnimationClip)states.Single(s => s.state.name == "Idle").state.motion;
+            var smile = (AnimationClip)states.Single(s => s.state.name == "Smile").state.motion;
+            var binding = EditorCurveBinding.FloatCurve("Face", typeof(SkinnedMeshRenderer), "blendShape.Face size");
+            AnimationUtility.SetEditorCurve(idle, binding, AnimationCurve.Constant(0, 1, 60));
+            AnimationUtility.SetEditorCurve(smile, binding, null);
+            var values = VrChatExpressionSampler.Sample(avatar, controller, Params("Face", 0), Params("Face", 1));
+            Assert.That(values.Single(v => v.Shape == "Face size").Weight, Is.EqualTo(60).Within(.01),
+                "The previous state owns the retained value, even though the current clip does not bind it.");
+        }
+
+        [Test]
+        public void DelayedExitCannotMasqueradeAsAFixedExpression()
+        {
+            DiscreteController();
+            var states = controller.layers[0].stateMachine.states;
+            var idle = states.Single(s => s.state.name == "Idle").state;
+            var smile = states.Single(s => s.state.name == "Smile").state;
+            var transition = smile.AddTransition(idle);
+            transition.hasExitTime = true;
+            transition.exitTime = 10;
+            transition.duration = 0;
+            Assert.Throws<InvalidOperationException>(() => VrChatExpressionSampler.Sample(avatar, controller, Params("Face", 0), Params("Face", 1)));
+        }
+
+        [Test]
+        public void DelayedNonLoopingStepCannotMasqueradeAsAFixedExpression()
+        {
+            DiscreteController();
+            var clip = (AnimationClip)controller.layers[0].stateMachine.states.Single(s => s.state.name == "Smile").state.motion;
+            var curve = new AnimationCurve(new Keyframe(0, 75, 0, float.PositiveInfinity), new Keyframe(10, 100, float.PositiveInfinity, 0));
+            AnimationUtility.SetEditorCurve(clip, EditorCurveBinding.FloatCurve("Face", typeof(SkinnedMeshRenderer), "blendShape.Face size"), curve);
+            Assert.Throws<InvalidOperationException>(() => VrChatExpressionSampler.Sample(avatar, controller, Params("Face", 0), Params("Face", 1)));
+        }
+
+        [Test]
         public void BlendTreeUsesTheMenuValueInsteadOfPublishingItsIndividualShapes()
         {
             controller.AddParameter("Strength", AnimatorControllerParameterType.Float);
@@ -116,20 +155,7 @@ namespace VRVlog.LilToonExporter.Tests
         [Test]
         public void MenuTraversalKeepsLabelsAncestorGatesAndReportsPuppets()
         {
-            var sub = new TestMenu();
-            sub.controls.Add(new TestControl { name = "笑顔", type = "Toggle", parameter = new TestParameter { name = "Face" }, value = 3 });
-            sub.controls.Add(new TestControl { name = "強さ", type = "RadialPuppet" });
-            var menu = new TestMenu();
-            menu.controls.Add(new TestControl { name = "表情", type = "SubMenu", parameter = new TestParameter { name = "OpenFace" }, value = 1, subMenu = sub });
-            sub.controls.Add(new TestControl { name = "循環", type = "SubMenu", subMenu = menu });
-            var source = new VrChatExpressionMenu.Source();
-            VrChatExpressionMenu.Walk(menu, "", "", new Dictionary<string, float>(), new HashSet<object>(), source, 0);
-            Assert.That(source.Entries, Has.Count.EqualTo(2));
-            Assert.That(source.Entries[0].Name, Is.EqualTo("表情 / 笑顔"));
-            Assert.That(source.Entries[0].Parameters["Face"], Is.EqualTo(3));
-            Assert.That(source.Entries[0].Parameters["OpenFace"], Is.EqualTo(1));
-            Assert.That(source.Entries[1].Error, Does.Contain("Puppet"));
-            Assert.That(source.Messages.Single(), Does.Contain("循環"));
+            MenuTraversalFixture.Run((condition, description) => Assert.That(condition, Is.True, description));
         }
 
         [Test]
@@ -164,14 +190,5 @@ namespace VRVlog.LilToonExporter.Tests
         }
 
         private static Dictionary<string, float> Params(string name, float value) => new Dictionary<string, float> { [name] = value };
-        private sealed class TestMenu { public List<TestControl> controls = new List<TestControl>(); }
-        private sealed class TestParameter { public string name; }
-        private sealed class TestControl
-        {
-            public string name, type;
-            public TestParameter parameter;
-            public float value;
-            public TestMenu subMenu;
-        }
     }
 }

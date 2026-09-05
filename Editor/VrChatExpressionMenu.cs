@@ -11,11 +11,17 @@ namespace VRVlog.LilToonExporter
     // an assembly dependency or changing the user's descriptor/menu assets.
     internal static class VrChatExpressionMenu
     {
+        internal sealed class MorphValue
+        {
+            internal string Path = "", Shape = "";
+            internal float Weight = 0f;
+        }
+
         internal sealed class Entry
         {
             internal string Id, Name, Error;
             internal readonly Dictionary<string, float> Parameters = new Dictionary<string, float>(StringComparer.Ordinal);
-            internal readonly List<VrChatExpressionSampler.MorphValue> Values = new List<VrChatExpressionSampler.MorphValue>();
+            internal readonly List<MorphValue> Values = new List<MorphValue>();
         }
 
         internal sealed class Source
