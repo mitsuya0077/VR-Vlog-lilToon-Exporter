@@ -37,6 +37,7 @@ public static class ExporterBehaviorTests
         VRVlog.LilToonExporter.Tests.MenuExpressionFixture.Run(Check);
         VRVlog.LilToonExporter.Tests.MenuTraversalFixture.Run(Check);
         VRVlog.LilToonExporter.Tests.FixedExpressionCurveFixture.Run(Check);
+        VRVlog.LilToonExporter.Tests.AnimatedExpressionFixture.Run(Check);
         CheckMaterials();
         var matcap = MobileMaterialMath.MatcapColor(new UnityEngine.Color(.65882355f,.5499329f,.478431284f,.574f),1);
         Check(Math.Abs(matcap.linear.r / new UnityEngine.Color(.65882355f,0,0).linear.r - .574f)<.0001f, "MatCap retains authored alpha in linear light rather than replacing it with full strength.");

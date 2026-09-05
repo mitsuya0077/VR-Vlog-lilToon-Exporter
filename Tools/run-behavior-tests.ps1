@@ -8,6 +8,7 @@ $taskSources = @(
     (Join-Path $taskRepo 'Editor/VrmMenuExpressions.cs'),
     (Join-Path $taskRepo 'Editor/VrChatExpressionMenu.cs'),
     (Join-Path $taskRepo 'Editor/VrChatFixedExpressionCurve.cs'),
+    (Join-Path $taskRepo 'Editor/ExpressionAnimationData.cs'),
     (Join-Path $taskRepo 'Editor/LilToonEmissionPolicy.cs'),
     (Join-Path $taskRepo 'Editor/LilToonMaterialReader.cs'),
     (Join-Path $taskRepo 'Editor/LilToonExtensionModel.cs'),
@@ -22,6 +23,7 @@ $taskSources = @(
     (Join-Path $taskRepo 'Tests/Editor/Fixtures/MenuExpressionFixture.cs'),
     (Join-Path $taskRepo 'Tests/Editor/Fixtures/MenuTraversalFixture.cs'),
     (Join-Path $taskRepo 'Tests/Editor/Fixtures/FixedExpressionCurveFixture.cs'),
+    (Join-Path $taskRepo 'Tests/Editor/Fixtures/AnimatedExpressionFixture.cs'),
     (Join-Path $PSScriptRoot 'MeshTestShim.cs'),
     (Join-Path $PSScriptRoot 'MaterialTestShim.cs'),
     (Join-Path $PSScriptRoot 'BehaviorTests.cs')

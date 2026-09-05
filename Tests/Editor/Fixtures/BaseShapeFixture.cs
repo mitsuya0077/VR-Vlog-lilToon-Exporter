@@ -67,6 +67,12 @@ namespace VRVlog.LilToonExporter.Tests
                 check(Near(target.vertices[0].x, 0), "Negative authored values extrapolate from zero.");
                 AvatarBaseShape.Rebase(source, target, new[] { 0f });
                 check(Near(target.vertices[0].x, 1), "Zero defaults keep the original rest geometry.");
+                AvatarBaseShape.AppendAnimatedShape(source, target, "Animated negative", 0, 25, -25);
+                target.GetBlendShapeFrameVertices(1, 0, v, n, t);
+                check(Near(v[0].x, -2), "Animation basis subtracts the first pose and supports negative source weights.");
+                AvatarBaseShape.AppendAnimatedShape(source, target, "Animated second frame", 0, 25, 75);
+                target.GetBlendShapeFrameVertices(2, 0, v, n, t);
+                check(Near(v[0].x, 3), "Animation basis retains the authored multi-frame geometry.");
             }
             finally
             {

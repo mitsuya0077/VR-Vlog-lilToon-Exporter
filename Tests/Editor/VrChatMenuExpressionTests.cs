@@ -64,7 +64,7 @@ namespace VRVlog.LilToonExporter.Tests
                 var entry = new VrChatExpressionMenu.Entry { Id = "face-smile", Name = "顔 / 笑顔" };
                 entry.Values.AddRange(values);
                 menu.Entries.Add(entry);
-                var expressions = VrChatExpressionBaker.Bake(avatar, clone, menu, null, temporary, null);
+                var expressions = VrChatExpressionBaker.Bake(avatar, clone, menu, temporary, null);
                 Assert.That(expressions, Has.Count.EqualTo(1));
                 var baked = clone.GetComponentInChildren<SkinnedMeshRenderer>().sharedMesh;
                 var v = new Vector3[3]; var n = new Vector3[3]; var t = new Vector3[3];
@@ -209,18 +209,48 @@ namespace VRVlog.LilToonExporter.Tests
         }
 
         [Test]
-        public void GestureClipRejectsChangingCurvesAndPartialMaterialFaces()
+        public void GestureClipKeepsChangingCurvesButRejectsPartialMaterialFaces()
         {
             var clip = Clip("Smile", 75, 0);
             AnimationUtility.SetEditorCurve(clip, EditorCurveBinding.FloatCurve("Face", typeof(SkinnedMeshRenderer), "blendShape.Blink"),
                 AnimationCurve.Linear(0, 0, 10, 100));
-            Assert.Throws<InvalidOperationException>(() => VrChatGestureExpressions.ReadPose(avatar, clip));
+            Assert.That(VrChatGestureExpressions.ReadPose(avatar, clip).Single(v => v.Shape == "Blink").Weight, Is.Zero);
+            DiscreteController();
+            controller.AddParameter("GestureRight", AnimatorControllerParameterType.Int);
+            var machine = controller.layers[0].stateMachine;
+            var state = machine.AddState("Animated cry"); state.motion = clip;
+            machine.AddAnyStateTransition(state).AddCondition(AnimatorConditionMode.Equals, 2, "GestureRight");
+            var source = new VrChatExpressionMenu.Source { Controller = controller };
+            VrChatGestureExpressions.Add(avatar, source);
+            var expression = source.Entries.Single();
+            Assert.That(expression.Error, Is.Null);
+            Assert.That(expression.Animation, Has.Count.EqualTo(1));
+            Assert.That(expression.Animation[0].Curve.Evaluate(5), Is.EqualTo(50).Within(.0001));
+            Assert.That(expression.Duration, Is.EqualTo(10));
             AnimationUtility.SetEditorCurve(clip, EditorCurveBinding.FloatCurve("Face", typeof(SkinnedMeshRenderer), "blendShape.Blink"),
                 AnimationCurve.Constant(0, 1, 0));
             AnimationUtility.SetEditorCurve(clip, EditorCurveBinding.FloatCurve("Face", typeof(GameObject), "m_IsActive"),
                 AnimationCurve.Constant(0, 1, 1));
             Assert.Throws<InvalidOperationException>(() => VrChatGestureExpressions.ReadPose(avatar, clip));
         }
+
+        [Test]
+        public void PortableCurveMatchesUnityWeightedAndSteppedAnimation()
+        {
+            var a = new Keyframe(0, -20, 0, 180, .25f, .8f) { weightedMode = WeightedMode.Both };
+            var b = new Keyframe(1, 80, -30, 0, .1f, .25f) { weightedMode = WeightedMode.Both };
+            var curve = new AnimationCurve(a, b) { preWrapMode = WrapMode.Loop, postWrapMode = WrapMode.PingPong };
+            var portable = VrChatGestureExpressions.ReadCurve(curve);
+            for (var i = -50; i <= 250; i++)
+                Assert.That(portable.Evaluate(i / 100f), Is.EqualTo(curve.Evaluate(i / 100f)).Within(.01), "time=" + i / 100f);
+            a.outTangent = float.PositiveInfinity;
+            curve = new AnimationCurve(a, b);
+            portable = VrChatGestureExpressions.ReadCurve(curve);
+            foreach (var time in new[] { 0f, .5f, .999f, 1f })
+                Assert.That(portable.Evaluate(time), Is.EqualTo(curve.Evaluate(time)).Within(.01));
+        }
+
+        [Test] public void AnimatedExpressionDataContracts() => AnimatedExpressionFixture.Run((ok, message) => Assert.IsTrue(ok, message));
 
         [TestCase(false)]
         [TestCase(true)]

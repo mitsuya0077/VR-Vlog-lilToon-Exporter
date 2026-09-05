@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.7.0
+
+- Keep changing BlendShape AnimationClips as named animated expressions instead of dropping them as non-constant. Export their first pose as an ordinary VRM custom expression and preserve all curve keys, weighted/stepped tangents, curve wrapping and clip looping in the optional `VRVLOG_expression_animations` extension for VR Vlog playback.
+- Preserve source multi-frame morph geometry with reusable animation basis targets, including negative and partial weights. These internal targets are not registered as selectable expressions. Bound expanded geometry and validate all references before writing the VRM.
+- Always refresh and import expressions on export. Remove the expression enable/gesture toggles, selection checklist, preview and reload button. Keep the completion dialog short; detailed conversion diagnostics remain in the Console.
+
 ## 0.6.1
 
 - Include authored fixed facial AnimationClips targeted by GestureLeft/GestureRight transitions in the registered FX controller. Preserve each clip's complete BlendShape combination and name, including explicit zero and partial weights; do not catalogue raw mesh shapes. Resolve Animator overrides and deduplicate shared clips.

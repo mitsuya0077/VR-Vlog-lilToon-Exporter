@@ -123,7 +123,21 @@ namespace VRVlog.LilToonExporter
             }
         }
 
-        static Deltas Evaluate(Mesh mesh, int shape, float weight)
+        internal static void AppendAnimatedShape(Mesh source, Mesh target, string name, int shape, double initial, double weight)
+        {
+            if (ReferenceEquals(source, target)) throw new ArgumentException("The source mesh must remain unchanged.");
+            var before = Evaluate(source, shape, initial);
+            var after = Evaluate(source, shape, weight);
+            for (var v = 0; v < source.vertexCount; v++)
+            {
+                after.Vertices[v] -= before.Vertices[v];
+                after.Normals[v] -= before.Normals[v];
+                after.Tangents[v] -= before.Tangents[v];
+            }
+            target.AddBlendShapeFrame(name, 100f, after.Vertices, after.Normals, after.Tangents);
+        }
+
+        static Deltas Evaluate(Mesh mesh, int shape, double weight)
         {
             var result = new Deltas(mesh.vertexCount);
             if (weight == 0f) return result;
@@ -144,7 +158,7 @@ namespace VRVlog.LilToonExporter
             var lowerDelta = new Deltas(mesh.vertexCount);
             if (left.Value >= 0) mesh.GetBlendShapeFrameVertices(shape, left.Value, lowerDelta.Vertices, lowerDelta.Normals, lowerDelta.Tangents);
             if (upper.Value >= 0) mesh.GetBlendShapeFrameVertices(shape, upper.Value, result.Vertices, result.Normals, result.Tangents);
-            var t = (weight - left.Key) / (upper.Key - left.Key);
+            var t = (float)((weight - left.Key) / (upper.Key - left.Key));
             for (var v = 0; v < mesh.vertexCount; v++)
             {
                 result.Vertices[v] = Vector3.LerpUnclamped(lowerDelta.Vertices[v], result.Vertices[v], t);

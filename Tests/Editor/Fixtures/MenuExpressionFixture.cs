@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using System.Linq;
+using VRVlog.Expressions;
 
 namespace VRVlog.LilToonExporter.Tests
 {
@@ -50,6 +51,23 @@ namespace VRVlog.LilToonExporter.Tests
             try { VrmMenuExpressions.Add(bytes, expressions); } catch (InvalidOperationException) { rejected = true; }
             check(rejected, "Missing exported composite targets fail before saving a misleading expression.");
             expressions[0].Targets.Remove("absent");
+            var animation = new ExpressionAnimationData { Duration = 1, Loop = true };
+            var curve = new ExpressionAnimationData.Curve();
+            curve.Keys.Add(new ExpressionAnimationData.Key { Time = 0, Value = 0, InTangent = 100, OutTangent = 100 });
+            curve.Keys.Add(new ExpressionAnimationData.Key { Time = 1, Value = 100, InTangent = 100, OutTangent = 100 });
+            var channel = new ExpressionAnimationData.Channel { Curve = curve };
+            channel.Points.Add(new ExpressionAnimationData.Point { Value = 0, Target = null });
+            channel.Points.Add(new ExpressionAnimationData.Point { Value = 100, Target = ExpressionAnimationData.TargetPrefix + "test" });
+            animation.Channels.Add(channel); expressions[0].Animation = animation;
+            ((List<object>)root["meshes"])[0] = Mesh("raw-eye", "composite-face", ExpressionAnimationData.TargetPrefix + "test");
+            var animated = GlbDocument.Read(VrmMenuExpressions.Add(GlbDocument.Create(root, binary).Write(), expressions));
+            var stored = ExpressionAnimationData.Read(((Dictionary<string, object>)animated.Json["extensions"])[ExpressionAnimationData.Extension]);
+            check(stored[0].Expression == "VRChat / 顔 / 笑顔 (2)" && stored[0].Channels[0].Points[0].Target == null,
+                "Animated data follows the final disambiguated expression name and supports a zero residual without a mesh target.");
+            check(Custom(animated.Json).Count == 2 && VrmMenuExpressions.CountRegistered(animated.Write()) == 1,
+                "Animation basis morphs do not inflate the exported expression count or selector list.");
+            check(((List<object>)animated.Json["extensionsUsed"]).Contains(ExpressionAnimationData.Extension) && !animated.Json.ContainsKey("extensionsRequired"),
+                "Animation is an optional extension; other VRM viewers retain the standard first pose.");
             ((List<object>)root["nodes"]).Add(Obj("mesh", 0L));
             rejected = false;
             try { VrmMenuExpressions.Add(GlbDocument.Create(root, binary).Write(), expressions); } catch (InvalidOperationException) { rejected = true; }
