@@ -57,7 +57,21 @@ It does not depend on material/texture names, does not suppress separate emissio
 maps, and can be disabled to retain intentional whole-image glow. It is an
 explicit approximation, not a complete conversion of lilToon's emission blending.
 
-The source avatar, materials, textures, and importer settings are never
+The one-click workflow preserves the current renderer **BlendShapes** values as
+the exported base face/body shape. Morphs then move from that customized base
+toward their existing final-frame endpoint, so an already half-closed eye does
+not receive its initial closing amount twice. Other shape customizations remain
+in place while expressions animate. Shared meshes are copied per renderer, and
+authored VRM expression bindings retain their names and indices. VRChat expression
+menus/Animator controllers are not converted into VRM expression clips.
+
+Multi-frame shapes are evaluated at the current initial weight; animation keeps
+UniVRM's single final-frame target approximation. A nonzero default on a shape
+with a zero-weight frame stops with an explicit error. The advanced existing-VRM
+material-injection workflow does not change geometry; re-export from Unity to
+recover a face whose initial values were absent in an older VRM.
+
+The source avatar, meshes, materials, textures, and importer settings are never
 modified. The old existing-fallback workflow remains under **上級者向け：既存のVRM
 1.0へlilToonデータを追加**.
 
@@ -90,7 +104,7 @@ shadows are enabled but no shade texture is assigned, the base image is reused.
 
 - `python Tools/validate.py`: package, schema, and source integration checks.
 - `pwsh -File Tools/run-behavior-tests.ps1`: compiles and executes production
-  expression, material-reader, and injection code with synthetic inputs. The
+  base-shape geometry, expression, material-reader, and injection code with synthetic inputs. The
   property-bag test doubles do not simulate Unity hierarchy or rendering; GPU
   operations throw if reached.
 - Unity Editor tests under `Tests/Editor`: material fallback, emission opt-out,

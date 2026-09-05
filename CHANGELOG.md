@@ -1,5 +1,18 @@
 # Changelog
 
+## 0.5.0
+
+- Preserve authored SkinnedMeshRenderer BlendShape values in one-click VRM base
+  geometry. Work on per-renderer temporary mesh copies, leaving scene assets,
+  skinning, topology and expression target names/indices unchanged.
+- Rebase morph deltas so a default partially closed eye reaches the existing
+  full-blink endpoint without double-applying the authored offset. Expressions
+  blend from the customized rest face; other customized shapes remain present.
+- Evaluate initial values across multiple frames, including extrapolation.
+  VRM retains UniVRM's single final-frame target per shape. Nonzero defaults
+  using zero-weight frames are rejected explicitly instead of silently lost.
+- Add executable geometry regressions and Unity per-renderer isolation tests.
+
 ## 0.4.1
 
 - Match UniVRM's active-object and enabled-renderer selection when converting

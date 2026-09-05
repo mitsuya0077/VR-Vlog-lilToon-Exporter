@@ -33,6 +33,7 @@ public static class ExporterBehaviorTests
     public static string Run()
     {
         _assertions = 0;
+        VRVlog.LilToonExporter.Tests.BaseShapeFixture.Run(Check);
         CheckMaterials();
         CheckHiddenMaterialInjection();
         var original = Encode(Fixture("unused", "eye_close", "eye_close_left", "eye_close_right", "mouth_a", "vrc.v.aa"));

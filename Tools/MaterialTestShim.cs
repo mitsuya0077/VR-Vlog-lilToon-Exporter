@@ -5,7 +5,8 @@ namespace UnityEngine
 {
     public class Object
     {
-        public static void DestroyImmediate(Object value) => throw new System.NotSupportedException("Unity lifetime is not simulated.");
+        public static void DestroyImmediate(Object value) { if (!(value is Mesh)) throw new System.NotSupportedException("Unity lifetime is not simulated."); }
+        public static T Instantiate<T>(T value) where T : Object => throw new System.NotSupportedException("Unity cloning is covered by Editor tests.");
     }
     public class Texture : Object { public string name; }
     public class Texture2D : Texture
@@ -22,12 +23,16 @@ namespace UnityEngine
     // Flat renderer inventory; hierarchy behavior is covered by Unity tests.
     public class GameObject
     {
+        public Transform transform;
         public bool activeInHierarchy = true;
         public readonly System.Collections.Generic.List<Renderer> Renderers = new System.Collections.Generic.List<Renderer>();
         public T[] GetComponentsInChildren<T>(bool includeInactive = false) => System.Linq.Enumerable.ToArray(System.Linq.Enumerable.OfType<T>(Renderers));
     }
     public class Renderer
     {
+        public string name;
+        public Transform transform;
+        public T[] GetComponents<T>() => throw new System.NotSupportedException();
         public GameObject gameObject = new GameObject();
         public bool enabled = true;
         public Material[] sharedMaterials = System.Array.Empty<Material>();

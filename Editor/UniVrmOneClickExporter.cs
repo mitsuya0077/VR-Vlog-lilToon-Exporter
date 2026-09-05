@@ -25,8 +25,10 @@ namespace VRVlog.LilToonExporter
             var clone = UnityEngine.Object.Instantiate(source);
             clone.name = source.name;
             var temporaryMaterials = new List<Material>();
+            var temporaryMeshes = new List<Mesh>();
             try
             {
+                AvatarBaseShape.Preserve(source, clone, temporaryMeshes, warnings);
                 ReplaceLilToonMaterials(clone, temporaryMaterials, warnings, suppressSharedTextureEmission);
                 var exported = Vrm10Exporter.Export(
                     new GltfExportSettings(),
@@ -40,6 +42,7 @@ namespace VRVlog.LilToonExporter
             {
                 UnityEngine.Object.DestroyImmediate(clone);
                 foreach (var material in temporaryMaterials) UnityEngine.Object.DestroyImmediate(material);
+                foreach (var mesh in temporaryMeshes) UnityEngine.Object.DestroyImmediate(mesh);
             }
         }
 
