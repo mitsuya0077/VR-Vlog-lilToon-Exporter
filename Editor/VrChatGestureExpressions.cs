@@ -97,9 +97,7 @@ namespace VRVlog.LilToonExporter
                     if (!entering.Add(machine)) return;
                     try
                     {
-                        var entries = machine.entryTransitions.Where(t => !t.mute).ToArray();
-                        if (entries.Any(t => t.solo)) entries = entries.Where(t => t.solo).ToArray();
-                        foreach (var entry in entries)
+                        foreach (var entry in EnabledTransitions(machine.entryTransitions))
                         {
                             Destination(entry);
                             // An unconditional entry takes precedence over later
@@ -121,16 +119,23 @@ namespace VRVlog.LilToonExporter
                 }
                 foreach (var machine in machines)
                 {
-                    foreach (var transition in machine.anyStateTransitions) Inspect(transition);
-                    foreach (var transition in machine.entryTransitions) Inspect(transition);
+                    foreach (var transition in EnabledTransitions(machine.anyStateTransitions)) Inspect(transition);
+                    foreach (var transition in EnabledTransitions(machine.entryTransitions)) Inspect(transition);
                     foreach (var child in machine.states)
-                        foreach (var transition in child.state.transitions) Inspect(transition);
+                        foreach (var transition in EnabledTransitions(child.state.transitions)) Inspect(transition);
                     foreach (var child in machine.stateMachines)
-                        foreach (var transition in machine.GetStateMachineTransitions(child.stateMachine)) Inspect(transition);
+                        foreach (var transition in EnabledTransitions(machine.GetStateMachineTransitions(child.stateMachine))) Inspect(transition);
                 }
                 foreach (var state in targets.Where(paths.ContainsKey).OrderBy(s => paths[s], StringComparer.Ordinal))
                     yield return new Target { State = state, Layer = layerIndex, Path = layerIndex + "/" + paths[state] };
             }
+        }
+
+        private static IEnumerable<T> EnabledTransitions<T>(IEnumerable<T> transitions) where T : AnimatorTransitionBase
+        {
+            var siblings = transitions.ToArray();
+            var solo = siblings.Any(t => t.solo);
+            return siblings.Where(t => !t.mute && (!solo || t.solo));
         }
 
         private static Motion EffectiveMotion(AnimatorController controller, AnimatorState state, int layer)

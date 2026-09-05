@@ -278,6 +278,51 @@ namespace VRVlog.LilToonExporter.Tests
             finally { UnityEngine.Object.DestroyImmediate(overrides); }
         }
 
+        [TestCase("state")]
+        [TestCase("any")]
+        [TestCase("entry")]
+        [TestCase("machine")]
+        public void GestureDiscoveryExcludesNonSoloSiblings(string kind)
+        {
+            DiscreteController();
+            controller.AddParameter("GestureRight", AnimatorControllerParameterType.Int);
+            var machine = controller.layers[0].stateMachine;
+            var idle = machine.states.Single(s => s.state.name == "Idle").state;
+            var smile = machine.states.Single(s => s.state.name == "Smile").state;
+            AnimatorTransitionBase inactive, solo;
+            if (kind == "any")
+            {
+                inactive = machine.AddAnyStateTransition(smile);
+                solo = machine.AddAnyStateTransition(idle);
+            }
+            else if (kind == "entry")
+            {
+                inactive = machine.AddEntryTransition(smile);
+                solo = machine.AddEntryTransition(idle);
+            }
+            else if (kind == "machine")
+            {
+                var sub = machine.AddStateMachine("Source");
+                sub.AddState("Default");
+                inactive = machine.AddStateMachineTransition(sub, smile);
+                solo = machine.AddStateMachineTransition(sub, idle);
+            }
+            else
+            {
+                inactive = idle.AddTransition(smile);
+                solo = idle.AddTransition(idle);
+            }
+            inactive.AddCondition(AnimatorConditionMode.Equals, 3, "GestureRight");
+            solo.solo = true;
+            var source = new VrChatExpressionMenu.Source { Controller = controller };
+            VrChatGestureExpressions.Add(avatar, source);
+            Assert.That(source.Entries, Is.Empty);
+            solo.mute = true;
+            source = new VrChatExpressionMenu.Source { Controller = controller };
+            VrChatGestureExpressions.Add(avatar, source);
+            Assert.That(source.Entries, Is.Empty, "Muting the solo transition does not enable non-solo siblings.");
+        }
+
         [Test]
         public void GestureBlendTreeLeavesAreNotRegisteredAsSeparateExpressions()
         {
