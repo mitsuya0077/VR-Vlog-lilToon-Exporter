@@ -12,7 +12,7 @@ namespace VRVlog.LilToonExporter
     {
         internal const string SupportedUniVrmSeries = "0.131";
 
-        public static byte[] Export(GameObject source, string avatarName, string author, ICollection<string> warnings = null)
+        public static byte[] Export(GameObject source, string avatarName, string author, ICollection<string> warnings = null, bool suppressSharedTextureEmission = true)
         {
             if (source == null) throw new ArgumentNullException(nameof(source));
             if (string.IsNullOrWhiteSpace(avatarName)) throw new InvalidOperationException("アバター名を取得できませんでした。");
@@ -24,13 +24,14 @@ namespace VRVlog.LilToonExporter
             var temporaryMaterials = new List<Material>();
             try
             {
-                ReplaceLilToonMaterials(clone, temporaryMaterials, warnings);
-                return Vrm10Exporter.Export(
+                ReplaceLilToonMaterials(clone, temporaryMaterials, warnings, suppressSharedTextureEmission);
+                var exported = Vrm10Exporter.Export(
                     new GltfExportSettings(),
                     clone,
                     materialExporter: new BuiltInVrm10MaterialExporter(),
                     textureSerializer: new EditorTextureSerializer(),
                     vrmMeta: CreateMeta(avatarName.Trim(), author.Trim()));
+                return VrmExpressionBindings.AddMissing(exported, warnings);
             }
             finally
             {
@@ -61,7 +62,7 @@ namespace VRVlog.LilToonExporter
             };
         }
 
-        private static void ReplaceLilToonMaterials(GameObject clone, List<Material> created, ICollection<string> warnings)
+        private static void ReplaceLilToonMaterials(GameObject clone, List<Material> created, ICollection<string> warnings, bool suppressSharedTextureEmission)
         {
             var converted = new Dictionary<Material, Material>();
             foreach (var renderer in clone.GetComponentsInChildren<Renderer>(true))
@@ -74,7 +75,7 @@ namespace VRVlog.LilToonExporter
                     if (!LilToonMaterialReader.IsLilToon(source)) continue;
                     if (!converted.TryGetValue(source, out var fallback))
                     {
-                        fallback = CreateMToonFallback(source, created, warnings);
+                        fallback = CreateMToonFallback(source, created, warnings, suppressSharedTextureEmission);
                         converted.Add(source, fallback);
                     }
                     materials[i] = fallback;
@@ -85,10 +86,10 @@ namespace VRVlog.LilToonExporter
             if (converted.Count == 0) throw new InvalidOperationException("選択したアバターに対応するlilToonマテリアルがありません。");
         }
 
-        private static Material CreateMToonFallback(Material source, List<Material> created, ICollection<string> warnings)
+        internal static Material CreateMToonFallback(Material source, List<Material> created, ICollection<string> warnings, bool suppressSharedTextureEmission = true)
         {
             // Validate the full mobile subset before producing any fallback output.
-            LilToonMaterialReader.Read(source, 0, (_, __) => 0, warnings);
+            LilToonMaterialReader.Read(source, 0, (_, __) => 0, warnings, suppressSharedTextureEmission);
             var shader = Shader.Find(MToon10Meta.UnityShaderName);
             if (shader == null) throw new InvalidOperationException("UniVRMのMToon10シェーダーを利用できません。");
             var material = new Material(shader) { name = source.name };
@@ -96,7 +97,8 @@ namespace VRVlog.LilToonExporter
             var shadowEnabled = source.HasProperty("_UseShadow") && source.GetFloat("_UseShadow") > 0.5f;
             var backlightEnabled = source.HasProperty("_UseBacklight") && source.GetFloat("_UseBacklight") > 0.5f;
             var normalEnabled = EnabledOrTexture(source, "_UseBumpMap", "_BumpMap");
-            var emissionEnabled = EnabledOrTexture(source, "_UseEmission", "_EmissionMap");
+            var emissionEnabled = EnabledOrTexture(source, "_UseEmission", "_EmissionMap") &&
+                !LilToonEmissionPolicy.IsSuppressed(source, suppressSharedTextureEmission);
             var matcapEnabled = source.HasProperty("_UseMatCap") && source.GetFloat("_UseMatCap") > 0.5f;
             var rimEnabled = source.HasProperty("_UseRim") && source.GetFloat("_UseRim") > 0.5f;
             var outlineEnabled = Float(source, "_UseOutline", 0f) > 0.5f || source.shader.name.EndsWith("Outline", StringComparison.Ordinal);
@@ -110,7 +112,10 @@ namespace VRVlog.LilToonExporter
                 BaseColorFactorSrgb = Color(source, "_Color", UnityEngine.Color.white),
                 BaseColorTexture = Texture(source, "_MainTex"),
                 ShadeColorFactorSrgb = shadowEnabled ? Color(source, "_ShadowColor", UnityEngine.Color.gray) : Color(source, "_Color", UnityEngine.Color.white),
-                ShadeColorTexture = shadowEnabled ? Texture(source, "_ShadowColorTex") : null,
+                // An unset MToon shade texture is white, not the base image.
+                ShadeColorTexture = shadowEnabled
+                    ? Texture(source, "_ShadowColorTex") ?? Texture(source, "_MainTex")
+                    : Texture(source, "_MainTex"),
                 NormalTexture = normalEnabled ? Texture(source, "_BumpMap") : null,
                 NormalTextureScale = normalEnabled ? Float(source, "_BumpScale", 1f) : 0f,
                 EmissiveFactorLinear = emissionEnabled ? Color(source, "_EmissionColor", UnityEngine.Color.black).linear : UnityEngine.Color.black,

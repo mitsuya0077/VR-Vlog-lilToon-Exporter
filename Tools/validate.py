@@ -18,7 +18,7 @@ listing = json.loads((root / "source.json").read_text(encoding="utf-8"))
 
 assert package["name"] == "com.vrvlog.liltoon-vrm-exporter"
 assert package["unity"] == "2022.3"
-assert package["version"] == "0.3.9"
+assert package["version"] == "0.4.0"
 assert package["vpmDependencies"] == {
     "com.vrmc.gltf": "0.131.x",
     "com.vrmc.vrm": "0.131.x",
@@ -95,7 +95,7 @@ assert '("_BacklightColorTex", "backlight")' in reader
 assert 'case "backlight": return Enabled(material, "_UseBacklight")' in reader
 assert 'item.Name == "_BacklightColorTex" && texture == Texture2D.whiteTexture' in reader
 assert "ResolveTexture(glb, texture" in injector
-assert 'LilToonMaterialReader.Read(source, 0, (_, __) => 0, warnings);' in one_click
+assert 'LilToonMaterialReader.Read(source, 0, (_, __) => 0, warnings, suppressSharedTextureEmission);' in one_click
 assert '近似・省略した項目' in window
 assert "glb.AppendBinary(png)" in injector
 assert "ImageConversion.EncodeToPNG(copy)" in injector
@@ -183,7 +183,7 @@ assert "UnityEngine.Object.Instantiate(source)" in one_click
 assert "ReplaceLilToonMaterials(clone" in one_click
 assert "DestroyImmediate(clone)" in one_click
 assert "MToon10Meta.UnityShaderName" in one_click
-assert "CreateMToonFallback(source, created, warnings)" in one_click
+assert "CreateMToonFallback(source, created, warnings, suppressSharedTextureEmission)" in one_click
 assert "created.Add(material)" in one_click
 assert 'Float(source, "_Cull", 2f) == 2f' in one_click
 assert "context.Validate()" in one_click
@@ -234,7 +234,7 @@ assert "ParametricRimColorFactorSrgb = rimEnabled" in one_click
 assert 'backlightEnabled ? Color(source, "_BacklightColor"' in one_click
 assert 'backlightEnabled ? Float(source, "_BacklightDirectivity"' in one_click
 assert "ShadeColorFactorSrgb = shadowEnabled ?" in one_click
-assert "ShadeColorTexture = shadowEnabled ?" in one_click
+assert "ShadeColorTexture = shadowEnabled" in one_click
 for gated_texture in ("NormalTexture", "EmissiveTexture", "MatcapTexture", "RimMultiplyTexture"):
     assert f"{gated_texture} =" in one_click and "? Texture(source," in one_click
 assert 'Float(source, "_OutlineWidth", 0f)) * 0.01f' in one_click
@@ -242,7 +242,7 @@ assert "OutlineWidthMultiplyTexture = null" in one_click
 assert 'OutlineWidthMultiplyTexture = outlineEnabled ? Texture(source, "_OutlineTex")' not in one_click
 assert 'private string author = "";' in window
 assert 'private string avatarName = "";' not in window
-assert 'UniVrmOneClickExporter.Export(avatar, AvatarName(), author, warnings)' in window
+assert 'UniVrmOneClickExporter.Export(avatar, AvatarName(), author, warnings, suppressSharedTextureEmission)' in window
 assert 'return avatar != null && !string.IsNullOrWhiteSpace(avatar.name) ? avatar.name.Trim() : "avatar";' in window
 assert 'var name = AvatarName();' in window
 assert 'EditorUtility.SaveFilePanel("VRMの保存先", "", DefaultFileName(), "vrm")' in window

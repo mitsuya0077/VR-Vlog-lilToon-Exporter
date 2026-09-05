@@ -15,6 +15,8 @@ namespace VRVlog.LilToonExporter
         private string outputPath = "";
         private string fallbackPath = "";
         private bool showAdvanced;
+        private bool showAppearanceOptions;
+        private bool suppressSharedTextureEmission = true;
 
         [MenuItem("VR Vlog/lilToon VRM 1.0を書き出す")]
         public static void Open()
@@ -40,6 +42,14 @@ namespace VRVlog.LilToonExporter
                 new GUIContent("② 作者名（必須）", "VRMファイルに記録される作者名です。"),
                 author);
             EditorGUILayout.HelpBox("VRMファイルに記録する作者名を入力してください。", MessageType.None);
+
+            showAppearanceOptions = EditorGUILayout.Foldout(showAppearanceOptions, "書き出し設定");
+            if (showAppearanceOptions)
+            {
+                suppressSharedTextureEmission = EditorGUILayout.Toggle(
+                    new GUIContent("目などの白飛びを抑える", "メイン画像と同じ画像を使う発光を省略します。意図的な発光も抑えられるため、必要に応じて解除してください。"),
+                    suppressSharedTextureEmission);
+            }
 
             EditorGUILayout.Space(4f);
             using (new EditorGUI.DisabledScope(avatar == null || string.IsNullOrWhiteSpace(author)))
@@ -70,8 +80,8 @@ namespace VRVlog.LilToonExporter
             var warnings = new List<string>();
             ExportAtomically(() =>
             {
-                var fallback = UniVrmOneClickExporter.Export(avatar, AvatarName(), author, warnings);
-                return LilToonGlbExtension.Inject(fallback, avatar, PackageVersion(), RequireSupportedLilToon(), warnings);
+                var fallback = UniVrmOneClickExporter.Export(avatar, AvatarName(), author, warnings, suppressSharedTextureEmission);
+                return LilToonGlbExtension.Inject(fallback, avatar, PackageVersion(), RequireSupportedLilToon(), warnings, suppressSharedTextureEmission);
             }, warnings);
         }
 
@@ -95,7 +105,7 @@ namespace VRVlog.LilToonExporter
                 if (!File.Exists(fallbackPath)) throw new FileNotFoundException("元にするVRMが見つかりません。", fallbackPath);
                 if (string.Equals(Path.GetFullPath(fallbackPath), Path.GetFullPath(outputPath), StringComparison.OrdinalIgnoreCase))
                     throw new InvalidOperationException("元のVRMを保護するため、別の保存先を指定してください。");
-                return LilToonGlbExtension.Inject(File.ReadAllBytes(fallbackPath), avatar, PackageVersion(), RequireSupportedLilToon(), warnings);
+                return LilToonGlbExtension.Inject(File.ReadAllBytes(fallbackPath), avatar, PackageVersion(), RequireSupportedLilToon(), warnings, suppressSharedTextureEmission);
             }, warnings);
         }
 
@@ -144,7 +154,7 @@ namespace VRVlog.LilToonExporter
         private static string PackageVersion()
         {
             var info = PackageManagerPackageInfo.FindForAssembly(typeof(LilToonExporterWindow).Assembly);
-            return info != null && !string.IsNullOrWhiteSpace(info.version) ? info.version : "0.3.9";
+            return info != null && !string.IsNullOrWhiteSpace(info.version) ? info.version : "0.4.0";
         }
 
         private static string InstalledLilToonStatus()

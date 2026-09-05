@@ -33,6 +33,22 @@ the confirmation screen before installation.
    1.0 through the public UniVRM API, injects the optional lilToon extension,
    validates the complete GLB, and atomically commits one output file.
 
+Missing standard blink and mouth presets are populated from a conservative list
+of known morph names in the exported mesh (`eye_close[_left/_right]`, VRM/ARKit
+blink names, VRoid names, and VRChat vowel visemes). Existing VRM presets and
+custom expressions are preserved, including explicitly empty presets. Names are
+matched exactly, ignoring case; ambiguous duplicate names are skipped with a
+warning. The exporter reports generated presets and warns when it cannot
+configure blinking. Verify expression movement on the target model.
+
+Under **書き出し設定**, **目などの白飛びを抑える** defaults to ON. This mobile
+appearance option omits emission only when the same Unity texture object is
+assigned to both the base image and emission image. It affects both the ordinary
+MToon fallback and lilToon compatibility data and reports each affected material.
+It does not depend on material/texture names, does not suppress separate emission
+maps, and can be disabled to retain intentional whole-image glow. It is an
+explicit approximation, not a complete conversion of lilToon's emission blending.
+
 The source avatar, materials, textures, and importer settings are never
 modified. The old existing-fallback workflow remains under **上級者向け：既存のVRM
 1.0へlilToonデータを追加**.
@@ -58,6 +74,19 @@ violations still stop the export.
 The portable MToon fallback converts lilToon's outline width to metres at
 one-hundredth scale. `_OutlineTex` is retained for lilToon restoration but is
 not reused as MToon's unrelated green-channel outline-width mask.
+When lilToon shadows are disabled, the base image is also bound as MToon's shade
+image, so shaded regions retain their colors instead of turning white. If
+shadows are enabled but no shade texture is assigned, the base image is reused.
+
+## Development checks
+
+- `python Tools/validate.py`: package, schema, and source integration checks.
+- `pwsh -File Tools/run-behavior-tests.ps1`: compiles and executes the production
+  expression helper and material reader with synthetic inputs. The material
+  property-bag test double does not simulate Unity rendering.
+- Unity Editor tests under `Tests/Editor`: material fallback, emission opt-out,
+  and outline conversion against actual Unity/UniVRM materials. These require a
+  dependency-complete Unity project; non-Unity checks cannot replace them.
 
 ## Install during development
 
