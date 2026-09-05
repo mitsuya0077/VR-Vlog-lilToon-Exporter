@@ -1,0 +1,229 @@
+using System;
+using System.Collections.Generic;
+using System.Linq;
+using UnityEditor;
+using UnityEditor.Animations;
+using UnityEditor.SceneManagement;
+using UnityEngine;
+using UnityEngine.Animations;
+using UnityEngine.Playables;
+using UnityEngine.SceneManagement;
+
+namespace VRVlog.LilToonExporter
+{
+    internal static class VrChatExpressionSampler
+    {
+        internal sealed class MorphValue
+        {
+            internal string Path, Shape;
+            internal float Weight;
+        }
+
+        internal static VrChatExpressionMenu.Source Analyze(GameObject avatar)
+        {
+            var source = VrChatExpressionMenu.Read(avatar);
+            try
+            {
+                for (var index = 0; index < source.Entries.Count; index++)
+                {
+                    var entry = source.Entries[index];
+                    if (entry.Error != null) continue;
+                    if (EditorUtility.DisplayCancelableProgressBar("VRChatの表情を読み込み中", entry.Name, (float)index / source.Entries.Count))
+                        throw new OperationCanceledException();
+                    try { entry.Values.AddRange(Sample(avatar, source.Controller, source.Defaults, entry.Parameters)); }
+                    catch (InvalidOperationException error) { entry.Error = error.Message; }
+                }
+            }
+            finally { EditorUtility.ClearProgressBar(); }
+            return source;
+        }
+
+        // Only stable, discrete, morph-based FX expressions are portable. Do not
+        // silently flatten clothes, material swaps, drivers or animated puppets.
+        internal static List<MorphValue> Sample(GameObject avatar, RuntimeAnimatorController runtime,
+            IDictionary<string, float> defaults, IDictionary<string, float> selected)
+        {
+            var controller = runtime as AnimatorController;
+            if (runtime is AnimatorOverrideController overrides) controller = overrides.runtimeAnimatorController as AnimatorController;
+            if (controller == null) throw new InvalidOperationException("FX Animator Controllerを取得できません。");
+            ValidateBehaviours(controller);
+            var layers = controller.layers;
+            var affected = Enumerable.Range(0, layers.Length).Where(i => Uses(layers[i].stateMachine, selected.Keys)).ToArray();
+            if (affected.Length == 0) throw new InvalidOperationException("このメニューに対応するFXの表情がありません。");
+            if (layers.Any(l => l.syncedLayerIndex >= 0)) throw new InvalidOperationException("同期Animatorレイヤーの表情変換は未対応です。");
+
+            var scene = EditorSceneManager.NewPreviewScene();
+            GameObject clone = null;
+            var graph = default(PlayableGraph);
+            try
+            {
+                clone = UnityEngine.Object.Instantiate(avatar);
+                clone.name = avatar.name;
+                clone.hideFlags = HideFlags.HideAndDontSave;
+                SceneManager.MoveGameObjectToScene(clone, scene);
+                foreach (var behaviour in clone.GetComponentsInChildren<Behaviour>(true)) behaviour.enabled = false;
+                var animator = clone.GetComponent<Animator>() ?? clone.AddComponent<Animator>();
+                animator.runtimeAnimatorController = null;
+                animator.enabled = true;
+                animator.cullingMode = AnimatorCullingMode.AlwaysAnimate;
+                animator.applyRootMotion = false;
+                animator.fireEvents = false;
+                clone.SetActive(true);
+                graph = PlayableGraph.Create("VR Vlog expression sampling");
+                graph.SetTimeUpdateMode(DirectorUpdateMode.Manual);
+                var playable = AnimatorControllerPlayable.Create(graph, runtime);
+                var output = AnimationPlayableOutput.Create(graph, "Expression", animator);
+                output.SetSourcePlayable(playable);
+                SetParameters(playable, controller, defaults);
+                graph.Play();
+                Advance(graph, 120);
+                SetParameters(playable, controller, selected);
+                Advance(graph, 120);
+                var bindings = ActiveBindings(playable, affected);
+                var values = Capture(avatar, clone, bindings);
+                // A state transition, a changing curve or changing active clip
+                // set cannot be represented as one fixed VRM expression.
+                for (var checkpoint = 0; checkpoint < 3; checkpoint++)
+                {
+                    Advance(graph, 7 + checkpoint);
+                    var nextBindings = ActiveBindings(playable, affected);
+                    if (!bindings.SetEquals(nextBindings)) throw new InvalidOperationException("表情が時間で切り替わるため、固定表情に変換できません。");
+                    var next = Capture(avatar, clone, bindings);
+                    if (values.Where((v, i) => Math.Abs(v.Weight - next[i].Weight) > 0.01f).Any())
+                        throw new InvalidOperationException("表情のアニメーションが静止しません。固定表情のみ取り込めます。");
+                }
+                if (values.Count == 0) throw new InvalidOperationException("有効な顔のBlendShapeアニメーションがありません。");
+                return values;
+            }
+            finally
+            {
+                if (graph.IsValid()) graph.Destroy();
+                if (clone != null) UnityEngine.Object.DestroyImmediate(clone);
+                EditorSceneManager.ClosePreviewScene(scene);
+            }
+        }
+
+        private static void Advance(PlayableGraph graph, int frames)
+        {
+            for (var i = 0; i < frames; i++) graph.Evaluate(1f / 60f);
+        }
+
+        private static void SetParameters(AnimatorControllerPlayable playable, AnimatorController controller, IDictionary<string, float> values)
+        {
+            foreach (var parameter in controller.parameters)
+            {
+                if (!values.TryGetValue(parameter.name, out var value)) continue;
+                if (float.IsNaN(value) || float.IsInfinity(value)) throw new InvalidOperationException("表情パラメーターに不正な値があります。");
+                switch (parameter.type)
+                {
+                    case AnimatorControllerParameterType.Bool: playable.SetBool(parameter.name, value != 0); break;
+                    case AnimatorControllerParameterType.Int: playable.SetInteger(parameter.name, Mathf.RoundToInt(value)); break;
+                    case AnimatorControllerParameterType.Float: playable.SetFloat(parameter.name, value); break;
+                    default: throw new InvalidOperationException("Triggerパラメーターの表情は未対応です。");
+                }
+            }
+        }
+
+        private static HashSet<EditorCurveBinding> ActiveBindings(AnimatorControllerPlayable playable, int[] layers)
+        {
+            var bindings = new HashSet<EditorCurveBinding>();
+            foreach (var layer in layers)
+            {
+                if (playable.IsInTransition(layer)) throw new InvalidOperationException("FXの表情遷移が完了しません（2秒以内に静止する表情が必要です）。");
+                if (layer > 0 && playable.GetLayerWeight(layer) <= 0.00001f) continue;
+                foreach (var info in playable.GetCurrentAnimatorClipInfo(layer))
+                {
+                    if (info.weight <= 0.00001f || info.clip == null) continue;
+                    if (AnimationUtility.GetObjectReferenceCurveBindings(info.clip).Length > 0)
+                        throw new InvalidOperationException("マテリアル・オブジェクトの差し替えを含む表情は未対応です。");
+                    foreach (var binding in AnimationUtility.GetCurveBindings(info.clip))
+                    {
+                        if (binding.type != typeof(SkinnedMeshRenderer) || !binding.propertyName.StartsWith("blendShape.", StringComparison.Ordinal))
+                            throw new InvalidOperationException("BlendShape以外の変化を含みます: " + binding.propertyName);
+                        var curve = AnimationUtility.GetEditorCurve(info.clip, binding);
+                        if (info.clip.isLooping && curve != null && curve.keys.Any(k => Math.Abs(k.value - curve.keys[0].value) > 0.01f))
+                            throw new InvalidOperationException("ループする表情アニメーションは固定表情に変換できません。");
+                        bindings.Add(binding);
+                    }
+                }
+            }
+            return bindings;
+        }
+
+        private static List<MorphValue> Capture(GameObject source, GameObject clone, IEnumerable<EditorCurveBinding> bindings)
+        {
+            var result = new List<MorphValue>();
+            foreach (var binding in bindings.OrderBy(b => b.path, StringComparer.Ordinal).ThenBy(b => b.propertyName, StringComparer.Ordinal))
+            {
+                var original = FindRenderer(source, binding.path);
+                var animated = FindRenderer(clone, binding.path);
+                if (!original.enabled || !original.gameObject.activeInHierarchy)
+                    throw new InvalidOperationException("非表示のRendererを動かす項目は取り込めません: " + binding.path);
+                var shape = binding.propertyName.Substring("blendShape.".Length);
+                var index = animated.sharedMesh.GetBlendShapeIndex(shape);
+                if (index < 0) throw new InvalidOperationException("BlendShapeが見つかりません: " + binding.path + "/" + shape);
+                var weight = animated.GetBlendShapeWeight(index);
+                if (float.IsNaN(weight) || float.IsInfinity(weight)) throw new InvalidOperationException("表情のBlendShape値が不正です。");
+                result.Add(new MorphValue { Path = binding.path, Shape = shape, Weight = weight });
+            }
+            return result;
+        }
+
+        internal static SkinnedMeshRenderer FindRenderer(GameObject root, string path)
+        {
+            if (root.GetComponentsInChildren<Transform>(true).Count(t => AnimationUtility.CalculateTransformPath(t, root.transform) == path) != 1)
+                throw new InvalidOperationException("重複する階層パスの表情は取り込めません: " + path);
+            var matches = root.GetComponentsInChildren<SkinnedMeshRenderer>(true).Where(r => AnimationUtility.CalculateTransformPath(r.transform, root.transform) == path).ToArray();
+            if (matches.Length != 1 || matches[0].sharedMesh == null)
+                throw new InvalidOperationException("Rendererのパスを一意に解決できません: " + path);
+            for (var current = matches[0].transform; current != root.transform; current = current.parent)
+                if (current.name.Contains("/")) throw new InvalidOperationException("名前に / を含む階層の表情は取り込めません: " + path);
+            return matches[0];
+        }
+
+        private static bool Uses(AnimatorStateMachine machine, IEnumerable<string> names)
+        {
+            var parameters = new HashSet<string>(names, StringComparer.Ordinal);
+            bool Conditions(IEnumerable<AnimatorCondition> conditions) => conditions.Any(c => parameters.Contains(c.parameter));
+            if (machine.anyStateTransitions.Any(t => Conditions(t.conditions)) || machine.entryTransitions.Any(t => Conditions(t.conditions))) return true;
+            foreach (var child in machine.states)
+            {
+                var state = child.state;
+                if (state.transitions.Any(t => Conditions(t.conditions)) || UsesMotion(state.motion, parameters) ||
+                    state.timeParameterActive && parameters.Contains(state.timeParameter)) return true;
+            }
+            return machine.stateMachines.Any(child => Uses(child.stateMachine, parameters) ||
+                machine.GetStateMachineTransitions(child.stateMachine).Any(t => Conditions(t.conditions)));
+        }
+
+        private static bool UsesMotion(Motion motion, HashSet<string> names)
+        {
+            if (!(motion is BlendTree tree)) return false;
+            return names.Contains(tree.blendParameter) || names.Contains(tree.blendParameterY) ||
+                tree.children.Any(c => names.Contains(c.directBlendParameter) || UsesMotion(c.motion, names));
+        }
+
+        private static void ValidateBehaviours(AnimatorController controller)
+        {
+            void Check(IEnumerable<StateMachineBehaviour> behaviours)
+            {
+                foreach (var behaviour in behaviours)
+                {
+                    if (behaviour == null) throw new InvalidOperationException("FXに欠けたState Behaviourがあります。");
+                    var name = behaviour.GetType().Name;
+                    // Tracking control only tells VRChat whether to run its own
+                    // blink/lip tracking. Imported fixed faces block VRM tracking.
+                    if (name == "VRCAnimatorTrackingControl" || name == "VRC_AnimatorTrackingControl") continue;
+                    throw new InvalidOperationException("FXのState Behaviourは未対応です: " + name + "（Parameter Driver・Layer Control等は自動変換しません）");
+                }
+            }
+            void Visit(AnimatorStateMachine machine)
+            {
+                Check(machine.behaviours);
+                foreach (var state in machine.states) Check(state.state.behaviours);
+                foreach (var child in machine.stateMachines) Visit(child.stateMachine);
+            }
+            foreach (var layer in controller.layers) Visit(layer.stateMachine);
+        }
+    }
+}

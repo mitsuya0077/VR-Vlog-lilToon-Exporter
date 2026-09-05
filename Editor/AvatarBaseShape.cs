@@ -86,6 +86,32 @@ namespace VRVlog.LilToonExporter
             target.RecalculateBounds();
         }
 
+        // One composed expression is one residual morph per renderer. Computing
+        // absolute source deltas before subtracting the authored rest also handles
+        // partial weights, negative weights and restoring a customized shape to 0.
+        internal static void AppendExpression(Mesh source, Mesh target, string name, float[] rest, float[] expression)
+        {
+            if (ReferenceEquals(source, target)) throw new ArgumentException("The source mesh must remain unchanged.");
+            if (rest.Length != source.blendShapeCount || expression.Length != rest.Length)
+                throw new ArgumentException("BlendShape weight count mismatch.");
+            var delta = new Deltas(source.vertexCount);
+            for (var shape = 0; shape < rest.Length; shape++)
+            {
+                if (float.IsNaN(rest[shape]) || float.IsInfinity(rest[shape]) || float.IsNaN(expression[shape]) || float.IsInfinity(expression[shape]))
+                    throw new InvalidOperationException("表情のBlendShape値が不正です。");
+                if (rest[shape] == expression[shape]) continue;
+                var before = Evaluate(source, shape, rest[shape]);
+                var after = Evaluate(source, shape, expression[shape]);
+                for (var v = 0; v < source.vertexCount; v++)
+                {
+                    delta.Vertices[v] += after.Vertices[v] - before.Vertices[v];
+                    delta.Normals[v] += after.Normals[v] - before.Normals[v];
+                    delta.Tangents[v] += after.Tangents[v] - before.Tangents[v];
+                }
+            }
+            target.AddBlendShapeFrame(name, 100f, delta.Vertices, delta.Normals, delta.Tangents);
+        }
+
         sealed class Deltas
         {
             internal readonly Vector3[] Vertices, Normals, Tangents;

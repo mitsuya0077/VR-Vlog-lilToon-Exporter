@@ -62,8 +62,9 @@ the exported base face/body shape. Morphs then move from that customized base
 toward their existing final-frame endpoint, so an already half-closed eye does
 not receive its initial closing amount twice. Other shape customizations remain
 in place while expressions animate. Shared meshes are copied per renderer, and
-authored VRM expression bindings retain their names and indices. VRChat expression
-menus/Animator controllers are not converted into VRM expression clips.
+authored VRM expression bindings retain their names and indices. Starting in 0.6.0,
+supported VRChat menu expressions are imported as composed custom VRM expressions,
+as described below.
 
 Multi-frame shapes are evaluated at the current initial weight; animation keeps
 UniVRM's single final-frame target approximation. A nonzero default on a shape
@@ -108,7 +109,8 @@ shadows are enabled but no shade texture is assigned, the base image is reused.
   property-bag test doubles do not simulate Unity hierarchy or rendering; GPU
   operations throw if reached.
 - Unity Editor tests under `Tests/Editor`: material fallback, emission opt-out,
-  and outline conversion against actual Unity/UniVRM materials. These require a
+  outline conversion, menu traversal, actual Animator graph evaluation (discrete
+  states and BlendTrees), and composed expression baking. These require a
   dependency-complete Unity project; non-Unity checks cannot replace them.
 
 ## Install during development
@@ -148,3 +150,40 @@ MatCapの色のアルファと合成の強さをMToonへ反映します。角度
 以前のVRMには太さ制御が保存されていないため、元のUnityアバターから再出力してください。
 修正版アプリの互換表示では、既知の旧版（0.3.8、0.4.0、0.4.1、0.5.0）の輪郭を抑制します。
 `vrc.v_aa`等のアンダースコア形式の口のBlendShapeもVRMの母音へ自動設定します。
+
+### 0.6.0: VRChatメニューの表情
+
+**VRChatの表情 > 表情メニューを取り込む**を有効にして、元のUnityアバターから
+書き出します。**表情メニューを確認・再読み込み**でメニュー項目を確認し、不要な
+項目を外せます。通常の書き出しでも自動で読み直すので、古いプレビューの値は使いません。
+
+Avatar Descriptorに設定されたExpressions MenuのButton・Toggleをサブメニューまで
+たどり、メニューの名前、パラメーター値、サブメニューの条件とExpression Parametersの
+初期値をカスタムFX Animatorに適用します。固定のAnimationClipとBlendTreeからなる
+BlendShape表情を、メニューの一項目につき一つのVRMカスタム表情にします。
+個々のBlendShape名を表情リストに並べる機能ではありません。SDKへのコンパイル依存は
+追加せず、VRChat SDKがあるプロジェクトの登録データを読み取ります。
+
+Unityの一時的なPreview Sceneで状態遷移を進め、2秒後に静止した表情を読み取ります。
+複数Rendererの目・眉・口などを一つの表情にまとめ、調整済みの基本の顔からの差分を
+保存します。アニメーションで指定されていないBlendShapeの調整はそのまま残ります。
+初期値より小さい値や複数フレームの形状も、元のメッシュから評価して差分を計算します。
+元のアバター・アセット・現在のBlendShape値は編集しません。
+
+VR Vlogでは「表情」から `VRChat / 表情 / 笑顔` などを選べます。選択中は表情の形を
+守るためVRMの瞬き・口・視線の自動変形をブロックし、「デフォルト」で通常の追従に
+戻ります。既存のVRM表情を上書きせず、同名項目には番号を付けます。
+
+**変換できない項目は理由を表示します。** 連続操作のPuppet、時間で変わり続ける表情、
+非表示のRendererを使う項目、マテリアル差し替え・表示切り替え・ボーン変形を含む項目は
+固定BlendShape表情として取り込みません。Parameter Driver・Layer Controlなど、FXに
+VRChat固有の状態処理がある場合も、実際と異なる顔を出さないため自動変換しません。
+Tracking Controlのみの状態処理は許容し、出力表情の追従ブロックで扱います。
+同期Animatorレイヤーは未対応です。Modular Avatar等がビルド時に生成するメニューや
+コントローラーを、この書き出し機能で生成することはありません。Descriptorへ登録済みの
+データを対象にします。Gestureレイヤーだけに実装された表情もFX取り込みの対象外です。
+
+メニューは256項目、追加する表情の頂点差分は128 MiBまでです。大量の表情では確認画面で
+取り込む項目を絞ってください。既存VRMには元のVRChatメニューやアニメーションの対応が
+入っていないため、VRMだけから正確な表情の組み合わせを復元することはできません。
+Unityの元プロジェクトで再出力し、メニューと同じ顔になることを確認してください。

@@ -18,7 +18,7 @@ listing = json.loads((root / "source.json").read_text(encoding="utf-8"))
 
 assert package["name"] == "com.vrvlog.liltoon-vrm-exporter"
 assert package["unity"] == "2022.3"
-assert package["version"] == "0.5.1"
+assert package["version"] == "0.6.0"
 assert one_click.index("AvatarBaseShape.Preserve(source, clone,") < one_click.index("Vrm10Exporter.Export(")
 assert "foreach (var mesh in temporaryMeshes) UnityEngine.Object.DestroyImmediate(mesh);" in one_click
 assert package["vpmDependencies"] == {
@@ -247,7 +247,10 @@ assert "HasPortableOutline(source)" in one_click
 assert 'OutlineWidthMultiplyTexture = outlineEnabled ? Texture(source, "_OutlineTex")' not in one_click
 assert 'private string author = "";' in window
 assert 'private string avatarName = "";' not in window
-assert 'UniVrmOneClickExporter.Export(avatar, AvatarName(), author, warnings, suppressSharedTextureEmission)' in window
+assert 'UniVrmOneClickExporter.Export(avatar, AvatarName(), author, warnings, suppressSharedTextureEmission,' in window
+assert 'importVrChatExpressions, excludedExpressions' in window
+assert one_click.index('AvatarBaseShape.Preserve(source, clone,') < one_click.index('VrChatExpressionBaker.Bake(') < one_click.index('Vrm10Exporter.Export(')
+assert 'VrmMenuExpressions.Add(exported, expressions)' in one_click
 assert 'return avatar != null && !string.IsNullOrWhiteSpace(avatar.name) ? avatar.name.Trim() : "avatar";' in window
 assert 'var name = AvatarName();' in window
 assert 'EditorUtility.SaveFilePanel("VRMの保存先", "", DefaultFileName(), "vrm")' in window

@@ -38,6 +38,18 @@ namespace VRVlog.LilToonExporter.Tests
                 check(Near(target.tangents[0].y, 0.5f) && Near(target.tangents[0].z, 0.25f) && target.tangents[0].w == -1, "Tangent deltas and handedness are preserved.");
                 check(source.vertices[0].x == 1 && source.vertices[0].y == 0, "The original shared mesh is unchanged.");
                 check(target.triangles[2] == 2, "Topology is unchanged.");
+                AvatarBaseShape.AppendExpression(source, target, "Menu smile", new[] { 25f, 50f }, new[] { 75f, 0f });
+                target.GetBlendShapeFrameVertices(2, 0, v, n, t);
+                check(Near(target.vertices[0].x + v[0].x, 4) && Near(target.vertices[0].y + v[0].y, 0),
+                    "One menu expression combines partial weights and can reopen a customized half-closed eye.");
+                check(target.blendShapeCount == 3 && target.GetBlendShapeName(1) == "Blink" && source.blendShapeCount == 2,
+                    "A composite is appended without replacing source morphs or existing VRM indices.");
+                check(Near(target.normals[0].x + n[0].x, 0) && Near(target.normals[0].y + n[0].y, .75f),
+                    "Composite normals subtract the authored rest as well as adding the selected pose.");
+                bool rejected = false;
+                try { AvatarBaseShape.AppendExpression(source, target, "Invalid", new[] { 25f, 50f }, new[] { float.NaN, 0f }); }
+                catch (InvalidOperationException) { rejected = true; }
+                check(rejected, "Invalid expression weights cannot enter geometry.");
                 AvatarBaseShape.Rebase(source, target, new[] { 100f, 0f });
                 target.GetBlendShapeFrameVertices(0, 0, v, n, t);
                 check(Near(v[0].x, 0) && target.blendShapeCount == 2, "Fully authored shapes retain their zero residual target slot.");
@@ -46,6 +58,9 @@ namespace VRVlog.LilToonExporter.Tests
                 source.AddBlendShapeFrame("Multi", 100, Delta(6, 0, 0), null, null);
                 AvatarBaseShape.Rebase(source, target, new[] { 75f });
                 check(Near(target.vertices[0].x, 5), "Authored values interpolate between multiple frames.");
+                AvatarBaseShape.AppendExpression(source, target, "Menu multi", new[] { 75f }, new[] { 25f });
+                target.GetBlendShapeFrameVertices(1, 0, v, n, t);
+                check(Near(target.vertices[0].x + v[0].x, 2), "Composed expressions evaluate multi-frame curves in the original mesh, not rebased linear weights.");
                 AvatarBaseShape.Rebase(source, target, new[] { 150f });
                 check(Near(target.vertices[0].x, 11), "Values above the final frame extrapolate.");
                 AvatarBaseShape.Rebase(source, target, new[] { -25f });
