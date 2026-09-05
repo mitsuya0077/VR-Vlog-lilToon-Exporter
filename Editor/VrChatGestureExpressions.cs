@@ -4,10 +4,11 @@ using System.Linq;
 using UnityEditor;
 using UnityEditor.Animations;
 using UnityEngine;
+using VRVlog.Expressions;
 
 namespace VRVlog.LilToonExporter
 {
-    // A gesture's authored, constant AnimationClip is a composed face in its own
+    // A gesture's authored AnimationClip is a composed face in its own
     // right. Read that clip, not every mesh morph and not an arbitrary frame of
     // the live FX controller (whose independent blink can keep running forever).
     // This route exports the clip on the authored base face, not a simulation of
@@ -50,6 +51,23 @@ namespace VRVlog.LilToonExporter
                     var bindings = AnimationUtility.GetCurveBindings(clip);
                     if (!bindings.Any(IsMorph)) continue; // Hand/bone motions are not facial expressions.
                     entry.Values.AddRange(ReadPose(avatar, clip));
+                    foreach (var binding in bindings)
+                    {
+                        var curve = ReadCurve(AnimationUtility.GetEditorCurve(clip, binding));
+                        curve.Range(out var minimum, out var maximum);
+                        if (minimum == maximum) continue;
+                        entry.Animation.Add(new VrChatExpressionMenu.AnimatedMorph
+                        {
+                            Path = binding.path, Shape = binding.propertyName.Substring("blendShape.".Length), Curve = curve
+                        });
+                    }
+                    if (entry.Animation.Count > 0)
+                    {
+                        entry.Duration = clip.length;
+                        entry.Loop = clip.isLooping;
+                        if (entry.Duration <= 0 || entry.Duration > 600)
+                            throw new InvalidOperationException("表情アニメーションの長さは0秒より長く600秒以下である必要があります: " + clip.name);
+                    }
                 }
                 catch (InvalidOperationException error) { entry.Error = error.Message; }
                 source.Entries.Add(entry);
@@ -172,9 +190,9 @@ namespace VRVlog.LilToonExporter
                 if (!IsMorph(binding)) throw new InvalidOperationException("BlendShape以外の変化を含む表情アニメーションです: " + binding.propertyName);
                 var curve = AnimationUtility.GetEditorCurve(clip, binding);
                 if (curve == null) throw new InvalidOperationException("表情アニメーションの曲線を読み取れません: " + clip.name);
-                if (!VrChatFixedExpressionCurve.TryRead(curve.keys.Select(k => new VrChatFixedExpressionCurve.Key
-                    { Value = k.value, InTangent = k.inTangent, OutTangent = k.outTangent }).ToArray(), out var weight))
-                    throw new InvalidOperationException("時間で変わる表情アニメーションは固定表情として取り込めません: " + clip.name);
+                // The standard VRM expression is the first pose. The animated
+                // channels are exported separately and replayed by VR Vlog.
+                var weight = (float)ReadCurve(curve).Evaluate(0);
                 var renderer = VrChatExpressionSampler.FindRenderer(avatar, binding.path);
                 if (!renderer.enabled || !renderer.gameObject.activeInHierarchy)
                     throw new InvalidOperationException("非表示のRendererを使う表情アニメーションです: " + binding.path);
@@ -184,6 +202,24 @@ namespace VRVlog.LilToonExporter
                 result.Add(new VrChatExpressionMenu.MorphValue { Path = binding.path, Shape = shape, Weight = weight });
             }
             if (result.Count == 0) throw new InvalidOperationException("顔のBlendShapeを含まないアニメーションです。");
+            return result;
+        }
+
+        internal static ExpressionAnimationData.Curve ReadCurve(AnimationCurve curve)
+        {
+            if (curve == null) throw new InvalidOperationException("表情アニメーションの曲線を読み取れません。");
+            string Wrap(WrapMode mode) => mode == WrapMode.Loop ? "loop" : mode == WrapMode.PingPong ? "pingPong" : "clamp";
+            var result = new ExpressionAnimationData.Curve { PreWrap = Wrap(curve.preWrapMode), PostWrap = Wrap(curve.postWrapMode) };
+            foreach (var k in curve.keys)
+                result.Keys.Add(new ExpressionAnimationData.Key
+                {
+                    Time = k.time, Value = k.value,
+                    InTangent = float.IsInfinity(k.inTangent) ? (double?)null : k.inTangent,
+                    OutTangent = float.IsInfinity(k.outTangent) ? (double?)null : k.outTangent,
+                    InWeight = (k.weightedMode & WeightedMode.In) != 0 ? k.inWeight : 1.0 / 3,
+                    OutWeight = (k.weightedMode & WeightedMode.Out) != 0 ? k.outWeight : 1.0 / 3
+                });
+            result.Validate();
             return result;
         }
 

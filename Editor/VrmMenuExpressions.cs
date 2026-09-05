@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using System.Linq;
+using VRVlog.Expressions;
 
 namespace VRVlog.LilToonExporter
 {
@@ -10,6 +11,7 @@ namespace VRVlog.LilToonExporter
         {
             internal string Name;
             internal readonly List<string> Targets = new List<string>();
+            internal ExpressionAnimationData Animation = null;
         }
 
         internal static int CountRegistered(byte[] bytes)
@@ -36,13 +38,16 @@ namespace VRVlog.LilToonExporter
             var custom = Object(root, "custom");
             var nodes = (List<object>)glb.Json["nodes"];
             var meshes = (List<object>)glb.Json["meshes"];
+            var animations = new List<ExpressionAnimationData>();
             foreach (var expression in expressions)
             {
                 var name = "VRChat / " + expression.Name;
                 var suffix = 2;
                 while (custom.ContainsKey(name)) name = "VRChat / " + expression.Name + " (" + suffix++ + ")";
                 var binds = new List<object>();
-                foreach (var target in expression.Targets)
+                var allTargets = expression.Targets.Concat(expression.Animation == null ? Enumerable.Empty<string>() :
+                    expression.Animation.Channels.SelectMany(c => c.Points).Select(p => p.Target).Where(t => t != null));
+                foreach (var target in allTargets)
                 {
                     var matches = new List<object>();
                     for (var nodeIndex = 0; nodeIndex < nodes.Count; nodeIndex++)
@@ -62,7 +67,7 @@ namespace VRVlog.LilToonExporter
                         }
                     }
                     if (matches.Count != 1) throw new InvalidOperationException("表情の出力先を一意に特定できません: " + expression.Name);
-                    binds.Add(matches.Single());
+                    if (expression.Targets.Contains(target)) binds.Add(matches.Single());
                 }
                 if (binds.Count == 0) throw new InvalidOperationException("表情の出力先がありません: " + expression.Name);
                 custom.Add(name, new Dictionary<string, object>
@@ -70,6 +75,20 @@ namespace VRVlog.LilToonExporter
                     ["morphTargetBinds"] = binds, ["isBinary"] = true,
                     ["overrideBlink"] = "block", ["overrideMouth"] = "block", ["overrideLookAt"] = "block"
                 });
+                if (expression.Animation != null)
+                {
+                    expression.Animation.Expression = name; // Includes any duplicate-name suffix.
+                    animations.Add(expression.Animation);
+                }
+            }
+            if (animations.Count > 0)
+            {
+                var extensions = (Dictionary<string, object>)glb.Json["extensions"];
+                if (extensions.ContainsKey(ExpressionAnimationData.Extension))
+                    throw new InvalidOperationException("既存の表情アニメーション拡張を上書きできません。");
+                extensions.Add(ExpressionAnimationData.Extension, ExpressionAnimationData.Write(animations));
+                if (!glb.Json.TryGetValue("extensionsUsed", out var used)) glb.Json["extensionsUsed"] = used = new List<object>();
+                ((List<object>)used).Add(ExpressionAnimationData.Extension);
             }
             return glb.Write();
         }

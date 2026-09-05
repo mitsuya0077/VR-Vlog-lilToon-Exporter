@@ -12,8 +12,7 @@ namespace VRVlog.LilToonExporter
     {
         internal const string SupportedUniVrmSeries = "0.131";
 
-        public static byte[] Export(GameObject source, string avatarName, string author, ICollection<string> warnings = null, bool suppressSharedTextureEmission = true,
-            bool importVrChatExpressions = true, ISet<string> excludedExpressions = null, bool includeGestureExpressions = true)
+        public static byte[] Export(GameObject source, string avatarName, string author, ICollection<string> warnings = null, bool suppressSharedTextureEmission = true)
         {
             if (source == null) throw new ArgumentNullException(nameof(source));
             // Cloning detaches the avatar from its parents. Reject an inactive
@@ -25,7 +24,7 @@ namespace VRVlog.LilToonExporter
             EnsureUniVrmVersion();
             // Re-read the live assets on every export; a preview is never a stale
             // cached source of expression weights after the user edits a clip.
-            var menu = importVrChatExpressions ? VrChatExpressionSampler.Analyze(source, includeGestureExpressions) : null;
+            var menu = VrChatExpressionSampler.Analyze(source);
             var clone = UnityEngine.Object.Instantiate(source);
             clone.name = source.name;
             var temporaryMaterials = new List<Material>();
@@ -34,9 +33,7 @@ namespace VRVlog.LilToonExporter
             try
             {
                 AvatarBaseShape.Preserve(source, clone, temporaryMeshes, warnings);
-                var expressions = menu != null
-                    ? VrChatExpressionBaker.Bake(source, clone, menu, excludedExpressions, temporaryMeshes, warnings)
-                    : new List<VrmMenuExpressions.Expression>();
+                var expressions = VrChatExpressionBaker.Bake(source, clone, menu, temporaryMeshes, warnings);
                 ReplaceLilToonMaterials(clone, temporaryMaterials, temporaryTextures, warnings, suppressSharedTextureEmission);
                 var exported = Vrm10Exporter.Export(
                     new GltfExportSettings(),

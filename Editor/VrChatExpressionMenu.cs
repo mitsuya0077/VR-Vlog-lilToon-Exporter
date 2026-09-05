@@ -20,8 +20,17 @@ namespace VRVlog.LilToonExporter
         internal sealed class Entry
         {
             internal string Id, Name, Error;
+            internal double Duration = 0;
+            internal bool Loop = false;
+            internal readonly List<AnimatedMorph> Animation = new List<AnimatedMorph>();
             internal readonly Dictionary<string, float> Parameters = new Dictionary<string, float>(StringComparer.Ordinal);
             internal readonly List<MorphValue> Values = new List<MorphValue>();
+        }
+
+        internal sealed class AnimatedMorph
+        {
+            internal string Path = "", Shape = "";
+            internal VRVlog.Expressions.ExpressionAnimationData.Curve Curve = null;
         }
 
         internal sealed class Source
