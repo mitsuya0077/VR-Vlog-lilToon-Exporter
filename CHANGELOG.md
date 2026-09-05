@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.6.1
+
+- Include authored fixed facial AnimationClips targeted by GestureLeft/GestureRight transitions in the registered FX controller. Preserve each clip's complete BlendShape combination and name, including explicit zero and partial weights; do not catalogue raw mesh shapes. Resolve Animator overrides and deduplicate shared clips.
+- Follow sub-state-machine entry/default destinations without importing unrelated descendant blink/reset states. Resolve synced-layer motion substitutions before controller-level clip replacements.
+- Read gesture clips independently of running FX timers and SDK state behaviours, so unrelated automatic blink or Parameter Driver no longer prevents this import route. These entries apply the individual authored clip to the customized base face; they do not emulate cross-layer mixing, retained state values, or driver effects. BlendTrees are reported rather than split into misleading individual faces.
+- Show the selected expression count before export and count actually registered VRChat expressions in the output. Gesture discovery also works without an enabled custom Expressions Menu.
+- Keep export completion to two short lines. Move omission details to one Console entry and collapse unsupported candidates in the exporter window.
+- Add constant-curve/output-count regression checks and Unity Editor cases for gesture discovery, automatic-blink isolation, overrides, duplicate clips, and rejection of animated or partial faces. Unity/device verification remains separate from command-line tests.
+
 ## 0.6.0
 
 - Import supported VRChat Expressions Menu Buttons/Toggles as named, composed VRM expressions, including submenu gates and FX BlendTrees. Individual raw BlendShapes are not listed as expressions.

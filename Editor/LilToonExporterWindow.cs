@@ -1,6 +1,7 @@
 using System;
 using System.IO;
 using System.Collections.Generic;
+using System.Linq;
 using UnityEditor;
 using UnityEngine;
 using PackageManagerPackageInfo = UnityEditor.PackageManager.PackageInfo;
@@ -18,6 +19,8 @@ namespace VRVlog.LilToonExporter
         private bool showAppearanceOptions;
         private bool suppressSharedTextureEmission = true;
         private bool importVrChatExpressions = true;
+        private bool includeGestureExpressions = true;
+        private bool showUnsupportedExpressions;
         private bool showExpressions = true;
         private Vector2 scrollPosition;
         private VrChatExpressionMenu.Source expressionMenu;
@@ -99,7 +102,7 @@ namespace VRVlog.LilToonExporter
             ExportAtomically(() =>
             {
                 var fallback = UniVrmOneClickExporter.Export(avatar, AvatarName(), author, warnings, suppressSharedTextureEmission,
-                    importVrChatExpressions, excludedExpressions);
+                    importVrChatExpressions, excludedExpressions, includeGestureExpressions);
                 return LilToonGlbExtension.Inject(fallback, avatar, PackageVersion(), RequireSupportedLilToon(), warnings, suppressSharedTextureEmission);
             }, warnings);
         }
@@ -108,13 +111,17 @@ namespace VRVlog.LilToonExporter
         {
             showExpressions = EditorGUILayout.Foldout(showExpressions, "VRChatの表情");
             if (!showExpressions) return;
-            importVrChatExpressions = EditorGUILayout.Toggle("表情メニューを取り込む", importVrChatExpressions);
+            importVrChatExpressions = EditorGUILayout.Toggle("表情を取り込む", importVrChatExpressions);
             if (!importVrChatExpressions) return;
             EditorGUILayout.HelpBox("メニューの笑顔・怒り顔などを、一つずつ選べる表情として保存します。複数のBlendShapeの組み合わせを保持します。", MessageType.None);
+            var gestures = EditorGUILayout.Toggle("ジェスチャーの表情も取り込む", includeGestureExpressions);
+            if (gestures != includeGestureExpressions) { includeGestureExpressions = gestures; expressionMenu = null; }
+            if (includeGestureExpressions)
+                EditorGUILayout.HelpBox("ジェスチャーに登録された固定表情アニメーションも候補にします。アニメーション単体を基本の顔に適用した表情です。不要な項目はチェックを外せます。", MessageType.None);
             using (new EditorGUI.DisabledScope(avatar == null))
                 if (GUILayout.Button("表情メニューを確認・再読み込み"))
                 {
-                    try { expressionMenu = VrChatExpressionSampler.Analyze(avatar); }
+                    try { expressionMenu = VrChatExpressionSampler.Analyze(avatar, includeGestureExpressions); }
                     catch (OperationCanceledException) { }
                     catch (Exception exception) { EditorUtility.DisplayDialog("表情を確認できませんでした", exception.Message, "閉じる"); }
                 }
@@ -124,8 +131,13 @@ namespace VRVlog.LilToonExporter
                 return;
             }
             foreach (var message in expressionMenu.Messages) EditorGUILayout.HelpBox(message, MessageType.Info);
+            var selectedCount = expressionMenu.Entries.Count(e => e.Error == null && e.Values.Count > 0 && !excludedExpressions.Contains(e.Id));
+            EditorGUILayout.HelpBox($"取り込む表情: {selectedCount}件" + (selectedCount == 0 ? "\n選択用の表情がVRMにない場合、アプリの表情ボタンは表示されません。" : ""),
+                selectedCount > 0 ? MessageType.Info : MessageType.Warning);
+            showUnsupportedExpressions = EditorGUILayout.Foldout(showUnsupportedExpressions, "取り込めない項目の詳細");
             foreach (var entry in expressionMenu.Entries)
             {
+                if (entry.Error != null && !showUnsupportedExpressions) continue;
                 using (new EditorGUI.DisabledScope(entry.Error != null))
                 {
                     var selected = entry.Error == null && !excludedExpressions.Contains(entry.Id);
@@ -181,8 +193,11 @@ namespace VRVlog.LilToonExporter
                 }
                 finally { if (File.Exists(temporary)) File.Delete(temporary); }
                 EditorUtility.RevealInFinder(outputPath);
-                var warningText = warnings != null && warnings.Count > 0 ? $"\n\n近似・省略した項目：\n・{string.Join("\n・", warnings)}" : "";
-                EditorUtility.DisplayDialog("書き出し完了", $"VRMを書き出しました（{bytes.Length:N0}バイト）。\nMToon互換データとVR Vlog用lilToonデータが含まれています。{warningText}", "閉じる");
+                // Keep the native modal short even for avatars with hundreds of
+                // omitted items. Diagnostics remain in one expandable Console entry.
+                if (warnings != null && warnings.Count > 0) Debug.Log("VR Vlog 書き出し詳細\n・" + string.Join("\n・", warnings));
+                var expressionCount = VrmMenuExpressions.CountRegistered(bytes);
+                EditorUtility.DisplayDialog("書き出し完了", $"VRMを書き出しました（{bytes.Length:N0}バイト）。\nVRChat表情: {expressionCount}件。", "閉じる");
             }
             catch (Exception exception)
             {
@@ -208,7 +223,7 @@ namespace VRVlog.LilToonExporter
         private static string PackageVersion()
         {
             var info = PackageManagerPackageInfo.FindForAssembly(typeof(LilToonExporterWindow).Assembly);
-            return info != null && !string.IsNullOrWhiteSpace(info.version) ? info.version : "0.6.0";
+            return info != null && !string.IsNullOrWhiteSpace(info.version) ? info.version : "0.6.1";
         }
 
         private static string InstalledLilToonStatus()

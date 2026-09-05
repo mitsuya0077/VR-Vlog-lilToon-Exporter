@@ -41,10 +41,9 @@ namespace VRVlog.LilToonExporter
             var descriptor = avatar.GetComponents<Component>().FirstOrDefault(c => c != null &&
                 c.GetType().FullName == "VRC.SDK3.Avatars.Components.VRCAvatarDescriptor");
             if (descriptor == null) { result.Messages.Add("VRChat Avatar Descriptorがありません。既存のVRM表情はそのまま保存します。"); return result; }
-            if (!(Member(descriptor, "customExpressions") is bool enabled) || !enabled)
-            { result.Messages.Add("VRChatのCustom Expressionsが有効になっていません。"); return result; }
-            var menu = Member(descriptor, "expressionsMenu");
-            Walk(menu, "", "", new Dictionary<string, float>(), new HashSet<object>(), result, 0);
+            if (Member(descriptor, "customExpressions") is bool enabled && enabled)
+                Walk(Member(descriptor, "expressionsMenu"), "", "", new Dictionary<string, float>(), new HashSet<object>(), result, 0);
+            else result.Messages.Add("VRChatのCustom Expressionsが無効です。FXに登録されたジェスチャー表情を確認します。");
             foreach (var parameter in Items(Member(Member(descriptor, "expressionParameters"), "parameters")))
             {
                 var name = Member(parameter, "name") as string;

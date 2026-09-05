@@ -18,7 +18,7 @@ listing = json.loads((root / "source.json").read_text(encoding="utf-8"))
 
 assert package["name"] == "com.vrvlog.liltoon-vrm-exporter"
 assert package["unity"] == "2022.3"
-assert package["version"] == "0.6.0"
+assert package["version"] == "0.6.1"
 assert one_click.index("AvatarBaseShape.Preserve(source, clone,") < one_click.index("Vrm10Exporter.Export(")
 assert "foreach (var mesh in temporaryMeshes) UnityEngine.Object.DestroyImmediate(mesh);" in one_click
 assert package["vpmDependencies"] == {
@@ -100,7 +100,8 @@ assert 'case "backlight": return Enabled(material, "_UseBacklight")' in reader
 assert 'item.Name == "_BacklightColorTex" && texture == Texture2D.whiteTexture' in reader
 assert "ResolveTexture(glb, texture" in injector
 assert 'LilToonMaterialReader.Read(source, 0, (_, __) => 0, warnings, suppressSharedTextureEmission);' in one_click
-assert '近似・省略した項目' in window
+assert 'var warningText' not in window
+assert 'VrmMenuExpressions.CountRegistered(bytes)' in window
 assert "glb.AppendBinary(png)" in injector
 assert "ImageConversion.EncodeToPNG(copy)" in injector
 assert "RenderTexture.ReleaseTemporary(temporary)" in injector
