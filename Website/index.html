@@ -14,7 +14,7 @@
   <meta property="og:description" content="アバターを、いつもの表情で。lilToonの見た目と対応する表情を、VRM 1.0にまとめて書き出す。">
   <meta property="og:url" content="https://mitsuya0077.github.io/VR-Vlog-lilToon-Exporter/">
   <meta name="twitter:card" content="summary">
-  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Crect width='64' height='64' rx='12' fill='%23191b1f'/%3E%3Cpath d='M15 18l9 29h9l6-19 4 19h8l-7-29h-9l-6 19-5-19z' fill='%23ff1880'/%3E%3C/svg%3E">
+  <link rel="icon" type="image/png" href="assets/vr-vlog-wordmark.png">
   <style>
     :root {
       color-scheme: dark;
@@ -43,9 +43,8 @@
     .skip { position: absolute; left: 1rem; top: -5rem; z-index: 5; padding: .7rem 1rem; background: var(--text); color: var(--canvas); }
     .skip:focus { top: 1rem; }
     .header { min-height: 88px; display: flex; align-items: center; justify-content: space-between; gap: 1.5rem; border-bottom: 1px solid var(--line); }
-    .brand { display: inline-flex; align-items: baseline; flex-wrap: wrap; gap: .8rem; text-decoration: none; }
-    .wordmark { font-size: 1.625rem; font-weight: 800; letter-spacing: -.06em; }
-    .wordmark b { color: var(--brand); }
+    .brand { display: inline-flex; align-items: center; min-height: 44px; gap: .8rem; text-decoration: none; }
+    .wordmark { display: block; width: 168px; height: auto; flex-shrink: 0; }
     .brand-label { border-left: 1px solid var(--stroke); padding-left: .8rem; color: var(--muted); font-size: .8125rem; }
     .nav { display: flex; flex-wrap: wrap; gap: 1.5rem; font-size: .875rem; }
     .nav a { display: inline-flex; min-height: 44px; align-items: center; text-decoration: none; }
@@ -120,6 +119,7 @@
       .wrap { width: min(100% - 2.5rem, 36rem); }
       .header { min-height: 76px; }
       .brand-label { display: none; }
+      .wordmark { width: 144px; }
       .nav { gap: 1rem; }
       .hero { grid-template-columns: 1fr; padding-block: 2.5rem; gap: 2rem; }
       h1 { font-size: clamp(1.875rem, 6.5vw, 2.75rem); }
@@ -136,7 +136,7 @@
       .wrap { width: calc(100% - 2rem); }
       .install-panel { padding: 1rem; }
       .nav { gap: .75rem; }
-      .wordmark { font-size: 1.4rem; }
+      .wordmark { width: 130px; }
     }
     @media (forced-colors: active) { .primary { border: 2px solid ButtonText; } }
   </style>
@@ -144,7 +144,7 @@
 <body>
   <a class="skip" href="#main">本文へスキップ</a>
   <header class="header wrap">
-    <a class="brand" href="https://mitsuya0077.github.io/vr-vlog-website/" aria-label="VR Vlog 公式サイト"><span class="wordmark">VR Vlog<b>.</b></span><span class="brand-label">CREATOR TOOLS</span></a>
+    <a class="brand" href="https://mitsuya0077.github.io/vr-vlog-website/" aria-label="VR Vlog 公式サイト"><img class="wordmark" src="assets/vr-vlog-wordmark.png" width="1000" height="298" alt="VR VLOG"><span class="brand-label">CREATOR TOOLS</span></a>
     <nav class="nav" aria-label="メインナビゲーション"><a href="#how-to">使い方</a><a href="https://github.com/mitsuya0077/VR-Vlog-lilToon-Exporter">GitHub ↗</a></nav>
   </header>
   <main id="main" class="wrap">
