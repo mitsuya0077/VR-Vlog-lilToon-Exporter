@@ -18,7 +18,7 @@ listing = json.loads((root / "source.json").read_text(encoding="utf-8"))
 
 assert package["name"] == "com.vrvlog.liltoon-vrm-exporter"
 assert package["unity"] == "2022.3"
-assert package["version"] == "0.7.1-preview.1"
+assert package["version"] == "0.7.1"
 assert one_click.index("AvatarBaseShape.Preserve(source, clone,") < one_click.index("Vrm10Exporter.Export(")
 assert "foreach (var mesh in temporaryMeshes) UnityEngine.Object.DestroyImmediate(mesh);" in one_click
 assert package["vpmDependencies"] == {
@@ -252,10 +252,10 @@ assert 'OutlineWidthMultiplyTexture = outlineEnabled ? Texture(source, "_Outline
 assert 'private string author = "";' in window
 assert 'private string avatarName = "";' not in window
 assert 'UniVrmOneClickExporter.Export(avatar, AvatarName(), author, warnings, suppressSharedTextureEmission,' in window
-assert 'PackageVersion(), RequireSupportedLilToon(), suppressHdrTextureEmission)' in window
+assert 'PackageVersion(), RequireSupportedLilToon(), suppressHdrTextureEmission, excludedObjects)' in window
 assert 'LilToonGlbExtension.Inject(exported, clone,' in one_click
 assert 'excludedExpressions' not in window and 'DrawExpressions' not in window
-assert 'var menu = VrChatExpressionSampler.Analyze(source);' in one_click
+assert 'var menu = VrChatExpressionSampler.Analyze(source, exclusions.ContainsPath);' in one_click
 assert one_click.index('AvatarBaseShape.Preserve(source, clone,') < one_click.index('VrChatExpressionBaker.Bake(') < one_click.index('Vrm10Exporter.Export(')
 assert 'VrmMenuExpressions.Add(exported, expressions)' in one_click
 assert 'return avatar != null && !string.IsNullOrWhiteSpace(avatar.name) ? avatar.name.Trim() : "avatar";' in window

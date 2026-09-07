@@ -6,7 +6,7 @@ on:
       version:
         description: Exporter version without the v prefix
         required: true
-        default: 0.7.0
+        default: 0.7.1
       univrm_version:
         description: Pinned UniVRM version
         required: true
@@ -29,9 +29,16 @@ jobs:
           python3 - <<'PY'
           import json, os
           package = json.load(open("package.json", encoding="utf-8"))
+          assert os.environ["GITHUB_REF"] == "refs/heads/main", "Publish only the reviewed main branch"
           assert package["version"] == os.environ["EXPORTER_VERSION"]
+          assert "-" not in package["version"], "This workflow publishes stable versions only"
           assert os.environ["UNIVRM_VERSION"] == "0.131.0"
           PY
+      - name: Validate exporter before packaging
+        run: python3 Tools/validate.py
+      - name: Run exporter behavior checks
+        shell: pwsh
+        run: ./Tools/run-behavior-tests.ps1
       - name: Build exporter package
         env:
           VERSION: ${{ inputs.version }}

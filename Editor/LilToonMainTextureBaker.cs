@@ -61,8 +61,15 @@ namespace VRVlog.LilToonExporter
                 var dissolve = "_Main" + layer + "DissolveParams";
                 var scroll = property + "_ScrollRotate";
                 if (material.HasProperty(dissolve) && material.GetVector(dissolve).x != 0 ||
-                    material.HasProperty(scroll) && material.GetVector(scroll) != Vector4.zero)
+                    material.HasProperty(scroll) && material.GetVector(scroll) != Vector4.zero ||
+                    material.HasProperty("_MainTex_ScrollRotate") && material.GetVector("_MainTex_ScrollRotate") != Vector4.zero)
                     throw new InvalidOperationException(material.name + ": 動くメインカラーレイヤーは自動ベイクできません。静止状態を焼き込んでから書き出してください。");
+                var distanceFade = "_Main" + layer + "DistanceFade";
+                if (Value(material, property + "_Cull") != 0 ||
+                    Value(material, "_Main" + layer + "EnableLighting", 1) != 1 ||
+                    material.HasProperty(distanceFade) && material.GetVector(distanceFade).z != 0 ||
+                    Enabled(material, "_UseAudioLink") && Enabled(material, "_AudioLink2Main" + layer))
+                    throw new InvalidOperationException(material.name + ": 表裏・照明・距離・AudioLinkで変化するメインカラーは一枚の画像に自動ベイクできません。lilToon側で通常のレイヤーに変更してから書き出してください。");
                 if (material.GetTextureScale("_MainTex") != Vector2.one || material.GetTextureOffset("_MainTex") != Vector2.zero)
                     throw new InvalidOperationException(material.name + ": メインUVを移動・拡縮した多層マテリアルはlilToon側で先に焼き込んでください。");
             }
@@ -81,16 +88,23 @@ namespace VRVlog.LilToonExporter
                 // consumers receive white tint after it is baked into pixels.
                 var width = 4;
                 var height = 4;
-                foreach (var name in new[] { "_MainTex", "_Main2ndTex", "_Main3rdTex" })
+                var inputs = new List<string> { "_MainTex", "_MainColorAdjustMask" };
+                if (Enabled(material, "_UseMain2ndTex")) inputs.AddRange(new[] { "_Main2ndTex", "_Main2ndBlendMask" });
+                if (Enabled(material, "_UseMain3rdTex")) inputs.AddRange(new[] { "_Main3rdTex", "_Main3rdBlendMask" });
+                foreach (var name in inputs)
                 {
-                    if (name != "_MainTex" && !Enabled(material, name == "_Main2ndTex" ? "_UseMain2ndTex" : "_UseMain3rdTex")) continue;
                     var texture = material.HasProperty(name) ? material.GetTexture(name) : null;
                     if (texture == null) continue;
                     width = Mathf.Max(width, texture.width);
                     height = Mathf.Max(height, texture.height);
                 }
                 if (width > LilToonMobileProfile.MaximumTextureSize || height > LilToonMobileProfile.MaximumTextureSize)
-                    throw new InvalidOperationException(material.name + ": ベイク画像がモバイル向けの最大サイズを超えます。");
+                {
+                    var scale = LilToonMobileProfile.MaximumTextureSize / (float)Mathf.Max(width, height);
+                    width = Mathf.Max(1, Mathf.RoundToInt(width * scale));
+                    height = Mathf.Max(1, Mathf.RoundToInt(height * scale));
+                    warnings?.Add(material.name + ": メインカラーの焼き込み画像をモバイル向けに " + width + "×" + height + " へ縮小しました。");
+                }
                 target = RenderTexture.GetTemporary(width, height, 0, RenderTextureFormat.ARGB32, RenderTextureReadWrite.sRGB);
                 GL.sRGBWrite = QualitySettings.activeColorSpace == ColorSpace.Linear;
                 Graphics.Blit(material.GetTexture("_MainTex") ?? Texture2D.whiteTexture, target, baker, 0);
