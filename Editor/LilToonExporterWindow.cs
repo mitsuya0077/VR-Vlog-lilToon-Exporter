@@ -17,6 +17,7 @@ namespace VRVlog.LilToonExporter
         private bool showAdvanced;
         private bool showAppearanceOptions;
         private bool suppressSharedTextureEmission = true;
+        private bool suppressHdrTextureEmission = true;
         private Vector2 scrollPosition;
 
         [MenuItem("VR Vlog/lilToon VRM 1.0を書き出す")]
@@ -60,6 +61,9 @@ namespace VRVlog.LilToonExporter
                 suppressSharedTextureEmission = EditorGUILayout.Toggle(
                     new GUIContent("目などの白飛びを抑える", "メイン画像と同じ画像を使う発光を省略します。意図的な発光も抑えられるため、必要に応じて解除してください。"),
                     suppressSharedTextureEmission);
+                suppressHdrTextureEmission = EditorGUILayout.Toggle(
+                    new GUIContent("別画像の強い発光も抑える", "焼き込み前の目画像など、別のテクスチャを使うHDR発光を省略します。意図的な発光を残す場合は解除してください。ワンクリック書き出しに適用されます。"),
+                    suppressHdrTextureEmission);
             }
 
             EditorGUILayout.Space(4f);
@@ -91,8 +95,8 @@ namespace VRVlog.LilToonExporter
             var warnings = new List<string>();
             ExportAtomically(() =>
             {
-                var fallback = UniVrmOneClickExporter.Export(avatar, AvatarName(), author, warnings, suppressSharedTextureEmission);
-                return LilToonGlbExtension.Inject(fallback, avatar, PackageVersion(), RequireSupportedLilToon(), warnings, suppressSharedTextureEmission);
+                return UniVrmOneClickExporter.Export(avatar, AvatarName(), author, warnings, suppressSharedTextureEmission,
+                    PackageVersion(), RequireSupportedLilToon(), suppressHdrTextureEmission);
             }, warnings);
         }
 
@@ -116,6 +120,10 @@ namespace VRVlog.LilToonExporter
                 if (!File.Exists(fallbackPath)) throw new FileNotFoundException("元にするVRMが見つかりません。", fallbackPath);
                 if (string.Equals(Path.GetFullPath(fallbackPath), Path.GetFullPath(outputPath), StringComparison.OrdinalIgnoreCase))
                     throw new InvalidOperationException("元のVRMを保護するため、別の保存先を指定してください。");
+                foreach (var renderer in ExportRendererSelection.Enumerate(avatar))
+                    foreach (var material in renderer.sharedMaterials)
+                        if (LilToonMaterialReader.IsLilToon(material) && LilToonMainTextureBaker.NeedsBake(material))
+                            throw new InvalidOperationException(material.name + ": 未ベイクのメインカラーがあります。画像とマテリアルを一緒に更新するため、ワンクリック書き出しを使用してください。");
                 return LilToonGlbExtension.Inject(File.ReadAllBytes(fallbackPath), avatar, PackageVersion(), RequireSupportedLilToon(), warnings, suppressSharedTextureEmission);
             }, warnings);
         }

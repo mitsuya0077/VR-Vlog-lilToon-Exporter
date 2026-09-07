@@ -29,6 +29,7 @@ namespace VRVlog.LilToonExporter
                     catch (InvalidOperationException error) { entry.Error = error.Message; }
                 }
                 VrChatGestureExpressions.Add(avatar, source);
+                FaceEmoExpressions.Add(avatar, source);
             }
             finally { EditorUtility.ClearProgressBar(); }
             return source;

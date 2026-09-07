@@ -12,7 +12,8 @@ namespace VRVlog.LilToonExporter
     {
         internal const string SupportedUniVrmSeries = "0.131";
 
-        public static byte[] Export(GameObject source, string avatarName, string author, ICollection<string> warnings = null, bool suppressSharedTextureEmission = true)
+        public static byte[] Export(GameObject source, string avatarName, string author, ICollection<string> warnings = null, bool suppressSharedTextureEmission = true,
+            string exporterVersion = null, string lilToonVersion = null, bool suppressHdrTextureEmission = true)
         {
             if (source == null) throw new ArgumentNullException(nameof(source));
             // Cloning detaches the avatar from its parents. Reject an inactive
@@ -34,6 +35,9 @@ namespace VRVlog.LilToonExporter
             {
                 AvatarBaseShape.Preserve(source, clone, temporaryMeshes, warnings);
                 var expressions = VrChatExpressionBaker.Bake(source, clone, menu, temporaryMeshes, warnings);
+                LilToonMainTextureBaker.Prepare(clone, temporaryMaterials, temporaryTextures, warnings, suppressSharedTextureEmission, suppressHdrTextureEmission);
+                var preparedMaterials = new Dictionary<Renderer, Material[]>();
+                foreach (var renderer in ExportRendererSelection.Enumerate(clone)) preparedMaterials.Add(renderer, renderer.sharedMaterials);
                 ReplaceLilToonMaterials(clone, temporaryMaterials, temporaryTextures, warnings, suppressSharedTextureEmission);
                 var exported = Vrm10Exporter.Export(
                     new GltfExportSettings(),
@@ -41,7 +45,16 @@ namespace VRVlog.LilToonExporter
                     materialExporter: new BuiltInVrm10MaterialExporter(),
                     textureSerializer: new EditorTextureSerializer(),
                     vrmMeta: CreateMeta(avatarName.Trim(), author.Trim()));
-                return VrmExpressionBindings.AddMissing(VrmMenuExpressions.Add(exported, expressions), warnings);
+                exported = VrmExpressionBindings.AddMissing(VrmMenuExpressions.Add(exported, expressions), warnings);
+                if (exporterVersion != null)
+                {
+                    // Inject from the same prepared materials, while their baked
+                    // images are alive. Re-reading source assets here would undo
+                    // the bake in apps that enable the lilToon extension.
+                    foreach (var pair in preparedMaterials) pair.Key.sharedMaterials = pair.Value;
+                    exported = LilToonGlbExtension.Inject(exported, clone, exporterVersion, lilToonVersion, warnings, suppressSharedTextureEmission);
+                }
+                return exported;
             }
             finally
             {

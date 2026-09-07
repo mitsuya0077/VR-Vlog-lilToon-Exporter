@@ -248,7 +248,9 @@ assert "HasPortableOutline(source)" in one_click
 assert 'OutlineWidthMultiplyTexture = outlineEnabled ? Texture(source, "_OutlineTex")' not in one_click
 assert 'private string author = "";' in window
 assert 'private string avatarName = "";' not in window
-assert 'UniVrmOneClickExporter.Export(avatar, AvatarName(), author, warnings, suppressSharedTextureEmission)' in window
+assert 'UniVrmOneClickExporter.Export(avatar, AvatarName(), author, warnings, suppressSharedTextureEmission,' in window
+assert 'PackageVersion(), RequireSupportedLilToon(), suppressHdrTextureEmission)' in window
+assert 'LilToonGlbExtension.Inject(exported, clone,' in one_click
 assert 'excludedExpressions' not in window and 'DrawExpressions' not in window
 assert 'var menu = VrChatExpressionSampler.Analyze(source);' in one_click
 assert one_click.index('AvatarBaseShape.Preserve(source, clone,') < one_click.index('VrChatExpressionBaker.Bake(') < one_click.index('Vrm10Exporter.Export(')
