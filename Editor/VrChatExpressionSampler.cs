@@ -45,9 +45,11 @@ namespace VRVlog.LilToonExporter
             if (controller == null) throw new InvalidOperationException("FX Animator Controllerを取得できません。");
             ValidateBehaviours(controller);
             var layers = controller.layers;
-            var affected = Enumerable.Range(0, layers.Length).Where(i => Uses(layers[i].stateMachine, selected.Keys)).ToArray();
-            if (affected.Length == 0) throw new InvalidOperationException("このメニューに対応するFXの表情がありません。");
             if (layers.Any(l => l.syncedLayerIndex >= 0)) throw new InvalidOperationException("同期Animatorレイヤーの表情変換は未対応です。");
+            var excludedLayers = FindExcludedLayers(controller, runtime, excludedPath);
+            var affected = Enumerable.Range(0, layers.Length)
+                .Where(i => !excludedLayers.Contains(i) && Uses(layers[i].stateMachine, selected.Keys)).ToArray();
+            if (affected.Length == 0) throw new InvalidOperationException("このメニューに対応するFXの表情がありません。");
 
             var scene = EditorSceneManager.NewPreviewScene();
             GameObject clone = null;
@@ -79,7 +81,7 @@ namespace VRVlog.LilToonExporter
                 Advance(graph, 120, remember);
                 SetParameters(playable, controller, selected);
                 Advance(graph, 120, remember);
-                ValidateFixedPose(playable, controller, excludedPath);
+                ValidateFixedPose(playable, controller, excludedPath, excludedLayers);
                 var bindings = ActiveBindings(playable, affected, excludedPath);
                 var values = Capture(avatar, clone, history, excludedPath);
                 // A state transition, a changing curve or changing active clip
@@ -102,6 +104,69 @@ namespace VRVlog.LilToonExporter
                 if (clone != null) UnityEngine.Object.DestroyImmediate(clone);
                 EditorSceneManager.ClosePreviewScene(scene);
             }
+        }
+
+        // A current pet-only state can still transition to a facial state later.
+        // Ignore a layer only after proving every possible motion writes solely
+        // to excluded objects. Write Defaults and empty motions can reset
+        // properties not listed in their own curves, so they do not establish
+        // that proof. Global StateMachineBehaviours are checked first.
+        internal static HashSet<int> FindExcludedLayers(AnimatorController controller, RuntimeAnimatorController runtime,
+            Func<string, bool> excludedPath)
+        {
+            var result = new HashSet<int>();
+            if (excludedPath == null) return result;
+            var replacements = new Dictionary<AnimationClip, AnimationClip>();
+            if (runtime is AnimatorOverrideController overrides)
+            {
+                var pairs = new List<KeyValuePair<AnimationClip, AnimationClip>>();
+                overrides.GetOverrides(pairs);
+                foreach (var pair in pairs) if (pair.Value != null) replacements[pair.Key] = pair.Value;
+            }
+            var layers = controller.layers;
+            for (var layer = 0; layer < layers.Length; layer++)
+            {
+                if (layers[layer].syncedLayerIndex >= 0 || layers[layer].iKPass) continue;
+                var foundExcludedBinding = false;
+                var motionStack = new HashSet<Motion>();
+                var machineStack = new HashSet<AnimatorStateMachine>();
+                bool BindingIsExcluded(EditorCurveBinding binding)
+                {
+                    if (binding.type == typeof(Animator) || excludedPath(binding.path) != true) return false;
+                    foundExcludedBinding = true;
+                    return true;
+                }
+                bool MotionIsExcluded(Motion motion)
+                {
+                    if (motion == null) return false;
+                    if (!motionStack.Add(motion)) return false;
+                    try
+                    {
+                        if (motion is AnimationClip clip)
+                        {
+                            if (replacements.TryGetValue(clip, out var replacement)) clip = replacement;
+                            var bindings = AnimationUtility.GetCurveBindings(clip)
+                                .Concat(AnimationUtility.GetObjectReferenceCurveBindings(clip)).ToArray();
+                            return bindings.Length > 0 && bindings.All(BindingIsExcluded);
+                        }
+                        return motion is BlendTree tree && tree.children.Length > 0 && tree.children.All(child => MotionIsExcluded(child.motion));
+                    }
+                    finally { motionStack.Remove(motion); }
+                }
+                bool MachineIsExcluded(AnimatorStateMachine machine)
+                {
+                    if (machine == null || !machineStack.Add(machine)) return false;
+                    try
+                    {
+                        return machine.states.Length + machine.stateMachines.Length > 0 &&
+                            machine.states.All(child => !child.state.writeDefaultValues && !child.state.iKOnFeet && MotionIsExcluded(child.state.motion)) &&
+                            machine.stateMachines.All(child => MachineIsExcluded(child.stateMachine));
+                    }
+                    finally { machineStack.Remove(machine); }
+                }
+                if (MachineIsExcluded(layers[layer].stateMachine) && foundExcludedBinding) result.Add(layer);
+            }
+            return result;
         }
 
         private static void Advance(PlayableGraph graph, int frames, Action afterFrame = null)
@@ -130,11 +195,13 @@ namespace VRVlog.LilToonExporter
         // Short samples alone cannot prove a fixed pose. Inspect every active
         // state's possible timed exits and the entire lifetime of active morph
         // and parameter curves, including delayed steps after the sample window.
-        private static void ValidateFixedPose(AnimatorControllerPlayable playable, AnimatorController controller, Func<string, bool> excludedPath)
+        private static void ValidateFixedPose(AnimatorControllerPlayable playable, AnimatorController controller, Func<string, bool> excludedPath,
+            ISet<int> excludedLayers)
         {
             var layers = controller.layers;
             for (var layer = 0; layer < layers.Length; layer++)
             {
+                if (excludedLayers.Contains(layer)) continue;
                 if (layer > 0 && playable.GetLayerWeight(layer) <= 0.00001f) continue;
                 if (playable.IsInTransition(layer)) throw new InvalidOperationException("FXの状態遷移が静止していません。");
                 var hash = playable.GetCurrentAnimatorStateInfo(layer).fullPathHash;
