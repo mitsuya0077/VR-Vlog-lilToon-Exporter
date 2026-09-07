@@ -20,7 +20,7 @@ lilToonのアバターを、VR Vlogで使える **VRM 1.0** に書き出すUnity
 
 **VCC（VRChat Creator Companion）またはALCOMからの導入を推奨します。**
 
-1. [紹介ページ](https://mitsuya0077.github.io/VR-Vlog-lilToon-Exporter/)の「VCCに追加する」を押すか、下のURLをリポジトリ追加画面に貼り付けます。
+1. [紹介ページ](https://mitsuya0077.github.io/VR-Vlog-lilToon-Exporter/)の「VCC / ALCOMに追加する」を押します。PCで関連付けられたVCCまたはALCOMが開きます。開かない場合は、下のURLを使いたいアプリのリポジトリ追加画面に貼り付けてください。
 2. 使いたいUnityプロジェクトのパッケージ管理画面を開きます。
 3. **VR Vlog lilToon VRM Exporter** を選んでインストールします。
 
