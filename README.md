@@ -1,9 +1,9 @@
 # VR Vlog lilToon VRM Exporter
 
-**アバターを、いつもの表情で。**
+**UnityのアバターをVR Vlogで使う。**
 
 lilToonのアバターを、VR Vlogで使える **VRM 1.0** に書き出すUnity Editor用パッケージです。
-対応する見た目の設定、調整した顔、VRChatの表情をひとつのファイルにまとめます。
+対応する色・影・輪郭線、調整した顔、VRChat・FaceEmoの表情をひとつのファイルに保存します。
 
 [紹介ページ・インストール](https://mitsuya0077.github.io/VR-Vlog-lilToon-Exporter/) · [最新リリース](https://github.com/mitsuya0077/VR-Vlog-lilToon-Exporter/releases/latest) · [詳しい仕様 / English](Docs/TechnicalDetails.md) · [不具合を報告](https://github.com/mitsuya0077/VR-Vlog-lilToon-Exporter/issues)
 
@@ -24,7 +24,7 @@ lilToonのアバターを、VR Vlogで使える **VRM 1.0** に書き出すUnity
 
 **VCC（VRChat Creator Companion）またはALCOMからの導入を推奨します。**
 
-1. [紹介ページ](https://mitsuya0077.github.io/VR-Vlog-lilToon-Exporter/)の「VCC / ALCOMに追加する」を押します。PCで関連付けられたVCCまたはALCOMが開きます。開かない場合は、下のURLを使いたいアプリのリポジトリ追加画面に貼り付けてください。
+1. [紹介ページ](https://mitsuya0077.github.io/VR-Vlog-lilToon-Exporter/)の「VCC / ALCOMに追加」を押します。PCで関連付けられたVCCまたはALCOMが開きます。開かない場合は、下のURLを使いたいアプリのリポジトリ追加画面に貼り付けてください。
 2. 使いたいUnityプロジェクトのパッケージ管理画面を開きます。
 3. **VR Vlog lilToon VRM Exporter** を選んでインストールします。
 
@@ -53,6 +53,15 @@ ZIPで手動導入する場合は、[最新リリース](https://github.com/mits
 5. **VR Vlogで確認する。** できた `.vrm` ファイルをiPhoneへ送り、アプリで読み込みます。見た目、まばたき、口、表情を確認してください。
 
 表情の取り込みは書き出すたびに自動で行われます。個々のBlendShapeではなく、対応するメニュー項目やジェスチャーのアニメーションをひとつの表情として保存します。
+
+### iPhoneで読み込む
+
+1. 書き出した `.vrm` ファイルをiPhoneの「ファイル」に保存します。
+2. VR Vlogの設定を開き、**モデルを変更 → 端末のVRMを選ぶ**からファイルを選びます。
+3. lilToonの追加データを使う場合は、設定の**実験的機能 → lilToon互換表示（モバイル）**をオンにします。
+4. 見た目やまばたき、口、表情の動きを確認します。位置・サイズ・明るさなどは**モデルの見え方 → 内カメラで調整**から調整できます。
+
+表示はアプリの描画方式や端末によって変わります。新しい書き出し設定を反映するには、元のUnityアバターから再度書き出してください。
 
 ### 書き出し後の確認
 

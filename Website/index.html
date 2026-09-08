@@ -4,234 +4,132 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <meta name="theme-color" content="#191b1f">
-  <title>VR Vlog lilToon Exporter — アバターを、いつもの表情で。</title>
-  <meta name="description" content="lilToonのアバターを、VR Vlogで使えるVRM 1.0へ。見た目の設定と対応する表情をまとめて書き出す、Unity用の無料エクスポーター。VCC・ALCOMから導入できます。">
+  <title>VR Vlog lilToon Exporter — UnityのアバターをVR Vlogで使う</title>
+  <meta name="description" content="lilToonのアバターをVRMに書き出して、iPhoneのVR Vlogで読み込めます。VCC・ALCOMから導入できる無料のUnity用エクスポーター。">
   <link rel="canonical" href="https://mitsuya0077.github.io/VR-Vlog-lilToon-Exporter/">
   <meta property="og:type" content="website">
   <meta property="og:locale" content="ja_JP">
   <meta property="og:site_name" content="VR Vlog">
-  <meta property="og:title" content="VR Vlog lilToon Exporter">
-  <meta property="og:description" content="アバターを、いつもの表情で。lilToonの見た目と対応する表情を、VRM 1.0にまとめて書き出す。">
+  <meta property="og:title" content="UnityのアバターをVR Vlogで使う">
+  <meta property="og:description" content="lilToonのアバターをVRMに書き出して、iPhoneのVR Vlogで読み込めます。無料のUnity用エクスポーター。">
   <meta property="og:url" content="https://mitsuya0077.github.io/VR-Vlog-lilToon-Exporter/">
   <meta name="twitter:card" content="summary">
   <link rel="icon" href="assets/favicon-phone.ico" sizes="16x16 32x32 48x48">
   <link rel="icon" type="image/png" href="assets/favicon-phone-32.png" sizes="32x32">
   <link rel="icon" type="image/png" href="assets/favicon-phone-16.png" sizes="16x16">
-  <style>
-    :root {
-      color-scheme: dark;
-      --canvas: #191b1f; --surface: #27292e; --raised: #33363c;
-      --text: #f4f3f0; --muted: #bfc2c9; --brand: #ff1880; --brand-ink: #05080c;
-      --success: #38d5bd; --line: #3d4047; --stroke: #464950; --radius: 10px;
-      font-family: -apple-system, BlinkMacSystemFont, "Hiragino Sans", "Noto Sans JP", "Yu Gothic", Meiryo, sans-serif;
-      font-synthesis: none;
-    }
-    * { box-sizing: border-box; }
-    [hidden] { display: none !important; }
-    html { scroll-padding-top: 2rem; }
-    body { margin: 0; background: var(--canvas); color: var(--text); font-size: 1rem; line-height: 1.8; }
-    a { color: inherit; text-underline-offset: .25em; }
-    a:hover { text-decoration-color: var(--brand); }
-    button, input { font: inherit; }
-    button, summary { cursor: pointer; }
-    :focus-visible { outline: 2px solid var(--success); outline-offset: 5px; }
-    ::selection { background: var(--brand); color: var(--brand-ink); }
-    h1, h2, h3, p { margin: 0; }
-    h1, h2, h3 { line-height: 1.45; }
-    h2 { font-size: clamp(1.5rem, 3vw, 2rem); letter-spacing: -.035em; }
-    h3 { font-size: 1.125rem; }
-    code { font: .875rem/1.65 ui-monospace, SFMono-Regular, Consolas, monospace; overflow-wrap: anywhere; }
-    .wrap { width: min(1120px, calc(100% - 4rem)); margin-inline: auto; }
-    .skip { position: absolute; left: 1rem; top: -5rem; z-index: 5; padding: .7rem 1rem; background: var(--text); color: var(--canvas); }
-    .skip:focus { top: 1rem; }
-    .header { min-height: 88px; display: flex; align-items: center; justify-content: space-between; gap: 1.5rem; border-bottom: 1px solid var(--line); }
-    .brand { display: inline-flex; align-items: center; min-height: 44px; gap: .8rem; text-decoration: none; }
-    .wordmark { display: block; width: 168px; height: auto; flex-shrink: 0; }
-    .brand-label { border-left: 1px solid var(--stroke); padding-left: .8rem; color: var(--muted); font-size: .8125rem; }
-    .nav { display: flex; flex-wrap: wrap; gap: 1.5rem; font-size: .875rem; }
-    .nav a { display: inline-flex; min-height: 44px; align-items: center; text-decoration: none; }
-    .nav a:hover { color: var(--brand); }
-    .hero { padding-block: 5rem 4rem; display: grid; grid-template-columns: 1.1fr 1fr; gap: 3.5rem; align-items: start; }
-    .eyebrow { color: var(--muted); font-size: .8125rem; letter-spacing: .12em; font-weight: 650; }
-    .eyebrow::before { content: ""; display: inline-block; width: 7px; height: 7px; background: var(--brand); margin: 0 .6rem .1rem 0; }
-    h1 { font-size: clamp(2.125rem, 4vw, 3.25rem); line-height: 1.5; letter-spacing: -.055em; margin-top: 1.25rem; font-weight: 800; }
-    h1 span { color: var(--brand); }
-    .hero-description { color: var(--muted); margin-top: 1.5rem; max-width: 32rem; line-height: 2; }
-    .tags { display: flex; gap: .5rem; flex-wrap: wrap; margin-top: 1.5rem; }
-    .tag { font-size: .8125rem; border: 1px solid var(--stroke); border-radius: 4px; padding: .15rem .6rem; color: var(--muted); }
-    .hero-note { margin-top: 1.5rem; font-size: .875rem; color: var(--muted); }
-    .install-panel { background: var(--surface); border: 1px solid var(--stroke); border-top: 3px solid var(--brand); border-radius: var(--radius); padding: 1.75rem; min-width: 0; }
-    .panel-top { display: flex; flex-wrap: wrap; justify-content: space-between; align-items: center; gap: .75rem; }
-    .version { color: var(--success); font: .875rem ui-monospace, SFMono-Regular, Consolas, monospace; }
-    .product-name { font-size: 1.5rem; margin-top: 1.1rem; letter-spacing: -.03em; }
-    .product-id { color: var(--muted); display: block; margin-top: .45rem; font-size: .8125rem; }
-    .panel-copy { color: var(--muted); margin-top: 1rem; font-size: 1rem; }
-    .button { min-height: 48px; padding: .7rem 1rem; display: inline-flex; justify-content: center; align-items: center; gap: .75rem; border: 1px solid var(--stroke); border-radius: 8px; text-decoration: none; font-weight: 700; line-height: 1.5; }
-    .primary { background: var(--brand); color: var(--brand-ink); border-color: var(--brand); width: 100%; margin-top: 1.5rem; }
-    .primary:hover { background: #ff479a; }
-    .primary svg { width: 18px; height: 18px; stroke: currentColor; fill: none; stroke-width: 1.8; }
-    .install-help { color: var(--muted); font-size: .875rem; margin-top: .65rem; }
-    .url-label { display: block; margin-top: 1.5rem; font-size: .875rem; }
-    .url-row { display: flex; gap: .5rem; margin-top: .5rem; }
-    .url-row input { min-width: 0; width: 100%; padding: .65rem .75rem; border: 1px solid var(--stroke); border-radius: 8px; background: var(--canvas); color: var(--muted); font: .875rem/1.5 ui-monospace, SFMono-Regular, Consolas, monospace; }
-    .copy { flex-shrink: 0; background: var(--raised); color: var(--text); font-size: .875rem; padding-inline: .85rem; }
-    .copy:hover { border-color: var(--muted); }
-    .copy-status { min-height: 1.5rem; font-size: .875rem; color: var(--success); margin-top: .35rem; }
-    .panel-bottom { border-top: 1px solid var(--line); margin-top: 1rem; padding-top: 1rem; display: flex; gap: .5rem 1.25rem; flex-wrap: wrap; font-size: .875rem; }
-    .panel-bottom a { padding-block: .25rem; }
-    .section { border-top: 1px solid var(--line); padding-block: 3rem; }
-    .section-heading { display: flex; gap: 1.2rem; align-items: baseline; margin-bottom: 1.75rem; }
-    .section-number { color: var(--brand); font: .8125rem ui-monospace, SFMono-Regular, Consolas, monospace; }
-    .features { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 2rem; }
-    .features h3 { margin-bottom: .65rem; }
-    .features p { color: var(--muted); }
-    .workflow { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); list-style: none; gap: 1rem; padding: 0; margin: 0; }
-    .workflow li { border: 1px solid var(--stroke); background: var(--surface); border-radius: var(--radius); padding: 1.5rem; }
-    .step-label { font-size: .8125rem; font-weight: 650; color: var(--muted); letter-spacing: .08em; display: block; margin-bottom: 1rem; }
-    .workflow p { color: var(--muted); margin-top: .75rem; }
-    .menu-path { display: block; color: var(--text); margin-top: .75rem; }
-    .after-export { color: var(--muted); margin-top: 1.25rem; }
-    .compatibility { display: grid; grid-template-columns: .8fr 1.2fr; gap: 3.5rem; }
-    .requirements { margin: 0; }
-    .requirements div { border-bottom: 1px solid var(--line); padding-block: .8rem; }
-    .requirements div:first-child { padding-top: 0; }
-    .requirements dt { font-size: .875rem; color: var(--muted); }
-    .requirements dd { margin: .2rem 0 0; }
-    .compatibility h3 { margin-bottom: .75rem; }
-    .compatibility p { color: var(--muted); }
-    .compatibility p + p { margin-top: .85rem; }
-    .support-links { display: flex; flex-wrap: wrap; gap: .75rem 1.5rem; margin-top: 1.25rem; }
-    details { margin-top: 1.75rem; border: 1px solid var(--stroke); border-radius: var(--radius); padding: .2rem 1.25rem; }
-    summary { padding: .8rem 0; }
-    .dependency-note { color: var(--muted); font-size: .875rem; margin-block: .25rem 1rem; }
-    .dependency { display: flex; justify-content: space-between; flex-wrap: wrap; gap: .75rem; border-top: 1px solid var(--line); padding-block: 1rem; }
-    .dependency span { display: block; }
-    .dependency code { color: var(--muted); }
-    .dependency a { font-size: .875rem; align-self: center; padding-block: .5rem; }
-    .footer { border-top: 1px solid var(--line); padding-block: 1.75rem 2.5rem; display: flex; justify-content: space-between; flex-wrap: wrap; gap: 1rem; font-size: .875rem; color: var(--muted); }
-    .footer-links { display: flex; flex-wrap: wrap; gap: 1.25rem; }
-    @media (max-width: 960px) {
-      .hero { gap: 2rem; }
-      .install-panel { padding: 1.25rem; }
-      h1 { font-size: 2.25rem; }
-      .features { gap: 1.5rem; }
-      .workflow li { padding: 1.2rem; }
-    }
-    @media (max-width: 760px) {
-      .wrap { width: min(100% - 2.5rem, 36rem); }
-      .header { min-height: 76px; }
-      .brand-label { display: none; }
-      .wordmark { width: 144px; }
-      .nav { gap: 1rem; }
-      .hero { grid-template-columns: 1fr; padding-block: 2.5rem; gap: 2rem; }
-      h1 { font-size: clamp(1.875rem, 6.5vw, 2.75rem); }
-      .hero-description, .hero-note { margin-top: 1rem; }
-      .install-panel { padding: 1.5rem; }
-      .section { padding-block: 2.25rem; }
-      .features, .workflow, .compatibility { grid-template-columns: 1fr; gap: 1.5rem; }
-      .features article + article { border-top: 1px solid var(--line); padding-top: 1.5rem; }
-      .workflow { gap: .75rem; }
-      .workflow li { padding: 1.25rem; }
-      .step-label { margin-bottom: .5rem; }
-    }
-    @media (max-width: 380px) {
-      .wrap { width: calc(100% - 2rem); }
-      .install-panel { padding: 1rem; }
-      .nav { gap: .75rem; }
-      .wordmark { width: 130px; }
-    }
-    @media (forced-colors: active) { .primary { border: 2px solid ButtonText; } }
-  </style>
+  <link rel="stylesheet" href="styles.css">
 </head>
 <body>
   <a class="skip" href="#main">本文へスキップ</a>
   <header class="header wrap">
-    <a class="brand" href="https://mitsuya0077.github.io/vr-vlog-website/" aria-label="VR Vlog 公式サイト"><img class="wordmark" src="assets/vr-vlog-wordmark.png" width="1000" height="298" alt="VR VLOG"><span class="brand-label">CREATOR TOOLS</span></a>
-    <nav class="nav" aria-label="メインナビゲーション"><a href="#how-to">使い方</a><a href="https://github.com/mitsuya0077/VR-Vlog-lilToon-Exporter">GitHub ↗</a></nav>
+    <a class="brand" href="https://mitsuya0077.github.io/vr-vlog-website/" aria-label="VR Vlog 公式サイト">
+      <img class="wordmark" src="assets/vr-vlog-wordmark.png" width="1000" height="298" alt="VR Vlog">
+      <span class="brand-label">lilToon Exporter</span>
+    </a>
+    <nav class="nav" aria-label="メインナビゲーション">
+      <a href="#how-to">使い方</a><a href="#compatibility">対応範囲</a>
+      <a href="https://github.com/mitsuya0077/VR-Vlog-lilToon-Exporter">GitHub <span aria-hidden="true">↗</span></a>
+    </nav>
   </header>
   <main id="main" class="wrap">
     <section class="hero" aria-labelledby="hero-title">
+      <div class="hero-copy">
+        <p class="eyebrow">Unity用エクスポーター</p>
+        <h1 id="hero-title">Unityのアバターを<br><span>VR Vlog</span>で使う</h1>
+        <p class="hero-description">lilToonのアバターをVRMに書き出して、<br class="desktop-break">iPhoneのVR Vlogで読み込めます。</p>
+        <a class="button primary" href="vcc://vpm/addRepo?url={{ listingInfo.Url }}">VCC / ALCOMに追加</a>
+        <p class="install-help">追加後、使うプロジェクトにインストールします。</p>
+        <a class="text-link zip-link" href="https://github.com/mitsuya0077/VR-Vlog-lilToon-Exporter#インストール" data-install-guide>ZIPで導入 <span aria-hidden="true">↗</span></a>
+        <p class="hero-note">無料 · Unity 2022.3以降</p>
+      </div>
+      <figure class="camera-figure">
+        <div class="camera-crop">
+          <img class="camera-image" src="assets/approved-camera-source.png" width="885" height="1777" fetchpriority="high" alt="海と砂浜を背面カメラに映し、kip kawaiiのアバターを小窓に表示したVR Vlogの撮影画面">
+        </div>
+      </figure>
+    </section>
+    <section id="how-to" class="step export-step" aria-labelledby="export-title">
+      <figure class="export-figure">
+        <img class="export-image" src="assets/unity-exporter-uribo.png" width="1330" height="1183" loading="lazy" alt="UnityのVR Vlog VRM書き出し画面。アバターにkip kawaii、作者名にuriboを入力し、保存先を選んでVRMを書き出す">
+        <figcaption>Unityの書き出し画面</figcaption>
+      </figure>
+      <div class="step-copy">
+        <p class="step-number" aria-hidden="true">01</p>
+        <h2 id="export-title">Unityで書き出す</h2>
+        <p class="step-description">使う衣装を表示して、<br>アバターと作者名を指定します。</p>
+        <p class="menu-path">VR Vlog <span aria-hidden="true">→</span> <span>lilToon VRM 1.0を書き出す</span></p>
+        <p class="small-note">元のアバターやマテリアルは変更しません。</p>
+      </div>
+    </section>
+    <section class="step import-step" aria-labelledby="import-title">
+      <div class="step-copy">
+        <p class="step-number" aria-hidden="true">02</p>
+        <h2 id="import-title">iPhoneで読み込む</h2>
+        <p class="step-description">VRMをiPhoneに保存し、<br>設定から「端末のVRMを選ぶ」を開きます。</p>
+        <a class="text-link import-guide" href="https://github.com/mitsuya0077/VR-Vlog-lilToon-Exporter#iphoneで読み込む">詳しい読み込み手順 <span aria-hidden="true">↗</span></a>
+      </div>
+      <figure class="settings-figure">
+        <div class="settings-preview" role="img" aria-label="VR Vlogの設定画面。モデルを変更の中にある「端末のVRMを選ぶ」を選択します。">
+          <div class="settings-header" aria-hidden="true"><span>設定</span><span class="settings-close">×</span></div>
+          <div class="settings-content" aria-hidden="true">
+            <p class="settings-label">モデルを変更</p>
+            <div class="settings-row">デフォルトアバター<span>›</span></div>
+            <div class="settings-row selected">端末のVRMを選ぶ<span>›</span></div>
+            <div class="settings-row">VRoid Hub<span>›</span></div>
+          </div>
+        </div>
+        <figcaption>VR Vlogの設定</figcaption>
+      </figure>
+    </section>
+    <section id="compatibility" class="compatibility" aria-labelledby="compatibility-title">
+      <h2 id="compatibility-title">引き継げる設定</h2>
       <div>
-        <p class="eyebrow">LILTOON → VRM 1.0</p>
-        <h1 id="hero-title">アバターを、<br><span>いつもの表情で。</span></h1>
-        <p class="hero-description">お気に入りの見た目も、表情も、VR Vlogへ。<br>lilToonのアバターを、撮影に使えるVRM 1.0にまとめて書き出すUnity用エクスポーターです。</p>
-        <div class="tags" aria-label="対応環境とライセンス"><span class="tag">Unity 2022.3+</span><span class="tag">VCC / ALCOM</span><span class="tag">無料・MIT License</span></div>
-        <p class="hero-note">対応するマテリアル・表情を変換します。<a href="#compatibility">対応範囲を見る</a></p>
-      </div>
-      <aside class="install-panel" aria-labelledby="install-title">
-        <div class="panel-top">
-          <p class="eyebrow">UNITY PACKAGE</p>
-          {{~ for package in packages ~}}
-          {{~ if package.Name == "com.vrvlog.liltoon-vrm-exporter" ~}}
-          <span class="version">v{{ package.Version }}</span>
-          {{~ end ~}}
-          {{~ end ~}}
-        </div>
-        <h2 id="install-title" class="product-name">lilToon VRM Exporter</h2>
-        <code class="product-id">com.vrvlog.liltoon-vrm-exporter</code>
-        <p class="panel-copy">リポジトリを追加したら、プロジェクトに<br><strong>VR Vlog lilToon VRM Exporter</strong> をインストール。</p>
-        <a class="button primary" href="vcc://vpm/addRepo?url={{ listingInfo.Url }}">VCC / ALCOMに追加する<svg aria-hidden="true" viewBox="0 0 24 24"><path d="M5 12h14m-6-6 6 6-6 6"/></svg></a>
-        <p class="install-help">PCで関連付けられたVCCまたはALCOMが開きます。<br>必要なUniVRMは自動で追加されます。</p>
-        <label class="url-label" for="listing-url">開かない場合・手動追加用のリポジトリURL</label>
-        <div class="url-row"><input id="listing-url" readonly spellcheck="false" value="{{ listingInfo.Url }}" aria-describedby="copy-status"><button id="copy-url" class="button copy" type="button" hidden>コピー</button></div>
-        <p id="copy-status" class="copy-status" role="status" aria-live="polite"></p>
-        <noscript><p class="install-help">上のURLを選択してコピーできます。</p></noscript>
-        <div class="panel-bottom">
-          <a href="https://github.com/mitsuya0077/VR-Vlog-lilToon-Exporter/releases/latest">最新リリース ↗</a>
-          {{~ for package in packages ~}}
-          {{~ if package.Name == "com.vrvlog.liltoon-vrm-exporter" ~}}
-          <a href="{{ package.ZipUrl }}">ZIPをダウンロード ↓</a>
-          {{~ end ~}}
-          {{~ end ~}}
-        </div>
-      </aside>
-    </section>
-    <section class="section" aria-labelledby="features-title">
-      <div class="section-heading"><span class="section-number">01</span><h2 id="features-title">見た目と表情を、ひとつのファイルに。</h2></div>
-      <div class="features">
-        <article><h3>lilToonの設定を引き継ぐ</h3><p>色、影、発光、MatCap、輪郭線などの対応設定を保存。通常のVRMビューアー向けに、MToonの互換表示も含めます。</p></article>
-        <article><h3>調整した顔と、登録済みの表情</h3><p>BlendShapeで調整した顔を基本の形に。対応するVRChatのメニュー・ジェスチャー表情を自動で取り込みます。</p></article>
-        <article><h3>元のアバターは、そのまま</h3><p>一時コピーから書き出すので、元のアバターやマテリアルを変更しません。保存前にファイルを検証します。</p></article>
+        <ul class="feature-list">
+          <li>lilToonの色・影・輪郭線</li><li>対応するVRChat・FaceEmoの表情</li><li>Modular Avatarの髪・衣装</li>
+        </ul>
+        <p class="small-note">対応する設定を保存します。見た目には差が出る場合があります。</p>
+        <a class="text-link compatibility-link" href="https://github.com/mitsuya0077/VR-Vlog-lilToon-Exporter#対応範囲と制限">対応範囲・制限を確認 <span aria-hidden="true">↗</span></a>
       </div>
     </section>
-    <section id="how-to" class="section" aria-labelledby="how-to-title">
-      <div class="section-heading"><span class="section-number">02</span><h2 id="how-to-title">書き出しは、3ステップ。</h2></div>
-      <ol class="workflow">
-        <li><span class="step-label">STEP 01 / 準備</span><h3>使いたい衣装を表示する</h3><p>Unityでアバターを開き、撮影したい衣装・パーツを有効にします。非表示の衣装は書き出し対象に含まれません。</p></li>
-        <li><span class="step-label">STEP 02 / 設定</span><h3>アバターと作者名を指定</h3><p>Unityのメニューから開き、Hierarchyのアバター最上位と、VRMに記録する作者名を指定します。</p><code class="menu-path">VR Vlog &gt;<br>lilToon VRM 1.0を書き出す</code></li>
-        <li><span class="step-label">STEP 03 / 保存</span><h3>保存先を選んで書き出す</h3><p>「保存先を選んでVRMを書き出す」を押し、保存先を指定。できた.vrmファイルをiPhoneへ送り、VR Vlogで読み込みます。</p></li>
-      </ol>
-      <p class="after-export">読み込んだら、見た目・まばたき・口・表情の動きを確認してください。省略された設定などの詳細は、Unity Consoleの「VR Vlog 書き出し詳細」で確認できます。</p>
-    </section>
-    <section id="compatibility" class="section" aria-labelledby="compatibility-title">
-      <div class="section-heading"><span class="section-number">03</span><h2 id="compatibility-title">使う前に、知っておきたいこと。</h2></div>
-      <div class="compatibility">
-        <dl class="requirements">
-          <div><dt>Unity</dt><dd>2022.3以降</dd></div>
-          <div><dt>必要なパッケージ</dt><dd>UniVRM 0.131.x <span class="tag">自動導入</span></dd></div>
-          <div><dt>対応するマテリアル</dt><dd>lilToon / lilToon Lite / lilToon Multi</dd></div>
-          <div><dt>出力</dt><dd>VRM 1.0 + VR Vlog用の追加データ</dd></div>
-        </dl>
-        <div>
-          <h3>すべての効果を同じ見た目にするものではありません。</h3>
-          <p>ファー、屈折、AudioLinkなどは近似・省略されます。マテリアル・表示・ボーンの変更を伴う表情や、ビルド時に生成されるメニューなども対象外です。</p>
-          <p>動くジェスチャー表情は、対応版のVR Vlogで再生できます。追加データに未対応のビューアーでは、MToonの互換表示と静止した表情を使用します。</p>
-          <p>VRChatのプロジェクトでは、VCCが案内する対応Unityバージョンを使ってください。アバターや衣装の利用条件を確認してから書き出してください。</p>
-          <div class="support-links"><a href="https://github.com/mitsuya0077/VR-Vlog-lilToon-Exporter#readme">導入ガイド・詳しい仕様 ↗</a><a href="https://github.com/mitsuya0077/VR-Vlog-lilToon-Exporter/issues">不具合を報告 ↗</a></div>
-        </div>
+    <section class="support" aria-labelledby="support-title">
+      <h2 id="support-title">導入で困ったら</h2>
+      <div class="support-links">
+        <a class="text-link" href="https://github.com/mitsuya0077/VR-Vlog-lilToon-Exporter#インストール" data-install-guide>手順を読む <span aria-hidden="true">↗</span></a>
+        <a class="text-link" href="https://github.com/mitsuya0077/VR-Vlog-lilToon-Exporter/issues">不具合を報告 <span aria-hidden="true">↗</span></a>
       </div>
-      <details>
-        <summary>依存パッケージ・手動インストール</summary>
-        <p class="dependency-note">通常はVCC・ALCOMからエクスポーターだけを選んでください。以下は自動で導入されるUniVRMのパッケージです。ZIPで手動導入する場合は、依存パッケージも必要になります。</p>
-        {{~ for package in packages ~}}
-        {{~ if package.Name != "com.vrvlog.liltoon-vrm-exporter" ~}}
-        <div class="dependency"><div><span>{{ package.DisplayName }} · v{{ package.Version }}</span><code>{{ package.Name }}</code></div><a href="{{ package.ZipUrl }}">ZIPをダウンロード ↓</a></div>
-        {{~ end ~}}
-        {{~ end ~}}
-      </details>
     </section>
   </main>
-  <footer class="footer wrap"><span>VR Vlog · Creator Tools</span><div class="footer-links"><a href="https://mitsuya0077.github.io/vr-vlog-website/">VR Vlogについて</a><a href="https://github.com/mitsuya0077/VR-Vlog-lilToon-Exporter/blob/main/LICENSE">MIT License</a><a href="https://github.com/mitsuya0077/VR-Vlog-lilToon-Exporter/blob/main/ThirdPartyNotices/UniVRM.md">Third-party notices</a></div></footer>
+  <footer class="footer wrap">
+    <span>VR Vlog</span>
+    <div class="footer-links">
+      <a href="https://mitsuya0077.github.io/vr-vlog-website/">アプリのサイト <span aria-hidden="true">↗</span></a>
+      <a href="https://github.com/mitsuya0077/VR-Vlog-lilToon-Exporter">GitHub <span aria-hidden="true">↗</span></a>
+    </div>
+  </footer>
+  <dialog id="install-guide" aria-labelledby="install-title">
+    <form method="dialog" class="dialog-heading">
+      <h2 id="install-title">エクスポーターを導入する</h2>
+      <button class="close-button" aria-label="閉じる" autofocus>×</button>
+    </form>
+    <p>アバターとlilToonを導入済みのUnityプロジェクトで使います。VCCまたはALCOMにリポジトリを追加し、使うプロジェクトで<strong>VR Vlog lilToon VRM Exporter</strong>をインストールしてください。</p>
+    <p>必要なUniVRM 0.131.xは自動で導入されます。VRChatのプロジェクトでは、VCCが案内する対応Unityバージョンを使ってください。</p>
+    <label class="url-label" for="listing-url">VCC / ALCOMが開かない場合は、このURLをリポジトリ追加画面に貼り付けます。</label>
+    <div class="url-row"><input id="listing-url" readonly spellcheck="false" value="{{ listingInfo.Url }}" aria-describedby="copy-status"><button id="copy-url" class="button copy" type="button" hidden>コピー</button></div>
+    <p id="copy-status" class="copy-status" role="status" aria-live="polite"></p>
+    <h3>ZIPで手動導入する</h3>
+    <p>エクスポーターとUniVRMのパッケージをダウンロードし、プロジェクトのPackagesフォルダーへ展開します。すでに同じパッケージがある場合は重複して導入しないでください。</p>
+    <div class="package-downloads">
+      {{~ for package in packages ~}}
+      <div class="dependency"><div><span>{{ package.DisplayName }} · v{{ package.Version }}</span><code>{{ package.Name }}</code></div><a class="text-link" href="{{ package.ZipUrl }}">ZIPをダウンロード <span aria-hidden="true">↓</span></a></div>
+      {{~ end ~}}
+    </div>
+    <div class="dialog-links">
+      <a href="https://github.com/mitsuya0077/VR-Vlog-lilToon-Exporter#readme">READMEで手順を読む</a>
+      <a href="https://github.com/mitsuya0077/VR-Vlog-lilToon-Exporter/releases/latest">更新履歴</a>
+      <a href="https://github.com/mitsuya0077/VR-Vlog-lilToon-Exporter/blob/main/LICENSE">MIT License</a>
+      <a href="https://github.com/mitsuya0077/VR-Vlog-lilToon-Exporter/blob/main/ThirdPartyNotices/UniVRM.md">Third-party notices</a>
+    </div>
+  </dialog>
   <script src="app.js" defer></script>
 </body>
 </html>
