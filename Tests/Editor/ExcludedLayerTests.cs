@@ -83,7 +83,7 @@ namespace VRVlog.LilToonExporter.Tests
             if (petUsesMenuParameter) transition.AddCondition(AnimatorConditionMode.If, 0, "Smile");
             Assert.Throws<InvalidOperationException>(() => Sample(controller));
             using var exclusions = new ExportObjectExclusions(avatar, new[] { pet });
-            Assert.That(VrChatExpressionSampler.FindExcludedLayers(controller, controller, exclusions.ContainsPath), Does.Contain(1));
+            Assert.That(VrChatExpressionSampler.FindExcludedLayers(controller, controller, exclusions.ContainsPath).Contains(1), Is.True);
             var values = Sample(controller, exclusions.ContainsPath);
             Assert.That(values.Count, Is.EqualTo(1));
             Assert.That(values.Single().Path, Is.EqualTo("Face"));
@@ -101,7 +101,7 @@ namespace VRVlog.LilToonExporter.Tests
             future.writeDefaultValues = false;
             DelayedTransition(future);
             using var exclusions = new ExportObjectExclusions(avatar, new[] { pet });
-            Assert.That(VrChatExpressionSampler.FindExcludedLayers(controller, controller, exclusions.ContainsPath), Does.Not.Contain(1));
+            Assert.That(VrChatExpressionSampler.FindExcludedLayers(controller, controller, exclusions.ContainsPath).Contains(1), Is.False);
             var error = Assert.Throws<InvalidOperationException>(() => Sample(controller, exclusions.ContainsPath));
             Assert.That(error.Message, Does.Contain("時間で遷移"));
         }
@@ -124,7 +124,7 @@ namespace VRVlog.LilToonExporter.Tests
             next.writeDefaultValues = false;
             DelayedTransition(next);
             using var exclusions = new ExportObjectExclusions(avatar, new[] { pet });
-            Assert.That(VrChatExpressionSampler.FindExcludedLayers(controller, controller, exclusions.ContainsPath), Does.Not.Contain(1));
+            Assert.That(VrChatExpressionSampler.FindExcludedLayers(controller, controller, exclusions.ContainsPath).Contains(1), Is.False);
             Assert.Throws<InvalidOperationException>(() => Sample(controller, exclusions.ContainsPath));
         }
 
@@ -140,13 +140,13 @@ namespace VRVlog.LilToonExporter.Tests
             var overrides = new AnimatorOverrideController(controller);
             try
             {
-                Assert.That(VrChatExpressionSampler.FindExcludedLayers(controller, overrides, exclusions.ContainsPath), Does.Not.Contain(1),
+                Assert.That(VrChatExpressionSampler.FindExcludedLayers(controller, overrides, exclusions.ContainsPath).Contains(1), Is.False,
                     "A null override still uses the original retained-face clip.");
                 overrides[faceClip] = petClip;
-                Assert.That(VrChatExpressionSampler.FindExcludedLayers(controller, overrides, exclusions.ContainsPath), Does.Contain(1));
+                Assert.That(VrChatExpressionSampler.FindExcludedLayers(controller, overrides, exclusions.ContainsPath).Contains(1), Is.True);
                 Assert.That(Sample(overrides, exclusions.ContainsPath).Single().Weight, Is.EqualTo(60).Within(.01f));
                 overrides[petClip] = faceClip;
-                Assert.That(VrChatExpressionSampler.FindExcludedLayers(controller, overrides, exclusions.ContainsPath), Does.Not.Contain(1),
+                Assert.That(VrChatExpressionSampler.FindExcludedLayers(controller, overrides, exclusions.ContainsPath).Contains(1), Is.False,
                     "Replacing an excluded clip with a retained face must restore timed-state validation.");
                 Assert.Throws<InvalidOperationException>(() => Sample(overrides, exclusions.ContainsPath));
             }
@@ -169,7 +169,7 @@ namespace VRVlog.LilToonExporter.Tests
             }
             DelayedTransition(future);
             using var exclusions = new ExportObjectExclusions(avatar, new[] { pet });
-            Assert.That(VrChatExpressionSampler.FindExcludedLayers(controller, controller, exclusions.ContainsPath), Does.Not.Contain(1));
+            Assert.That(VrChatExpressionSampler.FindExcludedLayers(controller, controller, exclusions.ContainsPath).Contains(1), Is.False);
             Assert.Throws<InvalidOperationException>(() => Sample(controller, exclusions.ContainsPath));
         }
 
@@ -182,8 +182,8 @@ namespace VRVlog.LilToonExporter.Tests
             // Even an overbroad path predicate must not hide global Animator
             // parameter curves, and a binding-free layer proves nothing.
             var ignored = VrChatExpressionSampler.FindExcludedLayers(controller, controller, _ => true);
-            Assert.That(ignored, Does.Not.Contain(1));
-            Assert.That(ignored, Does.Not.Contain(2));
+            Assert.That(ignored.Contains(1), Is.False);
+            Assert.That(ignored.Contains(2), Is.False);
         }
 
         private List<VrChatExpressionMenu.MorphValue> Sample(RuntimeAnimatorController runtime, Func<string, bool> excludedPath = null) =>
