@@ -20,3 +20,6 @@ jobs:
       - name: Run exporter behavior checks
         shell: pwsh
         run: ./Tools/run-behavior-tests.ps1
+      - name: Run material bake preflight checks
+        shell: pwsh
+        run: ./Tools/run-bake-tests.ps1

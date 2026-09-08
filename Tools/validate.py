@@ -18,7 +18,7 @@ listing = json.loads((root / "source.json").read_text(encoding="utf-8"))
 
 assert package["name"] == "com.vrvlog.liltoon-vrm-exporter"
 assert package["unity"] == "2022.3"
-assert package["version"] == "0.7.2"
+assert package["version"] == "0.7.3"
 assert one_click.index("AvatarBaseShape.Preserve(source, clone,") < one_click.index("Vrm10Exporter.Export(")
 assert "foreach (var mesh in temporaryMeshes) UnityEngine.Object.DestroyImmediate(mesh);" in one_click
 assert package["vpmDependencies"] == {
@@ -171,7 +171,7 @@ assert "does not declare VRMC_materials_mtoon in extensionsUsed" in injector
 assert "ValidateEncodedTexture(glb, texture.textureIndex, textureSources)" in injector
 assert "Unexpected extension property" in injector
 assert 'Guid.NewGuid().ToString("N")' in window
-assert "File.Replace(temporary, outputPath, null)" in window
+assert "File.Replace(temporary, destination, null)" in window
 assert "finally { if (File.Exists(temporary)) File.Delete(temporary); }" in window
 assert "UniVrmOneClickExporter.Export" in window
 assert 'SupportedLilToonVersion = "2.3.4"' in window
@@ -251,8 +251,13 @@ assert "HasPortableOutline(source)" in one_click
 assert 'OutlineWidthMultiplyTexture = outlineEnabled ? Texture(source, "_OutlineTex")' not in one_click
 assert 'private string author = "";' in window
 assert 'private string avatarName = "";' not in window
-assert 'UniVrmOneClickExporter.Export(avatar, AvatarName(), author, warnings, suppressSharedTextureEmission,' in window
-assert 'PackageVersion(), RequireSupportedLilToon(), suppressHdrTextureEmission, excludedObjects)' in window
+assert 'UniVrmOneClickExporter.Export(targetAvatar, targetName, targetAuthor, warnings, targetSharedEmission,' in window
+assert 'PackageVersion(), RequireSupportedLilToon(), targetHdrEmission, targetExclusions, bakeOptions)' in window
+assert 'var targetOutput = outputPath;' in window
+assert 'var targetExclusions = excludedObjects.ToArray();' in window
+assert 'ExportFailureWindow.Show(exception, omitAndRetry)' in window
+assert one_click.index('LilToonMainTextureBaker.ValidateAvatar(source,') < one_click.index('VrChatExpressionSampler.Analyze(source,')
+assert 'suppressHdrTextureEmission, bakeOptions);' in one_click
 assert 'LilToonGlbExtension.Inject(exported, clone,' in one_click
 assert 'excludedExpressions' not in window and 'DrawExpressions' not in window
 assert 'var menu = VrChatExpressionSampler.Analyze(source, exclusions.ContainsPath);' in one_click

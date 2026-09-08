@@ -106,12 +106,40 @@ namespace VRVlog.LilToonExporter
         {
             outputPath = EditorUtility.SaveFilePanel("VRMの保存先", "", DefaultFileName(), "vrm");
             if (string.IsNullOrEmpty(outputPath)) return;
-            var warnings = new List<string>();
-            ExportAtomically(() =>
+            // A nonmodal failure window may remain open while the user changes
+            // this window. Retry exactly the avatar, destination and options
+            // they chose for this attempt; revalidate the live avatar each time.
+            var targetAvatar = avatar;
+            var targetName = AvatarName();
+            var targetAuthor = author;
+            var targetOutput = outputPath;
+            var targetSharedEmission = suppressSharedTextureEmission;
+            var targetHdrEmission = suppressHdrTextureEmission;
+            var targetExclusions = excludedObjects.ToArray();
+            MaterialBakeOptions bakeOptions = null;
+            void Attempt()
             {
-                return UniVrmOneClickExporter.Export(avatar, AvatarName(), author, warnings, suppressSharedTextureEmission,
-                    PackageVersion(), RequireSupportedLilToon(), suppressHdrTextureEmission, excludedObjects);
-            }, warnings);
+                var warnings = new List<string>();
+                ExportAtomically(() =>
+                {
+                    if (targetAvatar == null) throw new InvalidOperationException("この書き出しで選んだアバターが見つかりません。アバターを指定し直してください。");
+                    return UniVrmOneClickExporter.Export(targetAvatar, targetName, targetAuthor, warnings, targetSharedEmission,
+                        PackageVersion(), RequireSupportedLilToon(), targetHdrEmission, targetExclusions, bakeOptions);
+                }, warnings, targetOutput, failure =>
+                {
+                    try
+                    {
+                        bakeOptions = (bakeOptions ?? new MaterialBakeOptions()).WithOmissions(failure.Issues);
+                        Attempt();
+                    }
+                    catch (Exception exception)
+                    {
+                        Debug.LogException(exception);
+                        ExportFailureWindow.Show(exception);
+                    }
+                });
+            }
+            Attempt();
         }
 
         private string AvatarName()
@@ -128,38 +156,42 @@ namespace VRVlog.LilToonExporter
 
         private void ExportExistingFallback()
         {
+            var targetOutput = outputPath;
             var warnings = new List<string>();
             ExportAtomically(() =>
             {
                 if (!File.Exists(fallbackPath)) throw new FileNotFoundException("元にするVRMが見つかりません。", fallbackPath);
-                if (string.Equals(Path.GetFullPath(fallbackPath), Path.GetFullPath(outputPath), StringComparison.OrdinalIgnoreCase))
+                if (string.Equals(Path.GetFullPath(fallbackPath), Path.GetFullPath(targetOutput), StringComparison.OrdinalIgnoreCase))
                     throw new InvalidOperationException("元のVRMを保護するため、別の保存先を指定してください。");
                 foreach (var renderer in ExportRendererSelection.Enumerate(avatar))
                     foreach (var material in renderer.sharedMaterials)
                         if (LilToonMaterialReader.IsLilToon(material) && LilToonMainTextureBaker.NeedsBake(material))
                             throw new InvalidOperationException(material.name + ": 未ベイクのメインカラーがあります。画像とマテリアルを一緒に更新するため、ワンクリック書き出しを使用してください。");
                 return LilToonGlbExtension.Inject(File.ReadAllBytes(fallbackPath), avatar, PackageVersion(), RequireSupportedLilToon(), warnings, suppressSharedTextureEmission);
-            }, warnings);
+            }, warnings, targetOutput);
         }
 
-        private void ExportAtomically(Func<byte[]> create, ICollection<string> warnings)
+        private void ExportAtomically(Func<byte[]> create, ICollection<string> warnings, string destination,
+            Action<MaterialBakeException> omitAndRetry = null)
         {
             try
             {
-                if (File.Exists(outputPath) && !EditorUtility.DisplayDialog("ファイルを上書きしますか？", outputPath, "上書き", "キャンセル")) return;
+                if (!string.Equals(Path.GetExtension(destination), ".vrm", StringComparison.OrdinalIgnoreCase))
+                    throw new InvalidOperationException("保存先の拡張子は .vrm にしてください。保存先を選び直して書き出してください。");
+                if (File.Exists(destination) && !EditorUtility.DisplayDialog("ファイルを上書きしますか？", destination, "上書き", "キャンセル")) return;
                 var bytes = create();
-                var directory = Path.GetDirectoryName(Path.GetFullPath(outputPath));
+                var directory = Path.GetDirectoryName(Path.GetFullPath(destination));
                 if (string.IsNullOrEmpty(directory)) throw new InvalidOperationException("保存先フォルダーが正しくありません。");
                 Directory.CreateDirectory(directory);
-                var temporary = Path.Combine(directory, "." + Path.GetFileName(outputPath) + "." + Guid.NewGuid().ToString("N") + ".tmp");
+                var temporary = Path.Combine(directory, "." + Path.GetFileName(destination) + "." + Guid.NewGuid().ToString("N") + ".tmp");
                 try
                 {
                     File.WriteAllBytes(temporary, bytes);
                     LilToonGlbExtension.Validate(File.ReadAllBytes(temporary));
-                    if (File.Exists(outputPath)) File.Replace(temporary, outputPath, null); else File.Move(temporary, outputPath);
+                    if (File.Exists(destination)) File.Replace(temporary, destination, null); else File.Move(temporary, destination);
                 }
                 finally { if (File.Exists(temporary)) File.Delete(temporary); }
-                EditorUtility.RevealInFinder(outputPath);
+                EditorUtility.RevealInFinder(destination);
                 // Keep the native modal short even for avatars with hundreds of
                 // omitted items. Diagnostics remain in one expandable Console entry.
                 if (warnings != null && warnings.Count > 0) Debug.Log("VR Vlog 書き出し詳細\n・" + string.Join("\n・", warnings));
@@ -169,7 +201,7 @@ namespace VRVlog.LilToonExporter
             catch (Exception exception)
             {
                 Debug.LogException(exception);
-                EditorUtility.DisplayDialog("書き出しに失敗しました", exception.Message, "閉じる");
+                ExportFailureWindow.Show(exception, omitAndRetry);
             }
         }
 
@@ -190,7 +222,7 @@ namespace VRVlog.LilToonExporter
         private static string PackageVersion()
         {
             var info = PackageManagerPackageInfo.FindForAssembly(typeof(LilToonExporterWindow).Assembly);
-            return info != null && !string.IsNullOrWhiteSpace(info.version) ? info.version : "0.7.2";
+            return info != null && !string.IsNullOrWhiteSpace(info.version) ? info.version : "0.7.3";
         }
 
         private static string InstalledLilToonStatus()

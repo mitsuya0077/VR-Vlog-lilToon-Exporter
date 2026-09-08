@@ -155,9 +155,9 @@ namespace VRVlog.LilToonExporter.Tests
             }
         }
 
-        [TestCase("_Main2ndEnableLighting", 0f)]
-        [TestCase("_Main2ndTex_Cull", 1f)]
-        public void BakeReportsLayersThatNeedLightingOrSurfaceDirection(string property, float value)
+        [TestCase("_Main2ndEnableLighting", 0f, "ライティングの適用: 0")]
+        [TestCase("_Main2ndTex_Cull", 1f, "表示する面: 裏面のみ")]
+        public void BakeReportsLayersThatNeedLightingOrSurfaceDirection(string property, float value, string setting)
         {
             var shader = Shader.Find("lilToon");
             Assert.That(shader, Is.Not.Null);
@@ -167,12 +167,263 @@ namespace VRVlog.LilToonExporter.Tests
             {
                 material.SetFloat("_UseMain2ndTex", 1);
                 material.SetFloat(property, value);
-                var error = Assert.Throws<InvalidOperationException>(() => LilToonMainTextureBaker.Bake(material, baked, new List<string>()));
-                Assert.That(error.Message, Does.Contain("表裏・照明・距離・AudioLink"));
+                var error = Assert.Throws<MaterialBakeException>(() => LilToonMainTextureBaker.Bake(material, baked, new List<string>()));
+                Assert.That(error.Issues.Any(issue => issue.Setting == setting), Is.True);
+                Assert.That(error.SourceUnchanged, Is.False);
                 Assert.That(baked, Is.Empty);
                 Assert.That(material.GetFloat("_UseMain2ndTex"), Is.EqualTo(1));
             }
             finally { Object.DestroyImmediate(material); }
+        }
+
+        [TestCase("2nd", false)]
+        [TestCase("2nd", true)]
+        [TestCase("3rd", false)]
+        [TestCase("3rd", true)]
+        public void StaticDecalBoundsAndUvCopyAreBaked(string layer, bool copy)
+        {
+            var material = CreateLayerMaterial(layer);
+            var baked = new List<Texture2D>();
+            try
+            {
+                material.SetFloat("_Main" + layer + "TexIsDecal", 1);
+                material.SetFloat("_Main" + layer + "TexShouldCopy", copy ? 1 : 0);
+                material.SetTextureScale("_Main" + layer + "Tex", new Vector2(2, 1));
+                material.SetTextureOffset("_Main" + layer + "Tex", new Vector2(-1, 0));
+                LilToonMainTextureBaker.Bake(material, baked, new List<string>());
+                var image = baked.Single();
+                var left = image.GetPixel(0, image.height / 2);
+                var right = image.GetPixel(image.width - 1, image.height / 2);
+                Assert.That(right.g, Is.GreaterThan(0.98f));
+                Assert.That(left.g, Is.EqualTo(copy ? 1 : 0).Within(0.02f));
+                Assert.That(left.r, Is.EqualTo(copy ? 0 : 1).Within(0.02f));
+            }
+            finally
+            {
+                foreach (var image in baked) Object.DestroyImmediate(image);
+                Object.DestroyImmediate(material);
+            }
+        }
+
+        [TestCase("2nd")]
+        [TestCase("3rd")]
+        public void MsdfCoverageAndUnusedLayerScrollZAreBaked(string layer)
+        {
+            var material = CreateLayerMaterial(layer);
+            var source = HorizontalPattern(Color.black, Color.white);
+            var baked = new List<Texture2D>();
+            try
+            {
+                material.SetTexture("_Main" + layer + "Tex", source);
+                material.SetFloat("_Main" + layer + "TexIsMSDF", 1);
+                // lilToon's layer shader uses TexAngle; ScrollRotate.z is unused.
+                material.SetVector("_Main" + layer + "Tex_ScrollRotate", new Vector4(0, 0, 1.234f, 0));
+                LilToonMainTextureBaker.Bake(material, baked, new List<string>());
+                var image = baked.Single();
+                Assert.That(image.GetPixel(2, 2).r, Is.GreaterThan(0.98f));
+                Assert.That(image.GetPixel(2, 2).g, Is.LessThan(0.02f));
+                Assert.That(image.GetPixel(13, 2).g, Is.GreaterThan(0.98f));
+                Assert.That(image.GetPixel(13, 2).r, Is.LessThan(0.02f));
+                Assert.That(source.GetPixel(2, 2), Is.EqualTo(Color.black));
+            }
+            finally
+            {
+                foreach (var image in baked) Object.DestroyImmediate(image);
+                Object.DestroyImmediate(source);
+                Object.DestroyImmediate(material);
+            }
+        }
+
+        [TestCase(false)]
+        [TestCase(true)]
+        public void StaticLayerAngleAndUvCopyFlipPreservePattern(bool copyFlip)
+        {
+            var material = CreateLayerMaterial("2nd");
+            var source = HorizontalPattern(Color.green, Color.blue);
+            var baked = new List<Texture2D>();
+            try
+            {
+                material.SetTexture("_Main2ndTex", source);
+                material.SetColor("_Color2nd", Color.white);
+                if (copyFlip)
+                {
+                    material.SetFloat("_Main2ndTexShouldCopy", 1);
+                    material.SetFloat("_Main2ndTexShouldFlipCopy", 1);
+                }
+                else
+                {
+                    material.SetFloat("_Main2ndTexAngle", Mathf.PI);
+                }
+                LilToonMainTextureBaker.Bake(material, baked, new List<string>());
+                var image = baked.Single();
+                Assert.That(image.GetPixel(2, 2).g, Is.EqualTo(copyFlip ? 1 : 0).Within(0.02f));
+                Assert.That(image.GetPixel(2, 2).b, Is.EqualTo(copyFlip ? 0 : 1).Within(0.02f));
+                Assert.That(image.GetPixel(13, 2).g, Is.EqualTo(copyFlip ? 0 : 1).Within(0.02f));
+                Assert.That(image.GetPixel(13, 2).b, Is.EqualTo(copyFlip ? 1 : 0).Within(0.02f));
+            }
+            finally
+            {
+                foreach (var image in baked) Object.DestroyImmediate(image);
+                Object.DestroyImmediate(source);
+                Object.DestroyImmediate(material);
+            }
+        }
+
+        private static Material CreateLayerMaterial(string layer)
+        {
+            var shader = Shader.Find("lilToon");
+            Assert.That(shader, Is.Not.Null, "Install lilToon 2.3.4 to run GPU bake tests.");
+            var material = new Material(shader);
+            material.SetTexture("_MainTex", Texture2D.whiteTexture);
+            material.SetColor("_Color", Color.red);
+            material.SetFloat("_UseMain" + layer + "Tex", 1);
+            material.SetTexture("_Main" + layer + "Tex", Texture2D.whiteTexture);
+            material.SetTexture("_Main" + layer + "BlendMask", Texture2D.whiteTexture);
+            material.SetColor("_Color" + layer, Color.green);
+            return material;
+        }
+
+        private static Texture2D HorizontalPattern(Color left, Color right)
+        {
+            var texture = new Texture2D(16, 4, TextureFormat.RGBA32, false, false)
+            {
+                filterMode = FilterMode.Point,
+                wrapMode = TextureWrapMode.Clamp
+            };
+            texture.SetPixels(Enumerable.Range(0, 16 * 4).Select(i => i % 16 < 8 ? left : right).ToArray());
+            texture.Apply();
+            return texture;
+        }
+
+        [Test]
+        public void PreflightCollectsAllMaterialCausesWithoutChangingObjects()
+        {
+            var avatar = new GameObject("Avatar");
+            var body = new GameObject("Body");
+            var clothing = new GameObject("Clothing");
+            body.transform.SetParent(avatar.transform, false);
+            clothing.transform.SetParent(avatar.transform, false);
+            var first = CreateLayerMaterial("2nd");
+            var second = CreateLayerMaterial("2nd");
+            try
+            {
+                first.name = second.name = "Same material name";
+                first.SetFloat("_Main2ndTex_UVMode", 1);
+                first.SetFloat("_Main2ndTexIsLeftOnly", 1);
+                first.SetFloat("_UseMain3rdTex", 1);
+                first.SetFloat("_Main3rdEnableLighting", 0);
+                second.SetFloat("_Main2ndTexIsRightOnly", 1);
+                var bodyRenderer = body.AddComponent<MeshRenderer>();
+                var clothingRenderer = clothing.AddComponent<MeshRenderer>();
+                bodyRenderer.sharedMaterial = first;
+                clothingRenderer.sharedMaterial = second;
+                var firstBefore = EditorJsonUtility.ToJson(first);
+                var secondBefore = EditorJsonUtility.ToJson(second);
+                var materialCount = Resources.FindObjectsOfTypeAll<Material>().Length;
+                var textureCount = Resources.FindObjectsOfTypeAll<Texture2D>().Length;
+                var objectCount = Resources.FindObjectsOfTypeAll<GameObject>().Length;
+
+                var error = Assert.Throws<MaterialBakeException>(() => LilToonMainTextureBaker.ValidateAvatar(avatar));
+
+                Assert.That(error.SourceUnchanged, Is.True);
+                Assert.That(error.Issues.Count, Is.EqualTo(4));
+                Assert.That(error.Issues.Any(i => i.Material == first && i.RendererPath == "Body" && i.Layer == "2nd" && i.Setting == "UV Mode: UV1"), Is.True);
+                Assert.That(error.Issues.Any(i => i.Material == first && i.RendererPath == "Body" && i.Layer == "2nd" && i.Setting == "左側のみ"), Is.True);
+                Assert.That(error.Issues.Any(i => i.Material == first && i.RendererPath == "Body" && i.Layer == "3rd" && i.Setting == "ライティングの適用: 0"), Is.True);
+                Assert.That(error.Issues.Any(i => i.Material == second && i.RendererPath == "Clothing" && i.Setting == "右側のみ"), Is.True);
+                Assert.That(error.Issues.All(i => !string.IsNullOrWhiteSpace(i.Reason) && !string.IsNullOrWhiteSpace(i.NextStep)), Is.True);
+                Assert.That(bodyRenderer.sharedMaterial, Is.SameAs(first));
+                Assert.That(clothingRenderer.sharedMaterial, Is.SameAs(second));
+                Assert.That(EditorJsonUtility.ToJson(first), Is.EqualTo(firstBefore));
+                Assert.That(EditorJsonUtility.ToJson(second), Is.EqualTo(secondBefore));
+                Assert.That(Resources.FindObjectsOfTypeAll<Material>().Length, Is.EqualTo(materialCount));
+                Assert.That(Resources.FindObjectsOfTypeAll<Texture2D>().Length, Is.EqualTo(textureCount));
+                Assert.That(Resources.FindObjectsOfTypeAll<GameObject>().Length, Is.EqualTo(objectCount));
+            }
+            finally
+            {
+                Object.DestroyImmediate(avatar);
+                Object.DestroyImmediate(first);
+                Object.DestroyImmediate(second);
+            }
+        }
+
+        [Test]
+        public void PreflightExclusionsAndApprovedOmissionsUseMaterialIdentity()
+        {
+            var avatar = new GameObject("Avatar");
+            var pet = new GameObject("Pet");
+            pet.transform.SetParent(avatar.transform, false);
+            var bodyMaterial = CreateLayerMaterial("2nd");
+            var petMaterial = CreateLayerMaterial("2nd");
+            try
+            {
+                bodyMaterial.name = petMaterial.name = "Shared display name";
+                bodyMaterial.SetFloat("_Main2ndTexIsLeftOnly", 1);
+                petMaterial.SetFloat("_Main2ndTexIsRightOnly", 1);
+                avatar.AddComponent<MeshRenderer>().sharedMaterial = bodyMaterial;
+                pet.AddComponent<MeshRenderer>().sharedMaterial = petMaterial;
+                Func<Transform, bool> excluded = t => t == pet.transform || t.IsChildOf(pet.transform);
+                var error = Assert.Throws<MaterialBakeException>(() => LilToonMainTextureBaker.ValidateAvatar(avatar, excluded));
+                Assert.That(error.Issues.Count, Is.EqualTo(1));
+                Assert.That(error.Issues.Single().Material, Is.SameAs(bodyMaterial));
+                var originalOptions = new MaterialBakeOptions();
+                var approved = originalOptions.WithOmissions(error.Issues);
+                Assert.DoesNotThrow(() => LilToonMainTextureBaker.ValidateAvatar(avatar, excluded, approved));
+                Assert.Throws<MaterialBakeException>(() => LilToonMainTextureBaker.ValidateAvatar(avatar, excluded, originalOptions));
+                var remaining = Assert.Throws<MaterialBakeException>(() => LilToonMainTextureBaker.ValidateAvatar(avatar, null, approved));
+                Assert.That(remaining.Issues.Count, Is.EqualTo(1));
+                Assert.That(remaining.Issues.Single().Material, Is.SameAs(petMaterial));
+                Assert.That(bodyMaterial.GetFloat("_UseMain2ndTex"), Is.EqualTo(1));
+                Assert.That(petMaterial.GetFloat("_UseMain2ndTex"), Is.EqualTo(1));
+            }
+            finally
+            {
+                Object.DestroyImmediate(avatar);
+                Object.DestroyImmediate(bodyMaterial);
+                Object.DestroyImmediate(petMaterial);
+            }
+        }
+
+        [Test]
+        public void ApprovedLayerOmissionChangesOnlyExportCopy()
+        {
+            var avatar = new GameObject("Avatar");
+            var source = CreateLayerMaterial("2nd");
+            var created = new List<Material>();
+            var textures = new List<Texture2D>();
+            GameObject clone = null;
+            try
+            {
+                source.SetFloat("_Main2ndTexShouldFlipMirror", 1);
+                var renderer = avatar.AddComponent<MeshRenderer>();
+                renderer.sharedMaterial = source;
+                var before = EditorJsonUtility.ToJson(source);
+                var error = Assert.Throws<MaterialBakeException>(() => LilToonMainTextureBaker.ValidateAvatar(avatar));
+                var options = new MaterialBakeOptions().WithOmissions(error.Issues);
+                clone = Object.Instantiate(avatar);
+                var warnings = new List<string>();
+                LilToonMainTextureBaker.Prepare(clone, created, textures, warnings, false, false, options);
+                var copy = clone.GetComponent<MeshRenderer>().sharedMaterial;
+                Assert.That(copy, Is.Not.SameAs(source));
+                Assert.That(created.Count, Is.EqualTo(1));
+                Assert.That(created.Single(), Is.SameAs(copy));
+                Assert.That(copy.GetFloat("_UseMain2ndTex"), Is.Zero);
+                Assert.That(copy.GetTexture("_MainTex"), Is.SameAs(source.GetTexture("_MainTex")));
+                Assert.That(copy.GetColor("_Color"), Is.EqualTo(source.GetColor("_Color")));
+                Assert.That(textures, Is.Empty, "Omitting the only layer needs no GPU bake.");
+                Assert.That(warnings.Count, Is.GreaterThan(0));
+                Assert.That(renderer.sharedMaterial, Is.SameAs(source));
+                Assert.That(EditorJsonUtility.ToJson(source), Is.EqualTo(before));
+            }
+            finally
+            {
+                if (clone != null) Object.DestroyImmediate(clone);
+                Object.DestroyImmediate(avatar);
+                foreach (var material in created) Object.DestroyImmediate(material);
+                foreach (var texture in textures) Object.DestroyImmediate(texture);
+                Object.DestroyImmediate(source);
+            }
         }
 
         [Test]
