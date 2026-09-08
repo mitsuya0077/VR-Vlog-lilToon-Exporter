@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.8.2
+
+- Clarify the required lilToon 2.3.4 version, tested Unity environment, VR Vlog display/reload steps, and MA/PhysBone conversion limits.
+- Package only tracked Editor source, package metadata, licenses and a concise user guide. Keep developer tools, tests, CI configuration and local inputs out of the installed package.
+- Add checks for common accidental disclosures and an issue form explaining how to share relevant diagnostics without private inputs.
+- Simplify public documentation and use a dedicated phone image instead of a full design source on the installation page. Generate future release notes from the matching changelog entry.
+- Keep the schema 1.2 output and export conversion behaviour from 0.8.1.
+
 ## 0.8.1
 
 - Export MA Bone Proxy / Merge Armature hair using its authored connection without an additional bone-selection screen. Remove the manual attachment preview and its repeat-confirmation option; unrelated independent props no longer interrupt export.

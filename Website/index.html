@@ -40,11 +40,11 @@
         <a class="button primary" href="vcc://vpm/addRepo?url={{ listingInfo.Url }}">VCC / ALCOMに追加</a>
         <p class="install-help">追加後、使うプロジェクトにインストールします。</p>
         <a class="text-link zip-link" href="https://github.com/mitsuya0077/VR-Vlog-lilToon-Exporter#インストール" data-install-guide>ZIPで導入 <span aria-hidden="true">↗</span></a>
-        <p class="hero-note">無料 · Unity 2022.3以降</p>
+        <p class="hero-note">無料 · Unity 2022.3 · lilToon 2.3.4必須</p>
       </div>
       <figure class="camera-figure">
         <div class="camera-crop">
-          <img class="camera-image" src="assets/approved-camera-source.png" width="885" height="1777" fetchpriority="high" alt="海と砂浜を背面カメラに映し、kip kawaiiのアバターを小窓に表示したVR Vlogの撮影画面">
+          <img class="camera-image" src="assets/camera-preview.png" width="981" height="1602" fetchpriority="high" alt="海と砂浜を背面カメラに映し、アバターを小窓に表示したVR Vlogの撮影画面イメージ">
         </div>
       </figure>
     </section>
@@ -111,7 +111,7 @@
       <h2 id="install-title">エクスポーターを導入する</h2>
       <button class="close-button" aria-label="閉じる" autofocus>×</button>
     </form>
-    <p>アバターとlilToonを導入済みのUnityプロジェクトで使います。VCCまたはALCOMにリポジトリを追加し、使うプロジェクトで<strong>VR Vlog lilToon VRM Exporter</strong>をインストールしてください。</p>
+    <p>アバターと<strong>lilToon 2.3.4</strong>を導入済みのUnityプロジェクトで使います。VCCまたはALCOMにリポジトリを追加し、使うプロジェクトで<strong>VR Vlog lilToon VRM Exporter</strong>をインストールしてください。Unity 2022.3.22f1で検証しています。</p>
     <p>必要なUniVRM 0.131.xは自動で導入されます。VRChatのプロジェクトでは、VCCが案内する対応Unityバージョンを使ってください。</p>
     <label class="url-label" for="listing-url">VCC / ALCOMが開かない場合は、このURLをリポジトリ追加画面に貼り付けます。</label>
     <div class="url-row"><input id="listing-url" readonly spellcheck="false" value="{{ listingInfo.Url }}" aria-describedby="copy-status"><button id="copy-url" class="button copy" type="button" hidden>コピー</button></div>
