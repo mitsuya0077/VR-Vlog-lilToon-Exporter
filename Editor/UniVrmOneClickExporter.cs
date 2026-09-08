@@ -14,7 +14,7 @@ namespace VRVlog.LilToonExporter
 
         public static byte[] Export(GameObject source, string avatarName, string author, ICollection<string> warnings = null, bool suppressSharedTextureEmission = true,
             string exporterVersion = null, string lilToonVersion = null, bool suppressHdrTextureEmission = true,
-            IEnumerable<GameObject> excludedObjects = null)
+            IEnumerable<GameObject> excludedObjects = null, MaterialBakeOptions bakeOptions = null)
         {
             if (source == null) throw new ArgumentNullException(nameof(source));
             // Cloning detaches the avatar from its parents. Reject an inactive
@@ -25,6 +25,9 @@ namespace VRVlog.LilToonExporter
 
             EnsureUniVrmVersion();
             using var exclusions = new ExportObjectExclusions(source, excludedObjects);
+            // Report every material problem before cloning or evaluating any
+            // avatar scripts. Selection buttons can reference the real assets.
+            LilToonMainTextureBaker.ValidateAvatar(source, exclusions.Contains, bakeOptions);
             // Re-read the live assets on every export; a preview is never a stale
             // cached source of expression weights after the user edits a clip.
             var menu = VrChatExpressionSampler.Analyze(source, exclusions.ContainsPath);
@@ -39,7 +42,7 @@ namespace VRVlog.LilToonExporter
                 AvatarBaseShape.Preserve(source, clone, temporaryMeshes, warnings, exclusions.Contains);
                 var expressions = VrChatExpressionBaker.Bake(source, clone, menu, temporaryMeshes, warnings);
                 exclusions.Apply(clone, warnings);
-                LilToonMainTextureBaker.Prepare(clone, temporaryMaterials, temporaryTextures, warnings, suppressSharedTextureEmission, suppressHdrTextureEmission);
+                LilToonMainTextureBaker.Prepare(clone, temporaryMaterials, temporaryTextures, warnings, suppressSharedTextureEmission, suppressHdrTextureEmission, bakeOptions);
                 var preparedMaterials = new Dictionary<Renderer, Material[]>();
                 foreach (var renderer in ExportRendererSelection.Enumerate(clone)) preparedMaterials.Add(renderer, renderer.sharedMaterials);
                 ReplaceLilToonMaterials(clone, temporaryMaterials, temporaryTextures, warnings, suppressSharedTextureEmission);

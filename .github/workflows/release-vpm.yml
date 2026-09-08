@@ -6,7 +6,7 @@ on:
       version:
         description: Exporter version without the v prefix
         required: true
-        default: 0.7.2
+        default: 0.7.3
       univrm_version:
         description: Pinned UniVRM version
         required: true
@@ -39,6 +39,9 @@ jobs:
       - name: Run exporter behavior checks
         shell: pwsh
         run: ./Tools/run-behavior-tests.ps1
+      - name: Run material bake preflight checks
+        shell: pwsh
+        run: ./Tools/run-bake-tests.ps1
       - name: Build exporter package
         env:
           VERSION: ${{ inputs.version }}

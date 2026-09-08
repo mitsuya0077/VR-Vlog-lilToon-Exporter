@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.7.3
+
+- Automatically bake static UV0 decals, copied decorations and MSDF text with the installed lilToon baker. Check the rendered mesh UV range before flattening decorations and distinguish inactive opaque-layer alpha settings from transparent-layer behavior.
+- Check all selected materials before cloning the avatar and list the actual unsupported settings, affected objects and next steps in a scrollable window. Add material selection and diagnostic-copy buttons.
+- Allow an explicit retry that omits only the listed material layers from temporary export copies. Keep the source assets unchanged and recheck other settings on every retry. Preserve the chosen avatar, destination and settings while the confirmation window is open.
+- Reject non-VRM output paths before generating data or asking to overwrite a file.
+
 ## 0.7.2
 
 - Fix CS1503 compilation errors in the shipped Editor tests by testing integer set membership through `HashSet.Contains` and boolean NUnit constraints. This removes the incompatible `Does.Not.Contain(int)` calls that blocked Unity after installing 0.7.1.
