@@ -18,7 +18,7 @@ listing = json.loads((root / "source.json").read_text(encoding="utf-8"))
 
 assert package["name"] == "com.vrvlog.liltoon-vrm-exporter"
 assert package["unity"] == "2022.3"
-assert package["version"] == "0.8.0"
+assert package["version"] == "0.8.1"
 assert one_click.index("AvatarBaseShape.Preserve(source, clone,") < one_click.index("Vrm10Exporter.Export(")
 assert "foreach (var mesh in temporaryMeshes) UnityEngine.Object.DestroyImmediate(mesh);" in one_click
 assert package["vpmDependencies"] == {
@@ -190,7 +190,7 @@ assert one_click.index("VrChatExpressionBaker.Bake(source, clone,") < one_click.
 assert one_click.index("VrChatExpressionBaker.Bake(source, clone,") < one_click.index("SkinnedMeshFallbackWeights.Preserve(clone,") < one_click.index("NdmfExportPreparation.Prepare(source, clone,")
 assert one_click.index("NdmfExportPreparation.Prepare(source, clone,") < one_click.rindex("SkinnedMeshFallbackWeights.Preserve(clone,") < one_click.index("Vrm10Exporter.Export(")
 assert one_click.count("SkinnedMeshFallbackWeights.Preserve(clone, temporaryMeshes, warnings, fixedRootJoints)") == 2
-assert "new ExportAttachmentSession(source, clone, reviewConnectedAttachments, fixedRootJoints)" in one_click
+assert "new ExportAttachmentSession(source, clone, fixedRootJoints: fixedRootJoints)" in one_click
 assert one_click.index("Vrm10Exporter.Export(") < one_click.index("ExportSkinRoots.Repair(exported,")
 assert "new MobileTextureSerializer(warnings)" in one_click
 assert "UnityEngine.Object.Instantiate(source)" in one_click
@@ -261,8 +261,7 @@ assert 'OutlineWidthMultiplyTexture = outlineEnabled ? Texture(source, "_Outline
 assert 'private string author = "";' in window
 assert 'private string avatarName = "";' not in window
 assert 'UniVrmOneClickExporter.Export(targetAvatar, targetName, targetAuthor, warnings, targetSharedEmission,' in window
-assert 'PackageVersion(), RequireSupportedLilToon(), targetHdrEmission, targetExclusions, bakeOptions,' in window
-assert 'session => AttachmentPreviewWindow.Review(session, warnings), targetAttachmentReview)' in window
+assert 'PackageVersion(), RequireSupportedLilToon(), targetHdrEmission, targetExclusions, bakeOptions);' in window
 assert 'var targetOutput = outputPath;' in window
 assert 'var targetExclusions = excludedObjects.ToArray();' in window
 assert 'ExportFailureWindow.Show(exception, omitAndRetry)' in window

@@ -1,7 +1,6 @@
 using System;
 using System.Collections.Generic;
 using System.Linq;
-using System.Reflection;
 using System.Threading.Tasks;
 using NUnit.Framework;
 using UniGLTF;
@@ -285,50 +284,6 @@ namespace VRVlog.LilToonExporter.Tests
             }
         }
 
-        [Test]
-        public void PreviewBuildsOnlyRenderComponentsAndCleansItsSceneWithoutTouchingSource()
-        {
-            using var f = new Fixture();
-            var window = ScriptableObject.CreateInstance<AttachmentPreviewWindow>();
-            var type = typeof(AttachmentPreviewWindow);
-            var flags = BindingFlags.Instance | BindingFlags.NonPublic;
-            var scene = f.Source.scene;
-            var beforeRoots = scene.GetRootGameObjects();
-            var dirty = scene.isDirty;
-            GameObject preview = null;
-            try
-            {
-                var review = new ExportAttachmentSession(f.Source, f.Copy);
-                type.GetField("session", flags).SetValue(window, review);
-                type.GetField("choices", flags).SetValue(window, new int[review.Parts.Count]);
-                type.GetMethod("InitializePreview", flags).Invoke(window, null);
-                preview = (GameObject)type.GetField("previewCopy", flags).GetValue(window);
-                Assert.That(preview.scene, Is.Not.EqualTo(scene));
-                Assert.That(preview.GetComponentsInChildren<MonoBehaviour>(true).Length, Is.Zero);
-                Assert.That(preview.GetComponentsInChildren<Animator>(true).Length, Is.Zero);
-                Assert.That(preview.GetComponentsInChildren<SkinnedMeshRenderer>().All(s => s.sharedMesh == f.Mesh), Is.True);
-                Assert.That(f.Hair.parent, Is.SameAs(f.Copy.transform));
-                Assert.That(scene.GetRootGameObjects(), Is.EquivalentTo(beforeRoots));
-                Assert.That(scene.isDirty, Is.EqualTo(dirty));
-            }
-            finally { Object.DestroyImmediate(window); }
-            Assert.That(preview == null, Is.True);
-        }
-
-        [Test]
-        public void ModalWaitDisablesPreparedCopyAndRestoresItWhenCanceled()
-        {
-            using var f = new Fixture();
-            Assert.Throws<OperationCanceledException>(() => AttachmentPreviewWindow.WhileCopyInactive(f.Copy, () =>
-            {
-                Assert.That(f.Copy.activeInHierarchy, Is.False);
-                Assert.That(f.Source.activeInHierarchy, Is.True);
-                throw new OperationCanceledException();
-            }));
-            Assert.That(f.Copy.activeSelf, Is.True);
-            Assert.That(f.Source.activeSelf, Is.True);
-        }
-
         [TestCase(0)]
         [TestCase(1)]
         [TestCase(2)]
@@ -417,6 +372,81 @@ namespace VRVlog.LilToonExporter.Tests
             finally
             {
                 if (imported != null) Object.DestroyImmediate(imported.gameObject);
+            }
+        }
+
+        [TestCase(false)]
+        [TestCase(true)]
+        public async Task OneClickExportsRootLevelMaHairWithoutManualConnectionEvenWithIndependentPet(bool includePet)
+        {
+            var proxyType = AppDomain.CurrentDomain.GetAssemblies().Select(a => a.GetType("nadena.dev.modular_avatar.core.ModularAvatarBoneProxy")).FirstOrDefault(t => t != null);
+            var markerType = AppDomain.CurrentDomain.GetAssemblies().Select(a => a.GetType("nadena.dev.ndmf.runtime.components.NDMFAvatarRoot")).FirstOrDefault(t => t != null);
+            if (proxyType == null || markerType == null) Assert.Ignore("Requires installed Modular Avatar and NDMF in Unity.");
+            using var f = new Fixture();
+            f.Source.AddComponent(markerType);
+            var sourceHair = f.Source.transform.Find("Independent hair");
+            var sourceHead = f.Source.GetComponent<Animator>().GetBoneTransform(HumanBodyBones.Head);
+            var proxy = sourceHair.gameObject.AddComponent(proxyType);
+            proxyType.GetProperty("target").SetValue(proxy, sourceHead);
+            var mode = proxyType.GetField("attachmentMode");
+            mode.SetValue(proxy, Enum.Parse(mode.FieldType, "AsChildKeepWorldPose"));
+            Mesh petMesh = null;
+            var shader = Shader.Find("lilToon");
+            if (shader == null) Assert.Ignore("Requires installed lilToon for the full exporter entry point.");
+            var exportMaterial = new Material(shader);
+            foreach (var skin in f.Source.GetComponentsInChildren<SkinnedMeshRenderer>())
+                skin.sharedMaterials = new[] { exportMaterial };
+            Vrm10Instance imported = null;
+            try
+            {
+                if (includePet)
+                {
+                    var pet = new GameObject("Independent pet").transform;
+                    pet.SetParent(f.Source.transform, false);
+                    pet.localPosition = new Vector3(1.2f, .2f, 0f);
+                    var renderer = pet.gameObject.AddComponent<SkinnedMeshRenderer>();
+                    petMesh = Object.Instantiate(f.Mesh);
+                    petMesh.bindposes = new[] { Matrix4x4.identity };
+                    renderer.sharedMesh = petMesh;
+                    renderer.bones = new[] { pet };
+                    renderer.rootBone = pet;
+                    renderer.sharedMaterials = f.Source.GetComponentInChildren<SkinnedMeshRenderer>().sharedMaterials;
+                }
+                var sourceBefore = f.Source.GetComponentsInChildren<Transform>(true).Select(t => t.localToWorldMatrix).ToArray();
+                var warnings = new List<string>();
+                // Use the same complete entry point as the window: no target
+                // selection callback, preview, or manual Attach call.
+                var bytes = UniVrmOneClickExporter.Export(f.Source, "Automatic MA hair", "Test", warnings);
+                Assert.That(sourceHair.parent, Is.SameAs(f.Source.transform));
+                Assert.That(f.Source.GetComponentsInChildren<Transform>(true).Select(t => t.localToWorldMatrix), Is.EqualTo(sourceBefore));
+                Assert.That(f.Source.transform.Find("Front").GetComponent<SkinnedMeshRenderer>().sharedMesh, Is.SameAs(f.Mesh));
+                Assert.That(warnings.Any(w => w.Contains("Independent pet")), Is.EqualTo(includePet));
+                imported = await Vrm10.LoadBytesAsync(bytes, canLoadVrm0X: false, awaitCaller: new ImmediateCaller());
+                imported.Runtime.Process();
+                var skins = imported.GetComponentsInChildren<SkinnedMeshRenderer>();
+                var hairSkins = skins.Where(skin => skin.name == "Front" || skin.name == "Back").ToArray();
+                Assert.That(hairSkins.Length, Is.EqualTo(2));
+                var before = hairSkins.ToDictionary(skin => skin, WorldVertices);
+                var petSkin = skins.FirstOrDefault(skin => skin.name == "Independent pet");
+                var petBefore = petSkin != null ? WorldVertices(petSkin) : null;
+                Assert.That(petSkin != null, Is.EqualTo(includePet));
+                Assert.That(imported.TryGetBoneTransform(HumanBodyBones.Head, out var originalHead), Is.True);
+                var matrix = originalHead.localToWorldMatrix;
+                imported.Runtime.ControlRig.GetBoneTransform(HumanBodyBones.Head).localRotation = Quaternion.Euler(12, 40, 0);
+                imported.Runtime.Process();
+                var delta = originalHead.localToWorldMatrix * matrix.inverse;
+                foreach (var skin in hairSkins)
+                {
+                    AssertVertices(before[skin].Select(delta.MultiplyPoint3x4).ToArray(), WorldVertices(skin));
+                    Assert.That(skin.sharedMesh.blendShapeCount, Is.EqualTo(1));
+                }
+                if (petSkin != null) AssertVertices(petBefore, WorldVertices(petSkin));
+            }
+            finally
+            {
+                if (imported != null) Object.DestroyImmediate(imported.gameObject);
+                if (petMesh != null) Object.DestroyImmediate(petMesh);
+                Object.DestroyImmediate(exportMaterial);
             }
         }
 
