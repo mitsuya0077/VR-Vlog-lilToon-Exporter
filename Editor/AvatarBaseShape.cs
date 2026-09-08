@@ -8,10 +8,12 @@ namespace VRVlog.LilToonExporter
     // authored rest face in geometry, with morphs relative to that rest face.
     internal static class AvatarBaseShape
     {
-        internal static void Preserve(GameObject source, GameObject clone, ICollection<Mesh> temporaryMeshes, ICollection<string> warnings)
+        internal static void Preserve(GameObject source, GameObject clone, ICollection<Mesh> temporaryMeshes, ICollection<string> warnings,
+            Func<Transform, bool> excluded = null)
         {
             foreach (var renderer in ExportRendererSelection.Enumerate(source))
             {
+                if (excluded?.Invoke(renderer.transform) == true) continue;
                 if (!(renderer is SkinnedMeshRenderer skin) || skin.sharedMesh == null) continue;
                 var mesh = skin.sharedMesh;
                 var weights = new float[mesh.blendShapeCount];

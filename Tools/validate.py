@@ -18,7 +18,7 @@ listing = json.loads((root / "source.json").read_text(encoding="utf-8"))
 
 assert package["name"] == "com.vrvlog.liltoon-vrm-exporter"
 assert package["unity"] == "2022.3"
-assert package["version"] == "0.7.0"
+assert package["version"] == "0.7.1"
 assert one_click.index("AvatarBaseShape.Preserve(source, clone,") < one_click.index("Vrm10Exporter.Export(")
 assert "foreach (var mesh in temporaryMeshes) UnityEngine.Object.DestroyImmediate(mesh);" in one_click
 assert package["vpmDependencies"] == {
@@ -221,7 +221,10 @@ assert "Generate listing from a local release fixture" in listing_workflow
 assert "--package-listing-source-folder" in listing_workflow
 assert 'test -s "$fixture/output/index.json"' in listing_workflow
 assert "3b99078d26b362733ad9bf463f98c83b8a1b4c9f" in release_workflow
-assert f"default: {package['version']}" in release_workflow
+# Unreleased previews do not update the manual stable-release default. The
+# workflow separately requires its requested version to equal package.json.
+if "-" not in package["version"]:
+    assert f"default: {package['version']}" in release_workflow
 assert '--target "${GITHUB_SHA}"' in release_workflow
 assert 'os.environ["UNIVRM_VERSION"] == "0.131.0"' in release_workflow
 assert 'tag v${VERSION} already exists' in release_workflow
@@ -248,9 +251,11 @@ assert "HasPortableOutline(source)" in one_click
 assert 'OutlineWidthMultiplyTexture = outlineEnabled ? Texture(source, "_OutlineTex")' not in one_click
 assert 'private string author = "";' in window
 assert 'private string avatarName = "";' not in window
-assert 'UniVrmOneClickExporter.Export(avatar, AvatarName(), author, warnings, suppressSharedTextureEmission)' in window
+assert 'UniVrmOneClickExporter.Export(avatar, AvatarName(), author, warnings, suppressSharedTextureEmission,' in window
+assert 'PackageVersion(), RequireSupportedLilToon(), suppressHdrTextureEmission, excludedObjects)' in window
+assert 'LilToonGlbExtension.Inject(exported, clone,' in one_click
 assert 'excludedExpressions' not in window and 'DrawExpressions' not in window
-assert 'var menu = VrChatExpressionSampler.Analyze(source);' in one_click
+assert 'var menu = VrChatExpressionSampler.Analyze(source, exclusions.ContainsPath);' in one_click
 assert one_click.index('AvatarBaseShape.Preserve(source, clone,') < one_click.index('VrChatExpressionBaker.Bake(') < one_click.index('Vrm10Exporter.Export(')
 assert 'VrmMenuExpressions.Add(exported, expressions)' in one_click
 assert 'return avatar != null && !string.IsNullOrWhiteSpace(avatar.name) ? avatar.name.Trim() : "avatar";' in window

@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.7.1 (unreleased)
+
+- Bake static UV0 main-color layers and tone correction with the installed lilToon baker, then share the prepared image between MToon and the optional lilToon extension. Reject unsupported layer configurations instead of silently losing the layer.
+- Add an opt-out setting for suppressing HDR texture emission that remains on a different image after baking. Apply the policy only to temporary export materials.
+- Read saved FaceEmo registered patterns and their authored expression clips directly, including separate scene launchers linked to the selected avatar, interleaved group order and trigger endpoints. VRChat condition evaluation and tracking-control settings are not reproduced.
+- Allow explicit pet/gimmick exclusions on the temporary export copy. Protect humanoid and retained mesh bones; omit excluded animation channels before face validation; prune dependent VRM spring, constraint, first-person and expression references without changing shared assets.
+- Downsample large baked layers proportionally to the mobile 2048-pixel limit, accounting for blend and adjustment masks.
+- Add Editor tests for layer color/encoding, source preservation, FaceEmo registration and exclusions. See the release verification checklist for Unity GPU and device validation, which remain separate from host tests. Application-side framing requires the companion app fix.
+
 ## 0.7.0
 
 - Keep changing BlendShape AnimationClips as named animated expressions instead of dropping them as non-constant. Export their first pose as an ordinary VRM custom expression and preserve all curve keys, weighted/stepped tangents, curve wrapping and clip looping in the optional `VRVLOG_expression_animations` extension for VR Vlog playback.

@@ -12,7 +12,9 @@ namespace VRVlog.LilToonExporter
     {
         internal const string SupportedUniVrmSeries = "0.131";
 
-        public static byte[] Export(GameObject source, string avatarName, string author, ICollection<string> warnings = null, bool suppressSharedTextureEmission = true)
+        public static byte[] Export(GameObject source, string avatarName, string author, ICollection<string> warnings = null, bool suppressSharedTextureEmission = true,
+            string exporterVersion = null, string lilToonVersion = null, bool suppressHdrTextureEmission = true,
+            IEnumerable<GameObject> excludedObjects = null)
         {
             if (source == null) throw new ArgumentNullException(nameof(source));
             // Cloning detaches the avatar from its parents. Reject an inactive
@@ -22,9 +24,11 @@ namespace VRVlog.LilToonExporter
             if (string.IsNullOrWhiteSpace(author)) throw new InvalidOperationException("作者名を入力してください。");
 
             EnsureUniVrmVersion();
+            using var exclusions = new ExportObjectExclusions(source, excludedObjects);
             // Re-read the live assets on every export; a preview is never a stale
             // cached source of expression weights after the user edits a clip.
-            var menu = VrChatExpressionSampler.Analyze(source);
+            var menu = VrChatExpressionSampler.Analyze(source, exclusions.ContainsPath);
+            exclusions.FilterExpressions(menu, warnings);
             var clone = UnityEngine.Object.Instantiate(source);
             clone.name = source.name;
             var temporaryMaterials = new List<Material>();
@@ -32,8 +36,12 @@ namespace VRVlog.LilToonExporter
             var temporaryTextures = new List<Texture2D>();
             try
             {
-                AvatarBaseShape.Preserve(source, clone, temporaryMeshes, warnings);
+                AvatarBaseShape.Preserve(source, clone, temporaryMeshes, warnings, exclusions.Contains);
                 var expressions = VrChatExpressionBaker.Bake(source, clone, menu, temporaryMeshes, warnings);
+                exclusions.Apply(clone, warnings);
+                LilToonMainTextureBaker.Prepare(clone, temporaryMaterials, temporaryTextures, warnings, suppressSharedTextureEmission, suppressHdrTextureEmission);
+                var preparedMaterials = new Dictionary<Renderer, Material[]>();
+                foreach (var renderer in ExportRendererSelection.Enumerate(clone)) preparedMaterials.Add(renderer, renderer.sharedMaterials);
                 ReplaceLilToonMaterials(clone, temporaryMaterials, temporaryTextures, warnings, suppressSharedTextureEmission);
                 var exported = Vrm10Exporter.Export(
                     new GltfExportSettings(),
@@ -41,7 +49,16 @@ namespace VRVlog.LilToonExporter
                     materialExporter: new BuiltInVrm10MaterialExporter(),
                     textureSerializer: new EditorTextureSerializer(),
                     vrmMeta: CreateMeta(avatarName.Trim(), author.Trim()));
-                return VrmExpressionBindings.AddMissing(VrmMenuExpressions.Add(exported, expressions), warnings);
+                exported = VrmExpressionBindings.AddMissing(VrmMenuExpressions.Add(exported, expressions), warnings);
+                if (exporterVersion != null)
+                {
+                    // Inject from the same prepared materials, while their baked
+                    // images are alive. Re-reading source assets here would undo
+                    // the bake in apps that enable the lilToon extension.
+                    foreach (var pair in preparedMaterials) pair.Key.sharedMaterials = pair.Value;
+                    exported = LilToonGlbExtension.Inject(exported, clone, exporterVersion, lilToonVersion, warnings, suppressSharedTextureEmission);
+                }
+                return exported;
             }
             finally
             {

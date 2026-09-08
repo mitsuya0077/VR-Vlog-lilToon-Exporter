@@ -15,7 +15,7 @@ namespace VRVlog.LilToonExporter
     // state behaviours, retained WD-Off values or additional Animator layers.
     internal static class VrChatGestureExpressions
     {
-        internal static void Add(GameObject avatar, VrChatExpressionMenu.Source source)
+        internal static void Add(GameObject avatar, VrChatExpressionMenu.Source source, Func<string, bool> excludedPath = null)
         {
             var runtime = source.Controller;
             var controller = runtime as AnimatorController;
@@ -48,9 +48,9 @@ namespace VRVlog.LilToonExporter
                 try
                 {
                     if (clip == null) throw new InvalidOperationException("ジェスチャーのBlendTreeは単体の固定表情アニメーションではないため省略しました。");
-                    var bindings = AnimationUtility.GetCurveBindings(clip);
+                    var bindings = AnimationUtility.GetCurveBindings(clip).Where(b => excludedPath?.Invoke(b.path) != true).ToArray();
                     if (!bindings.Any(IsMorph)) continue; // Hand/bone motions are not facial expressions.
-                    entry.Values.AddRange(ReadPose(avatar, clip));
+                    entry.Values.AddRange(ReadPose(avatar, clip, excludedPath));
                     foreach (var binding in bindings)
                     {
                         var curve = ReadCurve(AnimationUtility.GetEditorCurve(clip, binding));
@@ -180,13 +180,14 @@ namespace VRVlog.LilToonExporter
             return motion != null || parent < 0 ? motion : EffectiveMotion(controller, state, parent);
         }
 
-        internal static List<VrChatExpressionMenu.MorphValue> ReadPose(GameObject avatar, AnimationClip clip)
+        internal static List<VrChatExpressionMenu.MorphValue> ReadPose(GameObject avatar, AnimationClip clip, Func<string, bool> excludedPath = null)
         {
-            if (AnimationUtility.GetObjectReferenceCurveBindings(clip).Length > 0)
+            if (AnimationUtility.GetObjectReferenceCurveBindings(clip).Any(b => excludedPath?.Invoke(b.path) != true))
                 throw new InvalidOperationException("マテリアル・オブジェクトの差し替えを含む表情アニメーションは未対応です。");
             var result = new List<VrChatExpressionMenu.MorphValue>();
             foreach (var binding in AnimationUtility.GetCurveBindings(clip))
             {
+                if (excludedPath?.Invoke(binding.path) == true) continue;
                 if (!IsMorph(binding)) throw new InvalidOperationException("BlendShape以外の変化を含む表情アニメーションです: " + binding.propertyName);
                 var curve = AnimationUtility.GetEditorCurve(clip, binding);
                 if (curve == null) throw new InvalidOperationException("表情アニメーションの曲線を読み取れません: " + clip.name);
