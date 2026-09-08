@@ -122,6 +122,61 @@ namespace VRVlog.LilToonExporter.Tests
             finally { Object.DestroyImmediate(clone); Object.DestroyImmediate(source); foreach (var mesh in owned) Object.DestroyImmediate(mesh); Object.DestroyImmediate(original); }
         }
 
+        [TestCase(false)]
+        [TestCase(true)]
+        public void ExcludedRulesCannotChangeRetainedAppearanceAndSimulatorOverridesStillMap(bool disableKeptRule)
+        {
+            var marker=TypeNamed("nadena.dev.ndmf.runtime.components.NDMFAvatarRoot");
+            if(marker==null || TypeNamed("nadena.dev.modular_avatar.core.ModularAvatarShapeChanger")==null) Assert.Ignore("Install MA/NDMF.");
+            var source=new GameObject("Avatar"); source.AddComponent(marker);
+            var face=new GameObject("Face"); face.transform.SetParent(source.transform,false);
+            var skin=face.AddComponent<SkinnedMeshRenderer>();
+            var mesh=BaseShapeFixture.Create(); skin.sharedMesh=mesh; skin.SetBlendShapeWeight(0,25);
+            var material=new Material(Shader.Find("Hidden/VRVlogTests/lilToon"));
+            var replacement=new Material(material); replacement.SetColor("_Color",Color.red); skin.sharedMaterial=material;
+            AddRule(source,"ModularAvatarShapeChanger","Shapes","ChangedShape",face,("ShapeName","Face size"),("ChangeType",1),("Value",50f));
+            var kept=source.transform.Find("ModularAvatarShapeChanger").gameObject;
+            var omitted=new GameObject("Excluded gimmick"); omitted.transform.SetParent(source.transform,false);
+            AddRule(omitted,"ModularAvatarShapeChanger","Shapes","ChangedShape",face,("ShapeName","Face size"),("ChangeType",1),("Value",75f));
+            AddRule(omitted,"ModularAvatarMaterialSetter","Objects","MaterialSwitchObject",face,("Material",replacement),("MaterialIndex",0));
+            AddRule(omitted,"ModularAvatarObjectToggle","Objects","ToggledObject",face,("Active",false));
+            var simulator=TypeNamed("nadena.dev.modular_avatar.core.editor.Simulator.ROSimulator");
+            var published=simulator.GetField("PropertyOverrides").GetValue(null);
+            var valueProperty=published.GetType().GetProperty("Value");
+            var previous=valueProperty.GetValue(published);
+            var clone=Object.Instantiate(source); var owned=new List<Mesh>();
+            try
+            {
+                if(disableKeptRule)
+                {
+                    var analyzer=TypeNamed("nadena.dev.modular_avatar.core.editor.ReactiveObjectAnalyzer")
+                        .GetConstructor(new[]{TypeNamed("nadena.dev.ndmf.preview.ComputeContext")}).Invoke(new object[]{null});
+                    var key=analyzer.GetType().GetMethod("GetGameObjectStateProperty").Invoke(analyzer,new object[]{kept});
+                    var dictionary=previous ?? analyzer.GetType().GetProperty("ForcePropertyOverrides").GetValue(analyzer);
+                    valueProperty.SetValue(published,dictionary.GetType().GetMethod("SetItem").Invoke(dictionary,new[]{key,(object)0f}));
+                }
+                using var exclusions=new ExportObjectExclusions(source,new[]{omitted});
+                MaAppearanceSnapshot.Apply(source,clone,owned,exclusions);
+                using(NdmfExportPreparation.Prepare(source,clone))
+                {
+                    var prepared=clone.GetComponentInChildren<SkinnedMeshRenderer>();
+                    Assert.That(prepared,Is.Not.Null,"Excluded toggle must not hide retained face.");
+                    Assert.That(prepared.GetBlendShapeWeight(0),Is.EqualTo(disableKeptRule?25:50));
+                    Assert.That(prepared.sharedMaterial.GetColor("_Color"),Is.EqualTo(material.GetColor("_Color")));
+                    Assert.That(clone.transform.Find("Excluded gimmick"),Is.Null);
+                }
+                Assert.That(skin.GetBlendShapeWeight(0),Is.EqualTo(25));
+                Assert.That(face.activeSelf,Is.True); Assert.That(omitted,Is.Not.Null);
+            }
+            finally
+            {
+                valueProperty.SetValue(published,previous);
+                Object.DestroyImmediate(clone); Object.DestroyImmediate(source);
+                foreach(var item in owned) Object.DestroyImmediate(item);
+                Object.DestroyImmediate(mesh); Object.DestroyImmediate(material); Object.DestroyImmediate(replacement);
+            }
+        }
+
         static VrChatExpressionMenu.Source Menu()
         {
             var menu = new VrChatExpressionMenu.Source();
@@ -131,7 +186,7 @@ namespace VRVlog.LilToonExporter.Tests
             return menu;
         }
         static Type TypeNamed(string name) => AppDomain.CurrentDomain.GetAssemblies().Select(a => a.GetType(name, false)).FirstOrDefault(t => t != null);
-        static void AddRule(GameObject root, string componentName, string listName, string itemName, GameObject target, params (string name, object value)[] values)
+        internal static void AddRule(GameObject root, string componentName, string listName, string itemName, GameObject target, params (string name, object value)[] values)
         {
             const string prefix = "nadena.dev.modular_avatar.core.";
             var node = new GameObject(componentName); node.transform.SetParent(root.transform, false);

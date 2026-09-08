@@ -39,8 +39,7 @@ namespace VRVlog.LilToonExporter
             try
             {
                 var expressionBindings = new PreparedExpressionBindings(clone, menu);
-                MaAppearanceSnapshot.Apply(source, clone, temporaryMeshes);
-                exclusions.Apply(clone, warnings);
+                MaAppearanceSnapshot.Apply(source, clone, temporaryMeshes, exclusions, warnings);
                 LilToonMainTextureBaker.ValidateAvatar(clone, options: bakeOptions);
                 // Omission consent follows source identity before plugins clone
                 // materials. All actual baking waits for the final appearance.
@@ -68,14 +67,15 @@ namespace VRVlog.LilToonExporter
                         string.Join(", ", attachments.Parts.ConvertAll(part => part.Root.name)));
                 var preparedMaterials = new Dictionary<Renderer, Material[]>();
                 foreach (var renderer in ExportRendererSelection.Enumerate(clone)) preparedMaterials.Add(renderer, renderer.sharedMaterials);
-                ReplaceLilToonMaterials(clone, temporaryMaterials, temporaryTextures, warnings, suppressSharedTextureEmission);
+                var fallbackMaterials = ReplaceLilToonMaterials(clone, temporaryMaterials, temporaryTextures, warnings, suppressSharedTextureEmission);
+                var fallbackIndices = new Dictionary<Material, int>();
                 MakeRendererMeshesUnique(clone, temporaryMeshes);
                 var exported = Vrm10AppearanceExporter.Export(
                     new GltfExportSettings { ExportVertexColor = true },
                     clone,
                     materialExporter: new BuiltInVrm10MaterialExporter(),
                     textureSerializer: new MobileTextureSerializer(warnings),
-                    vrmMeta: CreateMeta(avatarName.Trim(), author.Trim()));
+                    vrmMeta: CreateMeta(avatarName.Trim(), author.Trim()), materialIndices: fallbackIndices);
                 exported = ExportSkinRoots.Repair(exported, warnings);
                 exported = VrmExpressionBindings.AddMissing(VrmMenuExpressions.Add(exported, expressions), warnings);
                 if (exporterVersion != null)
@@ -84,7 +84,9 @@ namespace VRVlog.LilToonExporter
                     // images are alive. Re-reading source assets here would undo
                     // the bake in apps that enable the lilToon extension.
                     foreach (var pair in preparedMaterials) pair.Key.sharedMaterials = pair.Value;
-                    exported = LilToonGlbExtension.Inject(exported, clone, exporterVersion, lilToonVersion, warnings, suppressSharedTextureEmission);
+                    var preparedIndices = new Dictionary<Material, int>();
+                    foreach (var pair in fallbackMaterials) preparedIndices.Add(pair.Key, fallbackIndices[pair.Value]);
+                    exported = LilToonGlbExtension.Inject(exported, clone, exporterVersion, lilToonVersion, warnings, suppressSharedTextureEmission, preparedIndices);
                 }
                 return exported;
             }
@@ -144,7 +146,7 @@ namespace VRVlog.LilToonExporter
             };
         }
 
-        private static void ReplaceLilToonMaterials(GameObject clone, List<Material> created, List<Texture2D> textures, ICollection<string> warnings, bool suppressSharedTextureEmission)
+        private static Dictionary<Material, Material> ReplaceLilToonMaterials(GameObject clone, List<Material> created, List<Texture2D> textures, ICollection<string> warnings, bool suppressSharedTextureEmission)
         {
             var converted = new Dictionary<Material, Material>();
             // Shared masks are converted once per export and owned until all
@@ -169,6 +171,7 @@ namespace VRVlog.LilToonExporter
                 if (changed) renderer.sharedMaterials = materials;
             }
             if (converted.Count == 0) throw new InvalidOperationException("選択したアバターに対応するlilToonマテリアルがありません。");
+            return converted;
         }
 
         internal static Material CreateMToonFallback(Material source, List<Material> created, ICollection<string> warnings, bool suppressSharedTextureEmission = false, List<Texture2D> textures = null, IDictionary<Texture, Texture2D> outlineMasks = null)

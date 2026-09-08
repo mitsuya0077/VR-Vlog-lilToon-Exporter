@@ -6,7 +6,8 @@ namespace VRVlog.LilToonExporter
 {
     internal static class LilToonGlbExtension
     {
-        public static byte[] Inject(byte[] source, GameObject avatar, string exporterVersion, string lilToonVersion, ICollection<string> warnings = null, bool suppressSharedTextureEmission = false)
+        public static byte[] Inject(byte[] source, GameObject avatar, string exporterVersion, string lilToonVersion, ICollection<string> warnings = null, bool suppressSharedTextureEmission = false,
+            IReadOnlyDictionary<Material, int> materialIndices = null)
         {
             if (avatar == null) throw new ArgumentNullException(nameof(avatar));
             var glb = GlbDocument.Read(source);
@@ -26,7 +27,8 @@ namespace VRVlog.LilToonExporter
             foreach (var material in renderer.sharedMaterials)
             {
                 if (!LilToonMaterialReader.IsLilToon(material)) continue;
-                var index = UniqueIndex(materialNames, material.name, "material");
+                var index = materialIndices != null ? materialIndices[material] : UniqueIndex(materialNames, material.name, "material");
+                if (index < 0 || index >= materialNames.Count) throw new InvalidOperationException("Prepared material index is outside the exported VRM.");
                 if (!seen.Add(index)) continue;
                 RequireMToonFallback(glb.Json, index);
                 var record = LilToonMaterialReader.Read(material, index, (texture, semantic) => ResolveTexture(glb, texture, semantic, index, imageNames, textureSources, fallbackTextureCount, addedTextures, warnings, material.GetTexture("_MainTex")), warnings, suppressSharedTextureEmission);

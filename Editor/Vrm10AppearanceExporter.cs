@@ -11,7 +11,8 @@ namespace VRVlog.LilToonExporter
     internal static class Vrm10AppearanceExporter
     {
         internal static byte[] Export(GltfExportSettings settings, GameObject avatar,
-            IMaterialExporter materialExporter, ITextureSerializer textureSerializer, VRM10ObjectMeta vrmMeta)
+            IMaterialExporter materialExporter, ITextureSerializer textureSerializer, VRM10ObjectMeta vrmMeta,
+            IDictionary<Material, int> materialIndices = null)
         {
             using var arrays = new NativeArrayManager();
             var converter = new ModelExporter();
@@ -19,6 +20,10 @@ namespace VRVlog.LilToonExporter
             model.ConvertCoordinate(Coordinates.Vrm1);
             using var exporter = new Vrm10Exporter(settings, materialExporter, textureSerializer);
             exporter.Export(avatar, model, converter, new ExportArgs(), vrmMeta);
+            // Vrm10Exporter emits materials in model.Materials order. Preserve
+            // object identity for extension injection, even with duplicate names.
+            if (materialIndices != null)
+                for (var i = 0; i < model.Materials.Count; i++) materialIndices.Add((Material)model.Materials[i], i);
             if (settings.ExportVertexColor) PreserveVertexColors(model, exporter.Storage);
             return exporter.Storage.ToGlbBytes();
         }
