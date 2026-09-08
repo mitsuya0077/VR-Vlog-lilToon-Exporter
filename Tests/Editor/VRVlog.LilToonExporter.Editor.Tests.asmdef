@@ -1,7 +1,7 @@
 {
   "name": "VRVlog.LilToonExporter.Editor.Tests",
   "rootNamespace": "VRVlog.LilToonExporter.Tests",
-  "references": ["VRVlog.LilToonExporter.Editor", "VRM10"],
+  "references": ["VRVlog.LilToonExporter.Editor", "VRM10", "UniGLTF", "VrmLib"],
   "includePlatforms": ["Editor"],
   "optionalUnityReferences": ["TestAssemblies"],
   "autoReferenced": false

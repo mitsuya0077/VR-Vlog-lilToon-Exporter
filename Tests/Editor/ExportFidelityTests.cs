@@ -141,8 +141,8 @@ namespace VRVlog.LilToonExporter.Tests
                 material.SetColor("_Color2nd", Color.green);
                 var warnings = new List<string>();
                 LilToonMainTextureBaker.Bake(material, baked, warnings);
-                Assert.That(baked.Single().width, Is.EqualTo(LilToonMobileProfile.MaximumTextureSize));
-                Assert.That(baked.Single().height, Is.EqualTo(2));
+                Assert.That(baked.Single().width, Is.EqualTo(LilToonMobileProfile.DefaultMaximumTextureSize));
+                Assert.That(baked.Single().height, Is.EqualTo(1));
                 Assert.That(baked.Single().GetPixel(0, 0).g, Is.GreaterThan(0.98f));
                 Assert.That(original.GetPixel(0, 0), Is.EqualTo(Color.red));
                 Assert.That(warnings.Any(w => w.Contains("縮小")), Is.True);

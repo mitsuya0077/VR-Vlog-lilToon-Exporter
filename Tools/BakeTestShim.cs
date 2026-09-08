@@ -280,6 +280,6 @@ namespace VRVlog.LilToonExporter
         internal static bool IsSuppressed(UnityEngine.Material material, bool enabled) => false;
         internal static bool HasHdrTextureEmission(UnityEngine.Material material) => false;
     }
-    internal static class LilToonMobileProfile { internal const int MaximumTextureSize = 2048; }
+    internal static class LilToonMobileProfile { internal const int MaximumTextureSize = 2048; internal const int DefaultMaximumTextureSize = 1024; }
 }
 #endif

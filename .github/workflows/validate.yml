@@ -23,3 +23,6 @@ jobs:
       - name: Run material bake preflight checks
         shell: pwsh
         run: ./Tools/run-bake-tests.ps1
+      - name: Run NDMF preparation ownership checks
+        shell: pwsh
+        run: ./Tools/run-ndmf-preparation-tests.ps1

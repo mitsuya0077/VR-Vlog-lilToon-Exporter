@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.7.4
+
+- Apply supported Modular Avatar / NDMF authoring passes to an isolated export copy before VRM serialization, preserving clothing and hair armature attachment. Keep source-based FaceEmo expressions and approved material omissions before preparation; skip the optimization phase and check that export expressions remain present.
+- Automatically downsize output images to a maximum dimension of 1024 pixels, including normal UniVRM serialization, extension-only textures, outline masks and existing fallback VRMs. Preserve aspect ratio, use appropriate color/data filtering, and leave original textures and importer settings unchanged.
+- Preserve implicit zero-weight skinning through an explicit fallback joint measured with Unity's BakeMesh. Verify vertices, normals and tangents before accepting the conversion, retain morph frames and existing influences, and preserve references to the otherwise omitted avatar-root joint.
+- Repair glTF skin-root ancestry metadata without changing mesh data or Unity bounds anchors such as AutoAnchorObject.
+
 ## 0.7.3
 
 - Automatically bake static UV0 decals, copied decorations and MSDF text with the installed lilToon baker. Check the rendered mesh UV range before flattening decorations and distinguish inactive opaque-layer alpha settings from transparent-layer behavior.

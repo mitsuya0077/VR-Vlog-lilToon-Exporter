@@ -80,9 +80,13 @@ modified. The old existing-fallback workflow remains under **上級者向け：�
 
 Most extension textures reference the already optimized texture indices produced
 by UniVRM. A custom backlight color texture is instead copied into the extension
-as a PNG so it cannot be confused with a same-named fallback texture. This may
-increase the VRM file size. Resize it beforehand when needed (1024 px recommended,
-2048 px maximum for the mobile profile).
+as a PNG so it cannot be confused with a same-named fallback texture. Images are
+automatically resized to a maximum dimension of 1024 pixels while preserving
+aspect ratio. This includes ordinary UniVRM textures, extension-only images,
+outline masks, baked layers, and oversized images in an existing fallback VRM.
+The serializer leaves source importer settings unchanged. Color images use
+alpha-aware linear-light filtering; numeric maps keep their channel values.
+The extension's compatibility validation limit remains 2048 pixels.
 
 ## Supported material subset
 
@@ -183,9 +187,9 @@ VR Vlogでは「表情」から `VRChat / 表情 / 笑顔` などを選べます
 固定BlendShape表情として取り込みません。Parameter Driver・Layer Controlなど、FXに
 VRChat固有の状態処理がある場合も、実際と異なる顔を出さないため自動変換しません。
 Tracking Controlのみの状態処理は許容し、出力表情の追従ブロックで扱います。
-同期Animatorレイヤーは未対応です。Modular Avatar等がビルド時に生成するメニューや
-コントローラーを、この書き出し機能で生成することはありません。Descriptorへ登録済みの
-データを対象にします。Gestureレイヤーだけに実装された表情もFX取り込みの対象外です。
+同期Animatorレイヤーは未対応です。表情の収集は着せ替え処理より前に行い、Descriptorへ
+登録済みのデータと保存済みのFaceEmo設定を対象にします。ビルド時に初めて生成される
+メニューは取り込みません。Gestureレイヤーだけに実装された表情もFX取り込みの対象外です。
 
 メニューは256項目、追加する表情の頂点差分は128 MiBまでです。上限を超える場合は
 エラーにし、途中までのVRMは保存しません。既存VRMには元のVRChatメニューやアニメーションの対応が

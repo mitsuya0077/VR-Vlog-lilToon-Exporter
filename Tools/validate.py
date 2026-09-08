@@ -18,7 +18,7 @@ listing = json.loads((root / "source.json").read_text(encoding="utf-8"))
 
 assert package["name"] == "com.vrvlog.liltoon-vrm-exporter"
 assert package["unity"] == "2022.3"
-assert package["version"] == "0.7.3"
+assert package["version"] == "0.7.4"
 assert one_click.index("AvatarBaseShape.Preserve(source, clone,") < one_click.index("Vrm10Exporter.Export(")
 assert "foreach (var mesh in temporaryMeshes) UnityEngine.Object.DestroyImmediate(mesh);" in one_click
 assert package["vpmDependencies"] == {
@@ -103,8 +103,9 @@ assert 'LilToonMaterialReader.Read(source, 0, (_, __) => 0, warnings, suppressSh
 assert 'var warningText' not in window
 assert 'VrmMenuExpressions.CountRegistered(bytes)' in window
 assert "glb.AppendBinary(png)" in injector
-assert "ImageConversion.EncodeToPNG(copy)" in injector
-assert "RenderTexture.ReleaseTemporary(temporary)" in injector
+texture_encoder = (root / "Editor/MobileTextureEncoder.cs").read_text(encoding="utf-8")
+assert "ImageConversion.EncodeToPNG(destination)" in texture_encoder
+assert "UnityEngine.Object.DestroyImmediate(destination)" in texture_encoder
 assert "addedTextures.TryGetValue" in injector
 assert "fallbackTextureCount" in injector
 assert 'addedTextures.TryGetValue(texture' in injector
@@ -112,7 +113,7 @@ assert injector.index('if(!isBacklight)') < injector.index('addedTextures.TryGet
 assert 'FindTexture(texture.name,imageNames,textureSources,fallbackTextureCount,out var ambiguous)' in injector
 assert 'string.Equals(semantic,"normalMap",StringComparison.Ordinal)' in injector
 assert 'MaterialTexture(glb.Json,materialIndex,"normalTexture")' in injector
-assert injector.index('MaterialTexture(glb.Json,materialIndex,"normalTexture")') < injector.index('var png=EncodePng(source)')
+assert injector.index('MaterialTexture(glb.Json,materialIndex,"normalTexture")') < injector.index('MobileTextureEncoder.EncodeSource(')
 assert 'if(!ambiguous)return existing;' in injector
 assert "同名候補が複数あるため、元画像を直接埋め込みました" in injector
 assert "source.mipmapCount>1" in injector
@@ -184,6 +185,11 @@ assert "using PackageManagerPackageInfo = UnityEditor.PackageManager.PackageInfo
 assert "PackageManagerPackageInfo FindLilToonPackage()" in window
 assert "PackageManagerPackageInfo.GetAllRegisteredPackages()" in window
 assert "Vrm10Exporter.Export" in one_click
+assert one_click.index("NdmfExportPreparation.ValidateSource(source,") < one_click.index("VrChatExpressionSampler.Analyze(source,")
+assert one_click.index("VrChatExpressionBaker.Bake(source, clone,") < one_click.index("NdmfExportPreparation.Prepare(source, clone,")
+assert one_click.index("NdmfExportPreparation.Prepare(source, clone,") < one_click.index("SkinnedMeshFallbackWeights.Preserve(clone,") < one_click.index("Vrm10Exporter.Export(")
+assert one_click.index("Vrm10Exporter.Export(") < one_click.index("ExportSkinRoots.Repair(exported,")
+assert "new MobileTextureSerializer(warnings)" in one_click
 assert "UnityEngine.Object.Instantiate(source)" in one_click
 assert "ReplaceLilToonMaterials(clone" in one_click
 assert "DestroyImmediate(clone)" in one_click
@@ -273,5 +279,7 @@ assert "ValidateAllEncodedTextures(glb, textureSources);" in injector
 assert "materialCount > LilToonMobileProfile.MaximumMaterials" in injector
 assert (root / "Tests/Editor/GlbDocumentTests.cs").is_file()
 assert (root / "Tests/Editor/VRVlog.LilToonExporter.Editor.Tests.asmdef").is_file()
+test_assembly = json.loads((root / "Tests/Editor/VRVlog.LilToonExporter.Editor.Tests.asmdef").read_text(encoding="utf-8"))
+assert {"VRM10", "UniGLTF", "VrmLib"}.issubset(test_assembly["references"])
 
 print("Exporter implementation, package, and schema checks passed.")
