@@ -60,6 +60,73 @@ namespace VRVlog.LilToonExporter.Tests
             Assert.That(new ExportAttachmentSession(f.Source, f.Copy, true).Parts.Any(p => p.Root == f.Hair), Is.True);
         }
 
+        [TestCase(0, false)]
+        [TestCase(0, true)]
+        [TestCase(1, false)]
+        [TestCase(1, true)]
+        [TestCase(2, false)]
+        [TestCase(2, true)]
+        public void GeneratedRootJointsStayFixedWhileSameNamedHairCanBeAttached(int weightMode, bool includeConnected)
+        {
+            using var f = new Fixture();
+            var sourceSkin = f.Source.GetComponentInChildren<SkinnedMeshRenderer>();
+            var sourceBefore = WorldVertices(sourceSkin);
+            var sourceBones = sourceSkin.bones;
+            var sourceWeights = f.Mesh.boneWeights;
+            var sourceBinds = f.Mesh.bindposes;
+            var input = Object.Instantiate(f.Mesh);
+            var owned = new List<Mesh>();
+            var fixedJoints = new HashSet<Transform>();
+            try
+            {
+                var skin = f.Skins[0];
+                skin.sharedMesh = input;
+                skin.rootBone = f.Copy.transform;
+                skin.bones = weightMode == 1 ? Array.Empty<Transform>() : new[] { f.Copy.transform, f.Head };
+                input.bindposes = skin.bones.Select(b => b.worldToLocalMatrix * skin.transform.localToWorldMatrix).ToArray();
+                input.boneWeights = Enumerable.Range(0, input.vertexCount).Select(i =>
+                    weightMode == 1 || (weightMode == 2 && i == 1) ? new BoneWeight() :
+                    new BoneWeight { boneIndex0 = 0, weight0 = 1 }).ToArray();
+                var before = WorldVertices(skin);
+                SkinnedMeshFallbackWeights.Preserve(f.Copy, owned, null, fixedJoints);
+                Assert.That(fixedJoints.Count, Is.EqualTo(weightMode == 2 ? 2 : 1));
+                AssertVertices(before, WorldVertices(skin));
+                // The same identity set survives both sides of authoring preparation.
+                SkinnedMeshFallbackWeights.Preserve(f.Copy, owned, null, fixedJoints);
+                Assert.That(fixedJoints.Count, Is.EqualTo(weightMode == 2 ? 2 : 1));
+                f.Hair.name = fixedJoints.First().name;
+                using (var review = new ExportAttachmentSession(f.Source, f.Copy, includeConnected, fixedJoints))
+                {
+                    Assert.That(review.Parts.Any(p => p.Root == f.Hair), Is.True, "Authored names must not act as a blacklist.");
+                    Assert.That(review.Parts.Any(p => fixedJoints.Any(j => ExportAttachmentSession.Inside(j, p.Root))), Is.False);
+                    foreach (var joint in fixedJoints)
+                        Assert.Throws<InvalidOperationException>(() => review.Attach(joint, f.Head));
+                    // An authoring pass can nest a generated joint under a larger
+                    // branch. Moving that whole branch must not bypass protection.
+                    foreach (var joint in fixedJoints) joint.SetParent(f.Hair, true);
+                    Assert.Throws<InvalidOperationException>(() => review.Attach(f.Hair, f.Head));
+                    using (var nested = new ExportAttachmentSession(f.Source, f.Copy, includeConnected, fixedJoints))
+                        Assert.That(nested.Parts.Any(p => p.Root == f.Hair), Is.False);
+                    foreach (var joint in fixedJoints) joint.SetParent(f.Copy.transform, true);
+                    review.Attach(f.Hair, f.Head);
+                    f.Head.localRotation = Quaternion.Euler(14, 37, -9);
+                    AssertVertices(before, WorldVertices(skin));
+                    Assert.That(fixedJoints.All(j => j.parent == f.Copy.transform), Is.True);
+                }
+                AssertVertices(sourceBefore, WorldVertices(sourceSkin));
+                Assert.That(sourceSkin.bones, Is.EqualTo(sourceBones));
+                Assert.That(sourceSkin.sharedMesh, Is.SameAs(f.Mesh));
+                Assert.That(f.Mesh.boneWeights, Is.EqualTo(sourceWeights));
+                Assert.That(f.Mesh.bindposes, Is.EqualTo(sourceBinds));
+                Assert.That(f.Source.transform.Find("Independent hair"), Is.Not.Null);
+            }
+            finally
+            {
+                foreach (var mesh in owned) Object.DestroyImmediate(mesh);
+                Object.DestroyImmediate(input);
+            }
+        }
+
         [Test]
         public void OriginalExternalAndHumanoidRootsCannotBeReparented()
         {

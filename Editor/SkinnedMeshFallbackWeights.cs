@@ -10,18 +10,20 @@ namespace VRVlog.LilToonExporter
         // Unity uses rootBone to render vertices with no bone weights. glTF has
         // no equivalent implicit influence. Measure that Unity transform on the
         // export copy and encode it as an ordinary, explicit joint influence.
-        internal static void Preserve(GameObject clone, ICollection<Mesh> ownedMeshes, ICollection<string> warnings)
+        internal static void Preserve(GameObject clone, ICollection<Mesh> ownedMeshes, ICollection<string> warnings,
+            ICollection<Transform> fixedRootJoints = null)
         {
             if (ownedMeshes == null) throw new ArgumentNullException(nameof(ownedMeshes));
             foreach (var renderer in ExportRendererSelection.Enumerate(clone))
                 if (renderer is SkinnedMeshRenderer skin && skin.sharedMesh != null)
                 {
-                    RemapOmittedRootJoint(clone.transform, skin, warnings);
-                    Preserve(clone.transform, skin, ownedMeshes, warnings);
+                    RemapOmittedRootJoint(clone.transform, skin, warnings, fixedRootJoints);
+                    Preserve(clone.transform, skin, ownedMeshes, warnings, fixedRootJoints);
                 }
         }
 
-        private static void RemapOmittedRootJoint(Transform root, SkinnedMeshRenderer skin, ICollection<string> warnings)
+        private static void RemapOmittedRootJoint(Transform root, SkinnedMeshRenderer skin, ICollection<string> warnings,
+            ICollection<Transform> fixedRootJoints)
         {
             var bones = skin.bones;
             if (skin.sharedMesh.vertexCount == 0 || bones == null || Array.IndexOf(bones, root) < 0) return;
@@ -42,6 +44,7 @@ namespace VRVlog.LilToonExporter
                 skin.bones = remapped;
                 skin.BakeMesh(after, false);
                 RequireSameGeometry(skin, before, after);
+                fixedRootJoints?.Add(joint.transform);
                 retained = true;
                 warnings?.Add($"{skin.name}: アバターのルートを参照するボーンを、同じ変換の出力用ジョイントに置き換えました。");
             }
@@ -58,7 +61,8 @@ namespace VRVlog.LilToonExporter
             }
         }
 
-        private static void Preserve(Transform root, SkinnedMeshRenderer skin, ICollection<Mesh> ownedMeshes, ICollection<string> warnings)
+        private static void Preserve(Transform root, SkinnedMeshRenderer skin, ICollection<Mesh> ownedMeshes, ICollection<string> warnings,
+            ICollection<Transform> fixedRootJoints)
         {
             var source = skin.sharedMesh;
             if (source.vertexCount == 0) return;
@@ -142,6 +146,7 @@ namespace VRVlog.LilToonExporter
                     RestoreBlendWeights(skin, blendWeights);
                     skin.BakeMesh(after, false);
                     RequireSameGeometry(skin, before, after);
+                    if (rootJoint != null) fixedRootJoints?.Add(rootJoint.transform);
                     ownedMeshes.Add(replacement);
                     completed = true;
                     jointRetained = true;

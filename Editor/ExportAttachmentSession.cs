@@ -22,14 +22,20 @@ namespace VRVlog.LilToonExporter
         internal readonly List<Transform> Targets;
         private readonly HashSet<Transform> humanoid;
         private readonly Dictionary<Transform, Transform[]> constraints;
+        private readonly HashSet<Transform> fixedRootJoints;
         private readonly List<UnityEngine.Object> ownedSettings = new List<UnityEngine.Object>();
 
-        internal ExportAttachmentSession(GameObject source, GameObject copy, bool includeConnected = false)
+        internal ExportAttachmentSession(GameObject source, GameObject copy, bool includeConnected = false,
+            IEnumerable<Transform> fixedRootJoints = null)
         {
             if (source == null || copy == null || source == copy || EditorUtility.IsPersistent(copy) ||
                 copy.transform.IsChildOf(source.transform) || source.transform.IsChildOf(copy.transform))
                 throw new InvalidOperationException("追従の確認には、元アバターから独立した書き出し用コピーが必要です。");
             Copy = copy;
+            // These exact joints preserve authored avatar-root weights. They
+            // are serialization details, not disconnected hair or accessories.
+            this.fixedRootJoints = new HashSet<Transform>((fixedRootJoints ?? Enumerable.Empty<Transform>())
+                .Where(joint => Inside(joint, copy.transform)));
             var animator = copy.GetComponent<Animator>();
             if (animator == null || animator.avatar == null || !animator.avatar.isValid || !animator.avatar.isHuman)
                 animator = null; // A nested pet Animator must not become the main rig.
@@ -68,7 +74,7 @@ namespace VRVlog.LilToonExporter
                     var root = bone;
                     while (root.parent != null && root.parent != Copy.transform &&
                         !humanoid.Any(h => Inside(h, root.parent))) root = root.parent;
-                    if (root != Copy.transform && !humanoid.Any(h => Inside(h, root))) roots.Add(root);
+                    if (root != Copy.transform && !ContainsFixedRootJoint(root) && !humanoid.Any(h => Inside(h, root))) roots.Add(root);
                 }
             foreach (var root in roots.OrderBy(Path, StringComparer.Ordinal))
                 result.Add(new Part
@@ -89,6 +95,8 @@ namespace VRVlog.LilToonExporter
             }
             return false;
         }
+
+        private bool ContainsFixedRootJoint(Transform root) => fixedRootJoints.Any(joint => Inside(joint, root));
 
         internal static Transform[] Influences(Renderer renderer)
         {
@@ -122,6 +130,8 @@ namespace VRVlog.LilToonExporter
                 Inside(target, root) || humanoid.Any(h => Inside(h, root)))
                 throw new InvalidOperationException("追従先または接続範囲が正しくありません。本体の骨を含まないパーツと、コピー内の追従先を指定してください。");
             if (!Targets.Contains(target)) throw new InvalidOperationException("追従先には表示された本体の骨を指定してください。");
+            if (ContainsFixedRootJoint(root))
+                throw new InvalidOperationException(Path(root) + ": アバターのルートに固定された頂点を保つ出力用ジョイントが含まれるため、別の骨には接続できません。");
             BindingPaths(root, target);
             foreach (var pair in constraints)
                 if (Inside(pair.Key, root) && pair.Value.Any(s => !Inside(s, root)))

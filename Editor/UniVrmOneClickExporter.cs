@@ -39,6 +39,7 @@ namespace VRVlog.LilToonExporter
             var temporaryMaterials = new List<Material>();
             var temporaryMeshes = new List<Mesh>();
             var temporaryTextures = new List<Texture2D>();
+            var fixedRootJoints = new HashSet<Transform>();
             try
             {
                 AvatarBaseShape.Preserve(source, clone, temporaryMeshes, warnings, exclusions.Contains);
@@ -52,13 +53,13 @@ namespace VRVlog.LilToonExporter
                 // rigs. Make implicit vertices explicit before those changes so
                 // they participate in the same bindpose preservation as the skin.
                 if (requiresPreparation)
-                    SkinnedMeshFallbackWeights.Preserve(clone, temporaryMeshes, warnings);
+                    SkinnedMeshFallbackWeights.Preserve(clone, temporaryMeshes, warnings, fixedRootJoints);
                 using var preparation = NdmfExportPreparation.Prepare(source, clone, warnings);
                 if (requiresPreparation)
                     LilToonMainTextureBaker.Prepare(clone, temporaryMaterials, temporaryTextures, warnings, suppressSharedTextureEmission, suppressHdrTextureEmission);
                 // Also cover meshes/joints newly created by authoring passes.
-                SkinnedMeshFallbackWeights.Preserve(clone, temporaryMeshes, warnings);
-                using var attachments = new ExportAttachmentSession(source, clone, reviewConnectedAttachments);
+                SkinnedMeshFallbackWeights.Preserve(clone, temporaryMeshes, warnings, fixedRootJoints);
+                using var attachments = new ExportAttachmentSession(source, clone, reviewConnectedAttachments, fixedRootJoints);
                 if (reviewAttachments != null && (attachments.Parts.Count > 0 || reviewConnectedAttachments))
                 {
                     if (!reviewAttachments(attachments)) throw new OperationCanceledException("追従の確認をキャンセルしました。");

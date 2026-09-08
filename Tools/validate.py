@@ -189,6 +189,8 @@ assert one_click.index("NdmfExportPreparation.ValidateSource(source,") < one_cli
 assert one_click.index("VrChatExpressionBaker.Bake(source, clone,") < one_click.index("NdmfExportPreparation.Prepare(source, clone,")
 assert one_click.index("VrChatExpressionBaker.Bake(source, clone,") < one_click.index("SkinnedMeshFallbackWeights.Preserve(clone,") < one_click.index("NdmfExportPreparation.Prepare(source, clone,")
 assert one_click.index("NdmfExportPreparation.Prepare(source, clone,") < one_click.rindex("SkinnedMeshFallbackWeights.Preserve(clone,") < one_click.index("Vrm10Exporter.Export(")
+assert one_click.count("SkinnedMeshFallbackWeights.Preserve(clone, temporaryMeshes, warnings, fixedRootJoints)") == 2
+assert "new ExportAttachmentSession(source, clone, reviewConnectedAttachments, fixedRootJoints)" in one_click
 assert one_click.index("Vrm10Exporter.Export(") < one_click.index("ExportSkinRoots.Repair(exported,")
 assert "new MobileTextureSerializer(warnings)" in one_click
 assert "UnityEngine.Object.Instantiate(source)" in one_click
