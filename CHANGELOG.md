@@ -1,6 +1,10 @@
 # Changelog
 
-## 0.7.1 (unreleased)
+## 0.7.2
+
+- Fix CS1503 compilation errors in the shipped Editor tests by testing integer set membership through `HashSet.Contains` and boolean NUnit constraints. This removes the incompatible `Does.Not.Contain(int)` calls that blocked Unity after installing 0.7.1.
+
+## 0.7.1
 
 - Bake static UV0 main-color layers and tone correction with the installed lilToon baker, then share the prepared image between MToon and the optional lilToon extension. Reject unsupported layer configurations instead of silently losing the layer.
 - Add an opt-out setting for suppressing HDR texture emission that remains on a different image after baking. Apply the policy only to temporary export materials.
