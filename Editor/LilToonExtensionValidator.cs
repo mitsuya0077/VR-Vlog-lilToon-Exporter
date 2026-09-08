@@ -105,7 +105,8 @@ namespace VRVlog.LilToonExporter
             foreach (var item in material.floats)
             {
                 if (item == null || !IsValidName(item.name) ||
-                    !floatNames.Add(item.name) || !IsFinite(item.value))
+                    !floatNames.Add(item.name) || !IsFinite(item.value) ||
+                    (IsAppearanceProperty(item.name) && (schemaMinor < 3 || !ValidAppearanceValue(item.name, item.value))))
                 {
                     error = $"Invalid float property on material {material.materialIndex}.";
                     return false;
@@ -141,7 +142,7 @@ namespace VRVlog.LilToonExporter
             foreach (var item in material.textures)
             {
                 if (item == null || !IsValidName(item.name) ||
-                    !textureNames.Add(item.name) ||
+                    !textureNames.Add(item.name) || (schemaMinor < 3 && IsAppearanceProperty(item.name)) ||
                     item.textureIndex < 0 ||
                     item.textureIndex >= LilToonMobileProfile.MaximumTextures ||
                     string.IsNullOrWhiteSpace(item.semantic) ||
@@ -156,6 +157,15 @@ namespace VRVlog.LilToonExporter
 
             error = "";
             return true;
+        }
+
+        internal static bool IsAppearanceProperty(string name) => name == "_EmissionBlendMode" || name == "_EmissionMainStrength" ||
+            name == "_EmissionFluorescence" || name == "_OutlineVertexR2Width" || name == "_EmissionBlendMask" || name == "_OutlineWidthMask";
+        internal static bool ValidAppearanceValue(string name, float value)
+        {
+            var discrete = name == "_EmissionBlendMode" || name == "_OutlineVertexR2Width";
+            var maximum = name == "_EmissionBlendMode" ? 3 : name == "_OutlineVertexR2Width" ? 2 : 1;
+            return IsFinite(value) && value >= 0 && value <= maximum && (!discrete || value == (int)value);
         }
 
         private static bool IsValidVersion(string version)

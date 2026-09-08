@@ -8,11 +8,13 @@ namespace VRVlog.LilToonExporter
     internal sealed class MaterialBakeIssue
     {
         public readonly Material Material;
+        public readonly string MaterialName;
         public readonly string RendererPath, Layer, Setting, Reason, NextStep;
 
         internal MaterialBakeIssue(Material material, string rendererPath, string layer, string setting, string reason, string nextStep)
         {
             Material = material;
+            MaterialName = material != null ? material.name : "マテリアル";
             RendererPath = rendererPath ?? "";
             Layer = layer;
             Setting = setting;
@@ -20,7 +22,7 @@ namespace VRVlog.LilToonExporter
             NextStep = nextStep;
         }
 
-        public override string ToString() => (Material != null ? Material.name : "マテリアル") +
+        public override string ToString() => MaterialName +
             " / メインカラー" + Layer + " / " + Setting + "\n" + Reason + "\n" + NextStep;
     }
 

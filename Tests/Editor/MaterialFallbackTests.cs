@@ -83,7 +83,7 @@ namespace VRVlog.LilToonExporter.Tests
                 var warnings = new List<string>();
                 fallback = UniVrmOneClickExporter.CreateMToonFallback(source, materials, warnings, true, textures);
                 Assert.AreEqual(0, fallback.GetInt("_OutlineWidthMode"));
-                Assert.IsFalse(LilToonMaterialReader.Read(source,0,(_,__)=>0).features.Contains("outline"));
+                Assert.IsTrue(LilToonMaterialReader.Read(source,0,(_,__)=>0).features.Contains("outline"));
                 Assert.IsNotEmpty(warnings);
             }
             finally
@@ -127,7 +127,7 @@ namespace VRVlog.LilToonExporter.Tests
         }
 
         [Test]
-        public void DefaultExportKeepsShadeImageAndSuppressesSharedEmissionWithoutChangingSource()
+        public void DefaultExportKeepsShadeImageAndIntentionalEmissionWithoutChangingSource()
         {
             var source = new Material(Shader.Find("Hidden/VRVlogTests/lilToon"));
             var image = new Texture2D(2, 2);
@@ -141,12 +141,12 @@ namespace VRVlog.LilToonExporter.Tests
                 var fallback = UniVrmOneClickExporter.CreateMToonFallback(source, created, new List<string>());
                 Assert.AreSame(image, fallback.GetTexture("_MainTex"));
                 Assert.AreSame(image, fallback.GetTexture("_ShadeTex"));
-                Assert.AreEqual(0f, fallback.GetColor("_EmissionColor").maxColorComponent);
+                Assert.Greater(fallback.GetColor("_EmissionColor").maxColorComponent, 0f);
                 Assert.AreEqual(0.0014f, fallback.GetFloat("_OutlineWidth"), 0.000001f);
                 Assert.AreNotSame(image, fallback.GetTexture("_OutlineWidthTex"));
                 var record = LilToonMaterialReader.Read(source, 0, (_, __) => 0);
-                Assert.IsFalse(record.features.Contains("emission"));
-                Assert.IsFalse(record.textures.Any(t => t.semantic == "emission"));
+                Assert.IsTrue(record.features.Contains("emission"));
+                Assert.IsTrue(record.textures.Any(t => t.semantic == "emission"));
                 Assert.AreEqual(originalEmission, source.GetColor("_EmissionColor"));
                 Assert.AreEqual(0.14f, source.GetFloat("_OutlineWidth"), 0.000001f);
                 Assert.AreSame(image, source.GetTexture("_EmissionMap"));

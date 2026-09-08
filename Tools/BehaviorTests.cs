@@ -50,7 +50,7 @@ public static class ExporterBehaviorTests
         var vertexOutline = new UnityEngine.Material();
         vertexOutline.Properties["_UseOutline"]=1f;vertexOutline.Properties["_OutlineVertexR2Width"]=1f;
         var outlineWarnings=new List<string>();
-        Check(!LilToonMaterialReader.Read(vertexOutline,0,(_,__)=>0,outlineWarnings).features.Contains("outline") && outlineWarnings.Count>0, "An unsupported vertex outline mask cannot turn into a full-width mouth outline.");
+        Check(LilToonMaterialReader.Read(vertexOutline,0,(_,__)=>0,outlineWarnings).features.Contains("outline") && outlineWarnings.Count>0, "Dedicated display retains vertex-controlled outlines and discloses the fallback difference.");
         CheckHiddenMaterialInjection();
         var original = Encode(Fixture("unused", "eye_close", "eye_close_left", "eye_close_right", "mouth_a", "vrc.v.aa"));
         var output = VrmExpressionBindings.AddMissing(original);
@@ -104,8 +104,8 @@ public static class ExporterBehaviorTests
         material.Properties["_EmissionColor"] = new UnityEngine.Color(1.4f, 1.4f, 1.4f);
         var warnings = new List<string>();
         var requested = new List<string>();
-        var record = LilToonMaterialReader.Read(material, 0, (_, semantic) => { requested.Add(semantic); return 0; }, warnings);
-        Check(!record.features.Contains("emission"), "Default policy suppresses whole-base-image emission.");
+        var record = LilToonMaterialReader.Read(material, 0, (_, semantic) => { requested.Add(semantic); return 0; }, warnings, suppressSharedTextureEmission: true);
+        Check(!record.features.Contains("emission"), "Opt-in mitigation suppresses whole-base-image emission.");
         Check(!requested.Contains("emission") && record.textures.Count == 1, "Suppressed emission does not resolve or embed a texture.");
         Check(record.colors.Single(c => c.name == "_EmissionColor").r == 0 && record.floats.Single(f => f.name == "_EmissionBlend").value == 0,
             "Extension scalars cannot re-enable suppressed emission.");

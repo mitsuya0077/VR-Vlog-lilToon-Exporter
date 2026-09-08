@@ -47,7 +47,7 @@ namespace VRVlog.LilToonExporter
                     window.issues.Add(new IssueView
                     {
                         material = issue.Material,
-                        materialName = issue.Material != null ? issue.Material.name : "マテリアルを取得できません",
+                        materialName = issue.MaterialName,
                         rendererPath = issue.RendererPath,
                         layer = issue.Layer,
                         setting = issue.Setting,

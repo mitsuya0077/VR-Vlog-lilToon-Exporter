@@ -1,5 +1,7 @@
 # Technical details / 詳しい仕様
 
+See [appearance preparation and schema 1.3](AppearanceFidelity.md) for the current static appearance contract.
+
 Lighting controls and backward compatibility for schema 1.2 are documented in [Lighting profile](../Schema/Lighting.md).
 
 Unity Editor package for exporting a VRM 1.0 file with two material
@@ -53,12 +55,12 @@ matched exactly, ignoring case; ambiguous duplicate names are skipped with a
 warning. The exporter reports generated presets and warns when it cannot
 configure blinking. Verify expression movement on the target model.
 
-Under **書き出し設定**, **目などの白飛びを抑える** defaults to ON. This mobile
+Under **書き出し設定**, **目などの白飛びを抑える** defaults to OFF. This mobile
 appearance option omits emission only when the same Unity texture object is
 assigned to both the base image and emission image. It affects both the ordinary
 MToon fallback and lilToon compatibility data and reports each affected material.
 It does not depend on material/texture names, does not suppress separate emission
-maps, and can be disabled to retain intentional whole-image glow. It is an
+maps, and is enabled only when explicitly requested. Intentional glow is retained by default. It is an
 explicit approximation, not a complete conversion of lilToon's emission blending.
 
 The one-click workflow preserves the current renderer **BlendShapes** values as

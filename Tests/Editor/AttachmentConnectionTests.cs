@@ -416,7 +416,9 @@ namespace VRVlog.LilToonExporter.Tests
                 var warnings = new List<string>();
                 // Use the same complete entry point as the window: no target
                 // selection callback, preview, or manual Attach call.
-                var bytes = UniVrmOneClickExporter.Export(f.Source, "Automatic MA hair", "Test", warnings);
+                f.Mesh.colors = Enumerable.Range(0, f.Mesh.vertexCount).Select(i => new Color(.25f + i*.1f,.6f,.7f,.8f - i*.1f)).ToArray();
+                var bytes = UniVrmOneClickExporter.Export(f.Source, "Automatic MA hair", "Test", warnings,
+                    exporterVersion: "0.9.0", lilToonVersion: "2.3.4");
                 Assert.That(sourceHair.parent, Is.SameAs(f.Source.transform));
                 Assert.That(f.Source.GetComponentsInChildren<Transform>(true).Select(t => t.localToWorldMatrix), Is.EqualTo(sourceBefore));
                 Assert.That(f.Source.transform.Find("Front").GetComponent<SkinnedMeshRenderer>().sharedMesh, Is.SameAs(f.Mesh));
@@ -426,6 +428,15 @@ namespace VRVlog.LilToonExporter.Tests
                 var skins = imported.GetComponentsInChildren<SkinnedMeshRenderer>();
                 var hairSkins = skins.Where(skin => skin.name == "Front" || skin.name == "Back").ToArray();
                 Assert.That(hairSkins.Length, Is.EqualTo(2));
+                foreach (var hairSkin in hairSkins)
+                {
+                    Assert.That(hairSkin.sharedMesh.colors, Has.Length.EqualTo(hairSkin.sharedMesh.vertexCount));
+                    for (var i = 0; i < hairSkin.sharedMesh.vertexCount; i++)
+                    {
+                        Assert.That(hairSkin.sharedMesh.colors[i].r, Is.EqualTo(.25f + i*.1f).Within(.005f));
+                        Assert.That(hairSkin.sharedMesh.colors[i].a, Is.EqualTo(.8f - i*.1f).Within(.005f));
+                    }
+                }
                 var before = hairSkins.ToDictionary(skin => skin, WorldVertices);
                 var petSkin = skins.FirstOrDefault(skin => skin.name == "Independent pet");
                 var petBefore = petSkin != null ? WorldVertices(petSkin) : null;
