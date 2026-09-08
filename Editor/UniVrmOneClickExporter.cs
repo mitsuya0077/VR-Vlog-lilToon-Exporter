@@ -25,6 +25,7 @@ namespace VRVlog.LilToonExporter
 
             EnsureUniVrmVersion();
             using var exclusions = new ExportObjectExclusions(source, excludedObjects);
+            NdmfExportPreparation.ValidateSource(source, exclusions.Contains);
             // Report every material problem before cloning or evaluating any
             // avatar scripts. Selection buttons can reference the real assets.
             LilToonMainTextureBaker.ValidateAvatar(source, exclusions.Contains, bakeOptions);
@@ -43,6 +44,19 @@ namespace VRVlog.LilToonExporter
                 var expressions = VrChatExpressionBaker.Bake(source, clone, menu, temporaryMeshes, warnings);
                 exclusions.Apply(clone, warnings);
                 LilToonMainTextureBaker.Prepare(clone, temporaryMaterials, temporaryTextures, warnings, suppressSharedTextureEmission, suppressHdrTextureEmission, bakeOptions);
+                // Keep source-based FaceEmo bindings and explicit material
+                // omissions before the authoring pipeline changes paths/assets.
+                var requiresPreparation = NdmfExportPreparation.NeedsProcessing(clone);
+                // MA can change rootBone for bounds or retarget it while merging
+                // rigs. Make implicit vertices explicit before those changes so
+                // they participate in the same bindpose preservation as the skin.
+                if (requiresPreparation)
+                    SkinnedMeshFallbackWeights.Preserve(clone, temporaryMeshes, warnings);
+                using var preparation = NdmfExportPreparation.Prepare(source, clone, warnings);
+                if (requiresPreparation)
+                    LilToonMainTextureBaker.Prepare(clone, temporaryMaterials, temporaryTextures, warnings, suppressSharedTextureEmission, suppressHdrTextureEmission);
+                // Also cover meshes/joints newly created by authoring passes.
+                SkinnedMeshFallbackWeights.Preserve(clone, temporaryMeshes, warnings);
                 var preparedMaterials = new Dictionary<Renderer, Material[]>();
                 foreach (var renderer in ExportRendererSelection.Enumerate(clone)) preparedMaterials.Add(renderer, renderer.sharedMaterials);
                 ReplaceLilToonMaterials(clone, temporaryMaterials, temporaryTextures, warnings, suppressSharedTextureEmission);
@@ -50,8 +64,9 @@ namespace VRVlog.LilToonExporter
                     new GltfExportSettings(),
                     clone,
                     materialExporter: new BuiltInVrm10MaterialExporter(),
-                    textureSerializer: new EditorTextureSerializer(),
+                    textureSerializer: new MobileTextureSerializer(warnings),
                     vrmMeta: CreateMeta(avatarName.Trim(), author.Trim()));
+                exported = ExportSkinRoots.Repair(exported, warnings);
                 exported = VrmExpressionBindings.AddMissing(VrmMenuExpressions.Add(exported, expressions), warnings);
                 if (exporterVersion != null)
                 {

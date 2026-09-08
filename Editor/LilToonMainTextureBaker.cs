@@ -131,9 +131,9 @@ namespace VRVlog.LilToonExporter
                     width = Mathf.Max(width, texture.width);
                     height = Mathf.Max(height, texture.height);
                 }
-                if (width > LilToonMobileProfile.MaximumTextureSize || height > LilToonMobileProfile.MaximumTextureSize)
+                if (width > LilToonMobileProfile.DefaultMaximumTextureSize || height > LilToonMobileProfile.DefaultMaximumTextureSize)
                 {
-                    var scale = LilToonMobileProfile.MaximumTextureSize / (float)Mathf.Max(width, height);
+                    var scale = LilToonMobileProfile.DefaultMaximumTextureSize / (float)Mathf.Max(width, height);
                     width = Mathf.Max(1, Mathf.RoundToInt(width * scale));
                     height = Mathf.Max(1, Mathf.RoundToInt(height * scale));
                     warnings?.Add(material.name + ": メインカラーの焼き込み画像をモバイル向けに " + width + "×" + height + " へ縮小しました。");

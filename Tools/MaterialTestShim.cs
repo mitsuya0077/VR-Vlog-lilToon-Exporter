@@ -8,19 +8,21 @@ namespace UnityEngine
         public static void DestroyImmediate(Object value) { if (!(value is Mesh)) throw new System.NotSupportedException("Unity lifetime is not simulated."); }
         public static T Instantiate<T>(T value) where T : Object => throw new System.NotSupportedException("Unity cloning is covered by Editor tests.");
     }
-    public class Texture : Object { public string name; }
+    public class Texture : Object { public string name; public int width, height; }
     public class Component : Object { }
     public class RuntimeAnimatorController : Object { }
     public class Texture2D : Texture
     {
         public static readonly Texture2D whiteTexture = new Texture2D();
-        public int width, height, mipmapCount;
+        public int mipmapCount;
         public FilterMode filterMode;
         public TextureWrapMode wrapModeU, wrapModeV;
         public Texture2D() { }
         public Texture2D(int w, int h, TextureFormat format, bool mip, bool linear) => throw new System.NotSupportedException();
         public void ReadPixels(Rect rect, int x, int y, bool mip) => throw new System.NotSupportedException();
         public void Apply(bool mip, bool unreadable) => throw new System.NotSupportedException();
+        public Color32[] GetPixels32() => throw new System.NotSupportedException("Image readback requires Unity.");
+        public void SetPixels32(Color32[] pixels) => throw new System.NotSupportedException("Image writes require Unity.");
     }
     // Flat renderer inventory; hierarchy behavior is covered by Unity tests.
     public class GameObject
@@ -44,7 +46,11 @@ namespace UnityEngine
     public enum TextureWrapMode { Clamp, Mirror, Repeat }
     public enum TextureFormat { RGBA32 }
     public enum RenderTextureFormat { ARGB32 }
-    public enum RenderTextureReadWrite { sRGB }
+    public enum RenderTextureReadWrite { sRGB, Linear }
+    public enum ColorSpace { Gamma, Linear }
+    public static class GL { public static bool sRGBWrite; }
+    public static class QualitySettings { public static ColorSpace activeColorSpace = ColorSpace.Gamma; }
+    public struct Color32 { public byte r,g,b,a; public Color32(byte r,byte g,byte b,byte a){this.r=r;this.g=g;this.b=b;this.a=a;} }
     public struct Rect { public Rect(float x, float y, float w, float h) { } }
     public class RenderTexture : Texture
     {
@@ -53,7 +59,11 @@ namespace UnityEngine
         public static void ReleaseTemporary(RenderTexture value) => throw new System.NotSupportedException();
     }
     public static class Graphics { public static void Blit(Texture a, RenderTexture b) => throw new System.NotSupportedException(); }
-    public static class ImageConversion { public static byte[] EncodeToPNG(Texture2D value) => throw new System.NotSupportedException(); }
+    public static class ImageConversion
+    {
+        public static byte[] EncodeToPNG(Texture2D value) => throw new System.NotSupportedException();
+        public static bool LoadImage(Texture2D value, byte[] bytes, bool markNonReadable) => throw new System.NotSupportedException("Image codecs require Unity.");
+    }
     public class Shader { public string name; }
     public struct Vector2 { public float x, y; }
 
@@ -80,6 +90,21 @@ namespace UnityEngine
         public Texture GetTexture(string name) => Properties[name] as Texture;
         public Vector2 GetTextureScale(string name) => new Vector2 { x = 1, y = 1 };
         public Vector2 GetTextureOffset(string name) => new Vector2();
+    }
+}
+namespace UniGLTF
+{
+    public enum ColorSpace { sRGB, Linear }
+    public interface ITextureSerializer
+    {
+        bool CanExportAsEditorAssetFile(UnityEngine.Texture texture, ColorSpace exportColorSpace);
+        (byte[] bytes, string mime) ExportBytesWithMime(UnityEngine.Texture2D texture, ColorSpace exportColorSpace);
+        void ModifyTextureAssetBeforeExporting(UnityEngine.Texture texture);
+    }
+    public static class TextureConverter
+    {
+        public static UnityEngine.Texture2D CopyTexture(UnityEngine.Texture source, ColorSpace colorSpace, bool alpha, UnityEngine.Material material) =>
+            throw new System.NotSupportedException("Texture conversion requires Unity and is not simulated.");
     }
 }
 #endif

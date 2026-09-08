@@ -11,6 +11,7 @@ namespace VRVlog.LilToonExporter
             if (avatar == null) throw new ArgumentNullException(nameof(avatar));
             var glb = GlbDocument.Read(source);
             RequireVrm10Root(glb.Json);
+            glb = GlbTextureDownsizer.Resize(glb, warnings);
             var materialNames = Names(glb.Json, "materials");
             var imageNames = Names(glb.Json, "images");
             var textureSources = TextureSources(glb.Json);
@@ -100,9 +101,9 @@ namespace VRVlog.LilToonExporter
             if(addedTextures.TryGetValue(texture,out var cached))return cached;
             if(textureSources.Count>=LilToonMobileProfile.MaximumTextures)throw new InvalidOperationException("Adding the lilToon texture would exceed the mobile texture limit.");
             if(!(texture is Texture2D source))throw new NotSupportedException($"Texture '{texture.name}' must be a Texture2D.");
-            if(source.width<=0||source.height<=0||source.width>LilToonMobileProfile.MaximumTextureSize||source.height>LilToonMobileProfile.MaximumTextureSize)
+            if(source.width<=0||source.height<=0)
                 throw new InvalidOperationException($"Texture '{texture.name}' is {source.width}x{source.height}; the mobile maximum is {LilToonMobileProfile.MaximumTextureSize}.");
-            var png=EncodePng(source);var offset=glb.AppendBinary(png);
+            var png=MobileTextureEncoder.EncodeSource(source, semantic != "normalMap", warnings);var offset=glb.AppendBinary(png);
             var views=Array(glb.Json,"bufferViews",true);var viewIndex=views.Count;
             views.Add(new Dictionary<string,object>{{"buffer",0L},{"byteOffset",(long)offset},{"byteLength",(long)png.Length}});
             var images=Array(glb.Json,"images",true);var imageIndex=images.Count;
@@ -124,12 +125,6 @@ namespace VRVlog.LilToonExporter
             return Convert.ToInt32(index);
         }
         private static void AddWarning(ICollection<string> warnings,string message){if(warnings!=null&&!warnings.Contains(message))warnings.Add(message);}
-        private static byte[] EncodePng(Texture2D source)
-        {
-            var temporary=RenderTexture.GetTemporary(source.width,source.height,0,RenderTextureFormat.ARGB32,RenderTextureReadWrite.sRGB);var previous=RenderTexture.active;Texture2D copy=null;
-            try{Graphics.Blit(source,temporary);RenderTexture.active=temporary;copy=new Texture2D(source.width,source.height,TextureFormat.RGBA32,false,false);copy.ReadPixels(new Rect(0,0,source.width,source.height),0,0,false);copy.Apply(false,false);var bytes=ImageConversion.EncodeToPNG(copy);if(bytes==null||bytes.Length==0)throw new InvalidOperationException($"Texture '{source.name}' could not be encoded as PNG.");return bytes;}
-            finally{RenderTexture.active=previous;if(copy!=null)UnityEngine.Object.DestroyImmediate(copy);RenderTexture.ReleaseTemporary(temporary);}
-        }
         private static long MagFilter(FilterMode mode)=>mode==FilterMode.Point?9728L:9729L;
         private static long MinFilter(FilterMode mode,bool mipmapped){if(!mipmapped)return mode==FilterMode.Point?9728L:9729L;return mode==FilterMode.Point?9984L:mode==FilterMode.Trilinear?9987L:9985L;}
         private static long Wrap(TextureWrapMode mode){switch(mode){case TextureWrapMode.Clamp:return 33071L;case TextureWrapMode.Mirror:return 33648L;case TextureWrapMode.Repeat:return 10497L;default:throw new NotSupportedException($"Texture wrap mode '{mode}' is not supported.");}}
@@ -143,7 +138,7 @@ namespace VRVlog.LilToonExporter
             var mime=String(image,"mimeType");var png=IsPng(glb.Binary,offset,length);var jpeg=length>=2&&glb.Binary[offset]==0xff&&glb.Binary[offset+1]==0xd8;if((mime!="image/png"||!png)&&(mime!="image/jpeg"||!jpeg))throw new InvalidOperationException("Fallback image MIME type does not match its encoded payload.");
             var size=ImageSize(glb.Binary,offset,length);if(size.Item1>LilToonMobileProfile.MaximumTextureSize||size.Item2>LilToonMobileProfile.MaximumTextureSize)throw new InvalidOperationException($"Encoded fallback texture is {size.Item1}x{size.Item2}; the mobile maximum is {LilToonMobileProfile.MaximumTextureSize}.");
         }
-        private static Tuple<int,int> ImageSize(byte[] data,int offset,int length)
+        internal static Tuple<int,int> ImageSize(byte[] data,int offset,int length)
         {
             if(IsPng(data,offset,length))return PngSize(data,offset,length);
             return JpegSize(data,offset,length);
