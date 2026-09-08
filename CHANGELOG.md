@@ -4,7 +4,7 @@
 
 - Apply supported Modular Avatar / NDMF authoring passes to an isolated export copy before VRM serialization, preserving clothing and hair armature attachment. Keep source-based FaceEmo expressions and approved material omissions before preparation; skip the optimization phase and check that export expressions remain present. Ignore unused inactive authoring settings while retaining dependencies of exported meshes.
 - Automatically downsize output images to a maximum dimension of 1024 pixels, including normal UniVRM serialization, extension-only textures, outline masks and existing fallback VRMs. Preserve aspect ratio, use appropriate color/data filtering, and leave original textures and importer settings unchanged.
-- Preserve implicit zero-weight skinning through an explicit fallback joint measured with Unity's BakeMesh. Verify vertices, normals and tangents before accepting the conversion, retain morph frames and existing influences, and preserve references to the otherwise omitted avatar-root joint.
+- Preserve implicit zero-weight skinning through an explicit fallback joint measured with Unity's BakeMesh. Apply it before authoring can change bounds anchors or retarget joints, and again for generated meshes afterward. Verify vertices, normals and tangents before accepting the conversion, retain morph frames and existing influences, and preserve references to the otherwise omitted avatar-root joint.
 - Repair glTF skin-root ancestry metadata without changing mesh data or Unity bounds anchors such as AutoAnchorObject.
 
 ## 0.7.3

@@ -187,7 +187,8 @@ assert "PackageManagerPackageInfo.GetAllRegisteredPackages()" in window
 assert "Vrm10Exporter.Export" in one_click
 assert one_click.index("NdmfExportPreparation.ValidateSource(source,") < one_click.index("VrChatExpressionSampler.Analyze(source,")
 assert one_click.index("VrChatExpressionBaker.Bake(source, clone,") < one_click.index("NdmfExportPreparation.Prepare(source, clone,")
-assert one_click.index("NdmfExportPreparation.Prepare(source, clone,") < one_click.index("SkinnedMeshFallbackWeights.Preserve(clone,") < one_click.index("Vrm10Exporter.Export(")
+assert one_click.index("VrChatExpressionBaker.Bake(source, clone,") < one_click.index("SkinnedMeshFallbackWeights.Preserve(clone,") < one_click.index("NdmfExportPreparation.Prepare(source, clone,")
+assert one_click.index("NdmfExportPreparation.Prepare(source, clone,") < one_click.rindex("SkinnedMeshFallbackWeights.Preserve(clone,") < one_click.index("Vrm10Exporter.Export(")
 assert one_click.index("Vrm10Exporter.Export(") < one_click.index("ExportSkinRoots.Repair(exported,")
 assert "new MobileTextureSerializer(warnings)" in one_click
 assert "UnityEngine.Object.Instantiate(source)" in one_click

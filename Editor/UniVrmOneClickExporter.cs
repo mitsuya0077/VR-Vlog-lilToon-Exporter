@@ -47,9 +47,15 @@ namespace VRVlog.LilToonExporter
                 // Keep source-based FaceEmo bindings and explicit material
                 // omissions before the authoring pipeline changes paths/assets.
                 var requiresPreparation = NdmfExportPreparation.NeedsProcessing(clone);
+                // MA can change rootBone for bounds or retarget it while merging
+                // rigs. Make implicit vertices explicit before those changes so
+                // they participate in the same bindpose preservation as the skin.
+                if (requiresPreparation)
+                    SkinnedMeshFallbackWeights.Preserve(clone, temporaryMeshes, warnings);
                 using var preparation = NdmfExportPreparation.Prepare(source, clone, warnings);
                 if (requiresPreparation)
                     LilToonMainTextureBaker.Prepare(clone, temporaryMaterials, temporaryTextures, warnings, suppressSharedTextureEmission, suppressHdrTextureEmission);
+                // Also cover meshes/joints newly created by authoring passes.
                 SkinnedMeshFallbackWeights.Preserve(clone, temporaryMeshes, warnings);
                 var preparedMaterials = new Dictionary<Renderer, Material[]>();
                 foreach (var renderer in ExportRendererSelection.Enumerate(clone)) preparedMaterials.Add(renderer, renderer.sharedMaterials);
