@@ -43,6 +43,9 @@ namespace UnityEngine
     {
         public readonly List<Component> components = new List<Component>();
         public readonly Transform transform;
+        public bool activeSelf = true;
+        public bool activeInHierarchy => activeSelf && (transform.parent == null || transform.parent.gameObject.activeInHierarchy);
+        public void SetActive(bool value) { activeSelf = value; }
         public GameObject(string name) { this.name = name; transform = new Transform { gameObject = this }; components.Add(transform); }
         public T AddComponent<T>() where T : Component, new() { var value = new T { gameObject = this }; components.Add(value); return value; }
         public Component AddComponent(Type type) { var value = (Component)Activator.CreateInstance(type); value.gameObject = this; components.Add(value); return value; }
@@ -83,10 +86,19 @@ namespace UnityEngine
         public int GetBlendShapeIndex(string name) => names.IndexOf(name);
         public void AddBlendShapeFrame(string name,float weight,Vector3[] vertices,Vector3[] normals,Vector3[] tangents) => names.Add(name);
     }
-    public class SkinnedMeshRenderer : Component
+    public class Renderer : Component { public bool enabled = true; }
+    public class SkinnedMeshRenderer : Renderer
     {
         public Mesh sharedMesh; public Transform[] bones; public Transform rootBone;
         public void BakeMesh(Mesh target) => throw new NotSupportedException("Native skinning requires Unity.");
+    }
+    public enum HumanBodyBones { Hips, Head, LastBone }
+    public class Avatar : Object { public bool isValid, isHuman; }
+    public class Animator : Component
+    {
+        public Avatar avatar;
+        public readonly Dictionary<HumanBodyBones,Transform> bones = new Dictionary<HumanBodyBones,Transform>();
+        public Transform GetBoneTransform(HumanBodyBones bone) => bones.TryGetValue(bone, out var value) ? value : null;
     }
 }
 namespace UnityEditor
@@ -144,6 +156,22 @@ namespace UnityEditor
 namespace UnityEditor.PackageManager
 {
     public class PackageInfo { public string version; public static PackageInfo FindForAssembly(Assembly assembly) => null; }
+}
+// Authoring metadata adapter only; the real pipeline tests still require the
+// installed NDMFAvatarRoot and canonical NDMF classes and remain skipped here.
+namespace nadena.dev.modular_avatar.core
+{
+    public class AvatarTagComponent : UnityEngine.MonoBehaviour { }
+    public sealed class AvatarObjectReference
+    {
+        public UnityEngine.GameObject target;
+        public void Set(UnityEngine.GameObject value) { target = value; }
+    }
+    public sealed class ModularAvatarMergeArmature : AvatarTagComponent
+    {
+        public AvatarObjectReference mergeTarget = new AvatarObjectReference();
+        public UnityEngine.GameObject mergeTargetObject => mergeTarget.target;
+    }
 }
 namespace NUnit.Framework
 {

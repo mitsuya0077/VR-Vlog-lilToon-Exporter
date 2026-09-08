@@ -18,8 +18,7 @@ namespace VRVlog.LilToonExporter
         private const string CompatibilityMessage =
             "Modular Avatar の準備に必要な NDMF API を利用できません。ALCOM で NDMF 1.8.3 以降の 1.x と Modular Avatar を更新してから書き出してください。";
 
-        internal static bool NeedsProcessing(GameObject avatar) => avatar != null &&
-            avatar.GetComponentsInChildren<Component>(true).Any(component => component != null && IsAuthoringTag(component.GetType()));
+        internal static bool NeedsProcessing(GameObject avatar) => avatar != null && RelevantAuthoring(avatar).Count != 0;
 
         private static bool IsAuthoringTag(Type type)
         {
@@ -28,23 +27,91 @@ namespace VRVlog.LilToonExporter
             return type.GetInterfaces().Any(i => i.FullName == "nadena.dev.ndmf.runtime.INDMFEditorOnly");
         }
 
+        private static HashSet<Component> RelevantAuthoring(GameObject avatar, Func<Transform, bool> excluded = null)
+        {
+            var components = avatar.GetComponentsInChildren<Component>(true)
+                .Where(component => component != null && excluded?.Invoke(component.transform) != true).ToArray();
+            var tags = components.Where(component => IsAuthoringTag(component.GetType())).ToArray();
+            if (tags.Length == 0) return new HashSet<Component>();
+            var byTransform = components.GroupBy(component => component.transform).ToDictionary(group => group.Key, group => group.ToArray());
+            var required = new HashSet<Transform>();
+            var pending = new Queue<Object>();
+            var visited = new HashSet<Object>();
+            void Require(Transform target)
+            {
+                if (target == null || (target != avatar.transform && !target.IsChildOf(avatar.transform)) || excluded?.Invoke(target) == true) return;
+                for (var node = target; node != null; node = node.parent)
+                {
+                    if (required.Add(node) && byTransform.TryGetValue(node, out var owners))
+                        foreach (var owner in owners)
+                            // Transform's children/parent are hierarchy structure,
+                            // not a reason to process an unused inactive wardrobe.
+                            if (!(owner is Transform) && (!(owner is Renderer renderer) || (renderer.enabled && renderer.gameObject.activeInHierarchy))) pending.Enqueue(owner);
+                    if (node == avatar.transform) break;
+                }
+            }
+            foreach (var component in components)
+                if (component.gameObject.activeInHierarchy) Require(component.transform);
+            while (pending.Count != 0)
+            {
+                var owner = pending.Dequeue();
+                if (owner == null || !visited.Add(owner)) continue;
+                if (owner is Component component)
+                {
+                    var property = FollowingProperty(component);
+                    if (property != null) Require(ReadFollowingTarget(component, property));
+                    if (component is SkinnedMeshRenderer skin)
+                    {
+                        Require(skin.rootBone);
+                        foreach (var bone in skin.bones ?? Array.Empty<Transform>()) Require(bone);
+                    }
+                    if (component is Animator animator && animator.avatar != null && animator.avatar.isValid && animator.avatar.isHuman)
+                        for (var bone = 0; bone < (int)HumanBodyBones.LastBone; bone++) Require(animator.GetBoneTransform((HumanBodyBones)bone));
+                }
+                foreach (var reference in References(owner))
+                {
+                    if (reference is GameObject gameObject) Require(gameObject.transform);
+                    else if (reference is Component dependency) Require(dependency.transform);
+                    else if (IsMutableAsset(reference)) pending.Enqueue(reference);
+                }
+            }
+            return new HashSet<Component>(tags.Where(component => required.Contains(component.transform)));
+        }
+
+        private static void PruneUnusedAuthoring(GameObject clone)
+        {
+            var retained = RelevantAuthoring(clone);
+            foreach (var component in clone.GetComponentsInChildren<Component>(true))
+                if (component != null && IsAuthoringTag(component.GetType()) && !retained.Contains(component))
+                    Object.DestroyImmediate(component);
+        }
+
+        private static string FollowingProperty(Component component)
+        {
+            for (var type = component.GetType(); type != null; type = type.BaseType)
+            {
+                if (type.FullName == MaNamespace + "ModularAvatarMergeArmature") return "mergeTargetObject";
+                if (type.FullName == MaNamespace + "ModularAvatarBoneProxy") return "target";
+            }
+            return null;
+        }
+
+        private static Transform ReadFollowingTarget(Component component, string property)
+        {
+            var getter = component.GetType().GetProperty(property, BindingFlags.Instance | BindingFlags.Public);
+            if (getter == null) throw new InvalidOperationException(CompatibilityMessage);
+            var value = Invoke(() => getter.GetValue(component));
+            return value is GameObject gameObject ? gameObject.transform : value as Transform;
+        }
+
         internal static void ValidateSource(GameObject source, Func<Transform, bool> excluded = null)
         {
             if (source == null) throw new ArgumentNullException(nameof(source));
-            foreach (var component in source.GetComponentsInChildren<Component>(true))
+            foreach (var component in RelevantAuthoring(source, excluded))
             {
-                if (component == null || excluded?.Invoke(component.transform) == true) continue;
-                string property = null;
-                for (var type = component.GetType(); type != null; type = type.BaseType)
-                {
-                    if (type.FullName == MaNamespace + "ModularAvatarMergeArmature") property = "mergeTargetObject";
-                    if (type.FullName == MaNamespace + "ModularAvatarBoneProxy") property = "target";
-                }
+                var property = FollowingProperty(component);
                 if (property == null) continue;
-                var getter = component.GetType().GetProperty(property, BindingFlags.Instance | BindingFlags.Public);
-                if (getter == null) throw new InvalidOperationException(CompatibilityMessage);
-                var value = Invoke(() => getter.GetValue(component));
-                var target = value is GameObject gameObject ? gameObject.transform : value as Transform;
+                var target = ReadFollowingTarget(component, property);
                 if (target == null)
                     throw new InvalidOperationException(component.name + ": Modular Avatar の追従先を取得できません。Merge Armature / Bone Proxy の対象を設定してから書き出してください。");
                 if (target != source.transform && !target.IsChildOf(source.transform))
@@ -57,7 +124,11 @@ namespace VRVlog.LilToonExporter
         internal static NdmfExportPreparation Prepare(GameObject source, GameObject clone, ICollection<string> warnings = null)
         {
             RequireOwnedCopy(source, clone);
-            if (!NeedsProcessing(clone)) return new NdmfExportPreparation();
+            if (!NeedsProcessing(clone))
+            {
+                PruneUnusedAuthoring(clone);
+                return new NdmfExportPreparation();
+            }
             ValidateSource(clone);
             var processor = FindType("nadena.dev.ndmf.AvatarProcessor");
             var package = processor != null ? PackageInfo.FindForAssembly(processor.Assembly) : null;
@@ -69,6 +140,9 @@ namespace VRVlog.LilToonExporter
             ICollection<string> warnings = null)
         {
             RequireOwnedCopy(source, clone);
+            // NDMF processes inactive tags too. Remove only irrelevant tags on
+            // our copy before dependency safety checks or any canonical pass.
+            PruneUnusedAuthoring(clone);
             var lease = new NdmfExportPreparation();
             var sourceAssets = Dependencies(source);
             var cloneAssets = Dependencies(clone);

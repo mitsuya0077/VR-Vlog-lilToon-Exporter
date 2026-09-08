@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Linq;
 using NUnit.Framework;
 using UnityEngine;
 using Object = UnityEngine.Object;
@@ -271,6 +272,125 @@ namespace VRVlog.LilToonExporter.Tests
             using (NdmfExportPreparation.Prepare(source, clone)) { }
             Assert.AreEqual(0, FakeProcessor.Calls);
             Assert.IsTrue(original != null);
+        }
+
+        [TestCase(false)]
+        [TestCase(true)]
+        public void UnusedInactiveWardrobeDoesNotRequireNdmfOrValidateItsTarget(bool staleExternalTarget)
+        {
+            var external = new GameObject("unused external target");
+            try
+            {
+                var sourceTag = AddMerge(source, "unused wardrobe", false, staleExternalTarget ? external.transform : null, false);
+                var cloneTag = AddMerge(clone, "unused wardrobe", false, staleExternalTarget ? external.transform : null, false);
+                var cloneWardrobe = cloneTag.gameObject;
+                Assert.IsFalse(NdmfExportPreparation.NeedsProcessing(source));
+                NdmfExportPreparation.ValidateSource(source);
+                using (NdmfExportPreparation.Prepare(source, clone)) { }
+                Assert.AreEqual(0, FakeProcessor.Calls);
+                Assert.IsTrue(sourceTag != null && cloneTag == null);
+                Assert.IsTrue(cloneWardrobe != null && !cloneWardrobe.activeInHierarchy);
+                Assert.AreSame(clone.transform, cloneWardrobe.transform.parent);
+                Assert.AreSame(original, source.GetComponent<SkinnedMeshRenderer>().sharedMesh);
+            }
+            finally { Object.DestroyImmediate(external); }
+        }
+
+        [Test]
+        public void MixedActiveAndInactiveAuthoringPrunesOnlyTheUnusedCopyTagBeforeNdmf()
+        {
+            var sourceTarget = Child(source.transform, "main rig", Vector3.zero);
+            var cloneTarget = Child(clone.transform, "main rig", Vector3.zero);
+            var activeSource = AddMerge(source, "used setting", true, sourceTarget);
+            var inactiveSource = AddMerge(source, "unused wardrobe", false, null);
+            var activeCopy = AddMerge(clone, "used setting", true, cloneTarget);
+            var inactiveCopy = AddMerge(clone, "unused wardrobe", false, null);
+            var inactiveObject = inactiveCopy.gameObject;
+            NdmfExportPreparation.ValidateSource(source);
+            Assert.IsTrue(NdmfExportPreparation.NeedsProcessing(source));
+            FakeProcessor.Action = root =>
+            {
+                Assert.IsTrue(activeCopy != null && inactiveCopy == null);
+                Assert.IsFalse(root.GetComponentsInChildren<Component>(true).Any(component => ReferenceEquals(component, inactiveCopy)));
+                Assert.IsTrue(inactiveObject != null && !inactiveObject.activeInHierarchy);
+            };
+            using (NdmfExportPreparation.ProcessClone(source, clone, Resolve())) { }
+            Assert.AreEqual(1, FakeProcessor.Calls);
+            Assert.IsTrue(activeSource != null && inactiveSource != null);
+            Assert.IsFalse(inactiveSource.gameObject.activeInHierarchy);
+            Assert.AreSame(source.transform, inactiveSource.transform.parent);
+        }
+
+        [TestCase(false)]
+        [TestCase(true)]
+        public void ActiveSkinRetainsItsInactiveRigTagAndAncestors(bool usesRootBone)
+        {
+            var sourceTag = AddMerge(source, "hidden rig", false, Child(source.transform, "main", Vector3.zero));
+            var cloneTag = AddMerge(clone, "hidden rig", false, Child(clone.transform, "main", Vector3.zero));
+            var sourceBone = Child(sourceTag.transform, "bone", Vector3.zero);
+            var cloneBone = Child(cloneTag.transform, "bone", Vector3.zero);
+            var sourceSkin = source.GetComponent<SkinnedMeshRenderer>();
+            var cloneSkin = clone.GetComponent<SkinnedMeshRenderer>();
+            if (usesRootBone) { sourceSkin.rootBone = sourceBone; cloneSkin.rootBone = cloneBone; }
+            else { sourceSkin.bones = new[] { sourceBone }; cloneSkin.bones = new[] { cloneBone }; }
+            NdmfExportPreparation.ValidateSource(source);
+            FakeProcessor.Action = root => Assert.IsTrue(cloneTag != null, "Active skin dependencies must remain available to NDMF.");
+            using (NdmfExportPreparation.ProcessClone(source, clone, Resolve())) { }
+            Assert.IsTrue(sourceTag != null && cloneTag != null);
+            Assert.AreSame(sourceTag.transform, sourceBone.parent);
+            Assert.AreSame(cloneTag.transform, cloneBone.parent);
+            Assert.AreSame(sourceBone, usesRootBone ? sourceSkin.rootBone : sourceSkin.bones[0]);
+            Assert.AreSame(cloneBone, usesRootBone ? cloneSkin.rootBone : cloneSkin.bones[0]);
+        }
+
+        [TestCase(false)]
+        [TestCase(true)]
+        public void InvalidInactiveRigIsValidatedOnlyWhenAnEnabledSkinRequiresIt(bool rendererEnabled)
+        {
+            var tag = AddMerge(source, "hidden rig", false, null, false);
+            var bone = Child(tag.transform, "bone", Vector3.zero);
+            var skin = source.GetComponent<SkinnedMeshRenderer>();
+            skin.bones = new[] { bone };
+            skin.enabled = rendererEnabled;
+            Assert.AreEqual(rendererEnabled, NdmfExportPreparation.NeedsProcessing(source));
+            if (rendererEnabled)
+            {
+                var error = Assert.Throws<InvalidOperationException>(() => NdmfExportPreparation.ValidateSource(source));
+                StringAssert.Contains("追従先を取得できません", error.Message);
+            }
+            else NdmfExportPreparation.ValidateSource(source);
+            Assert.IsTrue(tag != null);
+            Assert.AreSame(bone, skin.bones[0]);
+        }
+
+        [Test]
+        public void ActiveMergePreservesAnInactiveTargetAttachmentChain()
+        {
+            var target = Child(clone.transform, "main", Vector3.zero);
+            var last = AddMerge(clone, "last hidden attachment", false, target);
+            var middle = AddMerge(clone, "middle hidden attachment", false, Child(last.transform, "target bone", Vector3.zero));
+            var active = AddMerge(clone, "active attachment", true, Child(middle.transform, "target bone", Vector3.zero));
+            NdmfExportPreparation.ValidateSource(clone);
+            FakeProcessor.Action = root => Assert.IsTrue(active != null && middle != null && last != null);
+            using (NdmfExportPreparation.ProcessClone(source, clone, Resolve())) { }
+            Assert.AreEqual(1, FakeProcessor.Calls);
+            Assert.IsTrue(middle != null && last != null);
+        }
+
+        private static Component AddMerge(GameObject root, string name, bool active, Transform target, bool identifyAvatar = true)
+        {
+            var type = InstalledType("nadena.dev.modular_avatar.core.ModularAvatarMergeArmature");
+            if (type == null) Assert.Ignore("Install Modular Avatar to test its real authoring metadata.");
+            var marker = InstalledType("nadena.dev.ndmf.runtime.components.NDMFAvatarRoot");
+            if (identifyAvatar && marker != null && !root.GetComponentsInChildren<Component>(true).Any(component => component.transform == root.transform && component.GetType() == marker))
+                root.AddComponent(marker);
+            var node = Child(root.transform, name, Vector3.zero).gameObject;
+            node.SetActive(false);
+            var component = node.AddComponent(type);
+            var reference = type.GetField("mergeTarget").GetValue(component);
+            reference.GetType().GetMethod("Set", new[] { typeof(GameObject) }).Invoke(reference, new object[] { target == null ? null : target.gameObject });
+            node.SetActive(active);
+            return component;
         }
 
         [Test]
