@@ -154,17 +154,71 @@ namespace VRVlog.LilToonExporter.Tests
             Assert.That(f.Hair.localToWorldMatrix, Is.EqualTo(matrix));
         }
 
-        [Test]
-        public void ExistingVrmConstraintIsRecognizedAndNotDoubleAttached()
+        [TestCase(true, true)]
+        [TestCase(false, true)]
+        [TestCase(true, false)]
+        [TestCase(false, false)]
+        public void OnlyActiveEnabledVrmConstraintsEstablishOrBlockAttachment(bool enabled, bool active)
         {
             using var f = new Fixture();
+            var sourceHair = f.Source.transform.Find("Independent hair");
+            var original = sourceHair.gameObject.AddComponent<Vrm10RotationConstraint>();
+            original.Source = f.Source.GetComponent<Animator>().GetBoneTransform(HumanBodyBones.Head);
+            original.enabled = enabled;
+            sourceHair.gameObject.SetActive(active);
             var constraint = f.Hair.gameObject.AddComponent<Vrm10RotationConstraint>();
             constraint.Source = f.Head;
             constraint.Weight = 1f;
-            Assert.That(new ExportAttachmentSession(f.Source, f.Copy).Parts.Count, Is.Zero);
-            var review = new ExportAttachmentSession(f.Source, f.Copy, true);
-            Assert.Throws<InvalidOperationException>(() => review.Attach(f.Hair, f.Head));
-            Assert.That(constraint.Source, Is.SameAs(f.Head));
+            constraint.enabled = enabled;
+            f.Hair.gameObject.SetActive(active);
+            using (var automatic = new ExportAttachmentSession(f.Source, f.Copy))
+                Assert.That(automatic.Parts.Any(p => p.Root == f.Hair), Is.EqualTo(!enabled || !active));
+            using (var review = new ExportAttachmentSession(f.Source, f.Copy, true))
+            {
+                if (enabled && active)
+                {
+                    Assert.Throws<InvalidOperationException>(() => review.Attach(f.Hair, f.Head));
+                    Assert.That(constraint.Source, Is.SameAs(f.Head));
+                }
+                else
+                {
+                    Assert.That(f.Hair.GetComponent<Vrm10RotationConstraint>(), Is.Null);
+                    review.Attach(f.Hair, f.Head);
+                    Assert.That(f.Hair.parent, Is.SameAs(f.Head));
+                }
+            }
+            Assert.That(original != null, Is.True);
+            Assert.That(original.enabled, Is.EqualTo(enabled));
+            Assert.That(sourceHair.gameObject.activeSelf, Is.EqualTo(active));
+            Assert.That(sourceHair.parent, Is.SameAs(f.Source.transform));
+            Assert.That(f.Hair.gameObject.activeSelf, Is.EqualTo(active));
+        }
+
+        [TestCase(false)]
+        [TestCase(true)]
+        public void DisabledConstraintCannotBecomeEnabledInExportedVrm(bool enabled)
+        {
+            using var f = new Fixture();
+            var settings = ScriptableObject.CreateInstance<VRM10Object>();
+            var instance = f.Copy.AddComponent<Vrm10Instance>();
+            instance.Vrm = settings;
+            var constraint = f.Hair.gameObject.AddComponent<Vrm10RotationConstraint>();
+            constraint.Source = f.Head;
+            constraint.enabled = enabled;
+            try
+            {
+                using var review = new ExportAttachmentSession(f.Source, f.Copy);
+                if (!enabled) review.Attach(f.Hair, f.Head);
+                var bytes = Vrm10Exporter.Export(new GltfExportSettings(), f.Copy,
+                    textureSerializer: new MobileTextureSerializer(null),
+                    vrmMeta: new VRM10ObjectMeta { Name = "Constraint regression", Version = "1", Authors = new List<string> { "Test" } });
+                var nodes = (List<object>)GlbDocument.Read(bytes).Json["nodes"];
+                var count = nodes.Cast<Dictionary<string, object>>().Count(node =>
+                    node.TryGetValue("extensions", out var extensions) &&
+                    ((Dictionary<string, object>)extensions).ContainsKey("VRMC_node_constraint"));
+                Assert.That(count, Is.EqualTo(enabled ? 1 : 0), "Disabled Unity components must not become active VRM constraints.");
+            }
+            finally { Object.DestroyImmediate(settings); }
         }
 
         [TestCase(false)]

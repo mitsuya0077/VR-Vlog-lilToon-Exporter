@@ -54,7 +54,15 @@ namespace VRVlog.LilToonExporter
                     if (humanoid.Contains(bone) && !Targets.Contains(bone)) Targets.Add(bone);
                 }
             }
-            constraints = copy.GetComponentsInChildren<MonoBehaviour>(true).OfType<IVrm10Constraint>()
+            var constraintComponents = copy.GetComponentsInChildren<MonoBehaviour>(true)
+                .Where(component => component is IVrm10Constraint).ToArray();
+            // UniVRM 0.131 serializes disabled constraint components without
+            // an enabled flag. Remove only those components on the owned copy
+            // so a disabled authored constraint cannot revive after export.
+            foreach (var component in constraintComponents)
+                if (!component.isActiveAndEnabled) UnityEngine.Object.DestroyImmediate(component);
+            constraints = constraintComponents.Where(component => component != null && component.isActiveAndEnabled)
+                .OfType<IVrm10Constraint>()
                 .Where(c => c.ConstraintTarget != null && c.ConstraintSource != null)
                 .GroupBy(c => c.ConstraintTarget).ToDictionary(g => g.Key, g => g.Select(c => c.ConstraintSource).ToArray());
             Parts = FindParts(includeConnected);
