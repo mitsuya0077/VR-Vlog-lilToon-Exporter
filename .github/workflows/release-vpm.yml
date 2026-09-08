@@ -36,6 +36,10 @@ jobs:
           PY
       - name: Validate exporter before packaging
         run: python3 Tools/validate.py
+      - name: Check public contents and package isolation
+        run: |
+          python3 Tools/check-public-content.py
+          python3 Tools/test-package.py
       - name: Run exporter behavior checks
         shell: pwsh
         run: ./Tools/run-behavior-tests.ps1
@@ -49,9 +53,7 @@ jobs:
         env:
           VERSION: ${{ inputs.version }}
         run: |
-          mkdir -p artifacts/exporter
-          rsync -a --exclude .git --exclude artifacts --exclude Website --exclude source.json ./ artifacts/exporter/
-          (cd artifacts/exporter && zip -qr ../com.vrvlog.liltoon-vrm-exporter-${VERSION}.zip .)
+          python3 Tools/build-package.py --output "artifacts/com.vrvlog.liltoon-vrm-exporter-${VERSION}.zip"
       - name: Build UniVRM dependency packages
         env:
           UNIVRM_VERSION: ${{ inputs.univrm_version }}
@@ -88,11 +90,24 @@ jobs:
             echo "Refusing to publish: tag v${VERSION} already exists and is not owned by this run." >&2
             exit 1
           fi
+          python3 - <<'PY'
+          import os
+          from pathlib import Path
+          changelog = Path("CHANGELOG.md").read_text(encoding="utf-8")
+          heading = "## " + os.environ["VERSION"] + "\n"
+          if heading not in changelog:
+              raise SystemExit("Missing changelog entry for this version")
+          notes = changelog.split(heading, 1)[1].split("\n## ", 1)[0].strip()
+          if not notes:
+              raise SystemExit("Release notes must not be empty")
+          notes += "\n\nIncludes the exporter and official UniVRM " + os.environ["UNIVRM_VERSION"] + " package contents with the upstream MIT license.\n"
+          Path("artifacts/release-notes.md").write_text(notes, encoding="utf-8")
+          PY
           gh release create "v${VERSION}" \
             "artifacts/com.vrvlog.liltoon-vrm-exporter-${VERSION}.zip" \
             "artifacts/com.vrmc.gltf-${UNIVRM_VERSION}.zip" \
             "artifacts/com.vrmc.vrm-${UNIVRM_VERSION}.zip" \
             --title "VR Vlog lilToon VRM Exporter ${VERSION}" \
             --target "${GITHUB_SHA}" \
-            --notes "VPM release. Includes the exporter and unmodified UniVRM ${UNIVRM_VERSION} package contents with the upstream MIT license."
+            --notes-file artifacts/release-notes.md
           gh workflow run build-listing.yml --ref main
