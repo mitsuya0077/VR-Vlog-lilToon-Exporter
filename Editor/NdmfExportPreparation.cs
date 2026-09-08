@@ -71,7 +71,13 @@ namespace VRVlog.LilToonExporter
                 foreach (var reference in References(owner))
                 {
                     if (reference is GameObject gameObject) Require(gameObject.transform);
-                    else if (reference is Component dependency) Require(dependency.transform);
+                    else if (reference is Component dependency)
+                    {
+                        // LOD/settings components can reference unused renderers.
+                        // Apply the same output visibility gate at this entry point.
+                        if (dependency is Renderer renderer && (!renderer.enabled || !renderer.gameObject.activeInHierarchy)) continue;
+                        Require(dependency.transform);
+                    }
                     else if (IsMutableAsset(reference)) pending.Enqueue(reference);
                 }
             }

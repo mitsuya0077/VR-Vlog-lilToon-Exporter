@@ -296,6 +296,31 @@ namespace VRVlog.LilToonExporter.Tests
             finally { Object.DestroyImmediate(external); }
         }
 
+        [TestCase(false)]
+        [TestCase(true)]
+        public void ActiveHolderReferenceToInactiveRendererDoesNotRetainUnusedAuthoring(bool rendererEnabled)
+        {
+            var sourceTag = AddMerge(source, "unused referenced wardrobe", false, null, false);
+            var cloneTag = AddMerge(clone, "unused referenced wardrobe", false, null, false);
+            var sourceRenderer = sourceTag.gameObject.AddComponent<SkinnedMeshRenderer>();
+            var cloneRenderer = cloneTag.gameObject.AddComponent<SkinnedMeshRenderer>();
+            sourceRenderer.enabled = rendererEnabled;
+            cloneRenderer.enabled = rendererEnabled;
+            var sourceHolder = source.AddComponent<NdmfSharedAssetHolder>();
+            var cloneHolder = clone.AddComponent<NdmfSharedAssetHolder>();
+            sourceHolder.Renderer = sourceRenderer;
+            cloneHolder.Renderer = cloneRenderer;
+            Assert.IsFalse(NdmfExportPreparation.NeedsProcessing(source));
+            NdmfExportPreparation.ValidateSource(source);
+            using (NdmfExportPreparation.Prepare(source, clone)) { }
+            Assert.AreEqual(0, FakeProcessor.Calls);
+            Assert.IsTrue(sourceTag != null && cloneTag == null);
+            Assert.IsTrue(sourceRenderer != null && cloneRenderer != null);
+            Assert.AreSame(sourceRenderer, sourceHolder.Renderer);
+            Assert.AreSame(cloneRenderer, cloneHolder.Renderer);
+            Assert.AreEqual(rendererEnabled, sourceRenderer.enabled);
+        }
+
         [Test]
         public void MixedActiveAndInactiveAuthoringPrunesOnlyTheUnusedCopyTagBeforeNdmf()
         {
@@ -619,5 +644,6 @@ namespace VRVlog.LilToonExporter.Tests
     public sealed class NdmfSharedAssetHolder : MonoBehaviour
     {
         public NdmfSharedAssetFixture Settings;
+        public Renderer Renderer;
     }
 }
