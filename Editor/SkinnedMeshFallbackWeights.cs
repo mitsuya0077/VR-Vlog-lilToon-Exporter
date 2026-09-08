@@ -7,9 +7,8 @@ namespace VRVlog.LilToonExporter
 {
     internal static class SkinnedMeshFallbackWeights
     {
-        // Unity uses rootBone to render vertices with no bone weights. glTF has
-        // no equivalent implicit influence. Measure that Unity transform on the
-        // export copy and encode it as an ordinary, explicit joint influence.
+        // A mesh without any weights renders rigidly at its renderer transform;
+        // rootBone controls its bounds. Encode that placement as an explicit joint.
         internal static void Preserve(GameObject clone, ICollection<Mesh> ownedMeshes, ICollection<string> warnings,
             ICollection<Transform> fixedRootJoints = null)
         {
@@ -79,13 +78,21 @@ namespace VRVlog.LilToonExporter
                 if (counts[i] == 0) zeroCount++;
             }
             if (zeroCount == 0) return;
+            // In Unity's native skinning, zero-weight vertices mixed into a
+            // weighted mesh collapse rather than forming a rigid fallback. There
+            // is no invertible skin transform to preserve. Do not invent weights
+            // or silently rewrite their geometry/morphs.
+            if (zeroCount != source.vertexCount)
+                throw Failure(skin, "ウェイトのない頂点がウェイト付き頂点と混在しています。元メッシュのボーンウェイトを修正してから書き出してください。");
             var sourceWeights = source.GetAllBoneWeights().ToArray();
             var weights = new List<BoneWeight1>(sourceWeights.Length + zeroCount);
             var bones = skin.bones ?? Array.Empty<Transform>();
             var bindposes = source.bindposes;
             if (bindposes.Length != bones.Length)
                 throw Failure(skin, "ボーンとバインドポーズの数が一致しません。メッシュのスキニング設定を確認してください。");
-            var anchor = skin.rootBone != null ? skin.rootBone : skin.transform;
+            var anchor = skin.transform;
+            if (skin.rootBone != null && skin.rootBone != root && !skin.rootBone.IsChildOf(root))
+                throw Failure(skin, "Root Bone がアバターの外部を参照しています。アバター内の追従先を設定してください。");
             if (anchor != root && !anchor.IsChildOf(root))
                 throw Failure(skin, "Root Bone がアバターの外部を参照しています。アバター内の追従先を設定してください。");
             if (skin.GetComponent<Cloth>() != null)
@@ -150,7 +157,7 @@ namespace VRVlog.LilToonExporter
                     ownedMeshes.Add(replacement);
                     completed = true;
                     jointRetained = true;
-                    warnings?.Add($"{skin.name}: ウェイトのない {zeroCount} 頂点の配置を、Root Bone に追従するウェイトとして保持しました。");
+                    warnings?.Add($"{skin.name}: ウェイトのない {zeroCount} 頂点の配置を、元のメッシュオブジェクトに追従するウェイトとして保持しました。");
                 }
                 finally
                 {

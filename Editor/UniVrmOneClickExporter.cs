@@ -69,6 +69,7 @@ namespace VRVlog.LilToonExporter
                 var preparedMaterials = new Dictionary<Renderer, Material[]>();
                 foreach (var renderer in ExportRendererSelection.Enumerate(clone)) preparedMaterials.Add(renderer, renderer.sharedMaterials);
                 ReplaceLilToonMaterials(clone, temporaryMaterials, temporaryTextures, warnings, suppressSharedTextureEmission);
+                MakeRendererMeshesUnique(clone, temporaryMeshes);
                 var exported = Vrm10Exporter.Export(
                     new GltfExportSettings(),
                     clone,
@@ -93,6 +94,31 @@ namespace VRVlog.LilToonExporter
                 foreach (var material in temporaryMaterials) UnityEngine.Object.DestroyImmediate(material);
                 foreach (var mesh in temporaryMeshes) UnityEngine.Object.DestroyImmediate(mesh);
                 foreach (var texture in temporaryTextures) UnityEngine.Object.DestroyImmediate(texture);
+            }
+        }
+
+        internal static void MakeRendererMeshesUnique(GameObject clone, ICollection<Mesh> owned)
+        {
+            // UniVRM 0.131 keys exported skins by Mesh and throws when two
+            // renderers share one. Split only the export copy's mesh references.
+            var seen = new HashSet<Mesh>();
+            foreach (var renderer in ExportRendererSelection.Enumerate(clone))
+            {
+                var skin = renderer as SkinnedMeshRenderer;
+                var filter = skin == null ? renderer.GetComponent<MeshFilter>() : null;
+                var mesh = skin != null ? skin.sharedMesh : filter != null ? filter.sharedMesh : null;
+                if (mesh == null || seen.Add(mesh)) continue;
+                var copy = UnityEngine.Object.Instantiate(mesh);
+                copy.name = mesh.name;
+                owned.Add(copy);
+                if (skin == null) filter.sharedMesh = copy;
+                else
+                {
+                    var weights = new float[mesh.blendShapeCount];
+                    for (var i = 0; i < weights.Length; i++) weights[i] = skin.GetBlendShapeWeight(i);
+                    skin.sharedMesh = copy;
+                    for (var i = 0; i < weights.Length; i++) skin.SetBlendShapeWeight(i, weights[i]);
+                }
             }
         }
 

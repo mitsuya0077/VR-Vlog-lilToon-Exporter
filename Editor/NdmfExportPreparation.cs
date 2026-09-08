@@ -222,9 +222,25 @@ namespace VRVlog.LilToonExporter
                 throw new InvalidOperationException("NDMF の準備には元のアバターから独立した書き出し用コピーが必要です。");
         }
 
-        private static HashSet<Object> Dependencies(GameObject root) => root == null
-            ? new HashSet<Object>()
-            : new HashSet<Object>(EditorUtility.CollectDependencies(new Object[] { root }));
+        private static HashSet<Object> Dependencies(GameObject root) => Dependencies(root == null
+            ? Array.Empty<Object>()
+            : root.GetComponentsInChildren<Component>(true).Cast<Object>().Concat(new Object[] { root }));
+
+        private static HashSet<Object> Dependencies(IEnumerable<Object> roots)
+        {
+            // CollectDependencies omits unsaved references in the native Editor.
+            // Traverse the live serialized graph so copy ownership also covers
+            // generated meshes and nested, unsaved authoring settings.
+            var result = new HashSet<Object>();
+            var pending = new Queue<Object>(roots);
+            while (pending.Count > 0)
+            {
+                var value = pending.Dequeue();
+                if (value == null || !result.Add(value) || value is Shader || value is ComputeShader || value is MonoScript) continue;
+                foreach (var reference in References(value)) pending.Enqueue(reference);
+            }
+            return result;
+        }
 
         private static bool IsMutableAsset(Object value) => value != null &&
             !(value is GameObject) && !(value is Component) && !(value is Shader) &&
@@ -295,7 +311,7 @@ namespace VRVlog.LilToonExporter
                 copy.name = value.name;
                 replacements.Add(value, copy);
             }
-            var copiedDependencies = EditorUtility.CollectDependencies(replacements.Values.ToArray())
+            var copiedDependencies = Dependencies(replacements.Values)
                 .Where(value => IsMutableAsset(value) && !EditorUtility.IsPersistent(value) &&
                     !sourceAssets.Contains(value) && !cloneAssets.Contains(value)).ToArray();
             generated.UnionWith(copiedDependencies);

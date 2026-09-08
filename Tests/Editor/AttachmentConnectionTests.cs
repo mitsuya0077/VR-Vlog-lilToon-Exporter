@@ -88,13 +88,23 @@ namespace VRVlog.LilToonExporter.Tests
                     weightMode == 1 || (weightMode == 2 && i == 1) ? new BoneWeight() :
                     new BoneWeight { boneIndex0 = 0, weight0 = 1 }).ToArray();
                 var before = WorldVertices(skin);
+                if (weightMode == 2)
+                {
+                    var error = Assert.Throws<InvalidOperationException>(() => SkinnedMeshFallbackWeights.Preserve(f.Copy, owned, null, fixedJoints));
+                    Assert.That(error.Message, Does.Contain("ウェイトのない頂点"));
+                    Assert.That(skin.sharedMesh, Is.SameAs(input));
+                    AssertVertices(sourceBefore, WorldVertices(sourceSkin));
+                    Assert.That(sourceSkin.bones, Is.EqualTo(sourceBones));
+                    Assert.That(f.Mesh.boneWeights, Is.EqualTo(sourceWeights));
+                    return;
+                }
                 SkinnedMeshFallbackWeights.Preserve(f.Copy, owned, null, fixedJoints);
-                Assert.That(fixedJoints.Count, Is.EqualTo(weightMode == 2 ? 2 : 1));
+                Assert.That(fixedJoints.Count, Is.EqualTo(weightMode == 0 ? 1 : 0));
                 AssertVertices(before, WorldVertices(skin));
                 // The same identity set survives both sides of authoring preparation.
                 SkinnedMeshFallbackWeights.Preserve(f.Copy, owned, null, fixedJoints);
-                Assert.That(fixedJoints.Count, Is.EqualTo(weightMode == 2 ? 2 : 1));
-                f.Hair.name = fixedJoints.First().name;
+                Assert.That(fixedJoints.Count, Is.EqualTo(weightMode == 0 ? 1 : 0));
+                if (fixedJoints.Count > 0) f.Hair.name = fixedJoints.First().name;
                 using (var review = new ExportAttachmentSession(f.Source, f.Copy, includeConnected, fixedJoints))
                 {
                     Assert.That(review.Parts.Any(p => p.Root == f.Hair), Is.True, "Authored names must not act as a blacklist.");
@@ -103,11 +113,14 @@ namespace VRVlog.LilToonExporter.Tests
                         Assert.Throws<InvalidOperationException>(() => review.Attach(joint, f.Head));
                     // An authoring pass can nest a generated joint under a larger
                     // branch. Moving that whole branch must not bypass protection.
-                    foreach (var joint in fixedJoints) joint.SetParent(f.Hair, true);
-                    Assert.Throws<InvalidOperationException>(() => review.Attach(f.Hair, f.Head));
-                    using (var nested = new ExportAttachmentSession(f.Source, f.Copy, includeConnected, fixedJoints))
-                        Assert.That(nested.Parts.Any(p => p.Root == f.Hair), Is.False);
-                    foreach (var joint in fixedJoints) joint.SetParent(f.Copy.transform, true);
+                    if (fixedJoints.Count > 0)
+                    {
+                        foreach (var joint in fixedJoints) joint.SetParent(f.Hair, true);
+                        Assert.Throws<InvalidOperationException>(() => review.Attach(f.Hair, f.Head));
+                        using (var nested = new ExportAttachmentSession(f.Source, f.Copy, includeConnected, fixedJoints))
+                            Assert.That(nested.Parts.Any(p => p.Root == f.Hair), Is.False);
+                        foreach (var joint in fixedJoints) joint.SetParent(f.Copy.transform, true);
+                    }
                     review.Attach(f.Hair, f.Head);
                     f.Head.localRotation = Quaternion.Euler(14, 37, -9);
                     AssertVertices(before, WorldVertices(skin));
@@ -209,6 +222,7 @@ namespace VRVlog.LilToonExporter.Tests
             {
                 using var review = new ExportAttachmentSession(f.Source, f.Copy);
                 if (!enabled) review.Attach(f.Hair, f.Head);
+                f.PrepareMeshesForExport();
                 var bytes = Vrm10Exporter.Export(new GltfExportSettings(), f.Copy,
                     textureSerializer: new MobileTextureSerializer(null),
                     vrmMeta: new VRM10ObjectMeta { Name = "Constraint regression", Version = "1", Authors = new List<string> { "Test" } });
@@ -379,6 +393,7 @@ namespace VRVlog.LilToonExporter.Tests
         {
             using var f = new Fixture();
             new ExportAttachmentSession(f.Source, f.Copy).Attach(f.Hair, f.Head);
+            f.PrepareMeshesForExport();
             var bytes = Vrm10Exporter.Export(new GltfExportSettings(), f.Copy,
                 textureSerializer: new MobileTextureSerializer(null),
                 vrmMeta: new VRM10ObjectMeta { Name = "Attachment regression", Version = "1", Authors = new List<string> { "Test" } });
@@ -426,6 +441,22 @@ namespace VRVlog.LilToonExporter.Tests
             internal SkinnedMeshRenderer[] Skins;
             private Avatar avatar;
             private Material material;
+            private readonly List<Mesh> exportMeshes = new List<Mesh>();
+
+            internal void PrepareMeshesForExport()
+            {
+                var before = Skins.Select(WorldVertices).ToArray();
+                var bones = Skins.Select(s => s.bones).ToArray();
+                UniVrmOneClickExporter.MakeRendererMeshesUnique(Copy, exportMeshes);
+                Assert.That(Skins.Select(s => s.sharedMesh).Distinct().Count(), Is.EqualTo(Skins.Length));
+                Assert.That(Source.GetComponentsInChildren<SkinnedMeshRenderer>().All(s => s.sharedMesh == Mesh), Is.True);
+                for (var i = 0; i < Skins.Length; i++)
+                {
+                    AssertVertices(before[i], WorldVertices(Skins[i]));
+                    Assert.That(Skins[i].bones, Is.EqualTo(bones[i]));
+                    Assert.That(Skins[i].GetBlendShapeWeight(0), Is.EqualTo(35f));
+                }
+            }
 
             internal Fixture()
             {
@@ -463,6 +494,7 @@ namespace VRVlog.LilToonExporter.Tests
                 Mesh = new Mesh { name = "Shared hair" };
                 Mesh.vertices = new[] { new Vector3(-.1f, 1.7f, .08f), new Vector3(.1f, 1.7f, .08f), new Vector3(0, 1.9f, .08f) };
                 Mesh.triangles = new[] { 0, 1, 2 };
+                Mesh.uv = new[] { Vector2.zero, Vector2.right, Vector2.up };
                 Mesh.normals = Enumerable.Repeat(Vector3.forward, 3).ToArray();
                 Mesh.boneWeights = Enumerable.Repeat(new BoneWeight { boneIndex0 = 0, weight0 = 1 }, 3).ToArray();
                 Mesh.bindposes = new[] { joint.worldToLocalMatrix, bones[HumanBodyBones.Head].worldToLocalMatrix };
@@ -490,6 +522,7 @@ namespace VRVlog.LilToonExporter.Tests
             public void Dispose()
             {
                 Object.DestroyImmediate(Copy); Object.DestroyImmediate(Source);
+                foreach (var mesh in exportMeshes) Object.DestroyImmediate(mesh);
                 Object.DestroyImmediate(Mesh); Object.DestroyImmediate(material); Object.DestroyImmediate(avatar);
             }
         }
