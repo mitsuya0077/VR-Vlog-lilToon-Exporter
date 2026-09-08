@@ -8,6 +8,48 @@ namespace VRVlog.LilToonExporter.Tests
     public sealed class MaterialFallbackTests
     {
         [Test]
+        public void LightingSchemaStoresAuthoredValuesAndFallbackUsesCorrectUnits()
+        {
+            var source = new Material(Shader.Find("Hidden/VRVlogTests/lilToon"));
+            var created = new List<Material>();
+            try
+            {
+                source.SetFloat("_LightMinLimit", .1f);
+                source.SetFloat("_LightMaxLimit", .8f);
+                var direction = new Vector4(.2f, .3f, -.7f, 1f);
+                source.SetVector("_LightDirectionOverride", direction);
+                source.SetFloat("_UseShadow", 1f);
+                source.SetFloat("_ShadowBorder", .7f);
+                source.SetFloat("_ShadowBlur", .2f);
+                source.SetFloat("_UseRim", 1f);
+                source.SetFloat("_RimEnableLighting", .2f);
+                source.SetFloat("_RimBlur", .9f);
+                source.SetColor("_EmissionColor", new Color(.5f, .6f, .7f, 1f));
+                source.SetFloat("_EmissionBlend", .4f);
+                var record = LilToonMaterialReader.Read(source, 0, (_, __) => 0, suppressSharedTextureEmission: false);
+                Assert.AreEqual(.8f, record.floats.Single(item => item.name == "_LightMaxLimit").value);
+                Assert.AreEqual(1, record.vectors.Count);
+                Assert.AreEqual(direction.z, record.vectors[0].z);
+                Assert.AreEqual(direction.w, record.vectors[0].w);
+                var fallback = UniVrmOneClickExporter.CreateMToonFallback(source, created, null, false);
+                Assert.AreEqual(-.4f, fallback.GetFloat("_ShadingShiftFactor"), .00001f);
+                Assert.AreEqual(.8f, fallback.GetFloat("_ShadingToonyFactor"), .00001f);
+                Assert.AreEqual(.2f, fallback.GetFloat("_RimLightingMix"), .00001f);
+                Assert.AreEqual(0f, fallback.GetFloat("_RimLift"), .00001f);
+                var expectedEmission = source.GetColor("_EmissionColor").linear * .4f;
+                Assert.AreEqual(expectedEmission.r, fallback.GetColor("_EmissionColor").r, .00001f);
+                Assert.AreEqual(direction, source.GetVector("_LightDirectionOverride"));
+                Assert.AreEqual(.8f, source.GetFloat("_LightMaxLimit"));
+                Assert.AreEqual(.9f, source.GetFloat("_RimBlur"));
+            }
+            finally
+            {
+                foreach (var material in created) Object.DestroyImmediate(material);
+                Object.DestroyImmediate(source);
+            }
+        }
+
+        [Test]
         public void OutlineMaskConvertsRedToGreenAndRetainsSource()
         {
             var source = new Material(Shader.Find("Hidden/VRVlogTests/lilToon"));

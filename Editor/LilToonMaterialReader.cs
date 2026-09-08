@@ -46,6 +46,37 @@ namespace VRVlog.LilToonExporter
                 AddWarning(warnings, $"{material.name}: 頂点カラーで太さを制御する輪郭線はMToonで再現できないため省略しました。口・目への輪郭線の突き抜けを防ぎます。");
 
             foreach (var name in FloatNames) if (material.HasProperty(name)) record.floats.Add(new LilToonFloatProperty { name = name, value = suppressEmission && name == "_EmissionBlend" ? 0f : material.GetFloat(name) });
+            foreach (var property in LilToonLightingProfile.Properties)
+                if (property.AppliesTo(record.features))
+                {
+                    var authored = material.HasProperty(property.Name) ? material.GetFloat(property.Name) : property.DefaultFor(family);
+                    var normalized = LilToonLightingProfile.Normalize(property, authored, family);
+                    if (normalized != authored)
+                        AddWarning(warnings, $"{material.name}: {property.Name} を有効な範囲へ調整して書き出しました（元のマテリアルは変更していません）。");
+                    record.floats.Add(new LilToonFloatProperty {
+                        name = property.Name,
+                        value = normalized
+                    });
+                }
+            var minimum = record.floats.Find(item => item.name == "_LightMinLimit");
+            var maximum = record.floats.Find(item => item.name == "_LightMaxLimit");
+            if (minimum.value > maximum.value)
+            {
+                minimum.value = maximum.value;
+                AddWarning(warnings, $"{material.name}: 明るさの下限が上限を超えていたため、書き出し用の下限を上限に合わせました。");
+            }
+            var direction = material.HasProperty(LilToonLightingProfile.DirectionProperty)
+                ? material.GetVector(LilToonLightingProfile.DirectionProperty)
+                : new Vector4(0.001f, 0.002f, 0.001f, 0f);
+            if (!ValidDirection(direction))
+            {
+                direction = new Vector4(0.001f, 0.002f, 0.001f, 0f);
+                AddWarning(warnings, $"{material.name}: 不正なライト方向を既定値へ調整して書き出しました。");
+            }
+            record.vectors.Add(new LilToonVectorProperty {
+                name = LilToonLightingProfile.DirectionProperty,
+                x = direction.x, y = direction.y, z = direction.z, w = direction.w
+            });
             foreach (var name in ColorNames) if (material.HasProperty(name)) { var c = suppressEmission && name == "_EmissionColor" ? Color.black : material.GetColor(name); record.colors.Add(new LilToonColorProperty { name = name, r = c.r, g = c.g, b = c.b, a = c.a }); }
             foreach (var item in TextureNames)
             {
@@ -70,6 +101,11 @@ namespace VRVlog.LilToonExporter
         }
 
         private static bool HasOutline(Material m) => Enabled(m, "_UseOutline") || m.shader.name.EndsWith("Outline", StringComparison.Ordinal);
+        private static bool ValidDirection(Vector4 direction) =>
+            !float.IsNaN(direction.x) && Math.Abs(direction.x) <= 10000f &&
+            !float.IsNaN(direction.y) && Math.Abs(direction.y) <= 10000f &&
+            !float.IsNaN(direction.z) && Math.Abs(direction.z) <= 10000f &&
+            (direction.w == 0f || direction.w == 1f);
         internal static bool HasPortableOutline(Material m) => HasOutline(m) &&
             (!m.HasProperty("_OutlineVertexR2Width") || m.GetFloat("_OutlineVertexR2Width") == 0f);
 

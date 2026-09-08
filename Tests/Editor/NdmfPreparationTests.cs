@@ -32,6 +32,7 @@ namespace VRVlog.LilToonExporter.Tests
             FakeRegistry.Selected = new FakeProvider();
             FakeProcessor.Action = null;
             FakeProcessor.Calls = 0;
+            FakeContext.ReportedErrors.Clear();
         }
 
         [TearDown]
@@ -45,11 +46,12 @@ namespace VRVlog.LilToonExporter.Tests
         }
 
         [Test]
-        public void RunsCanonicalPhasesInMemoryAndOwnsOnlyNewReachableAssets()
+        public void RunsCanonicalPhasesWithOwnedAssetContainerAndOwnsOnlyNewReachableAssets()
         {
             FakeProcessor.Action = root =>
             {
-                Assert.AreEqual(null, FakeDirectoryScope.Current);
+                Assert.AreEqual(FakeContext.Last.AssetPath, FakeDirectoryScope.Current);
+                Assert.IsTrue(UnityEditor.AssetDatabase.IsValidFolder(FakeDirectoryScope.Current));
                 generated = MakeMesh("__VRVlog_Menu_fixture");
                 root.GetComponent<SkinnedMeshRenderer>().sharedMesh = generated;
                 unrelated = new Material(Shader.Find("Unlit/Color"));
@@ -60,13 +62,14 @@ namespace VRVlog.LilToonExporter.Tests
                 Assert.AreSame(FakePhase.Start, FakeProcessor.First);
                 Assert.AreSame(FakePhase.Transforming, FakeProcessor.Last);
                 Assert.AreSame(FakeRegistry.Selected, FakeContext.Last.Platform);
-                Assert.IsNull(FakeContext.Last.AssetPath);
+                Assert.IsTrue(FakeContext.Last.AssetPath.StartsWith("Assets/VRVlogExportTemp-", StringComparison.Ordinal));
                 Assert.IsTrue(FakeContext.Last.Finished);
                 Assert.IsTrue(FakeContext.Last.Saver.Disposed);
                 Assert.AreEqual("original-directory", FakeDirectoryScope.Current);
                 Assert.IsTrue(generated != null);
             }
             Assert.IsTrue(generated == null);
+            Assert.IsFalse(UnityEditor.AssetDatabase.IsValidFolder(FakeContext.Last.AssetPath));
             Assert.IsTrue(original != null);
             Assert.IsTrue(unrelated != null, "Global resource collection must not claim another owner's assets.");
             Assert.AreSame(original, source.GetComponent<SkinnedMeshRenderer>().sharedMesh);
@@ -90,6 +93,48 @@ namespace VRVlog.LilToonExporter.Tests
             Assert.IsTrue(generated == null);
             Assert.IsTrue(original != null);
             Assert.AreEqual("original-directory", FakeDirectoryScope.Current);
+            Assert.IsFalse(UnityEditor.AssetDatabase.IsValidFolder(FakeContext.Last.AssetPath));
+        }
+
+        [Test]
+        public void PluginFailureIncludesToolPassAndOriginalExceptionAndCleansTemporaryFolder()
+        {
+            FakeContext.Success = false;
+            var cause = new ArgumentNullException("assetContainer");
+            FakeContext.ReportedErrors.Add(new FakeErrorContext {
+                Plugin = new FakePlugin(), PassName = "GenerateAnimations",
+                TheError = new FakeError { Exception = cause }
+            });
+            var error = Assert.Throws<InvalidOperationException>(() => NdmfExportPreparation.ProcessClone(source, clone, Resolve()));
+            Assert.IsTrue(error.Message.Contains("LightLimitChanger"));
+            Assert.IsTrue(error.Message.Contains("GenerateAnimations"));
+            Assert.IsTrue(error.Message.Contains("assetContainer"));
+            Assert.AreSame(cause, error.InnerException);
+            Assert.IsFalse(UnityEditor.AssetDatabase.IsValidFolder(FakeContext.Last.AssetPath));
+            Assert.AreSame(original, source.GetComponent<SkinnedMeshRenderer>().sharedMesh);
+        }
+
+        [Test]
+        public void PersistentPluginAssetsRemainUntilExportLeaseEndsAndNeverTouchSiblingAssets()
+        {
+            NdmfSharedAssetFixture temporary = null;
+            var siblingName = "VRVlogExportTemp-" + Guid.NewGuid().ToString("N");
+            var siblingGuid = UnityEditor.AssetDatabase.CreateFolder("Assets", siblingName);
+            var siblingPath = UnityEditor.AssetDatabase.GUIDToAssetPath(siblingGuid);
+            try
+            {
+                FakeProcessor.Action = root => {
+                    Assert.IsTrue(UnityEditor.AssetDatabase.IsValidFolder(FakeContext.Last.AssetPath));
+                    temporary = ScriptableObject.CreateInstance<NdmfSharedAssetFixture>();
+                    UnityEditor.AssetDatabase.CreateAsset(temporary, FakeContext.Last.AssetPath + "/plugin.asset");
+                };
+                using (NdmfExportPreparation.ProcessClone(source, clone, Resolve()))
+                    Assert.IsTrue(temporary != null && UnityEditor.EditorUtility.IsPersistent(temporary));
+                Assert.IsTrue(temporary == null);
+                Assert.IsTrue(UnityEditor.AssetDatabase.IsValidFolder(siblingPath));
+                Assert.AreEqual(siblingGuid, UnityEditor.AssetDatabase.AssetPathToGUID(siblingPath));
+            }
+            finally { UnityEditor.AssetDatabase.DeleteAsset(siblingPath); }
         }
 
         [Test]
@@ -612,10 +657,16 @@ namespace VRVlog.LilToonExporter.Tests
             public bool Finished;
             public bool Successful => Success;
             public IDisposable AssetSaver => Saver;
+            public static readonly List<FakeErrorContext> ReportedErrors = new List<FakeErrorContext>();
+            public FakeReport ErrorReport { get; } = new FakeReport();
             public FakeContext(GameObject root, string path, IFakeProvider platform, bool isClone)
             { Root = root; AssetPath = path; Platform = platform; Last = this; }
             internal void Finish() { Finished = true; if (FailFinish) throw new InvalidOperationException("finish failed"); }
         }
+        public sealed class FakeReport { public IEnumerable<FakeErrorContext> Errors => FakeContext.ReportedErrors; }
+        public sealed class FakePlugin { public string DisplayName => "LightLimitChanger"; }
+        public struct FakeErrorContext { public FakePlugin Plugin; public string PassName; public FakeError TheError; }
+        public sealed class FakeError { public string Severity => "InternalError"; public Exception Exception { get; set; } }
         public sealed class FakeSaver : IDisposable
         {
             public bool Disposed;

@@ -19,7 +19,7 @@ namespace VRVlog.LilToonExporter
                 error = $"Unsupported schema major: {extension.schemaMajor}.";
                 return false;
             }
-            if (extension.schemaMinor < 0 ||
+            if (extension.schemaMinor < 0 || extension.schemaMinor > LilToonMobileProfile.SchemaMinor ||
                 !IsValidVersion(extension.exporterVersion) ||
                 !IsValidVersion(extension.sourceLilToonVersion))
             {
@@ -76,7 +76,7 @@ namespace VRVlog.LilToonExporter
                         return false;
                     }
                 }
-                if (!ValidateProperties(material, out error))
+                if (!ValidateProperties(material, extension.schemaMinor, out error))
                     return false;
             }
 
@@ -86,12 +86,15 @@ namespace VRVlog.LilToonExporter
 
         private static bool ValidateProperties(
             LilToonMaterialRecord material,
+            int schemaMinor,
             out string error)
         {
             if (material.floats == null ||
                 material.floats.Count > LilToonMobileProfile.MaximumFloatProperties ||
                 material.colors == null ||
                 material.colors.Count > LilToonMobileProfile.MaximumColorProperties ||
+                material.vectors == null ||
+                material.vectors.Count > LilToonMobileProfile.MaximumVectorProperties ||
                 material.textures == null ||
                 material.textures.Count > LilToonMobileProfile.MaximumTextureProperties)
             {
@@ -109,6 +112,20 @@ namespace VRVlog.LilToonExporter
                 }
             }
             var colorNames = new HashSet<string>(StringComparer.Ordinal);
+            var vectorNames = new HashSet<string>(StringComparer.Ordinal);
+            foreach (var item in material.vectors)
+            {
+                if (schemaMinor < 2 || item == null ||
+                    item.name != LilToonLightingProfile.DirectionProperty ||
+                    !vectorNames.Add(item.name) || !IsFinite(item.x) ||
+                    !IsFinite(item.y) || !IsFinite(item.z) || !IsFinite(item.w))
+                {
+                    error = $"Invalid vector property on material {material.materialIndex}.";
+                    return false;
+                }
+            }
+            if (schemaMinor >= 2 && !LilToonLightingProfile.ValidateRequired(material, floatNames, out error))
+                return false;
             foreach (var item in material.colors)
             {
                 if (item == null || !IsValidName(item.name) ||

@@ -87,6 +87,7 @@ namespace UnityEngine
         public bool HasProperty(string name) => Properties.ContainsKey(name);
         public float GetFloat(string name) => (float)Properties[name];
         public Color GetColor(string name) => (Color)Properties[name];
+        public Vector4 GetVector(string name) => (Vector4)Properties[name];
         public Texture GetTexture(string name) => Properties[name] as Texture;
         public Vector2 GetTextureScale(string name) => new Vector2 { x = 1, y = 1 };
         public Vector2 GetTextureOffset(string name) => new Vector2();

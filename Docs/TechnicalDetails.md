@@ -1,5 +1,7 @@
 # Technical details / 詳しい仕様
 
+Lighting controls and backward compatibility for schema 1.2 are documented in [Lighting profile](../Schema/Lighting.md).
+
 Unity Editor package for exporting a VRM 1.0 file with two material
 representations:
 

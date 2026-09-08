@@ -1,13 +1,13 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://vrvlog.app/schema/VRVLOG_materials_liltoon/1.1/schema.json",
+  "$id": "https://vrvlog.app/schema/VRVLOG_materials_liltoon/1.2/schema.json",
   "title": "VR Vlog lilToon material extension",
   "type": "object",
   "additionalProperties": false,
   "required": ["schemaMajor", "schemaMinor", "exporterVersion", "sourceLilToonVersion", "materials"],
   "properties": {
     "schemaMajor": {"const": 1},
-    "schemaMinor": {"type": "integer", "minimum": 0},
+    "schemaMinor": {"type": "integer", "minimum": 0, "maximum": 2},
     "exporterVersion": {"type": "string", "minLength": 1, "maxLength": 64},
     "sourceLilToonVersion": {"type": "string", "minLength": 1, "maxLength": 64},
     "materials": {
@@ -17,6 +17,11 @@
       "items": {"$ref": "#/$defs/material"}
     }
   },
+  "allOf": [{
+    "if": {"properties": {"schemaMinor": {"const": 2}}},
+    "then": {"properties": {"materials": {"items": {"required": ["vectors"]}}}},
+    "else": {"properties": {"materials": {"items": {"properties": {"vectors": false}}}}}
+  }],
   "$defs": {
     "finiteNumber": {"type": "number"},
     "namedFloat": {
@@ -38,6 +43,18 @@
         "g": {"$ref": "#/$defs/finiteNumber"},
         "b": {"$ref": "#/$defs/finiteNumber"},
         "a": {"$ref": "#/$defs/finiteNumber"}
+      }
+    },
+    "vector": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["name", "x", "y", "z", "w"],
+      "properties": {
+        "name": {"const": "_LightDirectionOverride"},
+        "x": {"$ref": "#/$defs/finiteNumber"},
+        "y": {"$ref": "#/$defs/finiteNumber"},
+        "z": {"$ref": "#/$defs/finiteNumber"},
+        "w": {"$ref": "#/$defs/finiteNumber"}
       }
     },
     "texture": {
@@ -72,6 +89,7 @@
         },
         "floats": {"type": "array", "description": "Property names must be unique; enforced by LilToonExtensionValidator.", "maxItems": 128, "items": {"$ref": "#/$defs/namedFloat"}},
         "colors": {"type": "array", "description": "Property names must be unique; enforced by LilToonExtensionValidator.", "maxItems": 32, "items": {"$ref": "#/$defs/color"}},
+        "vectors": {"type": "array", "description": "Schema 1.2 stores direction as numeric components, never as a color. Required global and feature lighting floats are enforced by LilToonExtensionValidator.", "minItems": 1, "maxItems": 1, "items": {"$ref": "#/$defs/vector"}},
         "textures": {"type": "array", "description": "Property names must be unique; enforced by LilToonExtensionValidator.", "maxItems": 32, "items": {"$ref": "#/$defs/texture"}}
       }
     }

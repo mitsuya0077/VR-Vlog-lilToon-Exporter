@@ -9,6 +9,7 @@ using System.Reflection;
 
 namespace UnityEngine
 {
+    public static class Debug { public static void LogWarning(object message) { } }
     public class Object
     {
         public string name; internal bool destroyed, persistent;
@@ -149,8 +150,22 @@ namespace UnityEditor
     public static class AssetDatabase
     {
         static readonly Dictionary<string,Object> assets = new Dictionary<string,Object>();
+        static readonly Dictionary<string,string> folders = new Dictionary<string,string>();
+        public static string CreateFolder(string parent,string name) { var path=parent+"/"+name; var guid=Guid.NewGuid().ToString("N"); folders.Add(path,guid); return guid; }
+        public static string GUIDToAssetPath(string guid) => folders.FirstOrDefault(item => item.Value==guid).Key ?? "";
+        public static string AssetPathToGUID(string path) => folders.TryGetValue(path,out var guid) ? guid : "";
+        public static bool IsValidFolder(string path) => path=="Assets" || folders.ContainsKey(path);
         public static void CreateAsset(Object value,string path) { value.persistent = true; assets.Add(path,value); }
-        public static bool DeleteAsset(string path) { if (!assets.TryGetValue(path,out var value)) return false; assets.Remove(path); value.persistent = false; Object.DestroyImmediate(value); return true; }
+        public static bool DeleteAsset(string path)
+        {
+            if (folders.Remove(path))
+            {
+                foreach (var child in assets.Keys.Where(key => key.StartsWith(path+"/",StringComparison.Ordinal)).ToArray()) DeleteAsset(child);
+                return true;
+            }
+            if (!assets.TryGetValue(path,out var value)) return false;
+            assets.Remove(path); value.persistent = false; Object.DestroyImmediate(value); return true;
+        }
     }
 }
 namespace UnityEditor.PackageManager

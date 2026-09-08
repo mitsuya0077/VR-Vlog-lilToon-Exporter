@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.8.0
+
+- Preserve lilToon lighting limits, light direction, shadow, rim and MatCap controls in schema 1.2 for the companion VR Vlog renderer. Continue reading schemas 1.0 and 1.1, using lilToon 2.3.4 defaults for settings that older files did not store.
+- Correct the portable MToon shadow boundary, linear emission strength and rim lighting conversion. Keep original materials and texture assets unchanged.
+- Inspect the actual weighted joints of independent parts after Modular Avatar / NDMF preparation. Offer a copy-only attachment preview with explicit target selection, show shared-rig effects, and preserve existing connections by default. Keep authored automatic connections and existing compatible spring chains.
+- Provide an owned temporary asset container for NDMF plugins, including LightLimitChanger, throughout export. Clean up only the export-owned directory and report the failing plugin, pass and original exception when preparation fails.
+
 ## 0.7.4
 
 - Apply supported Modular Avatar / NDMF authoring passes to an isolated export copy before VRM serialization, preserving clothing and hair armature attachment. Keep source-based FaceEmo expressions and approved material omissions before preparation; skip the optimization phase and check that export expressions remain present. Ignore unused inactive authoring settings while retaining dependencies of exported meshes.

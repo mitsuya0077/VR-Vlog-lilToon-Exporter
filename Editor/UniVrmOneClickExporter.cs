@@ -14,7 +14,8 @@ namespace VRVlog.LilToonExporter
 
         public static byte[] Export(GameObject source, string avatarName, string author, ICollection<string> warnings = null, bool suppressSharedTextureEmission = true,
             string exporterVersion = null, string lilToonVersion = null, bool suppressHdrTextureEmission = true,
-            IEnumerable<GameObject> excludedObjects = null, MaterialBakeOptions bakeOptions = null)
+            IEnumerable<GameObject> excludedObjects = null, MaterialBakeOptions bakeOptions = null,
+            Func<ExportAttachmentSession, bool> reviewAttachments = null, bool reviewConnectedAttachments = false)
         {
             if (source == null) throw new ArgumentNullException(nameof(source));
             // Cloning detaches the avatar from its parents. Reject an inactive
@@ -57,6 +58,13 @@ namespace VRVlog.LilToonExporter
                     LilToonMainTextureBaker.Prepare(clone, temporaryMaterials, temporaryTextures, warnings, suppressSharedTextureEmission, suppressHdrTextureEmission);
                 // Also cover meshes/joints newly created by authoring passes.
                 SkinnedMeshFallbackWeights.Preserve(clone, temporaryMeshes, warnings);
+                using var attachments = new ExportAttachmentSession(source, clone, reviewConnectedAttachments);
+                if (reviewAttachments != null && (attachments.Parts.Count > 0 || reviewConnectedAttachments))
+                {
+                    if (!reviewAttachments(attachments)) throw new OperationCanceledException("追従の確認をキャンセルしました。");
+                }
+                else if (attachments.Parts.Count > 0)
+                    warnings?.Add("本体の骨と独立したパーツが " + attachments.Parts.Count + " 範囲あります。髪などが追従しない場合は、書き出し画面で追従先を指定してください。");
                 var preparedMaterials = new Dictionary<Renderer, Material[]>();
                 foreach (var renderer in ExportRendererSelection.Enumerate(clone)) preparedMaterials.Add(renderer, renderer.sharedMaterials);
                 ReplaceLilToonMaterials(clone, temporaryMaterials, temporaryTextures, warnings, suppressSharedTextureEmission);
@@ -163,25 +171,32 @@ namespace VRVlog.LilToonExporter
                 DoubleSidedMode = Float(source, "_Cull", 2f) == 2f ? MToon10DoubleSidedMode.Off : MToon10DoubleSidedMode.On,
                 BaseColorFactorSrgb = Color(source, "_Color", UnityEngine.Color.white),
                 BaseColorTexture = Texture(source, "_MainTex"),
-                ShadeColorFactorSrgb = shadowEnabled ? Color(source, "_ShadowColor", UnityEngine.Color.gray) : Color(source, "_Color", UnityEngine.Color.white),
+                ShadeColorFactorSrgb = shadowEnabled ? MobileMaterialMath.ShadeColor(
+                    Color(source, "_Color", UnityEngine.Color.white), Color(source, "_ShadowColor", UnityEngine.Color.gray),
+                    Float(source, "_ShadowStrength", 1f)) : Color(source, "_Color", UnityEngine.Color.white),
+                ShadingShiftFactor = shadowEnabled ? MobileMaterialMath.ShadowShift(Float(source, "_ShadowBorder", 0.5f), Float(source, "_ShadowBlur", 0.1f)) : 0f,
+                ShadingToonyFactor = shadowEnabled ? MobileMaterialMath.ShadowToony(Float(source, "_ShadowBorder", 0.5f), Float(source, "_ShadowBlur", 0.1f)) : 0f,
                 // An unset MToon shade texture is white, not the base image.
                 ShadeColorTexture = shadowEnabled
                     ? shadeTexture ?? Texture(source, "_MainTex")
                     : Texture(source, "_MainTex"),
                 NormalTexture = normalEnabled ? Texture(source, "_BumpMap") : null,
                 NormalTextureScale = normalEnabled ? Float(source, "_BumpScale", 1f) : 0f,
-                EmissiveFactorLinear = emissionEnabled ? Color(source, "_EmissionColor", UnityEngine.Color.black).linear : UnityEngine.Color.black,
+                EmissiveFactorLinear = emissionEnabled ? Color(source, "_EmissionColor", UnityEngine.Color.black).linear * Mathf.Clamp01(Float(source, "_EmissionBlend", 1f)) : UnityEngine.Color.black,
                 EmissiveTexture = emissionEnabled ? Texture(source, "_EmissionMap") : null,
                 MatcapColorFactorSrgb = matcapEnabled ? MobileMaterialMath.MatcapColor(Color(source, "_MatCapColor", UnityEngine.Color.white), Float(source, "_MatCapBlend", 1f)) : UnityEngine.Color.black,
                 MatcapTexture = matcapEnabled ? Texture(source, "_MatCapTex") : null,
                 // MToon has no directional backlight. When lilToon rim light is
                 // unused, its parametric rim is the closest portable fallback.
                 ParametricRimColorFactorSrgb = rimEnabled
-                    ? Color(source, "_RimColor", UnityEngine.Color.black)
+                    ? MobileMaterialMath.MatcapColor(Color(source, "_RimColor", UnityEngine.Color.black), 1f)
                     : backlightEnabled ? Color(source, "_BacklightColor", UnityEngine.Color.black) : UnityEngine.Color.black,
                 ParametricRimFresnelPowerFactor = Mathf.Max(0f, rimEnabled
-                    ? Float(source, "_RimFresnelPower", 1f)
+                    ? MobileMaterialMath.RimPower(Float(source, "_RimBorder", 0.5f), Float(source, "_RimFresnelPower", 1f))
                     : backlightEnabled ? Float(source, "_BacklightDirectivity", 5f) : 1f),
+                ParametricRimLiftFactor = 0f,
+                RimLightingMixFactor = Mathf.Clamp01(rimEnabled ? Float(source, "_RimEnableLighting", 1f) :
+                    matcapEnabled ? Float(source, "_MatCapEnableLighting", 1f) : 1f),
                 RimMultiplyTexture = rimEnabled ? Texture(source, "_RimColorTex") : null,
                 OutlineWidthMode = outlineEnabled ? MToon10OutlineMode.World : MToon10OutlineMode.None,
                 // lilToon stores this UI value in centimetre-like units and
