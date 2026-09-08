@@ -15,6 +15,7 @@ $taskSources = @(
     (Join-Path $taskRepo 'Editor/ExpressionAnimationData.cs'),
     (Join-Path $taskRepo 'Editor/LilToonEmissionPolicy.cs'),
     (Join-Path $taskRepo 'Editor/LilToonMaterialReader.cs'),
+    (Join-Path $taskRepo 'Editor/LilToonLightingProfile.cs'),
     (Join-Path $taskRepo 'Editor/LilToonExtensionModel.cs'),
     (Join-Path $taskRepo 'Editor/LilToonMobileProfile.cs'),
     (Join-Path $taskRepo 'Editor/ExportRendererSelection.cs'),
@@ -31,12 +32,14 @@ $taskSources = @(
     (Join-Path $taskRepo 'Tests/Editor/Fixtures/AnimatedExpressionFixture.cs'),
     (Join-Path $PSScriptRoot 'MeshTestShim.cs'),
     (Join-Path $PSScriptRoot 'MaterialTestShim.cs'),
+    (Join-Path $PSScriptRoot 'LightingBehaviorTests.cs'),
     (Join-Path $PSScriptRoot 'TextureResizeBehaviorTests.cs'),
     (Join-Path $PSScriptRoot 'SkinRootBehaviorTests.cs'),
     (Join-Path $PSScriptRoot 'BehaviorTests.cs')
 )
 Add-Type -Path $taskSources -CompilerOptions '/define:EXPORTER_BEHAVIOR_TESTS'
 [ExporterBehaviorTests]::Run()
+[ExporterLightingBehaviorTests]::Run()
 [ExporterTextureResizeBehaviorTests]::Run()
 [ExporterSkinRootBehaviorTests]::Run()
 if ($LocalVrm) { [ExporterBehaviorTests]::VerifyLocalVrm($LocalVrm) }

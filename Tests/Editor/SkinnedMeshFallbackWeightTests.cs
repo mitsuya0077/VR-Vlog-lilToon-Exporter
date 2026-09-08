@@ -15,7 +15,7 @@ namespace VRVlog.LilToonExporter.Tests
         [TestCase(false, true)]
         [TestCase(true, false)]
         [TestCase(true, true)]
-        public void PlacementDirectionsAndMorphsSurviveAnchorAndBoneMotion(bool mixedWeights, bool useRootBone)
+        public void RigidMeshesPreserveGeometryAndMixedZeroWeightsFailSafely(bool mixedWeights, bool useRootBone)
         {
             using var fixture = new Fixture(mixedWeights, useRootBone);
             var original = fixture.SourceSkin.sharedMesh;
@@ -24,6 +24,16 @@ namespace VRVlog.LilToonExporter.Tests
             var originalBinds = original.bindposes;
             var originalWeights = original.GetAllBoneWeights().ToArray();
             var originalBounds = fixture.CloneSkin.localBounds;
+            if (mixedWeights)
+            {
+                var error = Assert.Throws<InvalidOperationException>(() => SkinnedMeshFallbackWeights.Preserve(fixture.Clone, fixture.Owned, null));
+                Assert.That(error.Message, Does.Contain("ウェイトのない頂点"));
+                Assert.That(fixture.CloneSkin.sharedMesh, Is.SameAs(original));
+                Assert.That(original.vertices, Is.EqualTo(originalVertices));
+                Assert.That(original.GetAllBoneWeights().ToArray(), Is.EqualTo(originalWeights));
+                Assert.That(fixture.Owned, Is.Empty);
+                return;
+            }
             SkinnedMeshFallbackWeights.Preserve(fixture.Clone, fixture.Owned, null);
             var converted = fixture.CloneSkin.sharedMesh;
             Assert.That(converted, Is.Not.SameAs(original));
@@ -65,9 +75,9 @@ namespace VRVlog.LilToonExporter.Tests
         }
 
         [Test]
-        public void MixedWeightsKeepTheirPoseWhenPreparationChangesTheBoundsAnchor()
+        public void RigidMeshKeepsItsPoseWhenPreparationChangesTheBoundsAnchor()
         {
-            using var fixture = new Fixture(true, true);
+            using var fixture = new Fixture(false, true);
             var originalMesh = fixture.SourceSkin.sharedMesh;
             var originalRoot = fixture.SourceSkin.rootBone;
             SkinnedMeshFallbackWeights.Preserve(fixture.Clone, fixture.Owned, null);
@@ -75,9 +85,7 @@ namespace VRVlog.LilToonExporter.Tests
             var explicitBones = fixture.CloneSkin.bones;
             var ownedCount = fixture.Owned.Count;
 
-            // MA MeshSettings changes rootBone for bounds even on a mesh that
-            // mixes weighted and implicit vertices. Encode the old implicit
-            // transform before that step, so this new anchor cannot move it.
+            // Bounds anchors must not determine rigid mesh placement.
             var boundsAnchor = new GameObject("New bounds anchor").transform;
             boundsAnchor.SetParent(fixture.Clone.transform, false);
             boundsAnchor.localPosition = new Vector3(-0.3f, 1.9f, 0.4f);
@@ -101,7 +109,7 @@ namespace VRVlog.LilToonExporter.Tests
         }
 
         [Test]
-        public void AvatarRootAnchorGetsAnExportedEquivalentJoint()
+        public void RigidMeshFollowsItsRendererWhenBoundsAnchorIsAvatarRoot()
         {
             using var fixture = new Fixture(false, true);
             fixture.SourceSkin.rootBone = fixture.Source.transform;
@@ -110,11 +118,8 @@ namespace VRVlog.LilToonExporter.Tests
             SkinnedMeshFallbackWeights.Preserve(fixture.Clone, fixture.Owned, null);
             var joint = fixture.CloneSkin.bones[0];
             Assert.That(joint, Is.Not.SameAs(fixture.Clone.transform));
-            Assert.That(joint.parent, Is.SameAs(fixture.Clone.transform));
-            Assert.That(joint.localPosition, Is.EqualTo(Vector3.zero));
-            Assert.That(joint.localRotation, Is.EqualTo(Quaternion.identity));
-            Assert.That(joint.localScale, Is.EqualTo(Vector3.one));
-            Assert.That(fixture.Clone.transform.childCount, Is.EqualTo(oldChildren + 1));
+            Assert.That(joint, Is.SameAs(fixture.CloneSkin.transform));
+            Assert.That(fixture.Clone.transform.childCount, Is.EqualTo(oldChildren));
             Assert.That(fixture.CloneSkin.rootBone, Is.SameAs(fixture.Clone.transform));
             fixture.Move(2);
             AssertRenderedGeometry(fixture.SourceSkin, fixture.CloneSkin);
@@ -154,6 +159,14 @@ namespace VRVlog.LilToonExporter.Tests
                 weights[0] = weights[3] = new BoneWeight { boneIndex0 = 0, weight0 = 1f };
                 mesh.boneWeights = weights;
             }
+            else
+            {
+                var error = Assert.Throws<InvalidOperationException>(() => SkinnedMeshFallbackWeights.Preserve(fixture.Clone, fixture.Owned, null));
+                Assert.That(error.Message, Does.Contain("ウェイトのない頂点"));
+                Assert.That(fixture.SourceSkin.bones[0], Is.SameAs(fixture.Source.transform));
+                Assert.That(fixture.CloneSkin.sharedMesh, Is.SameAs(mesh));
+                return;
+            }
             SkinnedMeshFallbackWeights.Preserve(fixture.Clone, fixture.Owned, null);
             Assert.That(fixture.SourceSkin.bones[0], Is.SameAs(fixture.Source.transform));
             Assert.That(fixture.CloneSkin.bones[0], Is.Not.SameAs(fixture.Clone.transform));
@@ -176,7 +189,14 @@ namespace VRVlog.LilToonExporter.Tests
         public void MoreThanFourInfluencesRemainUnchanged()
         {
             using var fixture = new Fixture(true, true);
-            var mesh = fixture.SourceSkin.sharedMesh;
+            var template = fixture.SourceSkin.sharedMesh;
+            // SetBoneWeights cannot convert an existing legacy weight buffer in
+            // Unity 2022 without logging a native vertex-format error.
+            var mesh = new Mesh { vertices = template.vertices, triangles = template.triangles,
+                normals = template.normals, tangents = template.tangents };
+            fixture.Owned.Add(mesh);
+            fixture.SourceSkin.sharedMesh = mesh;
+            fixture.CloneSkin.sharedMesh = mesh;
             var bones = new Transform[6];
             var cloneBones = new Transform[6];
             var binds = new Matrix4x4[6];
@@ -184,28 +204,26 @@ namespace VRVlog.LilToonExporter.Tests
             {
                 bones[i] = fixture.SourceSkin.bones[i % 2];
                 cloneBones[i] = fixture.CloneSkin.bones[i % 2];
-                binds[i] = mesh.bindposes[i % 2];
+                binds[i] = template.bindposes[i % 2];
             }
             fixture.SourceSkin.bones = bones;
             fixture.CloneSkin.bones = cloneBones;
             mesh.bindposes = binds;
-            // SetBoneWeights ignores zero influences, but does not accept an
-            // input count of zero. Two zero influences produce that vertex
-            // without using the legacy setter and truncating the six-weight one.
-            var counts = new byte[] { 2, 6, 1, 1 };
-            var weights = new List<BoneWeight1> { new BoneWeight1 { boneIndex = 0 }, new BoneWeight1 { boneIndex = 1 } };
+            // Use valid nonzero influences. Unity 2022 normalizes an all-zero
+            // SetBoneWeights input to a single influence, not an implicit vertex.
+            var counts = new byte[] { 1, 6, 1, 1 };
+            var weights = new List<BoneWeight1> { new BoneWeight1 { boneIndex = 0, weight = 1f } };
             for (var i = 0; i < 6; i++) weights.Add(new BoneWeight1 { boneIndex = i, weight = 1f / 6 });
             weights.Add(new BoneWeight1 { boneIndex = 0, weight = 1f });
             weights.Add(new BoneWeight1 { boneIndex = 0, weight = 1f });
             using (var nativeCounts = new NativeArray<byte>(counts, Allocator.Temp))
             using (var nativeWeights = new NativeArray<BoneWeight1>(weights.ToArray(), Allocator.Temp))
                 mesh.SetBoneWeights(nativeCounts, nativeWeights);
-            Assert.That(mesh.GetBonesPerVertex()[0], Is.EqualTo(0), "Fixture must contain an implicit vertex.");
             var before = mesh.GetAllBoneWeights().ToArray();
             SkinnedMeshFallbackWeights.Preserve(fixture.Clone, fixture.Owned, null);
             var after = fixture.CloneSkin.sharedMesh.GetAllBoneWeights().ToArray();
             Assert.That(fixture.CloneSkin.sharedMesh.GetBonesPerVertex()[1], Is.EqualTo(6));
-            for (var i = 0; i < 6; i++) Assert.That(after[i + 1], Is.EqualTo(before[i]));
+            Assert.That(after, Is.EqualTo(before));
             AssertRenderedGeometry(fixture.SourceSkin, fixture.CloneSkin);
         }
 
@@ -220,7 +238,7 @@ namespace VRVlog.LilToonExporter.Tests
                 var original = fixture.SourceSkin.sharedMesh;
                 var oldBones = fixture.CloneSkin.bones;
                 if (reason == "external") fixture.CloneSkin.rootBone = external.transform;
-                else fixture.CloneSkin.rootBone.localScale = new Vector3(1, 0, 1);
+                else fixture.CloneSkin.transform.localScale = new Vector3(1, 0, 1);
                 Assert.Throws<InvalidOperationException>(() => SkinnedMeshFallbackWeights.Preserve(fixture.Clone, fixture.Owned, null));
                 Assert.That(fixture.CloneSkin.sharedMesh, Is.SameAs(original));
                 Assert.That(fixture.SourceSkin.sharedMesh, Is.SameAs(original));

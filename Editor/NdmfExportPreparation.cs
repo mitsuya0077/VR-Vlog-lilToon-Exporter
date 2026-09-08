@@ -14,6 +14,7 @@ namespace VRVlog.LilToonExporter
     internal sealed class NdmfExportPreparation : IDisposable
     {
         private readonly HashSet<Object> generated = new HashSet<Object>();
+        private string temporaryAssetPath, temporaryAssetGuid;
         private const string MaNamespace = "nadena.dev.modular_avatar.core.";
         private const string CompatibilityMessage =
             "Modular Avatar の準備に必要な NDMF API を利用できません。ALCOM で NDMF 1.8.3 以降の 1.x と Modular Avatar を更新してから書き出してください。";
@@ -164,11 +165,16 @@ namespace VRVlog.LilToonExporter
                 {
                     RequireCopySceneReferences(clone, cloneAssets);
                     lease.IsolateSharedAssets(clone, sourceAssets, cloneAssets);
-                    directoryScope = (IDisposable)Invoke(() => bridge.DirectoryScope.Invoke(new object[] { null }));
+                    // Legacy NDMF plugins (including LightLimitChanger) add
+                    // subassets directly to context.AssetContainer. A null
+                    // root selects NullAssetSaver and breaks every such pass.
+                    // Use an exclusively owned folder for this export lease.
+                    lease.CreateTemporaryAssetDirectory();
+                    directoryScope = (IDisposable)Invoke(() => bridge.DirectoryScope.Invoke(new object[] { lease.temporaryAssetPath }));
                     var platform = Invoke(() => bridge.PrimaryPlatform.Invoke(null, new object[] { clone })) ??
                         Invoke(() => bridge.GenericPlatform.GetValue(null));
                     if (platform == null) throw new InvalidOperationException(CompatibilityMessage);
-                    context = Invoke(() => bridge.Context.Invoke(new object[] { clone, null, platform, true }));
+                    context = Invoke(() => bridge.Context.Invoke(new object[] { clone, lease.temporaryAssetPath, platform, true }));
                     try
                     {
                         Invoke(() => bridge.Process.Invoke(null, new[] { context, bridge.First, bridge.Transforming }));
@@ -180,10 +186,10 @@ namespace VRVlog.LilToonExporter
                         processError = processError == null ? error : new AggregateException(processError, error);
                     }
                     if (processError != null)
-                        throw new InvalidOperationException("Modular Avatar / NDMF の準備に失敗しました。NDMF のエラー表示を確認してください。", processError);
+                        throw BuildFailure(context, processError);
                     // NDMF records plugin exceptions instead of always rethrowing.
                     if (!(Invoke(() => bridge.Successful.GetValue(context)) is bool success) || !success)
-                        throw new InvalidOperationException("Modular Avatar / NDMF がエラーを報告したため書き出しを中止しました。NDMF のエラー表示を確認して修正してください。");
+                        throw BuildFailure(context, null);
                     if (!requiredMorphs.IsSubsetOf(ExportMorphs(clone)))
                         throw new InvalidOperationException("Modular Avatar / NDMF の処理で書き出し用の表情が失われました。メッシュや BlendShape を変更する追加ツールの設定を確認してください。");
                     warnings?.Add("Modular Avatar / NDMF の衣装・追従設定を一時コピーに適用しました（最適化フェーズは実行していません）。");
@@ -216,9 +222,25 @@ namespace VRVlog.LilToonExporter
                 throw new InvalidOperationException("NDMF の準備には元のアバターから独立した書き出し用コピーが必要です。");
         }
 
-        private static HashSet<Object> Dependencies(GameObject root) => root == null
-            ? new HashSet<Object>()
-            : new HashSet<Object>(EditorUtility.CollectDependencies(new Object[] { root }));
+        private static HashSet<Object> Dependencies(GameObject root) => Dependencies(root == null
+            ? Array.Empty<Object>()
+            : root.GetComponentsInChildren<Component>(true).Cast<Object>().Concat(new Object[] { root }));
+
+        private static HashSet<Object> Dependencies(IEnumerable<Object> roots)
+        {
+            // CollectDependencies omits unsaved references in the native Editor.
+            // Traverse the live serialized graph so copy ownership also covers
+            // generated meshes and nested, unsaved authoring settings.
+            var result = new HashSet<Object>();
+            var pending = new Queue<Object>(roots);
+            while (pending.Count > 0)
+            {
+                var value = pending.Dequeue();
+                if (value == null || !result.Add(value) || value is Shader || value is ComputeShader || value is MonoScript) continue;
+                foreach (var reference in References(value)) pending.Enqueue(reference);
+            }
+            return result;
+        }
 
         private static bool IsMutableAsset(Object value) => value != null &&
             !(value is GameObject) && !(value is Component) && !(value is Shader) &&
@@ -289,7 +311,7 @@ namespace VRVlog.LilToonExporter
                 copy.name = value.name;
                 replacements.Add(value, copy);
             }
-            var copiedDependencies = EditorUtility.CollectDependencies(replacements.Values.ToArray())
+            var copiedDependencies = Dependencies(replacements.Values)
                 .Where(value => IsMutableAsset(value) && !EditorUtility.IsPersistent(value) &&
                     !sourceAssets.Contains(value) && !cloneAssets.Contains(value)).ToArray();
             generated.UnionWith(copiedDependencies);
@@ -344,9 +366,82 @@ namespace VRVlog.LilToonExporter
 
         public void Dispose()
         {
-            foreach (var value in generated)
-                if (value != null && !EditorUtility.IsPersistent(value)) Object.DestroyImmediate(value);
-            generated.Clear();
+            try
+            {
+                foreach (var value in generated)
+                    if (value != null && !EditorUtility.IsPersistent(value)) Object.DestroyImmediate(value);
+                generated.Clear();
+            }
+            finally
+            {
+                if (temporaryAssetPath != null)
+                {
+                    var path = temporaryAssetPath;
+                    var guid = temporaryAssetGuid;
+                    temporaryAssetPath = temporaryAssetGuid = null;
+                    // Do not remove a replacement folder or a moved/user asset.
+                    if (AssetDatabase.IsValidFolder(path) && AssetDatabase.AssetPathToGUID(path) == guid)
+                    {
+                        if (!AssetDatabase.DeleteAsset(path))
+                            Debug.LogWarning("VR Vlog: 書き出しの一時データを削除できませんでした: " + path);
+                    }
+                }
+            }
+        }
+
+        private void CreateTemporaryAssetDirectory()
+        {
+            var name = "VRVlogExportTemp-" + Guid.NewGuid().ToString("N");
+            var guid = AssetDatabase.CreateFolder("Assets", name);
+            var path = AssetDatabase.GUIDToAssetPath(guid);
+            if (string.IsNullOrEmpty(guid) || path != "Assets/" + name || !AssetDatabase.IsValidFolder(path))
+                throw new InvalidOperationException("書き出し用の一時保存先を作成できませんでした。UnityプロジェクトのAssetsフォルダーへの書き込み権限と空き容量を確認してください。");
+            temporaryAssetPath = path;
+            temporaryAssetGuid = guid;
+        }
+
+        private static InvalidOperationException BuildFailure(object context, Exception cause)
+        {
+            var details = new List<string>();
+            var exceptions = new List<Exception>();
+            if (cause != null) exceptions.Add(cause);
+            try
+            {
+                var report = ReadDiagnosticMember(context, "ErrorReport") ?? ReadDiagnosticMember(context, "_report");
+                if (ReadDiagnosticMember(report, "Errors") is System.Collections.IEnumerable errors)
+                    foreach (var entry in errors)
+                    {
+                        var error = ReadDiagnosticMember(entry, "TheError");
+                        var severity = ReadDiagnosticMember(error, "Severity")?.ToString();
+                        if (severity != "Error" && severity != "InternalError") continue;
+                        var plugin = ReadDiagnosticMember(entry, "Plugin");
+                        var pluginName = ReadDiagnosticMember(plugin, "DisplayName") as string ?? "NDMF";
+                        var pass = ReadDiagnosticMember(entry, "PassName") as string;
+                        var exception = ReadDiagnosticMember(error, "Exception") as Exception;
+                        if (exception != null) exceptions.Add(exception);
+                        var message = exception?.Message ?? error?.GetType().GetMethod("ToMessage", Type.EmptyTypes)?.Invoke(error, null) as string;
+                        if (string.IsNullOrWhiteSpace(message)) message = "処理中にエラーが発生しました。";
+                        var detail = pluginName + (string.IsNullOrWhiteSpace(pass) ? "" : " / " + pass) + ": " + message.Trim();
+                        if (detail.Length > 900) detail = detail.Substring(0, 900) + "…";
+                        if (!details.Contains(detail)) details.Add(detail);
+                        if (details.Count >= 8) break;
+                    }
+            }
+            catch { /* Diagnostics must not replace the original processing failure. */ }
+            var summary = "書き出し用コピーの処理を完了できませんでした。元のアバターは変更していません。";
+            if (details.Count > 0) summary += "\n\n" + string.Join("\n", details);
+            else if (cause != null) summary += "\n\n" + cause.Message;
+            summary += "\n\nNDMFコンソールの該当ツールを開くと、対象オブジェクトを確認できます。「詳細をコピー」で原因の情報もコピーできます。";
+            var inner = exceptions.Count == 1 ? exceptions[0] : exceptions.Count > 1 ? new AggregateException(exceptions) : null;
+            return new InvalidOperationException(summary, inner);
+        }
+
+        private static object ReadDiagnosticMember(object owner, string name)
+        {
+            if (owner == null) return null;
+            const BindingFlags flags = BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Instance;
+            var type = owner.GetType();
+            return type.GetProperty(name, flags)?.GetValue(owner) ?? type.GetField(name, flags)?.GetValue(owner);
         }
 
         private static Type FindType(string name)

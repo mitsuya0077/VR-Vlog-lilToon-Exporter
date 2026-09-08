@@ -18,7 +18,7 @@ listing = json.loads((root / "source.json").read_text(encoding="utf-8"))
 
 assert package["name"] == "com.vrvlog.liltoon-vrm-exporter"
 assert package["unity"] == "2022.3"
-assert package["version"] == "0.7.4"
+assert package["version"] == "0.8.0"
 assert one_click.index("AvatarBaseShape.Preserve(source, clone,") < one_click.index("Vrm10Exporter.Export(")
 assert "foreach (var mesh in temporaryMeshes) UnityEngine.Object.DestroyImmediate(mesh);" in one_click
 assert package["vpmDependencies"] == {
@@ -31,7 +31,7 @@ assert listing["author"]["url"] == "https://github.com/mitsuya0077/VR-Vlog-lilTo
 assert listing["infoLink"]["url"] == "https://github.com/mitsuya0077/VR-Vlog-lilToon-Exporter"
 assert listing["githubRepos"] == ["mitsuya0077/VR-Vlog-lilToon-Exporter"]
 assert schema["properties"]["schemaMajor"]["const"] == 1
-assert schema["$id"].endswith("/1.1/schema.json")
+assert schema["$id"].endswith("/1.2/schema.json")
 assert 'backlight' in schema["$defs"]["material"]["properties"]["features"]["items"]["enum"]
 assert schema["properties"]["materials"]["maxItems"] == 64
 assert "VRVLOG_materials_liltoon" in profile
@@ -48,7 +48,7 @@ assert "material.renderQueue > 5000" in validator
 assert "MaximumFeaturesPerMaterial" in validator
 assert "new HashSet<string>(StringComparer.Ordinal)" in validator
 assert "!features.Add(feature)" in validator
-assert "ValidateProperties(material, out error)" in validator
+assert "ValidateProperties(material, extension.schemaMinor, out error)" in validator
 assert "MaximumFloatProperties" in validator
 assert "MaximumColorProperties" in validator
 assert "MaximumTextureProperties" in validator
@@ -189,6 +189,8 @@ assert one_click.index("NdmfExportPreparation.ValidateSource(source,") < one_cli
 assert one_click.index("VrChatExpressionBaker.Bake(source, clone,") < one_click.index("NdmfExportPreparation.Prepare(source, clone,")
 assert one_click.index("VrChatExpressionBaker.Bake(source, clone,") < one_click.index("SkinnedMeshFallbackWeights.Preserve(clone,") < one_click.index("NdmfExportPreparation.Prepare(source, clone,")
 assert one_click.index("NdmfExportPreparation.Prepare(source, clone,") < one_click.rindex("SkinnedMeshFallbackWeights.Preserve(clone,") < one_click.index("Vrm10Exporter.Export(")
+assert one_click.count("SkinnedMeshFallbackWeights.Preserve(clone, temporaryMeshes, warnings, fixedRootJoints)") == 2
+assert "new ExportAttachmentSession(source, clone, reviewConnectedAttachments, fixedRootJoints)" in one_click
 assert one_click.index("Vrm10Exporter.Export(") < one_click.index("ExportSkinRoots.Repair(exported,")
 assert "new MobileTextureSerializer(warnings)" in one_click
 assert "UnityEngine.Object.Instantiate(source)" in one_click
@@ -259,7 +261,8 @@ assert 'OutlineWidthMultiplyTexture = outlineEnabled ? Texture(source, "_Outline
 assert 'private string author = "";' in window
 assert 'private string avatarName = "";' not in window
 assert 'UniVrmOneClickExporter.Export(targetAvatar, targetName, targetAuthor, warnings, targetSharedEmission,' in window
-assert 'PackageVersion(), RequireSupportedLilToon(), targetHdrEmission, targetExclusions, bakeOptions)' in window
+assert 'PackageVersion(), RequireSupportedLilToon(), targetHdrEmission, targetExclusions, bakeOptions,' in window
+assert 'session => AttachmentPreviewWindow.Review(session, warnings), targetAttachmentReview)' in window
 assert 'var targetOutput = outputPath;' in window
 assert 'var targetExclusions = excludedObjects.ToArray();' in window
 assert 'ExportFailureWindow.Show(exception, omitAndRetry)' in window

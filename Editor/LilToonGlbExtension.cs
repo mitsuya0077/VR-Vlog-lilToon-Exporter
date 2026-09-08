@@ -78,7 +78,26 @@ namespace VRVlog.LilToonExporter
 
         private static Dictionary<string, object> ToDom(LilToonExtensionRoot root)
         {
-            var materials = new List<object>(); foreach (var m in root.materials) { var features = new List<object>(); foreach (var x in m.features) features.Add(x); var floats = new List<object>(); foreach (var x in m.floats) floats.Add(new Dictionary<string, object>{{"name",x.name},{"value",x.value}}); var colors = new List<object>(); foreach (var x in m.colors) colors.Add(new Dictionary<string, object>{{"name",x.name},{"r",x.r},{"g",x.g},{"b",x.b},{"a",x.a}}); var textures = new List<object>(); foreach (var x in m.textures) textures.Add(new Dictionary<string, object>{{"name",x.name},{"textureIndex",x.textureIndex},{"semantic",x.semantic},{"scaleX",x.scaleX},{"scaleY",x.scaleY},{"offsetX",x.offsetX},{"offsetY",x.offsetY}}); materials.Add(new Dictionary<string, object>{{"materialIndex",m.materialIndex},{"shaderFamily",m.shaderFamily},{"renderMode",m.renderMode},{"renderQueue",m.renderQueue},{"cullMode",m.cullMode},{"features",features},{"floats",floats},{"colors",colors},{"textures",textures}}); }
+            var materials = new List<object>();
+            foreach (var m in root.materials)
+            {
+                var features = new List<object>();
+                foreach (var x in m.features) features.Add(x);
+                var floats = new List<object>();
+                foreach (var x in m.floats) floats.Add(new Dictionary<string, object>{{"name",x.name},{"value",x.value}});
+                var colors = new List<object>();
+                foreach (var x in m.colors) colors.Add(new Dictionary<string, object>{{"name",x.name},{"r",x.r},{"g",x.g},{"b",x.b},{"a",x.a}});
+                var textures = new List<object>();
+                foreach (var x in m.textures) textures.Add(new Dictionary<string, object>{{"name",x.name},{"textureIndex",x.textureIndex},{"semantic",x.semantic},{"scaleX",x.scaleX},{"scaleY",x.scaleY},{"offsetX",x.offsetX},{"offsetY",x.offsetY}});
+                var material = new Dictionary<string, object>{{"materialIndex",m.materialIndex},{"shaderFamily",m.shaderFamily},{"renderMode",m.renderMode},{"renderQueue",m.renderQueue},{"cullMode",m.cullMode},{"features",features},{"floats",floats},{"colors",colors},{"textures",textures}};
+                if (root.schemaMinor >= 2)
+                {
+                    var vectors = new List<object>();
+                    foreach (var x in m.vectors) vectors.Add(new Dictionary<string, object>{{"name",x.name},{"x",x.x},{"y",x.y},{"z",x.z},{"w",x.w}});
+                    material.Add("vectors", vectors);
+                }
+                materials.Add(material);
+            }
             return new Dictionary<string, object>{{"schemaMajor",root.schemaMajor},{"schemaMinor",root.schemaMinor},{"exporterVersion",root.exporterVersion},{"sourceLilToonVersion",root.sourceLilToonVersion},{"materials",materials}};
         }
         private static List<string> Names(Dictionary<string, object> root, string key) { var r = new List<string>(); var list = Array(root,key,false) ?? new List<object>(); foreach (var x in list) { var o=x as Dictionary<string,object>; r.Add(o != null && o.TryGetValue("name",out var n) ? n as string ?? "" : ""); } return r; }
@@ -222,11 +241,21 @@ namespace VRVlog.LilToonExporter
             foreach (var rawMaterial in RequiredArray(root, "materials"))
             {
                 var source = RequiredObject(rawMaterial, "material");
-                RequireKeys(source,"materialIndex","shaderFamily","renderMode","renderQueue","cullMode","features","floats","colors","textures");
+                if (result.schemaMinor >= 2)
+                    RequireKeys(source,"materialIndex","shaderFamily","renderMode","renderQueue","cullMode","features","floats","colors","vectors","textures");
+                else
+                    RequireKeys(source,"materialIndex","shaderFamily","renderMode","renderQueue","cullMode","features","floats","colors","textures");
                 var material = new LilToonMaterialRecord { materialIndex=Integer(source,"materialIndex"), shaderFamily=String(source,"shaderFamily"), renderMode=String(source,"renderMode"), renderQueue=Integer(source,"renderQueue"), cullMode=String(source,"cullMode") };
                 foreach(var value in RequiredArray(source,"features")) material.features.Add(value as string ?? throw new InvalidOperationException("Feature must be a string."));
                 foreach(var value in RequiredArray(source,"floats")){var item=RequiredObject(value,"float");RequireKeys(item,"name","value");material.floats.Add(new LilToonFloatProperty{name=String(item,"name"),value=Number(item,"value")});}
                 foreach(var value in RequiredArray(source,"colors")){var item=RequiredObject(value,"color");RequireKeys(item,"name","r","g","b","a");material.colors.Add(new LilToonColorProperty{name=String(item,"name"),r=Number(item,"r"),g=Number(item,"g"),b=Number(item,"b"),a=Number(item,"a")});}
+                if (result.schemaMinor >= 2)
+                    foreach (var value in RequiredArray(source, "vectors"))
+                    {
+                        var item = RequiredObject(value, "vector");
+                        RequireKeys(item, "name", "x", "y", "z", "w");
+                        material.vectors.Add(new LilToonVectorProperty { name=String(item,"name"), x=Number(item,"x"), y=Number(item,"y"), z=Number(item,"z"), w=Number(item,"w") });
+                    }
                 foreach(var value in RequiredArray(source,"textures")){var item=RequiredObject(value,"texture");RequireKeys(item,"name","textureIndex","semantic","scaleX","scaleY","offsetX","offsetY");material.textures.Add(new LilToonTextureProperty{name=String(item,"name"),textureIndex=Integer(item,"textureIndex"),semantic=String(item,"semantic"),scaleX=Number(item,"scaleX"),scaleY=Number(item,"scaleY"),offsetX=Number(item,"offsetX"),offsetY=Number(item,"offsetY")});}
                 result.materials.Add(material);
             }

@@ -18,6 +18,7 @@ namespace VRVlog.LilToonExporter
         private bool showAppearanceOptions;
         private bool suppressSharedTextureEmission = true;
         private bool suppressHdrTextureEmission = true;
+        private bool reviewConnectedAttachments;
         private readonly List<GameObject> excludedObjects = new List<GameObject>();
         private Vector2 scrollPosition;
 
@@ -61,6 +62,8 @@ namespace VRVlog.LilToonExporter
             showAppearanceOptions = EditorGUILayout.Foldout(showAppearanceOptions, "書き出し設定");
             if (showAppearanceOptions)
             {
+                reviewConnectedAttachments = EditorGUILayout.Toggle(
+                    new GUIContent("髪・アクセサリの追従を毎回確認", "通常は、本体と独立した骨を使うパーツがあるときに確認します。オンにすると、接続済みの範囲もコピーで確認できます。"), reviewConnectedAttachments);
                 suppressSharedTextureEmission = EditorGUILayout.Toggle(
                     new GUIContent("目などの白飛びを抑える", "メイン画像と同じ画像を使う発光を省略します。意図的な発光も抑えられるため、必要に応じて解除してください。"),
                     suppressSharedTextureEmission);
@@ -116,6 +119,7 @@ namespace VRVlog.LilToonExporter
             var targetSharedEmission = suppressSharedTextureEmission;
             var targetHdrEmission = suppressHdrTextureEmission;
             var targetExclusions = excludedObjects.ToArray();
+            var targetAttachmentReview = reviewConnectedAttachments;
             MaterialBakeOptions bakeOptions = null;
             void Attempt()
             {
@@ -124,7 +128,8 @@ namespace VRVlog.LilToonExporter
                 {
                     if (targetAvatar == null) throw new InvalidOperationException("この書き出しで選んだアバターが見つかりません。アバターを指定し直してください。");
                     return UniVrmOneClickExporter.Export(targetAvatar, targetName, targetAuthor, warnings, targetSharedEmission,
-                        PackageVersion(), RequireSupportedLilToon(), targetHdrEmission, targetExclusions, bakeOptions);
+                        PackageVersion(), RequireSupportedLilToon(), targetHdrEmission, targetExclusions, bakeOptions,
+                        session => AttachmentPreviewWindow.Review(session, warnings), targetAttachmentReview);
                 }, warnings, targetOutput, failure =>
                 {
                     try
@@ -198,6 +203,7 @@ namespace VRVlog.LilToonExporter
                 var expressionCount = VrmMenuExpressions.CountRegistered(bytes);
                 EditorUtility.DisplayDialog("書き出し完了", $"VRMを書き出しました（{bytes.Length:N0}バイト）。\nVRChat表情: {expressionCount}件。", "閉じる");
             }
+            catch (OperationCanceledException) { }
             catch (Exception exception)
             {
                 Debug.LogException(exception);
@@ -222,7 +228,7 @@ namespace VRVlog.LilToonExporter
         private static string PackageVersion()
         {
             var info = PackageManagerPackageInfo.FindForAssembly(typeof(LilToonExporterWindow).Assembly);
-            return info != null && !string.IsNullOrWhiteSpace(info.version) ? info.version : "0.7.4";
+            return info != null && !string.IsNullOrWhiteSpace(info.version) ? info.version : "0.8.0";
         }
 
         private static string InstalledLilToonStatus()

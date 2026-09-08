@@ -24,6 +24,7 @@ namespace VRVlog.LilToonExporter
         public List<string> features = new List<string>();
         public List<LilToonFloatProperty> floats = new List<LilToonFloatProperty>();
         public List<LilToonColorProperty> colors = new List<LilToonColorProperty>();
+        public List<LilToonVectorProperty> vectors = new List<LilToonVectorProperty>();
         public List<LilToonTextureProperty> textures = new List<LilToonTextureProperty>();
     }
 
@@ -42,6 +43,16 @@ namespace VRVlog.LilToonExporter
         public float g;
         public float b;
         public float a = 1f;
+    }
+
+    [Serializable]
+    public sealed class LilToonVectorProperty
+    {
+        public string name = "";
+        public float x;
+        public float y;
+        public float z;
+        public float w;
     }
 
     [Serializable]
