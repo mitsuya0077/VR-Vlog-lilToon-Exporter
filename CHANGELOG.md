@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.8.1
+
+- Export MA Bone Proxy / Merge Armature hair using its authored connection without an additional bone-selection screen. Remove the manual attachment preview and its repeat-confirmation option; unrelated independent props no longer interrupt export.
+- Keep independent props attached as authored and name them in the export report. Do not infer a head connection from names or hierarchy placement alone.
+- Verify the complete one-click export and VRM reimport with root-level MA hair, shared hair meshes, and an independent pet. Locally verified the actual Kushu Short Kipfel prefab: all three hair meshes follow the runtime head without manual attachment.
+
 ## 0.8.0
 
 - Preserve lilToon lighting limits, light direction, shadow, rim and MatCap controls in schema 1.2 for the companion VR Vlog renderer. Continue reading schemas 1.0 and 1.1, using lilToon 2.3.4 defaults for settings that older files did not store.

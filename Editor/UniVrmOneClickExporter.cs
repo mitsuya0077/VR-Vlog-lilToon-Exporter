@@ -14,8 +14,7 @@ namespace VRVlog.LilToonExporter
 
         public static byte[] Export(GameObject source, string avatarName, string author, ICollection<string> warnings = null, bool suppressSharedTextureEmission = true,
             string exporterVersion = null, string lilToonVersion = null, bool suppressHdrTextureEmission = true,
-            IEnumerable<GameObject> excludedObjects = null, MaterialBakeOptions bakeOptions = null,
-            Func<ExportAttachmentSession, bool> reviewAttachments = null, bool reviewConnectedAttachments = false)
+            IEnumerable<GameObject> excludedObjects = null, MaterialBakeOptions bakeOptions = null)
         {
             if (source == null) throw new ArgumentNullException(nameof(source));
             // Cloning detaches the avatar from its parents. Reject an inactive
@@ -59,13 +58,13 @@ namespace VRVlog.LilToonExporter
                     LilToonMainTextureBaker.Prepare(clone, temporaryMaterials, temporaryTextures, warnings, suppressSharedTextureEmission, suppressHdrTextureEmission);
                 // Also cover meshes/joints newly created by authoring passes.
                 SkinnedMeshFallbackWeights.Preserve(clone, temporaryMeshes, warnings, fixedRootJoints);
-                using var attachments = new ExportAttachmentSession(source, clone, reviewConnectedAttachments, fixedRootJoints);
-                if (reviewAttachments != null && (attachments.Parts.Count > 0 || reviewConnectedAttachments))
-                {
-                    if (!reviewAttachments(attachments)) throw new OperationCanceledException("追従の確認をキャンセルしました。");
-                }
-                else if (attachments.Parts.Count > 0)
-                    warnings?.Add("本体の骨と独立したパーツが " + attachments.Parts.Count + " 範囲あります。髪などが追従しない場合は、書き出し画面で追従先を指定してください。");
+                // MA has already applied its authored Merge Armature / Bone
+                // Proxy connections. Independent props are not evidence of a
+                // failed hair attachment and must not trigger a modal edit.
+                using var attachments = new ExportAttachmentSession(source, clone, fixedRootJoints: fixedRootJoints);
+                if (attachments.Parts.Count > 0)
+                    warnings?.Add("本体のボーンと独立したパーツは現在の接続を保持しました: " +
+                        string.Join(", ", attachments.Parts.ConvertAll(part => part.Root.name)));
                 var preparedMaterials = new Dictionary<Renderer, Material[]>();
                 foreach (var renderer in ExportRendererSelection.Enumerate(clone)) preparedMaterials.Add(renderer, renderer.sharedMaterials);
                 ReplaceLilToonMaterials(clone, temporaryMaterials, temporaryTextures, warnings, suppressSharedTextureEmission);
