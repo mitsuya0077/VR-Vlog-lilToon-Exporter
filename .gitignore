@@ -8,3 +8,21 @@ UserSettings/
 *.csproj
 *.sln
 *.user
+
+# Local validation and private creator inputs
+/work/
+/outputs/
+/artifacts/
+__pycache__/
+*.pyc
+.env
+.env.*
+*.vrm
+*.fbx
+*.blend
+*.p12
+*.pfx
+*.pem
+*.key
+*.mobileprovision
+*.log

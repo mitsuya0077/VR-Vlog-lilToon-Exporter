@@ -1,239 +1,190 @@
-# Technical details / 詳しい仕様
+# Technical details
 
-See [appearance preparation and schema 1.3](AppearanceFidelity.md) for the current static appearance contract.
+[日本語の導入ガイド](../README.md)
 
-Lighting controls and backward compatibility for schema 1.2 are documented in [Lighting profile](../Schema/Lighting.md).
+This is a Unity Editor exporter for VRM 1.0. It emits standard
+`VRMC_materials_mtoon` fallback materials and optional VR Vlog data.
+The optional extensions are listed in `extensionsUsed`, never
+`extensionsRequired`; ordinary VRM viewers can use the standard fallback.
 
-Unity Editor package for exporting a VRM 1.0 file with two material
-representations:
+The main branch contains unreleased 0.9.0 (material schema 1.3); release it only
+after a compatible app is available. The latest published package is 0.8.1
+(schema 1.2). The website/VPM listing is currently paused; published ZIPs
+remain available from GitHub Releases.
 
-- standard `VRMC_materials_mtoon` fallback;
-- optional, versioned VR Vlog lilToon material data.
+## Installation
 
-The extension is never placed in `extensionsRequired`. Viewers that do not
-understand it must remain able to render the MToon fallback.
+- Tested editor: Unity 2022.3.22f1. Use the editor supported by VCC/ALCOM for
+  VRChat projects. Other editor series are not covered by this validation.
+- **lilToon 2.3.4 is required.** Install it and the source avatar first. The
+  exporter checks this exact version; it does not install or upgrade lilToon.
+- UniVRM 0.131.x is required. VCC/ALCOM resolves the published
+  `com.vrmc.gltf` and `com.vrmc.vrm` 0.131.0 packages automatically.
+- For Modular Avatar authoring, install its dependencies in the source
+  project. General connection processing supports NDMF 1.x starting at 1.8.3.
+  Current MA preview capture is tested with MA 1.18.7 / NDMF 1.14.8; it checks
+  the required APIs and stops clearly when they are unavailable.
 
-[日本語の導入ガイドに戻る](../README.md)
+Add this repository URL in VCC/ALCOM and install **VR Vlog lilToon VRM Exporter**:
 
-## Install with VCC or ALCOM
+```text
+https://mitsuya0077.github.io/VR-Vlog-lilToon-Exporter/index.json
+```
 
-Add the VR Vlog repository and install only **VR Vlog lilToon VRM Exporter**:
+For manual installation, obtain the exporter ZIP and both matching UniVRM
+ZIPs from the release. Extract each into its own package directory, then use
+Unity Package Manager's **Add package from disk** on each `package.json`,
+starting with UniGLTF, then VRM, then the exporter. Keep these directories
+available; Unity references them. Do not mix duplicate Assets-based and
+Packages-based UniVRM installations. Back up the project before updates.
 
-`https://mitsuya0077.github.io/VR-Vlog-lilToon-Exporter/index.json`
+## Export workflow
 
-The VPM dependency resolver installs the tested `com.vrmc.gltf` and
-`com.vrmc.vrm` 0.131.x packages automatically. The user does not need to find
-or select the UniVRM packages separately. The package manager may show them in
-the confirmation screen before installation.
+Enable the desired outfit, renderers, avatar root and its parents. Open
+**VR Vlog > lilToon VRM 1.0を書き出す**, select the top-level avatar, enter the
+author name and choose the destination. The model name comes from the avatar
+object. Only `.vrm` destinations are accepted; an existing file requires
+overwrite confirmation.
 
-## Workflow
+The exporter collects expressions, freezes current MA visibility, shape,
+material and Mesh Cutter settings on a temporary copy, then applies NDMF
+connections. It preserves prepared base geometry and expression residuals,
+converts materials, serializes with UniVRM, adds optional data and validates the file
+before replacing the destination. Source objects, meshes, materials, textures
+and importer settings are preserved.
 
-Only active objects with enabled renderers are exported, matching UniVRM's
-material selection. Hidden wardrobe objects may remain in the avatar; they are
-not converted or included in lilToon compatibility data. Enable the outfit you
-want before exporting. The avatar root and its parents must be active. Export
-never changes visibility, and missing materials on visible renderers still fail
-instead of being silently omitted. This also applies to the existing-fallback
-workflow, where the supplied VRM must match the currently enabled outfit.
+MA Bone Proxy / Merge Armature connections are applied as authored. There is
+no manual bone-selection step. Names or root-level placement alone do not
+establish a head connection. Independent props retain their connections.
+General VRChat PhysBone and arbitrary gimmick conversion are outside scope;
+existing compatible VRM spring chains are retained.
 
-1. Open **VR Vlog > lilToon VRM 1.0を書き出す**.
-2. In **① アバター（必須）**, select the top-level avatar object from the
-   Hierarchy. In **② 作者名（必須）**, enter the author name stored in the VRM.
-   Those are the only required fields; the VRM name is taken from the selected
-   object automatically.
-3. Press **③ 保存先を選んでVRMを書き出す**, then choose the destination in the
-   save dialog. The exporter creates a temporary cloned avatar,
-   maps supported lilToon materials to a portable MToon10 fallback, exports VRM
-   1.0 through the public UniVRM API, injects the optional lilToon extension,
-   validates the complete GLB, and atomically commits one output file.
+Object exclusions apply to one-click export. Required body/outfit joints are
+protected. Expressions and references to excluded objects are pruned; invalid
+or ambiguous retained references stop export instead of producing a partial file.
 
-Missing standard blink and mouth presets are populated from a conservative list
-of known morph names in the exported mesh (`eye_close[_left/_right]`, VRM/ARKit
-blink names, VRoid names, and VRChat vowel visemes). Existing VRM presets and
-custom expressions are preserved, including explicitly empty presets. Names are
-matched exactly, ignoring case; ambiguous duplicate names are skipped with a
-warning. The exporter reports generated presets and warns when it cannot
-configure blinking. Verify expression movement on the target model.
+The advanced **上級者向け：既存のVRM 1.0へlilToonデータを追加** mode needs a
+UniVRM-compatible MToon fallback matching the active source outfit. It writes
+to a different file and does not rebuild geometry or expressions. Unbaked
+main-color layers require one-click export.
 
-Under **書き出し設定**, **目などの白飛びを抑える** defaults to OFF. This mobile
-appearance option omits emission only when the same Unity texture object is
-assigned to both the base image and emission image. It affects both the ordinary
-MToon fallback and lilToon compatibility data and reports each affected material.
-It does not depend on material/texture names, does not suppress separate emission
-maps, and is enabled only when explicitly requested. Intentional glow is retained by default. It is an
-explicit approximation, not a complete conversion of lilToon's emission blending.
+## Material conversion
 
-The one-click workflow preserves the current renderer **BlendShapes** values as
-the exported base face/body shape. Morphs then move from that customized base
-toward their existing final-frame endpoint, so an already half-closed eye does
-not receive its initial closing amount twice. Other shape customizations remain
-in place while expressions animate. Shared meshes are copied per renderer, and
-authored VRM expression bindings retain their names and indices. Starting in 0.6.0,
-supported VRChat menu expressions are imported as composed custom VRM expressions,
-as described below.
+| Data | Conversion |
+| --- | --- |
+| Main color, first shadow, normal map, emission, rim, MatCap, outline | Supported settings are saved with an MToon approximation |
+| Backlight | Additional data retains supported settings and texture; portable MToon approximates it with rim lighting |
+| Main 2nd/3rd layers and color adjustment | Supported static UV0 settings are baked into the output image, including supported decals, copied patterns and MSDF text |
+| Outline width mask | Source red-channel mask is converted to MToon's green-channel width mask |
+| Vertex-color outline width | Schema 1.3 preserves vertex R/A and source width masks for the compatible app; portable MToon omits vertex-driven outlines |
+| Static alpha masks | Replace, multiply, add and subtract are baked into the main image |
+| Fur, refraction, gem, tessellation, AudioLink and unsupported variants | Approximated or omitted, with warnings |
 
-Multi-frame shapes are evaluated at the current initial weight; animation keeps
-UniVRM's single final-frame target approximation. A nonzero default on a shape
-with a zero-weight frame stops with an explicit error. The advanced existing-VRM
-material-injection workflow does not change geometry; re-export from Unity to
-recover a face whose initial values were absent in an older VRM.
+UV animation, unsupported UV sets, sidedness, alpha operations and other
+unbakeable combinations are reported with the affected material and next
+action. Omitting listed layers is an explicit retry action and applies to all
+uses of that material on the export copy.
 
-The source avatar, meshes, materials, textures, and importer settings are never
-modified. The old existing-fallback workflow remains under **上級者向け：既存のVRM
-1.0へlilToonデータを追加**.
+Both emission-suppression options default to off in 0.9.0 (on in 0.8.x). The first omits emission
+when the base and emission maps use the same Unity texture object. The second
+also suppresses qualifying HDR emission with a separate image in one-click
+export. Enable these options only when suppression is wanted.
 
-Most extension textures reference the already optimized texture indices produced
-by UniVRM. A custom backlight color texture is instead copied into the extension
-as a PNG so it cannot be confused with a same-named fallback texture. Images are
-automatically resized to a maximum dimension of 1024 pixels while preserving
-aspect ratio. This includes ordinary UniVRM textures, extension-only images,
-outline masks, baked layers, and oversized images in an existing fallback VRM.
-The serializer leaves source importer settings unchanged. Color images use
-alpha-aware linear-light filtering; numeric maps keep their channel values.
-The extension's compatibility validation limit remains 2048 pixels.
+Output images are resized to a maximum dimension of 1024, preserving aspect
+ratio. Color images use alpha-aware linear-light filtering; numeric maps retain
+their channel meaning. The format validator accepts images up to 2048 for
+compatibility with older files; this is not a selectable export quality preset.
 
-## Supported material subset
+0.9.0 writes material schema 1.3; published 0.8.x writes schema 1.2. The
+[current appearance contract](AppearanceFidelity.md) covers emission blending,
+RGBA masks and vertex-width controls. Earlier apps fall back to MToon for
+unsupported schema 1.3 data. Additional property contracts are in
+[Lighting.md](../Schema/Lighting.md) and the
+[JSON Schema](../Schema/VRVLOG_materials_liltoon.schema.json).
+Stored settings are not a promise of identical rendering. In VR Vlog versions
+with a **lilToon互換表示** setting, enable it and reload the model to apply
+supported additional data. Disabled or unsupported additional data uses the
+standard fallback. Re-export the source avatar to recover settings absent
+from an older file.
 
-Main color, shadow, backlight color/settings/texture, normal map, emission, rim
-light, matcap, and outline are preserved. Backlight uses an MToon rim-light
-approximation in fallback viewers. Optional variants such as FakeShadow and
-unsupported effects such as fur, refraction, gem, tessellation, and AudioLink
-are reduced to the closest standard lilToon/MToon representation. Any omitted
-details are listed as warnings after a successful export. Ambiguous texture
-names are resolved by embedding the exact source texture only for those cases.
-Invalid VRM structure, ambiguous material matching, corrupt image data, and mobile safety-limit
-violations still stop the export.
+## Shape and expressions
 
-The portable MToon fallback converts lilToon's outline width to metres at
-one-hundredth scale. `_OutlineTex` is retained for lilToon restoration but is
-not reused as MToon's unrelated green-channel outline-width mask.
-When lilToon shadows are disabled, the base image is also bound as MToon's shade
-image, so shaded regions retain their colors instead of turning white. If
-shadows are enabled but no shade texture is assigned, the base image is reused.
+Prepared renderer BlendShape weights, after MA/NDMF processing, become the exported base geometry.
+Expressions are rebased against it so an initial value is not added twice.
+Shared meshes are copied per renderer. Multi-frame shapes are evaluated at
+the initial value; ordinary UniVRM morph targets retain the final-frame
+approximation. A nonzero default with a zero-weight frame stops with an error.
+
+Missing standard blink and mouth expressions are populated only from known,
+unambiguous morph names. Existing VRM expressions, including explicitly empty
+presets, are preserved.
+
+### Menu expressions
+
+Registered Expressions Menu Button/Toggle items and submenus are evaluated
+through the custom FX Controller, including parameter defaults and supported
+BlendTrees. Each supported fixed BlendShape combination becomes one custom
+VRM expression. Individual morph names are not exposed as separate expressions.
+
+Puppet controls, time-varying menu expressions, material/object/bone changes,
+hidden-renderer bindings, synchronized layers, and unsupported controller
+behaviours such as Parameter Driver or Layer Control are not converted.
+Tracking Control is handled through expression override flags. Collection
+uses registered source data before NDMF; menus generated only during a build
+are outside scope.
+
+### Gesture and FaceEmo expressions
+
+Gesture clips are collected from registered FX conditions for
+`GestureLeft` / `GestureRight`. Supported BlendShape clips are applied to the
+customized base face. AnimatorOverrideController substitutions are read and
+duplicate clips are combined. Controller-layer composition, retained state,
+Driver effects and gestures implemented only in the Gesture layer or generated
+controllers are not reproduced. Gesture BlendTrees are not split into child clips.
+
+FaceEmo uses saved settings associated with the target avatar, including
+launchers elsewhere in the scene. Registered groups/patterns, default faces and
+supported branch clips are read. Trigger endpoints become separate expressions;
+unregistered patterns, continuous controls and VRChat tracking logic are not
+simulated.
+
+Supported animated gesture expressions retain their clip name, curves and
+loop setting in an optional extension. A normal VRM expression contains the
+first pose for viewers without playback support. Non-looping clips hold their
+end pose; changing the selected expression ends the previous animation.
+See [ExpressionAnimations.md](../Schema/ExpressionAnimations.md).
+
+Approximation, omission, resizing and correction produce a concise completion
+summary with an optional detail view. Full details are also reported in
+**VR Vlog 書き出し詳細** in Unity Console.
+The export does not silently truncate data exceeding its limits.
+
+## Public reports and exported data
+
+The exporter itself performs local conversion and has no avatar-upload or
+telemetry implementation. Installed third-party editor plugins have their own
+behaviour. Exported VRMs contain author/model names, geometry, images, material
+and expression names, and version metadata. The author/name fields are taken
+from the export window; metadata from an imported VRM is not implicitly copied.
+
+Public issues should include versions, minimal reproduction steps and only the
+relevant error excerpt. Review copied diagnostics for local paths, private names,
+credentials and share links before posting. Do not attach private models,
+project archives, paid textures or complete logs.
 
 ## Development checks
 
-- `python Tools/validate.py`: package, schema, and source integration checks.
-- `pwsh -File Tools/run-behavior-tests.ps1`: compiles and executes production
-  base-shape geometry, expression, material-reader, and injection code with synthetic inputs. The
-  property-bag test doubles do not simulate Unity hierarchy or rendering; GPU
-  operations throw if reached.
-- Unity Editor tests under `Tests/Editor`: material fallback, emission opt-out,
-  outline conversion, menu traversal, actual Animator graph evaluation (discrete
-  states and BlendTrees), and composed expression baking. These require a
-  dependency-complete Unity project; non-Unity checks cannot replace them.
+Run from a source checkout:
 
-## Install during development
+- `python Tools/validate.py`
+- `python Tools/check-public-content.py`
+- `python Tools/test-package.py`
+- `pwsh -File Tools/run-behavior-tests.ps1`
+- `pwsh -File Tools/run-bake-tests.ps1`
+- `pwsh -File Tools/run-ndmf-preparation-tests.ps1`
 
-Use VCC/ALCOM for a dependency-complete installation. Local package development
-requires the matching UniVRM packages to already be present.
-
-## Safety rules
-
-- Never modify source materials, textures, or importer settings.
-- Export only temporary copies.
-- Always emit an MToon fallback.
-- Reject unknown schema majors and invalid non-lilToon shader data.
-- Bound material counts, texture counts, dimensions, and expanded memory.
-- Do not claim pixel-identical output across render pipelines or devices.
-
-## Compatibility
-
-- Unity 2022.3 or later. VRChat creators should use VRChat's currently
-  supported editor (2022.3.22f1 at the time of this release); later editor
-  versions are source-compatible but are not a substitute for VRChat's
-  required upload version.
-- UniVRM 0.131.x (`com.vrmc.gltf` and `com.vrmc.vrm`)
-- lilToon materials whose shader names identify lilToon, Lite, or Multi
-- One-click export uses UniVRM's public `Vrm10Exporter.Export` API. New UniVRM
-  minor series must be tested and released explicitly rather than accepted
-  silently.
-
-### 0.5.1: 光沢・口まわりの輪郭線
-
-MatCapの色のアルファと合成の強さをMToonへ反映します。角度で光沢が出る効果は残りますが、
-元の強さを無視して光を加算する不具合を修正しています。lilToonとMToonの合成方式の差は残ります。
-輪郭線の太さマスクは赤チャンネルからMToonの緑チャンネルへ変換して保存します。
-頂点カラーで輪郭の太さを調整しているマテリアルは、口や目への輪郭線の突き抜けを避けるため
-輪郭を省略し、書き出し時に警告します。元のUnityマテリアルや画像は変更しません。
-
-以前のVRMには太さ制御が保存されていないため、元のUnityアバターから再出力してください。
-修正版アプリの互換表示では、既知の旧版（0.3.8、0.4.0、0.4.1、0.5.0）の輪郭を抑制します。
-`vrc.v_aa`等のアンダースコア形式の口のBlendShapeもVRMの母音へ自動設定します。
-
-### 0.6.0: VRChatメニューの表情
-
-元のUnityアバターから書き出すと、表情を自動で読み込みます。
-書き出すたびにメニューとアニメーションの登録を読み直すため、画面を開き直す必要は
-ありません。表情を取り込むチェック、候補ごとの選択、確認・再読み込みボタンはありません。
-
-Avatar Descriptorに設定されたExpressions MenuのButton・Toggleをサブメニューまで
-たどり、メニューの名前、パラメーター値、サブメニューの条件とExpression Parametersの
-初期値をカスタムFX Animatorに適用します。固定のAnimationClipとBlendTreeからなる
-BlendShape表情を、メニューの一項目につき一つのVRMカスタム表情にします。
-個々のBlendShape名を表情リストに並べる機能ではありません。SDKへのコンパイル依存は
-追加せず、VRChat SDKがあるプロジェクトの登録データを読み取ります。
-
-Unityの一時的なPreview Sceneで状態遷移を進め、2秒後に静止した表情を読み取ります。
-過去の状態から残ったBlendShape値も含めて読み取り、有効な状態の時間による遷移と
-曲線全体を検査します。数秒後にだけ変わる曲線も固定表情としては取り込みません。
-複数Rendererの目・眉・口などを一つの表情にまとめ、調整済みの基本の顔からの差分を
-保存します。アニメーションで指定されていないBlendShapeの調整はそのまま残ります。
-初期値より小さい値や複数フレームの形状も、元のメッシュから評価して差分を計算します。
-元のアバター・アセット・現在のBlendShape値は編集しません。
-
-VR Vlogでは「表情」から `VRChat / 表情 / 笑顔` などを選べます。選択中は表情の形を
-守るためVRMの瞬き・口・視線の自動変形をブロックし、「デフォルト」で通常の追従に
-戻ります。既存のVRM表情を上書きせず、同名項目には番号を付けます。
-
-**変換できない項目は理由を表示します。** 連続操作のPuppet、時間で変わり続ける表情、
-非表示のRendererを使う項目、マテリアル差し替え・表示切り替え・ボーン変形を含む項目は
-固定BlendShape表情として取り込みません。Parameter Driver・Layer Controlなど、FXに
-VRChat固有の状態処理がある場合も、実際と異なる顔を出さないため自動変換しません。
-Tracking Controlのみの状態処理は許容し、出力表情の追従ブロックで扱います。
-同期Animatorレイヤーは未対応です。表情の収集は着せ替え処理より前に行い、Descriptorへ
-登録済みのデータと保存済みのFaceEmo設定を対象にします。ビルド時に初めて生成される
-メニューは取り込みません。Gestureレイヤーだけに実装された表情もFX取り込みの対象外です。
-
-メニューは256項目、追加する表情の頂点差分は128 MiBまでです。上限を超える場合は
-エラーにし、途中までのVRMは保存しません。既存VRMには元のVRChatメニューやアニメーションの対応が
-入っていないため、VRMだけから正確な表情の組み合わせを復元することはできません。
-Unityの元プロジェクトで再出力し、メニューと同じ顔になることを確認してください。
-
-### 0.6.1: ジェスチャーの表情と短い完了表示
-
-ジェスチャーの表情も毎回自動で取り込みます。FX Controllerで
-`GestureLeft` / `GestureRight` の条件から遷移する状態に登録された、固定の顔の
-AnimationClipを取り込みます。アニメーション内の目・眉・口などのBlendShape値を
-組み合わせたまま、`VRChat / ジェスチャー / アニメーション名` として保存します。
-同じアニメーションの重複登録はまとめ、AnimatorOverrideControllerの差し替えも読みます。
-メニューのCustom Expressionsが無効でも、このジェスチャー取り込みは動作します。
-
-この経路は**登録アニメーション単体を調整済みの基本の顔に適用した固定表情**です。
-無関係な自動瞬きやParameter DriverがFX全体にあっても、アニメーション自体の値を
-読み取れます。一方、別レイヤーとの合成・以前の状態から残る値・Driverによる変化は
-再現しません。ジェスチャーのBlendTreeを個々の子アニメーションへ分解することも
-ありません。0.7.0では時間変化するBlendShapeの曲線も動きとして保存します。
-マテリアル・表示・ボーンを同時に変更するクリップは、この経路では引き続き省略します。
-元の顔が複数レイヤーやDriverの合成で作られる場合は、その固定顔を一つにまとめた
-表情アニメーションが必要です。ビルド時生成のControllerは引き続き対象外です。
-
-完了ダイアログは保存結果とVRChat表情件数だけを表示し、
-長い省略一覧は表示しません。必要な診断情報はUnity Consoleの「VR Vlog 書き出し詳細」
-にまとまります。VRMに選択用の表情がない場合、アプリに表情ボタンは表示されません。
-
-### 0.7.0: 動く表情と自動取り込み
-
-`kipfel_facial_cry` など、時間でBlendShape値が変わるジェスチャーの表情も取り込みます。
-アニメーションの名前を一項目として保存し、対応版のVR Vlogで選ぶと動きを再生します。
-元のキーフレーム、重み付き接線、段階的な切り替え、曲線の折り返しとクリップのループ設定を
-保存します。ループしないクリップは終端の顔で止まり、「デフォルト」や別の表情を選ぶと
-前の動きを解除します。動きの途中のフレームを個別の表情としてリストに追加しません。
-
-**動きの再生には対応版のアプリが必要です。** 通常のVRM表情として先頭の顔も保存するため、
-拡張に未対応のビューアーでは静止した先頭の顔を選べます。0.6.1以前に除外された動きは
-VRMに入っていないため、Unityの元アバターから再出力してください。
-
-取り込み設定と表情の一覧・再読み込みボタンはありません。書き出すたびに登録データを
-自動取得します。省略した衣装や未対応の処理の長い一覧は、完了ウィンドウへ表示しません。
-詳細な保存仕様と検証境界は [ExpressionAnimations.md](../Schema/ExpressionAnimations.md) にあります。
+Host tests execute production conversion code with synthetic inputs and API
+doubles. They do not establish Unity rendering or end-device behaviour.
+`Tests/Editor` requires a dependency-complete Unity project. Validate real
+export/reimport and target-app appearance for the affected features.
+See [ReleaseVerification.md](ReleaseVerification.md) for packaging and release.

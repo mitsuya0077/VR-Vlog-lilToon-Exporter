@@ -29,10 +29,9 @@ The player evaluates all channels at the same clip time and writes only these
 dedicated morphs. The ordinary selected expression supplies the first pose.
 Returning to default, changing expressions or disabling the driver clears the
 animation writes. A non-looping clip holds its end pose. The component pauses
-with its avatar and resumes its retained time when re-enabled. The app validates
-the complete optional data and resolves every target before attaching a player;
-rejected data retains the ordinary VRM faces. JSON is read without another copy
-of the GLB's large binary chunk.
+with its avatar and resumes its retained time when re-enabled. A compatible reader
+must validate the complete optional data and resolve every target before playback;
+rejected data retains the ordinary VRM faces.
 
 Bounds: at most 512 animations, 1,024 channels, 16,384 total curve keys, 4,096
 point references, 600 seconds per clip, absolute key time at most 3,600 seconds,
@@ -45,8 +44,6 @@ gesture condition. Its BlendShape curves are composed together over the
 customized base face. This is not a VRChat runtime: controller behaviours,
 retained layer state, gestures implemented only in generated controllers,
 material/object changes and bone animations are not simulated. The existing
-menu evaluator keeps its documented restrictions. Runtime tests cover data,
-curve mathematics, GLB binding and playback state with API doubles; the Unity
-Editor tests compare portable curves to AnimationCurve and exercise source
-Animator/baking. Real avatar re-export and iPhone recording require device
-acceptance testing.
+menu evaluator keeps its documented restrictions. Exporter tests compare portable
+curves to AnimationCurve and exercise source Animator/baking. Confirm animation
+playback in the target viewer when validating a converted avatar.

@@ -7,11 +7,16 @@
 - Export mesh vertex colors, distinguish source outline masks from portable MToon masks, and show concise approximation/omission details on completion.
 - See Docs/AppearanceFidelity.md for the paired runtime contract, validation coverage and remaining device checks. Publish only after the compatible application is available.
 
+- Clarify the required lilToon 2.3.4 version, tested Unity environment, VR Vlog display/reload steps, and MA/PhysBone conversion limits.
+- Package only tracked Editor source, package metadata, licenses and a concise user guide. Keep developer tools, tests, CI configuration and local inputs out of the installed package.
+- Add checks for common accidental disclosures and an issue form explaining how to share relevant diagnostics without private inputs.
+- Simplify public documentation and generate future release notes from the matching changelog entry. Preserve a paused website/VPM deployment when publishing a GitHub release.
+
 ## 0.8.1
 
 - Export MA Bone Proxy / Merge Armature hair using its authored connection without an additional bone-selection screen. Remove the manual attachment preview and its repeat-confirmation option; unrelated independent props no longer interrupt export.
 - Keep independent props attached as authored and name them in the export report. Do not infer a head connection from names or hierarchy placement alone.
-- Verify the complete one-click export and VRM reimport with root-level MA hair, shared hair meshes, and an independent pet. Locally verified the actual Kushu Short Kipfel prefab: all three hair meshes follow the runtime head without manual attachment.
+- Verify one-click export and VRM reimport with root-level MA hair, shared hair meshes, and an independent pet, including head-following without manual attachment.
 
 ## 0.8.0
 
