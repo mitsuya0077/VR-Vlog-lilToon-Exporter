@@ -26,7 +26,9 @@ namespace VRVlog.LilToonExporter
                 RenderTexture.active = target;
                 readable.ReadPixels(new Rect(0, 0, width, height), 0, 0, false);
                 readable.Apply(false, false);
-                return readable.GetRawTextureData();
+                var bytes = readable.GetRawTextureData();
+                VRVlog.LilToon.LilToonFullContract.ValidatePixels(bytes, half ? "rgbaHalf" : hdr ? "rgbaFloat" : "rgba32");
+                return bytes;
             }
             finally
             {

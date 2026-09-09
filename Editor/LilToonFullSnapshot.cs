@@ -104,8 +104,9 @@ namespace VRVlog.LilToonExporter
             var count = source is Texture2D two ? two.mipmapCount : ((Cubemap)source).mipmapCount;
             var faces = source is Cubemap ? 6 : 1;
             var srgb = !normal && UnityEngine.Experimental.Rendering.GraphicsFormatUtility.IsSRGBFormat(source.graphicsFormat);
-            var hdr = UnityEngine.Experimental.Rendering.GraphicsFormatUtility.IsHDRFormat(source.graphicsFormat);
-            var half = hdr && source.graphicsFormat.ToString().StartsWith("R16",StringComparison.Ordinal);
+            var storage = StorageFormat(source.graphicsFormat, normal);
+            var hdr = storage != "rgba32";
+            var half = storage == "rgbaHalf";
             for (var face = 0; face < faces; face++)
                 for (var mip = 0; mip < count; mip++)
                 {
@@ -121,6 +122,19 @@ namespace VRVlog.LilToonExporter
             });
             textureIds.Add((source, normal), index);
             return index;
+        }
+
+        internal static string StorageFormat(UnityEngine.Experimental.Rendering.GraphicsFormat format, bool normal)
+        {
+            // Decoded normal components and >8-bit UNorm masks also need more
+            // precision, even when Unity does not classify their format as HDR.
+            var name = format.ToString();
+            if (normal) return "rgbaFloat";
+            if (name.StartsWith("R16", StringComparison.Ordinal) && name.EndsWith("_SFloat", StringComparison.Ordinal)) return "rgbaHalf";
+            if (UnityEngine.Experimental.Rendering.GraphicsFormatUtility.IsHDRFormat(format)) return "rgbaFloat";
+            foreach (System.Text.RegularExpressions.Match component in System.Text.RegularExpressions.Regex.Matches(name, "[RGBA]([0-9]+)"))
+                if (int.Parse(component.Groups[1].Value, System.Globalization.CultureInfo.InvariantCulture) > 8) return "rgbaFloat";
+            return "rgba32";
         }
 
         // Called while UniVRM's exact Unity-object/node/mesh mapping is alive.

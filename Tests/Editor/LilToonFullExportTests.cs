@@ -16,6 +16,45 @@ namespace VRVlog.LilToonExporter.Tests
     {
         static IEnumerable<string> OfficialShaders=>VRVlog.LilToon.LilToon234Catalogue.Shaders.Keys;
 
+        [TestCase("rgbaHalf", 0x7c00u)][TestCase("rgbaHalf", 0xfc00u)][TestCase("rgbaHalf", 0x7e01u)]
+        [TestCase("rgbaFloat", 0x7f800000u)][TestCase("rgbaFloat", 0xff800000u)][TestCase("rgbaFloat", 0x7fc00001u)]
+        public void NonFiniteHdrPayloadsAreRejectedIncludingAlpha(string format, uint bits)
+        {
+            var size = format == "rgbaHalf" ? 2 : 4;
+            var payload = new byte[size * 4];
+            for (var component = 0; component < 4; component++)
+            {
+                Array.Clear(payload, 0, payload.Length);
+                for (var b = 0; b < size; b++) payload[component * size + b] = (byte)(bits >> (8 * b));
+                Assert.Throws<InvalidDataException>(() => F.ValidatePixels(payload, format));
+            }
+            Array.Clear(payload, 0, payload.Length);
+            var maximum = format == "rgbaHalf" ? 0x7bffu : 0x7f7fffffu;
+            for (var b = 0; b < size; b++) payload[b] = (byte)(maximum >> (8 * b));
+            Assert.DoesNotThrow(() => F.ValidatePixels(payload, format), "Finite HDR values are not clamped.");
+        }
+
+        [Test]
+        public void NonHdrSixteenBitMasksKeepTheirComponentPrecision()
+        {
+            foreach(var format in new[]{UnityEngine.Experimental.Rendering.GraphicsFormat.R16_UNorm,UnityEngine.Experimental.Rendering.GraphicsFormat.R16G16B16A16_UNorm})
+            {
+                var source=new Texture2D(4,1,format,UnityEngine.Experimental.Rendering.TextureCreationFlags.None){filterMode=FilterMode.Point};
+                try
+                {
+                    var components=format==UnityEngine.Experimental.Rendering.GraphicsFormat.R16_UNorm?1:4;
+                    var samples=new ushort[4*components];
+                    for(var i=0;i<samples.Length;i++)samples[i]=(ushort)(1+i*4001);
+                    source.SetPixelData(samples,0);source.Apply(false);
+                    Assert.That(LilToonFullSnapshot.StorageFormat(source.graphicsFormat,false),Is.EqualTo("rgbaFloat"));
+                    var bytes=LilToonFullTexture.Read(source,0,0,false,false,true);
+                    for(var pixel=0;pixel<4;pixel++)for(var c=0;c<components;c++)
+                        Assert.That(BitConverter.ToSingle(bytes,pixel*16+c*4),Is.EqualTo(samples[pixel*components+c]/65535f).Within(1e-6f),format+" component "+c);
+                }
+                finally {Object.DestroyImmediate(source);}
+            }
+        }
+
         [Test]
         public void ExtraMaterialDrawsBecomeExplicitPrimitivesWithoutEditingTheSourceMesh()
         {
@@ -81,6 +120,8 @@ namespace VRVlog.LilToonExporter.Tests
                     var actual=F.List(record,"values").Concat(F.List(record,"textures")).Select(F.Object).Select(p=>F.Text(p,"name")).ToArray();
                     Assert.That(actual,Is.EquivalentTo(VRVlog.LilToon.LilToon234Catalogue.RequiredProperties[shaderName]),shaderName);
                     Assert.That(F.List(record,"passes").Select(F.Object).Select(p=>F.Text(p,"name")),Is.EquivalentTo(VRVlog.LilToon.LilToon234Catalogue.Passes[shaderName]),shaderName);
+                    foreach(var pass in F.List(record,"passes").Select(F.Object))
+                        Assert.That(F.Text(pass,"lightMode"),Is.EqualTo(VRVlog.LilToon.LilToon234Catalogue.PassLightModes[shaderName][F.Text(pass,"name")]).IgnoreCase,shaderName);
                 }
                 finally {Object.DestroyImmediate(material);}
             }
@@ -166,6 +207,16 @@ namespace VRVlog.LilToonExporter.Tests
                 Assert.Throws<InvalidDataException>(()=>F.Validate(glb.Json,bytes.Length,glb.Binary.Length),"A missing property must not silently adopt a runtime default.");properties.Insert(0,removed);
                 var pass=F.Object(F.List(animated,"passes")[0]);var passName=pass["name"];pass["name"]="UnknownPass";
                 Assert.Throws<InvalidDataException>(()=>F.Validate(glb.Json,bytes.Length,glb.Binary.Length));pass["name"]=passName;
+                var lightMode=pass["lightMode"];pass["lightMode"]="OtherMode";
+                Assert.Throws<InvalidDataException>(()=>F.Validate(glb.Json,bytes.Length,glb.Binary.Length));pass["lightMode"]=lightMode;
+                var bound=F.Object(F.List(root,"bindings")[0]);var gltfMesh=F.Object(F.At(F.List(glb.Json,"meshes"),F.Int(bound,"mesh")));
+                var primitive=F.Object(F.List(gltfMesh,"primitives")[0]);
+                var accessor=F.Object(F.At(F.List(glb.Json,"accessors"),F.Int(F.Object(F.Get(primitive,"attributes")),"POSITION")));
+                var originalCount=accessor["count"];accessor["count"]=F.Int(accessor,"count")+1;
+                Assert.Throws<InvalidDataException>(()=>F.Validate(glb.Json,bytes.Length,glb.Binary.Length));accessor["count"]=originalCount;
+                var decoded=F.List(root,"chunks").Select(F.Object).Sum(c=>(long)F.Int(c,"decodedBytes"));
+                Assert.DoesNotThrow(()=>F.Validate(glb.Json,bytes.Length,glb.Binary.Length,decoded));
+                Assert.Throws<OutOfMemoryException>(()=>F.Validate(glb.Json,bytes.Length,glb.Binary.Length,decoded-1),"Admission uses the aggregate decoded bytes, not compressed file size or each chunk separately.");
                 root["schemaMinor"]=1;Assert.Throws<InvalidDataException>(()=>F.Validate(glb.Json,bytes.Length,glb.Binary.Length));root["schemaMinor"]=0;
                 F.Validate(glb.Json,bytes.Length,glb.Binary.Length);
             }

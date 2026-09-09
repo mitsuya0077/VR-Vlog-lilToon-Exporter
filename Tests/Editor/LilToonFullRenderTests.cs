@@ -63,6 +63,7 @@ namespace VRVlog.LilToonExporter.Tests
             var original=new Material(Shader.Find("lilToon")); var runtime=new Material(shader);
             Assert.That(original.HasProperty(feature),Is.True,"The feature must use an official enabling property.");
             original.SetFloat(feature,1);
+            if(feature == "_UsePOM") original.SetFloat("_UseParallax",1);
             foreach(var name in new[]{"_Color","_Color2nd","_Color3rd","_EmissionColor","_Emission2ndColor","_RimColor","_MatCapColor","_MatCap2ndColor","_GlitterColor"})
                 original.SetColor(name,new Color(.7f,.3f,.9f,.75f));
             original.SetFloat("_Shadow2ndBorder",.55f); original.SetFloat("_Shadow3rdBorder",.4f);
@@ -81,6 +82,23 @@ namespace VRVlog.LilToonExporter.Tests
             original.SetVector("_FurVector",new Vector4(.1f,.3f,1,.1f)); original.SetFloat("_FurGravity",.7f);
             original.SetFloat("_FurRootOffset",-.3f); original.SetFloat("_FurAO",.6f);
             runtime.CopyPropertiesFromMaterial(original); Compare(original,runtime);
+        }
+
+        [Test]
+        public void TessellationCacheKeepsReusableEntriesBeyond256DistinctTuples()
+        {
+            var type=Type.GetType("FaceMaskVTuber.UniVrmRuntime.LilToonTessellationTopology, FaceMaskVTuber.UniVrmRuntime");
+            if(type==null)Assert.Ignore("Requires the combined application validation project.");
+            object Create(long bytes)=>Activator.CreateInstance(type,BindingFlags.Instance|BindingFlags.NonPublic,null,new object[]{bytes},null);
+            var get=type.GetMethod("Get",BindingFlags.Instance|BindingFlags.NonPublic);
+            object Read(object cache,int a,int b,int c)=>get.Invoke(cache,new object[]{new Vector4(a,b,c,1)});
+            var cache=Create(32L*1024*1024);var first=Read(cache,1,1,1);
+            for(var a=1;a<=10;a++)for(var b=1;b<=10;b++)for(var c=1;c<=3;c++)Read(cache,a,b,c);
+            Assert.That(Read(cache,1,1,1),Is.SameAs(first),"A count threshold must not clear the cache.");
+            var small=Create(2048);var hot=Read(small,1,1,1);
+            for(var a=2;a<30;a++){Read(small,a,1,1);Assert.That(Read(small,1,1,1),Is.SameAs(hot));}
+            var bytesField=type.GetField("cacheBytes",BindingFlags.Instance|BindingFlags.NonPublic);
+            Assert.That((long)bytesField.GetValue(small),Is.LessThanOrEqualTo(2048));
         }
 
         internal static void Compare(Material authoring,Material runtime)
@@ -121,6 +139,7 @@ namespace VRVlog.LilToonExporter.Tests
                 Assert.That(nonFinite,Is.Zero,"Non-finite rendered pixels");
                 Assert.That(total/area,Is.LessThanOrEqualTo(1.0/255),runtime.shader.name+" mean linear HDR color error");
                 Assert.That((double)high/area,Is.LessThanOrEqualTo(.01),runtime.shader.name+" 99th-percentile error");
+                AssertSilhouette(expected, actual, 1024, 1024);
             }
             finally
             {
@@ -129,6 +148,47 @@ namespace VRVlog.LilToonExporter.Tests
                 Object.DestroyImmediate(authoring); Object.DestroyImmediate(runtime);
                 RenderSettings.ambientMode=previousAmbient; RenderSettings.ambientLight=previousColor;
             }
+        }
+
+        internal static void AssertSilhouette(Color[] expected, Color[] actual, int width, int height)
+        {
+            // Symmetric boundary distance. A small missing part must fail even
+            // when its area is too small to change the mean/percentile limits.
+            bool[] Boundary(Color[] pixels)
+            {
+                var boundary = new bool[pixels.Length];
+                bool Inside(int x, int y) => x >= 0 && y >= 0 && x < width && y < height && pixels[y * width + x].a > 1f / 255;
+                for(var y=0;y<height;y++)for(var x=0;x<width;x++)
+                    boundary[y*width+x] = Inside(x,y) && (!Inside(x-1,y) || !Inside(x+1,y) || !Inside(x,y-1) || !Inside(x,y+1));
+                return boundary;
+            }
+            var left=Boundary(expected);var right=Boundary(actual);
+            void Check(bool[] from, bool[] to)
+            {
+                for(var y=0;y<height;y++)for(var x=0;x<width;x++)
+                {
+                    if(!from[y*width+x])continue;
+                    bool Edge(int px,int py)=>px>=0 && py>=0 && px<width && py<height && to[py*width+px];
+                    if(!Edge(x,y) && !Edge(x-1,y) && !Edge(x+1,y) && !Edge(x,y-1) && !Edge(x,y+1))
+                        Assert.Fail("Silhouette differs by more than one pixel at ("+x+", "+y+").");
+                }
+            }
+            Check(left,right);Check(right,left);
+        }
+
+        [Test]
+        public void ContourMetricRejectsMissingPartsAndAcceptsOnePixelShift()
+        {
+            Color[] Rectangle(int offset)
+            {
+                var pixels=new Color[32*32];
+                for(var y=8;y<24;y++)for(var x=8+offset;x<24+offset;x++)pixels[y*32+x]=Color.white;
+                return pixels;
+            }
+            Assert.DoesNotThrow(()=>AssertSilhouette(Rectangle(0),Rectangle(1),32,32));
+            Assert.Throws<AssertionException>(()=>AssertSilhouette(Rectangle(0),Rectangle(2),32,32));
+            var hole=Rectangle(0);hole[16*32+16]=Color.clear;
+            Assert.Throws<AssertionException>(()=>AssertSilhouette(Rectangle(0),hole,32,32));
         }
 
         static Color[] Render(Camera camera)

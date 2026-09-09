@@ -10,6 +10,20 @@ namespace VRVlog.LilToon
     internal static class LilToonFullContract
     {
         internal const string ExtensionName = "VRVLOG_materials_liltoon";
+        internal static void ValidatePixels(byte[] bytes, string format)
+        {
+            // Payloads use little-endian IEEE-754 components. Check exponents
+            // directly, including alpha, without allocating a second image.
+            if (format == "rgba32") return;
+            var stride = format == "rgbaHalf" ? 2 : format == "rgbaFloat" ? 4 : 0;
+            if (stride == 0 || bytes.Length % (stride * 4) != 0) Fail("Invalid pixel payload.");
+            for (var i = 0; i < bytes.Length; i += stride)
+            {
+                var nonFinite = stride == 2 ? (bytes[i + 1] & 0x7c) == 0x7c :
+                    (bytes[i + 3] & 0x7f) == 0x7f && (bytes[i + 2] & 0x80) != 0;
+                if (nonFinite) Fail("Non-finite HDR pixel component.");
+            }
+        }
         internal static Dictionary<string, object> Root(Dictionary<string, object> gltf)
         {
             if (!gltf.TryGetValue("extensions", out var raw) || !(raw is Dictionary<string, object> ext) || !ext.TryGetValue(ExtensionName, out raw)) return null;
@@ -20,7 +34,7 @@ namespace VRVlog.LilToon
             var root = Root(gltf);
             return root != null && Int(root, "schemaMajor") >= 2;
         }
-        internal static void Validate(Dictionary<string, object> gltf, long fileLength, int binaryLength)
+        internal static void Validate(Dictionary<string, object> gltf, long fileLength, int binaryLength, long decodedByteBudget = long.MaxValue)
         {
             if (fileLength > 160L * 1024 * 1024) Fail("VRM exceeds 160 MiB.");
             var root = Root(gltf) ?? throw new InvalidDataException("Missing full lilToon extension.");
@@ -30,10 +44,13 @@ namespace VRVlog.LilToon
             Text(root, "exporterVersion");
             if (!List(gltf, "extensionsUsed").Contains(ExtensionName) || gltf.TryGetValue("extensionsRequired", out var required) && List(required).Contains(ExtensionName)) Fail("The lilToon extension must be declared and optional.");
             var views = List(gltf, "bufferViews"); var chunks = List(root, "chunks");
+            long decodedBytes = 0;
             foreach (var raw in chunks)
             {
                 var chunk = Object(raw); Keys(chunk, "bufferView", "decodedBytes", "codec");
                 if (Text(chunk, "codec") != "deflate" || Int(chunk, "decodedBytes") <= 0) Fail("Invalid binary payload.");
+                decodedBytes = checked(decodedBytes + Int(chunk, "decodedBytes"));
+                if (decodedBytes > decodedByteBudget) throw new OutOfMemoryException("The aggregate decoded lilToon payload exceeds the device memory budget.");
                 var view = Object(At(views, Int(chunk, "bufferView")));
                 if (Int(view, "buffer") != 0) Fail("External buffers are not allowed.");
                 var offset = view.ContainsKey("byteOffset") ? Int(view, "byteOffset") : 0;
@@ -96,7 +113,12 @@ namespace VRVlog.LilToon
                 var passNames = new HashSet<string>(StringComparer.Ordinal);
                 foreach (var passRaw in List(material, "passes"))
                 {
-                    var pass = Object(passRaw); Keys(pass, "name", "lightMode", "enabled"); if (!passNames.Add(Text(pass, "name"))) Fail("Duplicate pass."); Text(pass,"lightMode"); Bool(pass, "enabled");
+                    var pass = Object(passRaw); Keys(pass, "name", "lightMode", "enabled"); var name = Text(pass, "name");
+                    if (!passNames.Add(name)) Fail("Duplicate pass.");
+                    // Unity may expose interned ShaderTagId names in uppercase.
+                    if (!LilToon234Catalogue.PassLightModes[sourceShader].TryGetValue(name, out var mode) || !string.Equals(Text(pass,"lightMode"), mode, StringComparison.OrdinalIgnoreCase))
+                        Fail("The pass LightMode does not match its official shader.");
+                    Bool(pass, "enabled");
                 }
                 if(!passNames.SetEquals(LilToon234Catalogue.Passes[sourceShader]))Fail("The material pass set does not match its official shader: " + sourceShader + " [" + string.Join(",",passNames) + "].");
             }
@@ -117,8 +139,20 @@ namespace VRVlog.LilToon
                 var node = Object(At(nodes, nodeId)); var meshId = Int(binding, "mesh"); if (Int(node, "mesh") != meshId) Fail("Node/mesh binding mismatch.");
                 var primitives = List(Object(At(meshes, meshId)), "primitives"); var mats = List(binding, "materials");
                 if (mats.Count != primitives.Count) Fail("Primitive/material count mismatch.");
-                for (var i = 0; i < mats.Count; i++) { var id = Integer(mats[i]); if (id != Int(Object(primitives[i]), "material")) Fail("Primitive/material identity mismatch."); usedMaterials.Add(id); }
+                long importedCount = 0;
+                for (var i = 0; i < mats.Count; i++)
+                {
+                    var primitive = Object(primitives[i]); var id = Integer(mats[i]);
+                    if (id != Int(primitive, "material")) Fail("Primitive/material identity mismatch."); usedMaterials.Add(id);
+                    var attributes = Object(Get(primitive, "attributes"));
+                    var accessor = Object(At(List(gltf, "accessors"), Int(attributes, "POSITION")));
+                    var positionCount = Int(accessor, "count");
+                    if (positionCount <= 0 || Text(accessor, "type") != "VEC3" || Int(accessor, "componentType") != 5126)
+                        Fail("Invalid primitive position accessor.");
+                    importedCount = checked(importedCount + positionCount);
+                }
                 var count = Int(binding, "vertexCount"); if (count <= 0) Fail("Empty vertex binding.");
+                if (count != importedCount) Fail("Vertex binding differs from the imported primitive accessor counts.");
                 var expected = checked((long)count * 16);
                 if (Int(Object(At(chunks, Int(binding, "vertexIds"))), "decodedBytes") != expected) Fail("Vertex ID payload mismatch.");
                 var channels = new HashSet<int>();

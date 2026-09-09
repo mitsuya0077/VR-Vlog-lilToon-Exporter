@@ -4926,6 +4926,12 @@
         "SHADOW_CASTER"
       ],
       "category": "runtime",
+      "passLightModes": {
+        "FORWARD": "ForwardBase",
+        "FORWARD_ADD": "ForwardAdd",
+        "SHADOW_CASTER": "ShadowCaster",
+        "META": "Meta"
+      },
       "propertyNames": [
         "_Invisible",
         "_AsUnlit",
@@ -5456,6 +5462,12 @@
         "SHADOW_CASTER"
       ],
       "category": "runtime",
+      "passLightModes": {
+        "FORWARD": "ForwardBase",
+        "FORWARD_ADD": "ForwardAdd",
+        "SHADOW_CASTER": "ShadowCaster",
+        "META": "Meta"
+      },
       "propertyNames": [
         "_Invisible",
         "_AsUnlit",
@@ -5995,6 +6007,14 @@
         "SHADOW_CASTER_OUTLINE"
       ],
       "category": "runtime",
+      "passLightModes": {
+        "FORWARD": "ForwardBase",
+        "FORWARD_OUTLINE": "ForwardBase",
+        "FORWARD_ADD": "ForwardAdd",
+        "FORWARD_ADD_OUTLINE": "ForwardAdd",
+        "SHADOW_CASTER_OUTLINE": "ShadowCaster",
+        "META": "Meta"
+      },
       "propertyNames": [
         "_Invisible",
         "_AsUnlit",
@@ -6530,6 +6550,10 @@
         "FORWARD_OUTLINE"
       ],
       "category": "runtime",
+      "passLightModes": {
+        "FORWARD_OUTLINE": "ForwardBase",
+        "FORWARD_ADD_OUTLINE": "ForwardAdd"
+      },
       "propertyNames": [
         "_Invisible",
         "_AsUnlit",
@@ -7064,6 +7088,9 @@
         "FORWARD"
       ],
       "category": "runtime",
+      "passLightModes": {
+        "FORWARD": "ForwardBase"
+      },
       "propertyNames": [
         "_Invisible",
         "_Color",
@@ -7135,6 +7162,14 @@
         "SHADOW_CASTER"
       ],
       "category": "runtime",
+      "passLightModes": {
+        "FORWARD": "ForwardBase",
+        "FORWARD_FUR": "ForwardBase",
+        "FORWARD_ADD": "ForwardAdd",
+        "FORWARD_ADD_FUR": "ForwardAdd",
+        "SHADOW_CASTER": "ShadowCaster",
+        "META": "Meta"
+      },
       "propertyNames": [
         "_Invisible",
         "_AsUnlit",
@@ -7688,6 +7723,14 @@
         "SHADOW_CASTER"
       ],
       "category": "runtime",
+      "passLightModes": {
+        "FORWARD": "ForwardBase",
+        "FORWARD_FUR": "ForwardBase",
+        "FORWARD_ADD": "ForwardAdd",
+        "FORWARD_ADD_FUR": "ForwardAdd",
+        "SHADOW_CASTER": "ShadowCaster",
+        "META": "Meta"
+      },
       "propertyNames": [
         "_Invisible",
         "_AsUnlit",
@@ -8255,6 +8298,16 @@
         "SHADOW_CASTER"
       ],
       "category": "runtime",
+      "passLightModes": {
+        "FORWARD": "ForwardBase",
+        "FORWARD_FUR_PRE": "ForwardBase",
+        "FORWARD_FUR": "ForwardBase",
+        "FORWARD_ADD": "ForwardAdd",
+        "FORWARD_ADD_FUR_PRE": "ForwardAdd",
+        "FORWARD_ADD_FUR": "ForwardAdd",
+        "SHADOW_CASTER": "ShadowCaster",
+        "META": "Meta"
+      },
       "propertyNames": [
         "_Invisible",
         "_AsUnlit",
@@ -8804,6 +8857,10 @@
         "FORWARD_FUR"
       ],
       "category": "runtime",
+      "passLightModes": {
+        "FORWARD_FUR": "ForwardBase",
+        "FORWARD_ADD_FUR": "ForwardAdd"
+      },
       "propertyNames": [
         "_Invisible",
         "_AsUnlit",
@@ -9353,6 +9410,10 @@
         "FORWARD_FUR"
       ],
       "category": "runtime",
+      "passLightModes": {
+        "FORWARD_FUR": "ForwardBase",
+        "FORWARD_ADD_FUR": "ForwardAdd"
+      },
       "propertyNames": [
         "_Invisible",
         "_AsUnlit",
@@ -9916,6 +9977,12 @@
         "FORWARD_FUR_PRE"
       ],
       "category": "runtime",
+      "passLightModes": {
+        "FORWARD_FUR_PRE": "ForwardBase",
+        "FORWARD_FUR": "ForwardBase",
+        "FORWARD_ADD_FUR_PRE": "ForwardAdd",
+        "FORWARD_ADD_FUR": "ForwardAdd"
+      },
       "propertyNames": [
         "_Invisible",
         "_AsUnlit",
@@ -10467,6 +10534,12 @@
         "SHADOW_CASTER"
       ],
       "category": "runtime",
+      "passLightModes": {
+        "FORWARD_PRE": "ForwardBase",
+        "FORWARD": "ForwardBase",
+        "SHADOW_CASTER": "ShadowCaster",
+        "META": "Meta"
+      },
       "propertyNames": [
         "_Invisible",
         "_AsUnlit",
@@ -10990,6 +11063,14 @@
         "SHADOW_CASTER_OUTLINE"
       ],
       "category": "runtime",
+      "passLightModes": {
+        "FORWARD": "ForwardBase",
+        "FORWARD_OUTLINE": "ForwardBase",
+        "FORWARD_ADD": "ForwardAdd",
+        "FORWARD_ADD_OUTLINE": "ForwardAdd",
+        "SHADOW_CASTER_OUTLINE": "ShadowCaster",
+        "META": "Meta"
+      },
       "propertyNames": [
         "_Invisible",
         "_AsUnlit",
@@ -11519,6 +11600,11 @@
         "SHADOW_CASTER"
       ],
       "category": "runtime",
+      "passLightModes": {
+        "FORWARD": "ForwardBase",
+        "SHADOW_CASTER": "ShadowCaster",
+        "META": "Meta"
+      },
       "propertyNames": [
         "_Invisible",
         "_AsUnlit",
@@ -12089,6 +12175,12 @@
         "SHADOW_CASTER_OUTLINE"
       ],
       "category": "runtime",
+      "passLightModes": {
+        "FORWARD": "ForwardBase",
+        "FORWARD_OUTLINE": "ForwardBase",
+        "SHADOW_CASTER_OUTLINE": "ShadowCaster",
+        "META": "Meta"
+      },
       "propertyNames": [
         "_Invisible",
         "_AsUnlit",
@@ -12657,6 +12749,10 @@
         "FORWARD_OUTLINE"
       ],
       "category": "runtime",
+      "passLightModes": {
+        "FORWARD_OUTLINE": "ForwardBase",
+        "FORWARD_ADD_OUTLINE": "ForwardAdd"
+      },
       "propertyNames": [
         "_Invisible",
         "_AsUnlit",
@@ -13185,6 +13281,10 @@
         "FORWARD_ADD"
       ],
       "category": "runtime",
+      "passLightModes": {
+        "FORWARD": "ForwardBase",
+        "FORWARD_ADD": "ForwardAdd"
+      },
       "propertyNames": [
         "_Invisible",
         "_AsUnlit",
@@ -13752,6 +13852,9 @@
         "FORWARD"
       ],
       "category": "runtime",
+      "passLightModes": {
+        "FORWARD": "ForwardBase"
+      },
       "propertyNames": [
         "_Invisible",
         "_AsUnlit",
@@ -14322,6 +14425,12 @@
         "SHADOW_CASTER"
       ],
       "category": "runtime",
+      "passLightModes": {
+        "FORWARD": "ForwardBase",
+        "FORWARD_ADD": "ForwardAdd",
+        "SHADOW_CASTER": "ShadowCaster",
+        "META": "Meta"
+      },
       "propertyNames": [
         "_Invisible",
         "_AsUnlit",
@@ -14837,6 +14946,13 @@
         "SHADOW_CASTER"
       ],
       "category": "runtime",
+      "passLightModes": {
+        "FORWARD_BLUR": "ForwardBase",
+        "FORWARD": "ForwardBase",
+        "FORWARD_ADD": "ForwardAdd",
+        "SHADOW_CASTER": "ShadowCaster",
+        "META": "Meta"
+      },
       "propertyNames": [
         "_Invisible",
         "_AsUnlit",
@@ -15351,6 +15467,12 @@
         "SHADOW_CASTER"
       ],
       "category": "runtime",
+      "passLightModes": {
+        "FORWARD": "ForwardBase",
+        "FORWARD_ADD": "ForwardAdd",
+        "SHADOW_CASTER": "ShadowCaster",
+        "META": "Meta"
+      },
       "propertyNames": [
         "_Invisible",
         "_AsUnlit",
@@ -15881,6 +16003,12 @@
         "SHADOW_CASTER"
       ],
       "category": "runtime",
+      "passLightModes": {
+        "FORWARD": "ForwardBase",
+        "FORWARD_ADD": "ForwardAdd",
+        "SHADOW_CASTER": "ShadowCaster",
+        "META": "Meta"
+      },
       "propertyNames": [
         "_Invisible",
         "_AsUnlit",
@@ -16420,6 +16548,14 @@
         "SHADOW_CASTER_OUTLINE"
       ],
       "category": "runtime",
+      "passLightModes": {
+        "FORWARD": "ForwardBase",
+        "FORWARD_OUTLINE": "ForwardBase",
+        "FORWARD_ADD": "ForwardAdd",
+        "FORWARD_ADD_OUTLINE": "ForwardAdd",
+        "SHADOW_CASTER_OUTLINE": "ShadowCaster",
+        "META": "Meta"
+      },
       "propertyNames": [
         "_Invisible",
         "_AsUnlit",
@@ -16959,6 +17095,14 @@
         "SHADOW_CASTER_OUTLINE"
       ],
       "category": "runtime",
+      "passLightModes": {
+        "FORWARD": "ForwardBase",
+        "FORWARD_OUTLINE": "ForwardBase",
+        "FORWARD_ADD": "ForwardAdd",
+        "FORWARD_ADD_OUTLINE": "ForwardAdd",
+        "SHADOW_CASTER_OUTLINE": "ShadowCaster",
+        "META": "Meta"
+      },
       "propertyNames": [
         "_Invisible",
         "_AsUnlit",
@@ -17488,6 +17632,11 @@
         "SHADOW_CASTER"
       ],
       "category": "runtime",
+      "passLightModes": {
+        "FORWARD": "ForwardBase",
+        "SHADOW_CASTER": "ShadowCaster",
+        "META": "Meta"
+      },
       "propertyNames": [
         "_Invisible",
         "_AsUnlit",
@@ -18058,6 +18207,12 @@
         "SHADOW_CASTER_OUTLINE"
       ],
       "category": "runtime",
+      "passLightModes": {
+        "FORWARD": "ForwardBase",
+        "FORWARD_OUTLINE": "ForwardBase",
+        "SHADOW_CASTER_OUTLINE": "ShadowCaster",
+        "META": "Meta"
+      },
       "propertyNames": [
         "_Invisible",
         "_AsUnlit",
@@ -18628,6 +18783,12 @@
         "SHADOW_CASTER"
       ],
       "category": "runtime",
+      "passLightModes": {
+        "FORWARD": "ForwardBase",
+        "FORWARD_ADD": "ForwardAdd",
+        "SHADOW_CASTER": "ShadowCaster",
+        "META": "Meta"
+      },
       "propertyNames": [
         "_Invisible",
         "_AsUnlit",
@@ -19200,6 +19361,14 @@
         "SHADOW_CASTER_OUTLINE"
       ],
       "category": "runtime",
+      "passLightModes": {
+        "FORWARD": "ForwardBase",
+        "FORWARD_OUTLINE": "ForwardBase",
+        "FORWARD_ADD": "ForwardAdd",
+        "FORWARD_ADD_OUTLINE": "ForwardAdd",
+        "SHADOW_CASTER_OUTLINE": "ShadowCaster",
+        "META": "Meta"
+      },
       "propertyNames": [
         "_Invisible",
         "_AsUnlit",
@@ -19771,6 +19940,13 @@
         "SHADOW_CASTER"
       ],
       "category": "runtime",
+      "passLightModes": {
+        "FORWARD_BACK": "ForwardBase",
+        "FORWARD": "ForwardBase",
+        "FORWARD_ADD": "ForwardAdd",
+        "SHADOW_CASTER": "ShadowCaster",
+        "META": "Meta"
+      },
       "propertyNames": [
         "_Invisible",
         "_AsUnlit",
@@ -20344,6 +20520,15 @@
         "SHADOW_CASTER_OUTLINE"
       ],
       "category": "runtime",
+      "passLightModes": {
+        "FORWARD_BACK": "ForwardBase",
+        "FORWARD": "ForwardBase",
+        "FORWARD_OUTLINE": "ForwardBase",
+        "FORWARD_ADD": "ForwardAdd",
+        "FORWARD_ADD_OUTLINE": "ForwardAdd",
+        "SHADOW_CASTER_OUTLINE": "ShadowCaster",
+        "META": "Meta"
+      },
       "propertyNames": [
         "_Invisible",
         "_AsUnlit",
@@ -20914,6 +21099,12 @@
         "SHADOW_CASTER"
       ],
       "category": "runtime",
+      "passLightModes": {
+        "FORWARD": "ForwardBase",
+        "FORWARD_ADD": "ForwardAdd",
+        "SHADOW_CASTER": "ShadowCaster",
+        "META": "Meta"
+      },
       "propertyNames": [
         "_Invisible",
         "_AsUnlit",
@@ -21486,6 +21677,14 @@
         "SHADOW_CASTER_OUTLINE"
       ],
       "category": "runtime",
+      "passLightModes": {
+        "FORWARD": "ForwardBase",
+        "FORWARD_OUTLINE": "ForwardBase",
+        "FORWARD_ADD": "ForwardAdd",
+        "FORWARD_ADD_OUTLINE": "ForwardAdd",
+        "SHADOW_CASTER_OUTLINE": "ShadowCaster",
+        "META": "Meta"
+      },
       "propertyNames": [
         "_Invisible",
         "_AsUnlit",
@@ -22054,6 +22253,10 @@
         "FORWARD_OUTLINE"
       ],
       "category": "runtime",
+      "passLightModes": {
+        "FORWARD_OUTLINE": "ForwardBase",
+        "FORWARD_ADD_OUTLINE": "ForwardAdd"
+      },
       "propertyNames": [
         "_Invisible",
         "_AsUnlit",
@@ -22625,6 +22828,13 @@
         "SHADOW_CASTER"
       ],
       "category": "runtime",
+      "passLightModes": {
+        "FORWARD_BACK": "ForwardBase",
+        "FORWARD": "ForwardBase",
+        "FORWARD_ADD": "ForwardAdd",
+        "SHADOW_CASTER": "ShadowCaster",
+        "META": "Meta"
+      },
       "propertyNames": [
         "_Invisible",
         "_AsUnlit",
@@ -23198,6 +23408,15 @@
         "SHADOW_CASTER_OUTLINE"
       ],
       "category": "runtime",
+      "passLightModes": {
+        "FORWARD_BACK": "ForwardBase",
+        "FORWARD": "ForwardBase",
+        "FORWARD_OUTLINE": "ForwardBase",
+        "FORWARD_ADD": "ForwardAdd",
+        "FORWARD_ADD_OUTLINE": "ForwardAdd",
+        "SHADOW_CASTER_OUTLINE": "ShadowCaster",
+        "META": "Meta"
+      },
       "propertyNames": [
         "_Invisible",
         "_AsUnlit",
@@ -23768,6 +23987,12 @@
         "SHADOW_CASTER"
       ],
       "category": "runtime",
+      "passLightModes": {
+        "FORWARD": "ForwardBase",
+        "FORWARD_ADD": "ForwardAdd",
+        "SHADOW_CASTER": "ShadowCaster",
+        "META": "Meta"
+      },
       "propertyNames": [
         "_Invisible",
         "_AsUnlit",
@@ -23934,6 +24159,12 @@
         "SHADOW_CASTER"
       ],
       "category": "runtime",
+      "passLightModes": {
+        "FORWARD": "ForwardBase",
+        "FORWARD_ADD": "ForwardAdd",
+        "SHADOW_CASTER": "ShadowCaster",
+        "META": "Meta"
+      },
       "propertyNames": [
         "_Invisible",
         "_AsUnlit",
@@ -24108,6 +24339,14 @@
         "SHADOW_CASTER_OUTLINE"
       ],
       "category": "runtime",
+      "passLightModes": {
+        "FORWARD": "ForwardBase",
+        "FORWARD_OUTLINE": "ForwardBase",
+        "FORWARD_ADD": "ForwardAdd",
+        "FORWARD_ADD_OUTLINE": "ForwardAdd",
+        "SHADOW_CASTER_OUTLINE": "ShadowCaster",
+        "META": "Meta"
+      },
       "propertyNames": [
         "_Invisible",
         "_AsUnlit",
@@ -24282,6 +24521,14 @@
         "SHADOW_CASTER_OUTLINE"
       ],
       "category": "runtime",
+      "passLightModes": {
+        "FORWARD": "ForwardBase",
+        "FORWARD_OUTLINE": "ForwardBase",
+        "FORWARD_ADD": "ForwardAdd",
+        "FORWARD_ADD_OUTLINE": "ForwardAdd",
+        "SHADOW_CASTER_OUTLINE": "ShadowCaster",
+        "META": "Meta"
+      },
       "propertyNames": [
         "_Invisible",
         "_AsUnlit",
@@ -24447,6 +24694,11 @@
         "SHADOW_CASTER"
       ],
       "category": "runtime",
+      "passLightModes": {
+        "FORWARD": "ForwardBase",
+        "SHADOW_CASTER": "ShadowCaster",
+        "META": "Meta"
+      },
       "propertyNames": [
         "_Invisible",
         "_AsUnlit",
@@ -24652,6 +24904,12 @@
         "SHADOW_CASTER_OUTLINE"
       ],
       "category": "runtime",
+      "passLightModes": {
+        "FORWARD": "ForwardBase",
+        "FORWARD_OUTLINE": "ForwardBase",
+        "SHADOW_CASTER_OUTLINE": "ShadowCaster",
+        "META": "Meta"
+      },
       "propertyNames": [
         "_Invisible",
         "_AsUnlit",
@@ -24855,6 +25113,10 @@
         "FORWARD_ADD"
       ],
       "category": "runtime",
+      "passLightModes": {
+        "FORWARD": "ForwardBase",
+        "FORWARD_ADD": "ForwardAdd"
+      },
       "propertyNames": [
         "_Invisible",
         "_AsUnlit",
@@ -25057,6 +25319,9 @@
         "FORWARD"
       ],
       "category": "runtime",
+      "passLightModes": {
+        "FORWARD": "ForwardBase"
+      },
       "propertyNames": [
         "_Invisible",
         "_AsUnlit",
@@ -25262,6 +25527,12 @@
         "SHADOW_CASTER"
       ],
       "category": "runtime",
+      "passLightModes": {
+        "FORWARD": "ForwardBase",
+        "FORWARD_ADD": "ForwardAdd",
+        "SHADOW_CASTER": "ShadowCaster",
+        "META": "Meta"
+      },
       "propertyNames": [
         "_Invisible",
         "_AsUnlit",
@@ -25469,6 +25740,14 @@
         "SHADOW_CASTER_OUTLINE"
       ],
       "category": "runtime",
+      "passLightModes": {
+        "FORWARD": "ForwardBase",
+        "FORWARD_OUTLINE": "ForwardBase",
+        "FORWARD_ADD": "ForwardAdd",
+        "FORWARD_ADD_OUTLINE": "ForwardAdd",
+        "SHADOW_CASTER_OUTLINE": "ShadowCaster",
+        "META": "Meta"
+      },
       "propertyNames": [
         "_Invisible",
         "_AsUnlit",
@@ -25675,6 +25954,13 @@
         "SHADOW_CASTER"
       ],
       "category": "runtime",
+      "passLightModes": {
+        "FORWARD_BACK": "ForwardBase",
+        "FORWARD": "ForwardBase",
+        "FORWARD_ADD": "ForwardAdd",
+        "SHADOW_CASTER": "ShadowCaster",
+        "META": "Meta"
+      },
       "propertyNames": [
         "_Invisible",
         "_AsUnlit",
@@ -25883,6 +26169,15 @@
         "SHADOW_CASTER_OUTLINE"
       ],
       "category": "runtime",
+      "passLightModes": {
+        "FORWARD_BACK": "ForwardBase",
+        "FORWARD": "ForwardBase",
+        "FORWARD_OUTLINE": "ForwardBase",
+        "FORWARD_ADD": "ForwardAdd",
+        "FORWARD_ADD_OUTLINE": "ForwardAdd",
+        "SHADOW_CASTER_OUTLINE": "ShadowCaster",
+        "META": "Meta"
+      },
       "propertyNames": [
         "_Invisible",
         "_AsUnlit",
@@ -26088,6 +26383,12 @@
         "SHADOW_CASTER"
       ],
       "category": "runtime",
+      "passLightModes": {
+        "FORWARD": "ForwardBase",
+        "FORWARD_ADD": "ForwardAdd",
+        "SHADOW_CASTER": "ShadowCaster",
+        "META": "Meta"
+      },
       "propertyNames": [
         "_Invisible",
         "_AsUnlit",
@@ -26620,6 +26921,14 @@
         "SHADOW_CASTER"
       ],
       "category": "runtime",
+      "passLightModes": {
+        "FORWARD": "ForwardBase",
+        "FORWARD_FUR": "ForwardBase",
+        "FORWARD_ADD": "ForwardAdd",
+        "FORWARD_ADD_FUR": "ForwardAdd",
+        "SHADOW_CASTER": "ShadowCaster",
+        "META": "Meta"
+      },
       "propertyNames": [
         "_Invisible",
         "_AsUnlit",
@@ -27171,6 +27480,12 @@
         "SHADOW_CASTER"
       ],
       "category": "runtime",
+      "passLightModes": {
+        "FORWARD_PRE": "ForwardBase",
+        "FORWARD": "ForwardBase",
+        "SHADOW_CASTER": "ShadowCaster",
+        "META": "Meta"
+      },
       "propertyNames": [
         "_Invisible",
         "_AsUnlit",
@@ -27694,6 +28009,14 @@
         "SHADOW_CASTER"
       ],
       "category": "runtime",
+      "passLightModes": {
+        "FORWARD": "ForwardBase",
+        "FORWARD_OUTLINE": "ForwardBase",
+        "FORWARD_ADD": "ForwardAdd",
+        "FORWARD_ADD_OUTLINE": "ForwardAdd",
+        "SHADOW_CASTER": "ShadowCaster",
+        "META": "Meta"
+      },
       "propertyNames": [
         "_Invisible",
         "_AsUnlit",
@@ -28224,6 +28547,12 @@
         "SHADOW_CASTER"
       ],
       "category": "runtime",
+      "passLightModes": {
+        "FORWARD": "ForwardBase",
+        "FORWARD_ADD": "ForwardAdd",
+        "SHADOW_CASTER": "ShadowCaster",
+        "META": "Meta"
+      },
       "propertyNames": [
         "_Invisible",
         "_AsUnlit",
@@ -28733,6 +29062,7 @@
       "file": "ltspass_baker.shader",
       "passes": [],
       "category": "editor",
+      "passLightModes": {},
       "propertyNames": [
         "_Color",
         "_MainTex",
@@ -28918,6 +29248,7 @@
       "file": "ltspass_bakeramp.shader",
       "passes": [],
       "category": "editor",
+      "passLightModes": {},
       "propertyNames": [
         "_ShadowStrength",
         "_ShadowColor",
@@ -28996,6 +29327,15 @@
         "SHADOW_CASTER_OUTLINE"
       ],
       "category": "runtime-pass",
+      "passLightModes": {
+        "FORWARD": "ForwardBase",
+        "FORWARD_OUTLINE": "ForwardBase",
+        "FORWARD_ADD": "ForwardAdd",
+        "FORWARD_ADD_OUTLINE": "ForwardAdd",
+        "SHADOW_CASTER": "ShadowCaster",
+        "SHADOW_CASTER_OUTLINE": "ShadowCaster",
+        "META": "Meta"
+      },
       "propertyNames": [
         "_Invisible",
         "_AsUnlit",
@@ -29530,6 +29870,9 @@
         "FORWARD_ADD"
       ],
       "category": "editor",
+      "passLightModes": {
+        "FORWARD_ADD": "ForwardAdd"
+      },
       "propertyNames": [],
       "propertyOverrides": {}
     },
@@ -29546,6 +29889,15 @@
         "SHADOW_CASTER_OUTLINE"
       ],
       "category": "runtime-pass",
+      "passLightModes": {
+        "FORWARD": "ForwardBase",
+        "FORWARD_OUTLINE": "ForwardBase",
+        "FORWARD_ADD": "ForwardAdd",
+        "FORWARD_ADD_OUTLINE": "ForwardAdd",
+        "SHADOW_CASTER": "ShadowCaster",
+        "SHADOW_CASTER_OUTLINE": "ShadowCaster",
+        "META": "Meta"
+      },
       "propertyNames": [
         "_Invisible",
         "_AsUnlit",
@@ -29721,6 +30073,15 @@
         "SHADOW_CASTER_OUTLINE"
       ],
       "category": "runtime-pass",
+      "passLightModes": {
+        "FORWARD": "ForwardBase",
+        "FORWARD_OUTLINE": "ForwardBase",
+        "FORWARD_ADD": "ForwardAdd",
+        "FORWARD_ADD_OUTLINE": "ForwardAdd",
+        "SHADOW_CASTER": "ShadowCaster",
+        "SHADOW_CASTER_OUTLINE": "ShadowCaster",
+        "META": "Meta"
+      },
       "propertyNames": [
         "_Invisible",
         "_AsUnlit",
@@ -29891,6 +30252,16 @@
         "SHADOW_CASTER_OUTLINE"
       ],
       "category": "runtime-pass",
+      "passLightModes": {
+        "FORWARD_BACK": "ForwardBase",
+        "FORWARD": "ForwardBase",
+        "FORWARD_OUTLINE": "ForwardBase",
+        "FORWARD_ADD": "ForwardAdd",
+        "FORWARD_ADD_OUTLINE": "ForwardAdd",
+        "SHADOW_CASTER": "ShadowCaster",
+        "SHADOW_CASTER_OUTLINE": "ShadowCaster",
+        "META": "Meta"
+      },
       "propertyNames": [
         "_Invisible",
         "_AsUnlit",
@@ -30099,6 +30470,15 @@
         "SHADOW_CASTER_OUTLINE"
       ],
       "category": "runtime-pass",
+      "passLightModes": {
+        "FORWARD": "ForwardBase",
+        "FORWARD_OUTLINE": "ForwardBase",
+        "FORWARD_ADD": "ForwardAdd",
+        "FORWARD_ADD_OUTLINE": "ForwardAdd",
+        "SHADOW_CASTER": "ShadowCaster",
+        "SHADOW_CASTER_OUTLINE": "ShadowCaster",
+        "META": "Meta"
+      },
       "propertyNames": [
         "_Invisible",
         "_AsUnlit",
@@ -30624,6 +31004,7 @@
       "file": "ltspass_proponly.shader",
       "passes": [],
       "category": "editor",
+      "passLightModes": {},
       "propertyNames": [
         "_Invisible",
         "_AsUnlit",
@@ -32845,6 +33226,15 @@
         "SHADOW_CASTER_OUTLINE"
       ],
       "category": "runtime-pass",
+      "passLightModes": {
+        "FORWARD": "ForwardBase",
+        "FORWARD_OUTLINE": "ForwardBase",
+        "FORWARD_ADD": "ForwardAdd",
+        "FORWARD_ADD_OUTLINE": "ForwardAdd",
+        "SHADOW_CASTER": "ShadowCaster",
+        "SHADOW_CASTER_OUTLINE": "ShadowCaster",
+        "META": "Meta"
+      },
       "propertyNames": [
         "_Invisible",
         "_AsUnlit",
@@ -33385,6 +33775,15 @@
         "SHADOW_CASTER_OUTLINE"
       ],
       "category": "runtime-pass",
+      "passLightModes": {
+        "FORWARD": "ForwardBase",
+        "FORWARD_OUTLINE": "ForwardBase",
+        "FORWARD_ADD": "ForwardAdd",
+        "FORWARD_ADD_OUTLINE": "ForwardAdd",
+        "SHADOW_CASTER": "ShadowCaster",
+        "SHADOW_CASTER_OUTLINE": "ShadowCaster",
+        "META": "Meta"
+      },
       "propertyNames": [
         "_Invisible",
         "_AsUnlit",
@@ -33919,6 +34318,16 @@
         "SHADOW_CASTER_OUTLINE"
       ],
       "category": "runtime-pass",
+      "passLightModes": {
+        "FORWARD_BACK": "ForwardBase",
+        "FORWARD": "ForwardBase",
+        "FORWARD_OUTLINE": "ForwardBase",
+        "FORWARD_ADD": "ForwardAdd",
+        "FORWARD_ADD_OUTLINE": "ForwardAdd",
+        "SHADOW_CASTER": "ShadowCaster",
+        "SHADOW_CASTER_OUTLINE": "ShadowCaster",
+        "META": "Meta"
+      },
       "propertyNames": [
         "_Invisible",
         "_AsUnlit",
@@ -34493,6 +34902,16 @@
         "SHADOW_CASTER_OUTLINE"
       ],
       "category": "runtime-pass",
+      "passLightModes": {
+        "FORWARD_BACK": "ForwardBase",
+        "FORWARD": "ForwardBase",
+        "FORWARD_OUTLINE": "ForwardBase",
+        "FORWARD_ADD": "ForwardAdd",
+        "FORWARD_ADD_OUTLINE": "ForwardAdd",
+        "SHADOW_CASTER": "ShadowCaster",
+        "SHADOW_CASTER_OUTLINE": "ShadowCaster",
+        "META": "Meta"
+      },
       "propertyNames": [
         "_Invisible",
         "_AsUnlit",
