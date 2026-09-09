@@ -183,6 +183,30 @@ namespace VRVlog.LilToonExporter.Tests
             Assert.That(ExportGimmickDetection.AutomaticRoots(findings, new ExportGimmickOptions { IncludedObjects = new[] { child } }), Is.Empty);
         }
 
+        [TestCase("ModularAvatarMergeArmature", "mergeTarget.referencePath")]
+        [TestCase("ModularAvatarBoneProxy", "subPath")]
+        public void MaPathBasedConnectionsProtectTheHierarchy(string componentName, string pathProperty)
+        {
+            Type FindType(string name) => AppDomain.CurrentDomain.GetAssemblies().Select(a => a.GetType(name)).FirstOrDefault(t => t != null);
+            var type = FindType("nadena.dev.modular_avatar.core." + componentName);
+            var descriptor = FindType("VRC.SDK3.Avatars.Components.VRCAvatarDescriptor");
+            if (type == null || descriptor == null) Assert.Ignore("Installed MA and VRChat SDK are required for this connection regression.");
+            avatar.AddComponent(descriptor);
+            var root = Child("system"); var effect = Render("effect", hidden, root.transform);
+            var wardrobe = Render("wardrobe", normal).gameObject;
+            var component = wardrobe.AddComponent(type);
+            using (var serialized = new SerializedObject(component))
+            {
+                serialized.FindProperty(pathProperty).stringValue = "system/effect";
+                var direct = serialized.FindProperty("mergeTarget.targetObject");
+                if (direct != null) direct.objectReferenceValue = null;
+                serialized.ApplyModifiedPropertiesWithoutUndo();
+            }
+            Assert.That(NdmfExportPreparation.FollowingTarget(component), Is.SameAs(effect.transform));
+            Assert.That(ExportGimmickDetection.UnsafeRootReason(avatar, root.transform, _ => false), Is.Not.Null);
+            Assert.That(ExportGimmickDetection.UnsafeRootReason(avatar, root.transform, t => t == wardrobe.transform), Is.Null);
+        }
+
         [Test] public void MissingMeshOrMaterialSlotsProtectTheHierarchy()
         {
             var root = Child("system"); var renderer = Render("effect", hidden, root.transform);

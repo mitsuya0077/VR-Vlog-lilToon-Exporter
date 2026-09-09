@@ -177,6 +177,17 @@ namespace VRVlog.LilToonExporter
             foreach (var component in source.GetComponentsInChildren<Component>(true))
             {
                 if (component == null || component is Transform || Within(component.transform) || manuallyExcluded(component.transform)) continue;
+                // MA also stores connections as avatar-relative paths or
+                // humanoid bone/subpath pairs, without an ObjectReference.
+                try
+                {
+                    if (Within(NdmfExportPreparation.FollowingTarget(component)))
+                        return "残す衣装のMA接続先を含むため、システム全体は残します。";
+                }
+                catch (Exception)
+                {
+                    return "MAの接続先を確認できないため、システム全体は残します。";
+                }
                 using var serialized = new SerializedObject(component);
                 var property = serialized.GetIterator();
                 while (property.Next(true))

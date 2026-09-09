@@ -103,6 +103,12 @@ namespace VRVlog.LilToonExporter
             return null;
         }
 
+        internal static Transform FollowingTarget(Component component)
+        {
+            var property = FollowingProperty(component);
+            return property == null ? null : ReadFollowingTarget(component, property);
+        }
+
         private static Transform ReadFollowingTarget(Component component, string property)
         {
             var getter = component.GetType().GetProperty(property, BindingFlags.Instance | BindingFlags.Public);
