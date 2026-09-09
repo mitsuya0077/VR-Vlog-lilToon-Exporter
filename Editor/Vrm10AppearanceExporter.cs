@@ -12,7 +12,8 @@ namespace VRVlog.LilToonExporter
     {
         internal static byte[] Export(GltfExportSettings settings, GameObject avatar,
             IMaterialExporter materialExporter, ITextureSerializer textureSerializer, VRM10ObjectMeta vrmMeta,
-            IDictionary<Material, int> materialIndices = null)
+            IDictionary<Material, int> materialIndices = null,
+            Action<ModelExporter, Model, ExportingGltfData> afterExport = null)
         {
             using var arrays = new NativeArrayManager();
             var converter = new ModelExporter();
@@ -25,6 +26,7 @@ namespace VRVlog.LilToonExporter
             if (materialIndices != null)
                 for (var i = 0; i < model.Materials.Count; i++) materialIndices.Add((Material)model.Materials[i], i);
             if (settings.ExportVertexColor) PreserveVertexColors(model, exporter.Storage);
+            afterExport?.Invoke(converter, model, exporter.Storage);
             return exporter.Storage.ToGlbBytes();
         }
 

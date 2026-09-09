@@ -1,0 +1,463 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://vrvlog.app/schema/VRVLOG_materials_liltoon/2.0/schema.json",
+  "title": "VR Vlog lilToon 2.0 development contract",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schemaMajor",
+    "schemaMinor",
+    "sourceLilToonVersion",
+    "sourceCommit",
+    "exporterVersion",
+    "materials",
+    "textures",
+    "bindings",
+    "chunks"
+  ],
+  "properties": {
+    "schemaMajor": {
+      "const": 2
+    },
+    "schemaMinor": {
+      "const": 0
+    },
+    "sourceLilToonVersion": {
+      "const": "2.3.4"
+    },
+    "sourceCommit": {
+      "const": "252fd8cfc46106d4967e95b3f2c788418502f227"
+    },
+    "exporterVersion": {
+      "type": "string",
+      "maxLength": 1024
+    },
+    "materials": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/material"
+      }
+    },
+    "textures": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/texture"
+      }
+    },
+    "bindings": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/binding"
+      }
+    },
+    "chunks": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/chunk"
+      }
+    }
+  },
+  "$defs": {
+    "chunk": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "bufferView",
+        "decodedBytes",
+        "codec"
+      ],
+      "properties": {
+        "bufferView": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "decodedBytes": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 2147483647
+        },
+        "codec": {
+          "const": "deflate"
+        }
+      }
+    },
+    "value": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "name",
+        "type",
+        "value"
+      ],
+      "properties": {
+        "name": {
+          "type": "string",
+          "maxLength": 1024
+        },
+        "type": {
+          "enum": [
+            "float",
+            "color",
+            "vector"
+          ]
+        },
+        "value": {
+          "type": "array",
+          "items": {
+            "type": "number"
+          },
+          "minItems": 4,
+          "maxItems": 4
+        }
+      }
+    },
+    "textureProperty": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "name",
+        "texture",
+        "st"
+      ],
+      "properties": {
+        "name": {
+          "type": "string",
+          "maxLength": 1024
+        },
+        "texture": {
+          "type": "integer",
+          "minimum": -1
+        },
+        "st": {
+          "type": "array",
+          "items": {
+            "type": "number"
+          },
+          "minItems": 4,
+          "maxItems": 4
+        }
+      }
+    },
+    "pass": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "name",
+        "lightMode",
+        "enabled"
+      ],
+      "properties": {
+        "name": {
+          "type": "string",
+          "maxLength": 1024
+        },
+        "lightMode": {
+          "type": "string",
+          "maxLength": 1024
+        },
+        "enabled": {
+          "type": "boolean"
+        }
+      }
+    },
+    "material": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "sourceShader",
+        "name",
+        "materialIndex",
+        "renderQueue",
+        "values",
+        "textures",
+        "passes",
+        "keywords",
+        "clippingCanceller"
+      ],
+      "properties": {
+        "sourceShader": {
+          "type": "string",
+          "maxLength": 1024
+        },
+        "name": {
+          "type": "string",
+          "maxLength": 1024
+        },
+        "materialIndex": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "renderQueue": {
+          "type": "integer",
+          "minimum": -1,
+          "maximum": 5000
+        },
+        "values": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/value"
+          }
+        },
+        "textures": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/textureProperty"
+          }
+        },
+        "passes": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/pass"
+          }
+        },
+        "keywords": {
+          "type": "array",
+          "uniqueItems": true,
+          "items": {
+            "type": "string",
+            "maxLength": 128
+          }
+        },
+        "clippingCanceller": {
+          "type": "boolean"
+        }
+      }
+    },
+    "texture": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "name",
+        "width",
+        "height",
+        "mips",
+        "faces",
+        "format",
+        "srgb",
+        "normal",
+        "filter",
+        "wrapU",
+        "wrapV",
+        "wrapW",
+        "aniso",
+        "mipBias",
+        "chunks"
+      ],
+      "properties": {
+        "name": {
+          "type": "string",
+          "maxLength": 1024
+        },
+        "width": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "height": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "mips": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "faces": {
+          "enum": [
+            1,
+            6
+          ]
+        },
+        "format": {
+          "enum": [
+            "rgba32",
+            "rgbaHalf",
+            "rgbaFloat"
+          ]
+        },
+        "srgb": {
+          "type": "boolean"
+        },
+        "normal": {
+          "type": "boolean"
+        },
+        "filter": {
+          "enum": [
+            0,
+            1,
+            2
+          ]
+        },
+        "wrapU": {
+          "enum": [
+            0,
+            1,
+            2,
+            3
+          ]
+        },
+        "wrapV": {
+          "enum": [
+            0,
+            1,
+            2,
+            3
+          ]
+        },
+        "wrapW": {
+          "enum": [
+            0,
+            1,
+            2,
+            3
+          ]
+        },
+        "aniso": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 16
+        },
+        "mipBias": {
+          "type": "number"
+        },
+        "chunks": {
+          "type": "array",
+          "items": {
+            "type": "integer",
+            "minimum": 0
+          }
+        }
+      }
+    },
+    "binding": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "node",
+        "mesh",
+        "vertexCount",
+        "materials",
+        "uv",
+        "vertexIds",
+        "renderer"
+      ],
+      "properties": {
+        "node": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "mesh": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "vertexCount": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "materials": {
+          "type": "array",
+          "items": {
+            "type": "integer",
+            "minimum": 0
+          }
+        },
+        "uv": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "channel",
+              "payload"
+            ],
+            "properties": {
+              "channel": {
+                "type": "integer",
+                "minimum": 0,
+                "maximum": 7
+              },
+              "payload": {
+                "type": "integer",
+                "minimum": 0
+              }
+            }
+          }
+        },
+        "vertexIds": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "renderer": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "receiveShadows",
+            "shadowCasting",
+            "lightProbes",
+            "reflectionProbes",
+            "probeAnchor",
+            "sortingLayer",
+            "sortingOrder",
+            "boundsCenter",
+            "boundsExtents"
+          ],
+          "properties": {
+            "receiveShadows": {
+              "type": "boolean"
+            },
+            "shadowCasting": {
+              "enum": [
+                0,
+                1,
+                2,
+                3
+              ]
+            },
+            "lightProbes": {
+              "enum": [
+                0,
+                1,
+                3
+              ]
+            },
+            "reflectionProbes": {
+              "enum": [
+                0,
+                1,
+                2,
+                3
+              ]
+            },
+            "probeAnchor": {
+              "type": "integer",
+              "minimum": -1
+            },
+            "sortingLayer": {
+              "type": "integer"
+            },
+            "sortingOrder": {
+              "type": "integer",
+              "minimum": -32768,
+              "maximum": 32767
+            },
+            "boundsCenter": {
+              "type": "array",
+              "items": {
+                "type": "number"
+              },
+              "minItems": 4,
+              "maxItems": 4
+            },
+            "boundsExtents": {
+              "type": "array",
+              "items": {
+                "type": "number"
+              },
+              "minItems": 4,
+              "maxItems": 4
+            }
+          }
+        }
+      }
+    }
+  },
+  "description": "FullContract additionally validates exact official property/pass sets, typed properties, optional extension declaration, glTF identities, buffer/mip byte ranges and finite numbers. No legacy material/texture-count cap applies. Not a certification of visual parity."
+}
