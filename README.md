@@ -6,7 +6,7 @@ lilToonのアバターを、VR Vlogで使う **VRM 1.0** に書き出すUnity Ed
 
 [インストールページ](https://mitsuya0077.github.io/VR-Vlog-lilToon-Exporter/) · [最新リリース](https://github.com/mitsuya0077/VR-Vlog-lilToon-Exporter/releases/latest) · [Technical details / English](Docs/TechnicalDetails.md) · [変更履歴](CHANGELOG.md)
 
-mainは次期0.9.0（schema 1.3）のソースです。対応アプリの配布確認までパッケージは未公開です。配布済みの最新版は[0.8.1](https://github.com/mitsuya0077/VR-Vlog-lilToon-Exporter/releases/tag/v0.8.1)です。サイト・VPM一覧も現在は公開停止中のため、配布済みZIPを使う場合は手動導入の手順を参照してください。
+mainは次期0.9.0（schema 1.3）のソースです。対応アプリの配布確認までパッケージは未公開です。配布済みの最新版は[0.8.1](https://github.com/mitsuya0077/VR-Vlog-lilToon-Exporter/releases/tag/v0.8.1)です。[インストールページ](https://mitsuya0077.github.io/VR-Vlog-lilToon-Exporter/)とVPM一覧では、配布済みのバージョンを案内しています。
 
 ## 必要な環境
 
