@@ -13,4 +13,4 @@ lilToonのアバターをVRM 1.0へ書き出すUnity Editor用パッケージで
 
 不具合報告は公開されます。コピーしたエラーから個人情報・ローカルパス・共有リンク・認証情報を除き、必要な箇所だけを共有してください。私有アバター・有料素材・元プロジェクト・ログ全文は公開で添付しないでください。
 
-エクスポーターはMIT Licenseです。アバター・衣装・テクスチャにはそれぞれの利用条件が適用されます。
+エクスポーターはMIT Licenseです。アルファマスク処理に利用するlilToon 2.3.4の著作権表示とMITライセンス全文は [lilToonのライセンス](../ThirdPartyNotices/lilToon-LICENSE.txt) に同梱しています。[lilToonの出典](../ThirdPartyNotices/lilToon.md) · [UniVRMの出典とライセンス](../ThirdPartyNotices/UniVRM.md) も参照してください。アバター・衣装・テクスチャにはそれぞれの利用条件が適用されます。
