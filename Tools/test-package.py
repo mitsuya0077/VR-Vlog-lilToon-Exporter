@@ -80,6 +80,16 @@ class PackageTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "Symlinks"):
             package.build(self.root, self.root / "invalid.zip")
 
+    def test_nul_and_unicode_text_cannot_bypass_content_checks(self):
+        token = "ghp_" + "a" * 36
+        content = "example\ncredential=" + token
+        for encoding in ["utf-8-sig", "utf-16", "utf-16-le", "utf-16-be", "utf-32", "utf-32-le", "utf-32-be"]:
+            with self.subTest(encoding=encoding):
+                findings = public.inspect("example.txt", content.encode(encoding))
+                self.assertIn((2, "access token"), findings)
+                self.assertNotIn(token, repr(findings))
+        self.assertIn((1, "access token"), public.inspect("example.bin", b"\0" + token.encode()))
+
 
 if __name__ == "__main__":
     unittest.main()
