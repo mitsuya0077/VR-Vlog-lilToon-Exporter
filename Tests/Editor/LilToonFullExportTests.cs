@@ -16,6 +16,24 @@ namespace VRVlog.LilToonExporter.Tests
     {
         static IEnumerable<string> OfficialShaders=>VRVlog.LilToon.LilToon234Catalogue.Shaders.Keys;
 
+        [Test]
+        public void SourceVertexIdsRetainIntegerBitsAboveFloatPrecision()
+        {
+            var values = new[]{0,16777215,16777216,16777217,int.MaxValue};
+            var snapshot = new LilToonFullSnapshot();
+            var index = snapshot.AddVertexIds(values);
+            var payloads = (List<byte[]>)typeof(LilToonFullSnapshot).GetField("payloads",BindingFlags.Instance|BindingFlags.NonPublic).GetValue(snapshot);
+            var bytes = payloads[index];
+            Assert.That(bytes.Length,Is.EqualTo(values.Length*4));
+            for(var i=0;i<values.Length;i++)Assert.That(BitConverter.ToUInt32(bytes,i*4),Is.EqualTo((uint)values[i]));
+            var runtime = Type.GetType("FaceMaskVTuber.UniVrmRuntime.LilToonFullRuntime, FaceMaskVTuber.UniVrmRuntime");
+            if(runtime!=null)
+            {
+                var ids=(uint[])runtime.GetMethod("VertexIds",BindingFlags.Static|BindingFlags.NonPublic).Invoke(null,new object[]{bytes});
+                Assert.That(ids,Is.EqualTo(values.Select(v=>(uint)v).ToArray()));
+            }
+        }
+
         [TestCase("rgbaHalf", 0x7c00u)][TestCase("rgbaHalf", 0xfc00u)][TestCase("rgbaHalf", 0x7e01u)]
         [TestCase("rgbaFloat", 0x7f800000u)][TestCase("rgbaFloat", 0xff800000u)][TestCase("rgbaFloat", 0x7fc00001u)]
         public void NonFiniteHdrPayloadsAreRejectedIncludingAlpha(string format, uint bits)
@@ -32,6 +50,94 @@ namespace VRVlog.LilToonExporter.Tests
             var maximum = format == "rgbaHalf" ? 0x7bffu : 0x7f7fffffu;
             for (var b = 0; b < size; b++) payload[b] = (byte)(maximum >> (8 * b));
             Assert.DoesNotThrow(() => F.ValidatePixels(payload, format), "Finite HDR values are not clamped.");
+        }
+
+        [Test]
+        public void SignedNormalizedMasksRetainNegativeSamples()
+        {
+            // This Unity/driver combination may not expose SNorm textures.
+            // Still exercise the selected floating-point copy path on every GPU.
+            foreach(var format in new[]{UnityEngine.Experimental.Rendering.GraphicsFormat.R8_SNorm,UnityEngine.Experimental.Rendering.GraphicsFormat.R8G8_SNorm,UnityEngine.Experimental.Rendering.GraphicsFormat.R8G8B8A8_SNorm})
+                Assert.That(LilToonFullSnapshot.StorageFormat(format,false),Is.EqualTo("rgbaFloat"));
+            var source=new Texture2D(4,1,TextureFormat.RGBAFloat,false,true){filterMode=FilterMode.Point};
+            try
+            {
+                var expected=new[]{-1f,-63f/127,1f/127,1f};
+                source.SetPixels(expected.Select(v=>new Color(v,0,0,1)).ToArray());source.Apply(false);
+                var storage=LilToonFullSnapshot.StorageFormat(UnityEngine.Experimental.Rendering.GraphicsFormat.R8_SNorm,false);
+                var bytes=LilToonFullTexture.Read(source,0,0,false,false,storage!="rgba32",storage=="rgbaHalf");
+                for(var i=0;i<4;i++)Assert.That(BitConverter.ToSingle(bytes,i*16),Is.EqualTo(expected[i]).Within(1e-6f));
+            }
+            finally {Object.DestroyImmediate(source);}
+        }
+
+        [Test]
+        public void SignedNormalizedSourceTextureSamplesSurviveGpuCopy()
+        {
+            var format=UnityEngine.Experimental.Rendering.GraphicsFormat.R8_SNorm;
+            if(!SystemInfo.IsFormatSupported(format,UnityEngine.Experimental.Rendering.FormatUsage.Sample))
+                Assert.Ignore("This Unity/driver does not support R8_SNorm sampling; floating-point signed copy and storage selection are tested separately.");
+            var source=new Texture2D(4,1,format,UnityEngine.Experimental.Rendering.TextureCreationFlags.None){filterMode=FilterMode.Point};
+            try
+            {
+                source.SetPixelData(new byte[]{128,193,1,127},0);source.Apply(false);
+                var bytes=LilToonFullTexture.Read(source,0,0,false,false,true);
+                var expected=new[]{-1f,-63f/127,1f/127,1f};
+                for(var i=0;i<4;i++)Assert.That(BitConverter.ToSingle(bytes,i*16),Is.EqualTo(expected[i]).Within(1e-6f));
+            }
+            finally {Object.DestroyImmediate(source);}
+        }
+
+        [TestCase(false,false)][TestCase(true,false)][TestCase(false,true)]
+        public void ExplicitEmissionSuppressionReachesBothFullLayersWithoutEditingSource(bool shared,bool hdr)
+        {
+            using var fixture=new AttachmentConnectionTests.Fixture();
+            var source=new Material(Shader.Find("_lil/lilToonMulti"));
+            try
+            {
+                Assert.That(source.shader,Is.Not.Null);
+                source.SetTexture("_MainTex",shared?Texture2D.whiteTexture:Texture2D.blackTexture);
+                foreach(var layer in new[]{"","2nd"})
+                {
+                    source.SetFloat("_UseEmission"+layer,1);source.SetFloat("_Emission"+layer+"Blend",1);
+                    source.SetColor("_Emission"+layer+"Color",new Color(2,3,4,1));source.SetTexture("_Emission"+layer+"Map",Texture2D.whiteTexture);
+                }
+                source.EnableKeyword("_EMISSION");source.EnableKeyword("GEOM_TYPE_BRANCH");
+                foreach(var renderer in fixture.Source.GetComponentsInChildren<SkinnedMeshRenderer>())renderer.sharedMaterial=source;
+                var glb=GlbDocument.Read(UniVrmOneClickExporter.Export(fixture.Source,"Emission setting","Tests",suppressSharedTextureEmission:shared,suppressHdrTextureEmission:hdr,exporterVersion:"0.10.0-preview.1",lilToonVersion:"2.3.4"));
+                foreach(var record in F.List(F.Root(glb.Json),"materials").Select(F.Object))
+                {
+                    var values=F.List(record,"values").Select(F.Object).ToDictionary(v=>F.Text(v,"name"));
+                    foreach(var layer in new[]{"","2nd"})
+                    {
+                        Assert.That(F.Vector(F.Get(values["_UseEmission"+layer],"value"))[0],Is.EqualTo(shared||hdr?0:1));
+                        Assert.That(source.GetFloat("_UseEmission"+layer),Is.EqualTo(1));
+                        Assert.That(source.GetColor("_Emission"+layer+"Color"),Is.EqualTo(new Color(2,3,4,1)));
+                    }
+                    foreach(var keyword in new[]{"_EMISSION","GEOM_TYPE_BRANCH"})
+                    {Assert.That(F.List(record,"keywords").Contains(keyword),Is.EqualTo(!shared&&!hdr));Assert.That(source.IsKeywordEnabled(keyword),Is.True);}
+                }
+            }
+            finally {Object.DestroyImmediate(source);}
+        }
+
+        [Test]
+        public void NonMeshRenderersDoNotCreateFullPrimitiveBindings()
+        {
+            using var fixture=new AttachmentConnectionTests.Fixture();
+            var source=new Material(Shader.Find("lilToon"));
+            var particles=new GameObject("Particle system");particles.transform.SetParent(fixture.Source.transform,false);
+            var trailObject=new GameObject("Trail");trailObject.transform.SetParent(fixture.Source.transform,false);
+            try
+            {
+                foreach(var renderer in fixture.Source.GetComponentsInChildren<SkinnedMeshRenderer>())renderer.sharedMaterial=source;
+                particles.AddComponent<ParticleSystem>();particles.GetComponent<ParticleSystemRenderer>().sharedMaterial=source;
+                trailObject.AddComponent<TrailRenderer>().sharedMaterial=source;
+                var bytes=UniVrmOneClickExporter.Export(fixture.Source,"Mesh bindings","Tests",exporterVersion:"0.10.0-preview.1",lilToonVersion:"2.3.4");
+                var glb=GlbDocument.Read(bytes);F.Validate(glb.Json,bytes.Length,glb.Binary.Length);
+                Assert.That(F.List(F.Root(glb.Json),"bindings").Count,Is.EqualTo(fixture.Source.GetComponentsInChildren<SkinnedMeshRenderer>().Length));
+            }
+            finally {Object.DestroyImmediate(particles);Object.DestroyImmediate(trailObject);Object.DestroyImmediate(source);}
         }
 
         [Test]
@@ -56,10 +162,12 @@ namespace VRVlog.LilToonExporter.Tests
         }
 
         [Test]
-        public void ExtraMaterialDrawsBecomeExplicitPrimitivesWithoutEditingTheSourceMesh()
+        public async Task ExtraMaterialDrawsBecomeExplicitPrimitivesWithoutEditingTheSourceMesh()
         {
             using var fixture=new AttachmentConnectionTests.Fixture();
             var first=new Material(Shader.Find("lilToon"));var overlay=new Material(Shader.Find("_lil/[Optional] lilToonOverlay"));
+            GameObject loaded=null;
+            var path=Path.Combine(Path.GetTempPath(),"vrvlog-extra-draws-"+Guid.NewGuid().ToString("N")+".vrm");
             try
             {
                 var renderers=fixture.Source.GetComponentsInChildren<SkinnedMeshRenderer>();
@@ -70,8 +178,16 @@ namespace VRVlog.LilToonExporter.Tests
                 Assert.That(F.List(F.Root(glb.Json),"bindings").Select(F.Object).Any(b=>F.List(b,"materials").Count==2),Is.True);
                 Assert.That(fixture.Mesh.subMeshCount,Is.EqualTo(before));
                 Assert.That(renderers[0].sharedMaterials,Is.EqualTo(new[]{first,overlay}));
+                var loader=Type.GetType("FaceMaskVTuber.UniVrmRuntime.UniVrmRuntimeLoader, FaceMaskVTuber.UniVrmRuntime");
+                if(loader!=null)
+                {
+                    File.WriteAllBytes(path,bytes);loader.GetMethod("ConfigureLilToon").Invoke(null,new object[]{true});
+                    loaded=await (Task<GameObject>)loader.GetMethod("LoadAsync").Invoke(null,new object[]{path,null,false,null});
+                    Assert.That(loaded,Is.Not.Null);
+                    Assert.That(loaded.GetComponentsInChildren<Renderer>(true).Any(r=>r.sharedMaterials.Length==2),Is.True,"Both exported draws remain imported renderer slots.");
+                }
             }
-            finally {Object.DestroyImmediate(first);Object.DestroyImmediate(overlay);}
+            finally {if(loaded!=null)Object.DestroyImmediate(loaded);Object.DestroyImmediate(first);Object.DestroyImmediate(overlay);if(File.Exists(path))File.Delete(path);}
         }
 
         [TestCaseSource(nameof(OfficialShaders))]

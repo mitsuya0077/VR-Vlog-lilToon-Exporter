@@ -21,12 +21,18 @@ namespace VRVlog.LilToonExporter
         readonly List<byte[]> payloads = new List<byte[]>();
         readonly List<object> bindings = new List<object>();
         readonly Dictionary<int, Dictionary<string, object>> indexedRecords = new Dictionary<int, Dictionary<string, object>>();
+        bool suppressSharedTextureEmission, suppressHdrTextureEmission;
 
-        internal static LilToonFullSnapshot Capture(GameObject avatar)
+        internal static LilToonFullSnapshot Capture(GameObject avatar, bool suppressSharedTextureEmission=false, bool suppressHdrTextureEmission=false)
         {
-            var result = new LilToonFullSnapshot();
+            var result = new LilToonFullSnapshot {suppressSharedTextureEmission=suppressSharedTextureEmission, suppressHdrTextureEmission=suppressHdrTextureEmission};
             foreach (var renderer in ExportRendererSelection.Enumerate(avatar))
             {
+                // UniVRM exports mesh primitives, not particle/trail/line systems.
+                // Their materials must not create bindings to absent glTF meshes.
+                var filter = renderer.GetComponent<MeshFilter>();
+                var mesh = renderer is SkinnedMeshRenderer skin ? skin.sharedMesh : renderer is MeshRenderer && filter != null ? filter.sharedMesh : null;
+                if(mesh==null)continue;
                 var materials = renderer.sharedMaterials;
                 result.sources.Add(renderer, materials);
                 foreach (var material in materials)
@@ -39,6 +45,9 @@ namespace VRVlog.LilToonExporter
 
         Dictionary<string, object> ReadMaterial(Material source)
         {
+            bool Suppress(bool second) => LilToonEmissionPolicy.IsSuppressed(source,suppressSharedTextureEmission,second) ||
+                suppressHdrTextureEmission && LilToonEmissionPolicy.HasHdrTextureEmission(source,second);
+            var suppressEmission=Suppress(false);var suppressEmission2nd=Suppress(true);
             var values = new List<object>();
             var textureProperties = new List<object>();
             var shader = source.shader;
@@ -72,6 +81,9 @@ namespace VRVlog.LilToonExporter
                 {
                     var value = type == ShaderPropertyType.Color ? (Vector4)source.GetColor(name) :
                         type == ShaderPropertyType.Vector ? source.GetVector(name) : new Vector4(source.GetFloat(name), 0, 0, 0);
+                    if(suppressEmission && (name=="_UseEmission" || name=="_EmissionBlend") ||
+                        suppressEmission2nd && (name=="_UseEmission2nd" || name=="_Emission2ndBlend")) value=Vector4.zero;
+                    if(suppressEmission && name=="_EmissionColor" || suppressEmission2nd && name=="_Emission2ndColor") value=(Vector4)Color.black;
                     if (!Finite(value)) throw new InvalidDataException(source.name + ": 非有限の値: " + name);
                     values.Add(new Dictionary<string, object> { {"name", name}, {"type", declaration.Split(':')[0]}, {"value", new List<object> {value.x, value.y, value.z, value.w}} });
                 }
@@ -93,7 +105,8 @@ namespace VRVlog.LilToonExporter
                 clipping=settings!=null && settings.TryGetValue("LIL_FEATURE_CLIPPING_CANCELLER",out var enabled) && enabled is bool on && on;
             }
             if(LilToon234Catalogue.Shaders[shader.name].StartsWith("ltsmulti",StringComparison.Ordinal))clipping=source.GetFloat("_UseClippingCanceller")!=0;
-            return new Dictionary<string, object> { {"sourceShader", shader.name}, {"name", source.name}, {"renderQueue", source.renderQueue}, {"values", values}, {"textures", textureProperties}, {"passes", passes}, {"keywords", source.shaderKeywords.Cast<object>().ToList()}, {"clippingCanceller",clipping} };
+            var keywords=source.shaderKeywords.Where(k=>!(suppressEmission && k=="_EMISSION") && !(suppressEmission2nd && k=="GEOM_TYPE_BRANCH")).Cast<object>().ToList();
+            return new Dictionary<string, object> { {"sourceShader", shader.name}, {"name", source.name}, {"renderQueue", source.renderQueue}, {"values", values}, {"textures", textureProperties}, {"passes", passes}, {"keywords", keywords}, {"clippingCanceller",clipping} };
         }
 
         int Texture(Texture source, bool normal)
@@ -129,7 +142,7 @@ namespace VRVlog.LilToonExporter
             // Decoded normal components and >8-bit UNorm masks also need more
             // precision, even when Unity does not classify their format as HDR.
             var name = format.ToString();
-            if (normal) return "rgbaFloat";
+            if (normal || name.EndsWith("_SNorm", StringComparison.Ordinal)) return "rgbaFloat";
             if (name.StartsWith("R16", StringComparison.Ordinal) && name.EndsWith("_SFloat", StringComparison.Ordinal)) return "rgbaHalf";
             if (UnityEngine.Experimental.Rendering.GraphicsFormatUtility.IsHDRFormat(format)) return "rgbaFloat";
             foreach (System.Text.RegularExpressions.Match component in System.Text.RegularExpressions.Regex.Matches(name, "[RGBA]([0-9]+)"))
@@ -145,7 +158,8 @@ namespace VRVlog.LilToonExporter
                 var renderer = entry.Key;
                 var node = model.Nodes.IndexOf(converter.Nodes[renderer.gameObject]);
                 if (node < 0 || node >= storage.Gltf.nodes.Count) throw new InvalidOperationException("出力nodeの対応が一致しません。");
-                var mesh = renderer is SkinnedMeshRenderer skin ? skin.sharedMesh : renderer.GetComponent<MeshFilter>()?.sharedMesh;
+                var filter = renderer.GetComponent<MeshFilter>();
+                var mesh = renderer is SkinnedMeshRenderer skin ? skin.sharedMesh : filter != null ? filter.sharedMesh : null;
                 if (mesh == null) throw new InvalidOperationException("描画メッシュがありません。");
                 var group = converter.Meshes[mesh];
                 var meshIndex = model.MeshGroups.IndexOf(group);
@@ -179,7 +193,7 @@ namespace VRVlog.LilToonExporter
                     if (uv.Count != mesh.vertexCount) throw new InvalidDataException("UV数が一致しません。");
                     attributes.Add(new Dictionary<string, object> { {"channel", channel}, {"payload", AddVectors(originalIds.Select(id => uv[id]))} });
                 }
-                var ids = AddVectors(originalIds.Select(id => new Vector4(id, 0, 0, 0)));
+                var ids = AddVertexIds(originalIds);
                 var bounds=renderer.localBounds;
                 List<object> Vec(Vector3 v)=>new List<object>{v.x,v.y,v.z,0};
                 var anchor=renderer.probeAnchor;
@@ -191,6 +205,17 @@ namespace VRVlog.LilToonExporter
                     {"boundsCenter",Vec(bounds.center)},{"boundsExtents",Vec(bounds.extents)}};
                 bindings.Add(new Dictionary<string, object> { {"node", node}, {"mesh", meshIndex}, {"vertexCount", originalIds.Count}, {"materials", materialIndices}, {"uv", attributes}, {"vertexIds", ids}, {"renderer",state} });
             }
+        }
+
+        internal int AddVertexIds(IEnumerable<int> values)
+        {
+            using var bytes = new MemoryStream(); using var writer = new BinaryWriter(bytes);
+            foreach (var id in values)
+            {
+                if (id < 0) throw new InvalidDataException("負の元頂点ID。");
+                writer.Write((uint)id);
+            }
+            var index = payloads.Count; payloads.Add(bytes.ToArray()); return index;
         }
 
         int AddVectors(IEnumerable<Vector4> values)

@@ -71,7 +71,7 @@ namespace VRVlog.LilToonExporter
                 AvatarBaseShape.Preserve(clone, clone, temporaryMeshes, warnings);
                 var expressions = VrChatExpressionBaker.Bake(null, clone, menu, temporaryMeshes, warnings, expressionBindings);
                 if(exporterVersion!=null) PreserveExtraMaterialSlots(clone,temporaryMeshes);
-                var fullSnapshot = exporterVersion != null ? LilToonFullSnapshot.Capture(clone) : null;
+                var fullSnapshot = exporterVersion != null ? LilToonFullSnapshot.Capture(clone,suppressSharedTextureEmission,suppressHdrTextureEmission) : null;
                 var fallbackWarnings=fullSnapshot==null?warnings:new List<string>();
                 if (fullSnapshot == null) LilToonMainTextureBaker.ValidateAvatar(clone);
                 LilToonMainTextureBaker.Prepare(clone, temporaryMaterials, temporaryTextures, fallbackWarnings, suppressSharedTextureEmission, suppressHdrTextureEmission, approximationOnly: fullSnapshot != null);
@@ -117,7 +117,9 @@ namespace VRVlog.LilToonExporter
         {
             foreach(var renderer in ExportRendererSelection.Enumerate(avatar))
             {
-                var original=renderer is SkinnedMeshRenderer skin?skin.sharedMesh:renderer.GetComponent<MeshFilter>()?.sharedMesh;
+                if (!(renderer is SkinnedMeshRenderer) && !(renderer is MeshRenderer)) continue;
+                var filter=renderer.GetComponent<MeshFilter>();
+                var original=renderer is SkinnedMeshRenderer skin?skin.sharedMesh:filter != null ? filter.sharedMesh : null;
                 var slots=renderer.sharedMaterials.Length;
                 if(original==null || original.subMeshCount==0 || slots<=original.subMeshCount)continue;
                 // Unity draws the last submesh once per extra material. glTF

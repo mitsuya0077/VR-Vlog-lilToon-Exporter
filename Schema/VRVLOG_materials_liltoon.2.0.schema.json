@@ -382,6 +382,7 @@
           }
         },
         "vertexIds": {
+          "description": "Chunk index containing one little-endian uint32 original source vertex ID per exported vertex, in primitive order.",
           "type": "integer",
           "minimum": 0
         },

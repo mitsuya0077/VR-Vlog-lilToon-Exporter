@@ -154,7 +154,7 @@ namespace VRVlog.LilToon
                 var count = Int(binding, "vertexCount"); if (count <= 0) Fail("Empty vertex binding.");
                 if (count != importedCount) Fail("Vertex binding differs from the imported primitive accessor counts.");
                 var expected = checked((long)count * 16);
-                if (Int(Object(At(chunks, Int(binding, "vertexIds"))), "decodedBytes") != expected) Fail("Vertex ID payload mismatch.");
+                if (Int(Object(At(chunks, Int(binding, "vertexIds"))), "decodedBytes") != (long)count * 4) Fail("Vertex ID payload mismatch.");
                 var channels = new HashSet<int>();
                 foreach (var uvRaw in List(binding, "uv"))
                 {
