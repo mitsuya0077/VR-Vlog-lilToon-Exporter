@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.9.0
+
+- Freeze current MA preview visibility, Shape Changer, Material Setter/Swap and Mesh Cutter on the export copy before NDMF attachment preparation; retain original FaceEmo references and compute expression residuals from prepared geometry.
+- Bake static alpha masks, retain vertex red/alpha outline width and width masks, and preserve source emission blend/mask/main-color/fluorescence controls in schema 1.3. Intentional-emission suppression now defaults OFF.
+- Export mesh vertex colors, distinguish source outline masks from portable MToon masks, and show concise approximation/omission details on completion.
+- See Docs/AppearanceFidelity.md for the paired runtime contract, validation coverage and remaining device checks. Publish only after the compatible application is available.
+
 ## 0.8.1
 
 - Export MA Bone Proxy / Merge Armature hair using its authored connection without an additional bone-selection screen. Remove the manual attachment preview and its repeat-confirmation option; unrelated independent props no longer interrupt export.

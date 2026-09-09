@@ -1,13 +1,13 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://vrvlog.app/schema/VRVLOG_materials_liltoon/1.2/schema.json",
+  "$id": "https://vrvlog.app/schema/VRVLOG_materials_liltoon/1.3/schema.json",
   "title": "VR Vlog lilToon material extension",
   "type": "object",
   "additionalProperties": false,
   "required": ["schemaMajor", "schemaMinor", "exporterVersion", "sourceLilToonVersion", "materials"],
   "properties": {
     "schemaMajor": {"const": 1},
-    "schemaMinor": {"type": "integer", "minimum": 0, "maximum": 2},
+    "schemaMinor": {"type": "integer", "minimum": 0, "maximum": 3},
     "exporterVersion": {"type": "string", "minLength": 1, "maxLength": 64},
     "sourceLilToonVersion": {"type": "string", "minLength": 1, "maxLength": 64},
     "materials": {
@@ -18,10 +18,10 @@
     }
   },
   "allOf": [{
-    "if": {"properties": {"schemaMinor": {"const": 2}}},
+    "if": {"properties": {"schemaMinor": {"minimum": 2}}},
     "then": {"properties": {"materials": {"items": {"required": ["vectors"]}}}},
     "else": {"properties": {"materials": {"items": {"properties": {"vectors": false}}}}}
-  }],
+  }, {"if": {"properties": {"schemaMinor": {"maximum": 2}}}, "then": {"properties": {"materials": {"items": {"properties": {"floats": {"items": {"properties": {"name": {"not": {"enum": ["_EmissionBlendMode", "_EmissionMainStrength", "_EmissionFluorescence", "_OutlineVertexR2Width", "_EmissionBlendMask", "_OutlineWidthMask"]}}}}}, "textures": {"items": {"properties": {"name": {"not": {"enum": ["_EmissionBlendMode", "_EmissionMainStrength", "_EmissionFluorescence", "_OutlineVertexR2Width", "_EmissionBlendMask", "_OutlineWidthMask"]}}}}}}}}}}}],
   "$defs": {
     "finiteNumber": {"type": "number"},
     "namedFloat": {
@@ -31,7 +31,13 @@
       "properties": {
         "name": {"type": "string", "minLength": 1, "maxLength": 96},
         "value": {"$ref": "#/$defs/finiteNumber"}
-      }
+      },
+      "allOf": [
+        {"if": {"properties": {"name": {"const": "_EmissionBlendMode"}}}, "then": {"properties": {"value": {"type": "integer", "minimum": 0, "maximum": 3}}}},
+        {"if": {"properties": {"name": {"const": "_EmissionMainStrength"}}}, "then": {"properties": {"value": {"type": "number", "minimum": 0, "maximum": 1}}}},
+        {"if": {"properties": {"name": {"const": "_EmissionFluorescence"}}}, "then": {"properties": {"value": {"type": "number", "minimum": 0, "maximum": 1}}}},
+        {"if": {"properties": {"name": {"const": "_OutlineVertexR2Width"}}}, "then": {"properties": {"value": {"type": "integer", "minimum": 0, "maximum": 2}}}}
+      ]
     },
     "color": {
       "type": "object",

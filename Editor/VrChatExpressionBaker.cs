@@ -10,6 +10,11 @@ namespace VRVlog.LilToonExporter
     {
         internal static List<VrmMenuExpressions.Expression> Bake(GameObject source, GameObject clone,
             VrChatExpressionMenu.Source menu, ICollection<Mesh> meshes, ICollection<string> warnings)
+            => Bake(source, clone, menu, meshes, warnings, null);
+
+        internal static List<VrmMenuExpressions.Expression> Bake(GameObject source, GameObject clone,
+            VrChatExpressionMenu.Source menu, ICollection<Mesh> meshes, ICollection<string> warnings,
+            PreparedExpressionBindings prepared)
         {
             var result = new List<VrmMenuExpressions.Expression>();
             foreach (var message in menu.Messages) warnings?.Add(message);
@@ -31,24 +36,26 @@ namespace VRVlog.LilToonExporter
                 var expression = new VrmMenuExpressions.Expression { Name = entry.Name };
                 foreach (var group in entry.Values.GroupBy(v => v.Path))
                 {
-                    var original = VrChatExpressionSampler.FindRenderer(source, group.Key);
-                    var copy = VrChatExpressionSampler.FindRenderer(clone, group.Key);
-                    Reserve(original.sharedMesh);
-                    if (!meshes.Contains(copy.sharedMesh))
+                    var binding = prepared?.Get(group.Key);
+                    var original = binding == null ? VrChatExpressionSampler.FindRenderer(source, group.Key) : null;
+                    var originalMesh = binding?.Mesh ?? original.sharedMesh;
+                    var copy = binding?.Renderer ?? VrChatExpressionSampler.FindRenderer(clone, group.Key);
+                    Reserve(originalMesh);
+                    if (!meshes.Contains(copy.sharedMesh) || ReferenceEquals(copy.sharedMesh, originalMesh))
                     {
                         copy.sharedMesh = UnityEngine.Object.Instantiate(copy.sharedMesh);
                         meshes.Add(copy.sharedMesh);
                     }
-                    var rest = Enumerable.Range(0, original.sharedMesh.blendShapeCount).Select(original.GetBlendShapeWeight).ToArray();
+                    var rest = binding?.Weights ?? Enumerable.Range(0, originalMesh.blendShapeCount).Select(original.GetBlendShapeWeight).ToArray();
                     var pose = (float[])rest.Clone();
                     foreach (var value in group)
                     {
-                        var index = original.sharedMesh.GetBlendShapeIndex(value.Shape);
+                        var index = originalMesh.GetBlendShapeIndex(value.Shape);
                         if (index < 0) throw new InvalidOperationException("表情の元BlendShapeが見つかりません: " + value.Shape);
                         pose[index] = value.Weight;
                     }
                     var name = prefix + serial++;
-                    AvatarBaseShape.AppendExpression(original.sharedMesh, copy.sharedMesh, name, rest, pose);
+                    AvatarBaseShape.AppendExpression(originalMesh, copy.sharedMesh, name, rest, pose);
                     expression.Targets.Add(name);
                 }
                 if (entry.Animation.Count > 0)
@@ -56,8 +63,8 @@ namespace VRVlog.LilToonExporter
                     expression.Animation = new ExpressionAnimationData { Duration = entry.Duration, Loop = entry.Loop };
                     foreach (var animated in entry.Animation)
                     {
-                        var original = VrChatExpressionSampler.FindRenderer(source, animated.Path).sharedMesh;
-                        var copy = VrChatExpressionSampler.FindRenderer(clone, animated.Path).sharedMesh;
+                        var original = prepared?.Get(animated.Path).Mesh ?? VrChatExpressionSampler.FindRenderer(source, animated.Path).sharedMesh;
+                        var copy = prepared?.Get(animated.Path).Renderer.sharedMesh ?? VrChatExpressionSampler.FindRenderer(clone, animated.Path).sharedMesh;
                         var shape = original.GetBlendShapeIndex(animated.Shape);
                         animated.Curve.Range(out var minimum, out var maximum);
                         // Morph geometry is linear between source frame weights.

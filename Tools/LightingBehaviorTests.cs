@@ -71,7 +71,7 @@ public static class ExporterLightingBehaviorTests
         LilToonGlbExtension.Validate(bytes, 1);
         var document = GlbDocument.Read(bytes);
         var extension = (Dictionary<string, object>)((Dictionary<string, object>)document.Json["extensions"])[LilToonMobileProfile.ExtensionName];
-        Check((long)extension["schemaMinor"] == 2L, "New output declares schema 1.2.");
+        Check((long)extension["schemaMinor"] == 3L, "New output declares schema 1.3.");
         var material = (Dictionary<string, object>)((List<object>)extension["materials"])[0];
         var vector = (Dictionary<string, object>)((List<object>)material["vectors"])[0];
         Near(Convert.ToDouble(vector["y"]), .7, "GLB round trip preserves numeric light direction.");

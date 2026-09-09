@@ -61,6 +61,35 @@ namespace VRVlog.LilToonExporter
             catch (UnityException) { return false; }
         }
 
+        internal static void ApplyOmissions(GameObject avatar, List<Material> materials, ICollection<string> warnings, MaterialBakeOptions options)
+        {
+            if (options == null) return;
+            var copies = new Dictionary<Material, Material>();
+            foreach (var renderer in ExportRendererSelection.Enumerate(avatar))
+            {
+                var slots = renderer.sharedMaterials;
+                for (var i = 0; i < slots.Length; i++)
+                {
+                    var original = slots[i];
+                    if (!LilToonMaterialReader.IsLilToon(original) || !(options.Omits(original, "2nd") || options.Omits(original, "3rd"))) continue;
+                    if (!copies.TryGetValue(original, out var copy))
+                    {
+                        copy = new Material(original) { name = original.name };
+                        copies.Add(original, copy);
+                        materials.Add(copy);
+                        foreach (var layer in new[] { "2nd", "3rd" })
+                            if (options.Omits(original, layer))
+                            {
+                                copy.SetFloat("_UseMain" + layer + "Tex", 0);
+                                warnings?.Add(original.name + ": 確認した内容に従い、メインカラー" + layer + "を省略しました。");
+                            }
+                    }
+                    slots[i] = copy;
+                }
+                renderer.sharedMaterials = slots;
+            }
+        }
+
         internal static void Prepare(GameObject avatar, List<Material> materials, List<Texture2D> textures,
             ICollection<string> warnings, bool suppressSharedEmission, bool suppressHdrTextureEmission, MaterialBakeOptions options = null)
         {
@@ -72,6 +101,7 @@ namespace VRVlog.LilToonExporter
                 {
                     var original = slots[i];
                     if (!LilToonMaterialReader.IsLilToon(original)) continue;
+                    AlphaMaskBaker.CheckUvRange(renderer, i, original, warnings);
                     if (!copies.TryGetValue(original, out var copy))
                     {
                         copy = new Material(original) { name = original.name };
@@ -93,6 +123,7 @@ namespace VRVlog.LilToonExporter
                             warnings?.Add(original.name + ": 色変化を抑える設定に従い、テクスチャ発光を省略しました。発光を残す場合は書き出し設定を解除してください。");
                         }
                         if (NeedsBake(copy)) Bake(copy, textures, warnings);
+                        AlphaMaskBaker.Bake(copy, textures, warnings);
                     }
                     slots[i] = copy;
                 }
