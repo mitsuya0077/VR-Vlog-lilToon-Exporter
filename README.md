@@ -103,7 +103,9 @@ ZIPによる手動導入は[技術資料](Docs/TechnicalDetails.md#installation)
 
 ## ライセンス
 
-エクスポーターは [MIT License](LICENSE) です。0.9.0のアルファマスク処理にはlilToon 2.3.4由来の実装を含み、著作権表示とMITライセンス全文をパッケージに同梱します。出典とライセンスは [lilToon](ThirdPartyNotices/lilToon.md) · [UniVRM](ThirdPartyNotices/UniVRM.md) を参照してください。アバターなどの素材には、それぞれの利用条件が適用されます。
+エクスポーターは [MIT License](LICENSE) です。0.9.0のアルファマスク処理にはlilToon 2.3.4由来の実装を含み、著作権表示とMITライセンス全文をパッケージに同梱します。出典とライセンスは [lilToon](ThirdPartyNotices/lilToon.md) · [UniVRM](ThirdPartyNotices/UniVRM.md) を参照してください。
+
+掲載画像に含まれるアバターなどの第三者著作物は、本リポジトリのMITライセンスの対象外です。それぞれの権利者が定める利用条件が適用されます。画像の出典と利用条件へのリンクは[サイトの画像](Website/assets/README.md)を参照してください。
 
 ## English
 
