@@ -16,6 +16,22 @@ namespace VRVlog.LilToonExporter.Tests
     {
         static IEnumerable<string> OfficialShaders=>VRVlog.LilToon.LilToon234Catalogue.Shaders.Keys;
 
+        [TestCase(2)][TestCase(3)]
+        public void ExternalProbeDataCannotBeSilentlyOmitted(int mode)
+        {
+            using var fixture=new AttachmentConnectionTests.Fixture();
+            var source=new Material(Shader.Find("lilToon"));
+            try
+            {
+                var skins=fixture.Source.GetComponentsInChildren<SkinnedMeshRenderer>();
+                foreach(var skin in skins)skin.sharedMaterial=source;
+                skins[0].lightProbeUsage=(UnityEngine.Rendering.LightProbeUsage)mode;
+                var error=Assert.Throws<InvalidDataException>(()=>UniVrmOneClickExporter.Export(fixture.Source,"External probes","Tests",exporterVersion:"0.10.0-preview.1",lilToonVersion:"2.3.4"));
+                Assert.That(error.Message,Does.Contain("external environment data"));
+            }
+            finally {Object.DestroyImmediate(source);}
+        }
+
         [Test]
         public void EditorGradientKeysAreExcludedWhileTheRenderedGradientTextureRemains()
         {
@@ -376,8 +392,8 @@ namespace VRVlog.LilToonExporter.Tests
             finally { Object.DestroyImmediate(texture); }
         }
 
-        [Test]
-        public async Task FullExportLoadsThroughApplicationWithoutNameBasedFallback()
+        [TestCase(false)][TestCase(true)]
+        public async Task FullExportLoadsThroughApplicationWithoutNameBasedFallback(bool sameExpressionName)
         {
             var loader = Type.GetType("FaceMaskVTuber.UniVrmRuntime.UniVrmRuntimeLoader, FaceMaskVTuber.UniVrmRuntime");
             if (loader == null) Assert.Ignore("Application assembly is required for the combined exporter/runtime gate.");
@@ -394,7 +410,10 @@ namespace VRVlog.LilToonExporter.Tests
                 var fullRecords=F.List(F.Root(exported.Json),"materials").Select(F.Object).ToArray();
                 var leftIndex=F.Int(fullRecords[0],"materialIndex");var rightIndex=F.Int(fullRecords[1],"materialIndex");
                 Dictionary<string,object> Expression(int material,string type,float[] color)=>new Dictionary<string,object>{{"materialColorBinds",new List<object>{new Dictionary<string,object>{{"material",material},{"type",type},{"targetValue",color.Cast<object>().ToList()}}}}};
-                F.Object(F.Get(F.Object(F.Get(exported.Json,"extensions")),"VRMC_vrm"))["expressions"]=new Dictionary<string,object>{{"custom",new Dictionary<string,object>{{"Left",Expression(leftIndex,"shadeColor",new[]{.1f,.2f,.3f,1f})},{"Right",Expression(rightIndex,"color",new[]{.2f,.8f,.4f,1f})}}}};
+                var leftBinding=Expression(leftIndex,"shadeColor",new[]{.1f,.2f,.3f,1f});var rightBinding=Expression(rightIndex,"color",new[]{.2f,.8f,.4f,1f});
+                F.Object(F.Get(F.Object(F.Get(exported.Json,"extensions")),"VRMC_vrm"))["expressions"]=sameExpressionName
+                    ?new Dictionary<string,object>{{"preset",new Dictionary<string,object>{{"happy",leftBinding}}},{"custom",new Dictionary<string,object>{{"happy",rightBinding}}}}
+                    :new Dictionary<string,object>{{"custom",new Dictionary<string,object>{{"Left",leftBinding},{"Right",rightBinding}}}};
                 File.WriteAllBytes(path,exported.Write());
                 loader.GetMethod("ConfigureLilToon").Invoke(null,new object[]{true});
                 loaded=await (Task<GameObject>)loader.GetMethod("LoadAsync").Invoke(null,new object[]{path,null,false,null});
@@ -413,11 +432,16 @@ namespace VRVlog.LilToonExporter.Tests
                 var originalLeft=left.GetColor("_ShadowColor");var originalRight=right.GetColor("_Color");
                 Assert.That(left.GetShaderPassEnabled("ShadowCaster"),Is.False,"Unity pass enablement uses its LightMode tag.");
                 LilToonFullRenderTests.Compare(new Material(source),new Material(left));
-                var weights=vrm.Vrm.Expression.Clips.ToDictionary(c=>vrm.Vrm.Expression.CreateKey(c.Clip),c=>c.Clip.name=="Left"?1f:0f);
+                var leftKey=sameExpressionName?UniVRM10.ExpressionKey.Happy:UniVRM10.ExpressionKey.CreateCustom("Left");
+                var rightKey=UniVRM10.ExpressionKey.CreateCustom(sameExpressionName?"happy":"Right");
+                var weights=vrm.Vrm.Expression.Clips.Select(c=>vrm.Vrm.Expression.CreateKey(c.Clip)).ToDictionary(k=>k,k=>k.Equals(leftKey)?1f:0f);
                 var apply=expressionType.GetMethod("Apply",BindingFlags.Instance|BindingFlags.NonPublic);apply.Invoke(expressionPlayer,new object[]{weights});
                 Assert.That(((Vector4)left.GetColor("_ShadowColor")-new Vector4(.1f,.2f,.3f,1f)).sqrMagnitude,Is.LessThan(1e-10f));Assert.That(right.GetColor("_Color"),Is.EqualTo(originalRight));
                 foreach(var key in weights.Keys.ToArray())weights[key]=0;apply.Invoke(expressionPlayer,new object[]{weights});
                 Assert.That(left.GetColor("_ShadowColor"),Is.EqualTo(originalLeft));
+                weights[rightKey]=1;apply.Invoke(expressionPlayer,new object[]{weights});
+                Assert.That(left.GetColor("_ShadowColor"),Is.EqualTo(originalLeft),"A custom expression does not alias the same-name preset.");
+                Assert.That(((Vector4)right.GetColor("_Color")-new Vector4(.2f,.8f,.4f,1f)).sqrMagnitude,Is.LessThan(1e-10f));
             }
             finally { if(loaded!=null)Object.DestroyImmediate(loaded); Object.DestroyImmediate(source); Object.DestroyImmediate(other); if(File.Exists(path))File.Delete(path); }
         }

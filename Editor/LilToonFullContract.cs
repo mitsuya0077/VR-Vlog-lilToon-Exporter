@@ -131,7 +131,7 @@ namespace VRVlog.LilToon
                 Keys(renderer,"receiveShadows","shadowCasting","lightProbes","reflectionProbes","probeAnchor","sortingLayer","sortingOrder","boundsCenter","boundsExtents");
                 Bool(renderer,"receiveShadows");
                 foreach(var key in new[]{"shadowCasting","lightProbes","reflectionProbes"}) if(Int(renderer,key)<0 || Int(renderer,key)>3)Fail("Invalid renderer state.");
-                if(Int(renderer,"lightProbes")==2)Fail("A light probe proxy volume requires external environment data.");
+                if(Int(renderer,"lightProbes")>=2)Fail("Light probe proxy volumes and custom-provided SH/occlusion arrays require external environment data.");
                 var anchor=Int(renderer,"probeAnchor");if(anchor != -1)At(nodes,anchor);
                 Int(renderer,"sortingLayer");var order=Int(renderer,"sortingOrder");if(order<short.MinValue || order>short.MaxValue)Fail("Invalid sorting order.");
                 Vector(Get(renderer,"boundsCenter"));foreach(var extent in Vector(Get(renderer,"boundsExtents")))if(extent<0)Fail("Invalid renderer bounds.");
