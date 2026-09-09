@@ -14,10 +14,11 @@ namespace VRVlog.LilToonExporter
     internal static class ExportReferencePruning
     {
         internal static void Prepare(GameObject clone, IList<Transform> removedRoots,
-            ICollection<Object> temporaryAssets, ICollection<string> warnings)
+            ICollection<Object> temporaryAssets, ICollection<string> warnings, ISet<Renderer> removedRenderers = null)
         {
             bool Removed(Transform value) => value != null && removedRoots.Any(root => value == root || value.IsChildOf(root));
             bool RemovedComponent(Component value) => value == null || Removed(value.transform);
+            bool RemovedRenderer(Renderer value) => Removed(value.transform) || removedRenderers?.Contains(value) == true;
             void RequireLocal(Component value)
             {
                 if (value != null && !value.transform.IsChildOf(clone.transform))
@@ -28,7 +29,9 @@ namespace VRVlog.LilToonExporter
             if (instance == null) return;
             var removedPaths = new HashSet<string>(clone.GetComponentsInChildren<Transform>(true)
                 .GroupBy(t => AnimationUtility.CalculateTransformPath(t, clone.transform), StringComparer.Ordinal)
-                .Where(group => group.All(Removed)).Select(group => group.Key), StringComparer.Ordinal);
+                .Where(group => group.All(t => Removed(t) ||
+                    t.GetComponents<Renderer>().Length > 0 && t.GetComponents<Renderer>().All(RemovedRenderer)))
+                .Select(group => group.Key), StringComparer.Ordinal);
             bool RemovedPath(string path) => path != null && removedPaths.Contains(path);
             foreach (var constraint in clone.GetComponentsInChildren<MonoBehaviour>(true).OfType<IVrm10Constraint>().ToArray())
             {
@@ -82,7 +85,7 @@ namespace VRVlog.LilToonExporter
                 foreach (var material in renderer.sharedMaterials)
                     if (material != null)
                     {
-                        if (Removed(renderer.transform)) excludedMaterials.Add(material.name);
+                        if (RemovedRenderer(renderer)) excludedMaterials.Add(material.name);
                         else if (renderer.enabled && renderer.gameObject.activeInHierarchy) retainedMaterials.Add(material.name);
                     }
             excludedMaterials.ExceptWith(retainedMaterials);

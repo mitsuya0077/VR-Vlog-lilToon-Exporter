@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Linq;
 using UniGLTF;
 using UniVRM10;
 using UnityEngine;
@@ -14,7 +15,7 @@ namespace VRVlog.LilToonExporter
 
         public static byte[] Export(GameObject source, string avatarName, string author, ICollection<string> warnings = null, bool suppressSharedTextureEmission = false,
             string exporterVersion = null, string lilToonVersion = null, bool suppressHdrTextureEmission = false,
-            IEnumerable<GameObject> excludedObjects = null, MaterialBakeOptions bakeOptions = null)
+            IEnumerable<GameObject> excludedObjects = null, MaterialBakeOptions bakeOptions = null, ExportGimmickOptions gimmickOptions = null)
         {
             if (source == null) throw new ArgumentNullException(nameof(source));
             // Cloning detaches the avatar from its parents. Reject an inactive
@@ -24,7 +25,19 @@ namespace VRVlog.LilToonExporter
             if (string.IsNullOrWhiteSpace(author)) throw new InvalidOperationException("作者名を入力してください。");
 
             EnsureUniVrmVersion();
-            using var exclusions = new ExportObjectExclusions(source, excludedObjects);
+            var manualObjects = (excludedObjects ?? Array.Empty<GameObject>()).ToArray();
+            gimmickOptions = new ExportGimmickOptions
+            {
+                AutoExclude = gimmickOptions?.AutoExclude != false,
+                IncludedObjects = (gimmickOptions?.IncludedObjects ?? Array.Empty<GameObject>()).ToArray()
+            };
+            using var manualExclusions = new ExportObjectExclusions(source, manualObjects);
+            var findings = gimmickOptions.AutoExclude ? ExportGimmickDetection.Analyze(source, manualExclusions.Contains) : new List<ExportGimmickFinding>();
+            var automaticRoots = ExportGimmickDetection.AutomaticRoots(findings, gimmickOptions).ToArray();
+            using var exclusions = new ExportObjectExclusions(source, manualObjects.Concat(automaticRoots));
+            foreach (var finding in findings.Where(f => f.Renderer == null))
+                if (automaticRoots.Contains(finding.Target)) warnings?.Add("補助ギミックを省略: " + finding.Target.name + " — " + finding.Reason);
+                else if (finding.Unit == GimmickExclusionUnit.Review) warnings?.Add("自動除外せず保持: " + finding.Target.name + " — " + finding.Reason);
             NdmfExportPreparation.ValidateSource(source, exclusions.Contains);
             // Re-read the live assets on every export; a preview is never a stale
             // cached source of expression weights after the user edits a clip.
@@ -38,8 +51,10 @@ namespace VRVlog.LilToonExporter
             var fixedRootJoints = new HashSet<Transform>();
             try
             {
+                using var gimmicks = new ExportGimmickSession(source, clone, gimmickOptions);
                 var expressionBindings = new PreparedExpressionBindings(clone, menu);
                 MaAppearanceSnapshot.Apply(source, clone, temporaryMeshes, exclusions, warnings);
+                gimmicks.Apply(expressionBindings, menu, warnings);
                 LilToonMainTextureBaker.ValidateAvatar(clone, options: bakeOptions);
                 // Omission consent follows source identity before plugins clone
                 // materials. All actual baking waits for the final appearance.
@@ -51,6 +66,7 @@ namespace VRVlog.LilToonExporter
                 if (requiresPreparation)
                     SkinnedMeshFallbackWeights.Preserve(clone, temporaryMeshes, warnings, fixedRootJoints);
                 using var preparation = NdmfExportPreparation.Prepare(source, clone, warnings);
+                gimmicks.Apply(expressionBindings, menu, warnings);
                 expressionBindings.Capture(menu);
                 AvatarBaseShape.Preserve(clone, clone, temporaryMeshes, warnings);
                 var expressions = VrChatExpressionBaker.Bake(null, clone, menu, temporaryMeshes, warnings, expressionBindings);

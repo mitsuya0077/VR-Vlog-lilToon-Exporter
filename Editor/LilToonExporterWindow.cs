@@ -1,6 +1,7 @@
 using System;
 using System.IO;
 using System.Collections.Generic;
+using System.Linq;
 using UnityEditor;
 using UnityEngine;
 using PackageManagerPackageInfo = UnityEditor.PackageManager.PackageInfo;
@@ -19,6 +20,10 @@ namespace VRVlog.LilToonExporter
         private bool suppressSharedTextureEmission = false;
         private bool suppressHdrTextureEmission = false;
         private readonly List<GameObject> excludedObjects = new List<GameObject>();
+        private bool autoExcludeGimmicks = true;
+        private readonly List<GameObject> includedGimmicks = new List<GameObject>();
+        private List<ExportGimmickFinding> gimmickFindings = new List<ExportGimmickFinding>();
+        private double nextGimmickScan;
         private Vector2 scrollPosition;
 
         [MenuItem("VR Vlog/lilToon VRM 1.0を書き出す")]
@@ -48,7 +53,13 @@ namespace VRVlog.LilToonExporter
                 avatar,
                 typeof(GameObject),
                 true);
-            if (selectedAvatar != avatar) excludedObjects.Clear();
+            if (selectedAvatar != avatar)
+            {
+                excludedObjects.Clear();
+                includedGimmicks.Clear();
+                gimmickFindings.Clear();
+                nextGimmickScan = 0;
+            }
             avatar = selectedAvatar;
             EditorGUILayout.HelpBox("Hierarchyから、書き出したいアバターの一番上のオブジェクトを指定してください。", MessageType.None);
 
@@ -68,6 +79,8 @@ namespace VRVlog.LilToonExporter
                 suppressHdrTextureEmission = EditorGUILayout.Toggle(
                     new GUIContent("別画像の強い発光も抑える", "焼き込み前の目画像など、別のテクスチャを使うHDR発光を省略します。意図的な発光を残す場合は解除してください。ワンクリック書き出しに適用されます。"),
                     suppressHdrTextureEmission);
+                EditorGUILayout.Space(4f);
+                DrawGimmicks();
                 EditorGUILayout.Space(4f);
                 EditorGUILayout.LabelField("書き出さないオブジェクト（ペット・ギミックなど）");
                 EditorGUILayout.HelpBox("除外したい子オブジェクトを指定します。ワンクリック書き出しに適用され、Unityの元アバターは変更しません。", MessageType.None);
@@ -103,6 +116,63 @@ namespace VRVlog.LilToonExporter
                 if (GUILayout.Button("lilToonデータを追加して別名保存")) ExportExistingFallback();
         }
 
+        private void DrawGimmicks()
+        {
+            autoExcludeGimmicks = EditorGUILayout.Toggle("補助ギミックを自動除外", autoExcludeGimmicks);
+            EditorGUILayout.HelpBox("ワンクリック書き出しで、確認できた補助ギミックを省略します。衣装や表情は保持し、Unityの元アバターは変更しません。判定は書き出すたびに更新します。", MessageType.None);
+            if (avatar == null) return;
+            if (GUILayout.Button("検出一覧を更新")) nextGimmickScan = 0;
+            if (Event.current.type == EventType.Layout && EditorApplication.timeSinceStartup >= nextGimmickScan)
+            {
+                bool Manual(Transform t) => excludedObjects.Any(go => go != null && go != avatar &&
+                    (t == go.transform || t.IsChildOf(go.transform)));
+                gimmickFindings = ExportGimmickDetection.Analyze(avatar, Manual);
+                nextGimmickScan = EditorApplication.timeSinceStartup + 1;
+            }
+            var roots = gimmickFindings.Where(f => f.Target != null && f.Unit == GimmickExclusionUnit.Hierarchy).ToArray();
+            foreach (var finding in gimmickFindings)
+            {
+                if (finding.Target == null || roots.Any(root => root != finding && finding.Target.transform.IsChildOf(root.Target.transform))) continue;
+                EditorGUILayout.BeginVertical(EditorStyles.helpBox);
+                EditorGUILayout.ObjectField(finding.Target, typeof(GameObject), true);
+                EditorGUILayout.LabelField(finding.Reason, EditorStyles.wordWrappedLabel);
+                if (finding.Unit == GimmickExclusionUnit.Review)
+                {
+                    if (GUILayout.Button("手動の除外一覧に追加") && !excludedObjects.Contains(finding.Target))
+                    {
+                        excludedObjects.Add(finding.Target);
+                        nextGimmickScan = 0;
+                    }
+                }
+                else
+                {
+                    var inherited = includedGimmicks.Any(go => go != null && go != finding.Target && finding.Target.transform.IsChildOf(go.transform));
+                    using (new EditorGUI.DisabledScope(!autoExcludeGimmicks || inherited))
+                    {
+                        var keep = includedGimmicks.Contains(finding.Target);
+                        var selected = EditorGUILayout.ToggleLeft(inherited ? "親の指定により含める" : "この対象は含める", keep || inherited);
+                        if (!inherited && selected != keep)
+                        {
+                            if (selected) includedGimmicks.Add(finding.Target);
+                            else includedGimmicks.Remove(finding.Target);
+                        }
+                    }
+                }
+                EditorGUILayout.EndVertical();
+            }
+            // Keep exceptions editable if an asset changes and is no longer a
+            // candidate, or a formerly safe hierarchy becomes a review item.
+            for (var i = includedGimmicks.Count - 1; i >= 0; i--)
+            {
+                var go = includedGimmicks[i];
+                if (go == null) { includedGimmicks.RemoveAt(i); continue; }
+                EditorGUILayout.BeginHorizontal();
+                EditorGUILayout.LabelField("含める指定: " + go.name);
+                if (GUILayout.Button("解除", GUILayout.Width(48))) includedGimmicks.RemoveAt(i);
+                EditorGUILayout.EndHorizontal();
+            }
+        }
+
         private void ExportOneClick()
         {
             outputPath = EditorUtility.SaveFilePanel("VRMの保存先", "", DefaultFileName(), "vrm");
@@ -117,6 +187,7 @@ namespace VRVlog.LilToonExporter
             var targetSharedEmission = suppressSharedTextureEmission;
             var targetHdrEmission = suppressHdrTextureEmission;
             var targetExclusions = excludedObjects.ToArray();
+            var targetGimmicks = new ExportGimmickOptions { AutoExclude = autoExcludeGimmicks, IncludedObjects = includedGimmicks.ToArray() };
             MaterialBakeOptions bakeOptions = null;
             void Attempt()
             {
@@ -125,7 +196,7 @@ namespace VRVlog.LilToonExporter
                 {
                     if (targetAvatar == null) throw new InvalidOperationException("この書き出しで選んだアバターが見つかりません。アバターを指定し直してください。");
                     return UniVrmOneClickExporter.Export(targetAvatar, targetName, targetAuthor, warnings, targetSharedEmission,
-                        PackageVersion(), RequireSupportedLilToon(), targetHdrEmission, targetExclusions, bakeOptions);
+                        PackageVersion(), RequireSupportedLilToon(), targetHdrEmission, targetExclusions, bakeOptions, targetGimmicks);
                 }, warnings, targetOutput, failure =>
                 {
                     try

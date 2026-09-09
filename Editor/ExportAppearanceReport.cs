@@ -10,7 +10,7 @@ namespace VRVlog.LilToonExporter
     {
         internal static string[] Changes(IEnumerable<string> messages) => (messages ?? Array.Empty<string>())
             .Where(message => !string.IsNullOrEmpty(message) &&
-                (message.Contains("省略") || message.Contains("近似") || message.Contains("縮小") || message.Contains("調整して")))
+                (message.Contains("省略") || message.Contains("近似") || message.Contains("縮小") || message.Contains("調整して") || message.Contains("自動除外せず保持")))
             .Distinct().ToArray();
 
         internal static string Summary(IEnumerable<string> changes)
