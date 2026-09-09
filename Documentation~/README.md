@@ -9,7 +9,7 @@ lilToonのアバターをVRM 1.0へ書き出すUnity Editor用パッケージで
 - 大きな画像は長辺1024以下へ縮小します。
 - VR Vlogの対応版と表示設定を確認し、読み込んだモデルの見た目・表情・髪と衣装の追従を確認してください。
 
-[導入ガイド・対応範囲](https://github.com/mitsuya0077/VR-Vlog-lilToon-Exporter#readme) · [変更履歴](https://github.com/mitsuya0077/VR-Vlog-lilToon-Exporter/blob/main/CHANGELOG.md) · [技術資料](https://github.com/mitsuya0077/VR-Vlog-lilToon-Exporter/blob/main/Docs/TechnicalDetails.md)
+[導入ガイド・対応範囲](https://github.com/mitsuya0077/VR-Vlog-lilToon-Exporter#readme) · [変更履歴](https://github.com/mitsuya0077/VR-Vlog-lilToon-Exporter/blob/main/CHANGELOG.md)
 
 不具合報告は公開されます。コピーしたエラーから個人情報・ローカルパス・共有リンク・認証情報を除き、必要な箇所だけを共有してください。私有アバター・有料素材・元プロジェクト・ログ全文は公開で添付しないでください。
 
