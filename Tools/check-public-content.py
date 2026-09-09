@@ -14,18 +14,18 @@ PATTERNS = {
 
 
 def text_views(data):
-    # Decode BOM-marked text before scanning. UTF-32 must precede UTF-16
-    # because their little-endian BOMs share the first two bytes.
+    views = [data.decode("utf-8-sig", errors="replace")]
+    # A UTF-16LE BOM followed by a NUL is also a UTF-32LE BOM.
+    # Keep every plausible interpretation instead of returning on one match.
     for bom, encoding in [(b"\xff\xfe\x00\x00", "utf-32"), (b"\x00\x00\xfe\xff", "utf-32"),
                           (b"\xff\xfe", "utf-16"), (b"\xfe\xff", "utf-16")]:
         if data.startswith(bom):
-            return [data.decode(encoding, errors="replace")]
-    views = [data.decode("utf-8-sig", errors="replace")]
+            views.append(data.decode(encoding, errors="replace"))
     if b"\0" in data:
         # Also inspect embedded ASCII strings and BOM-less UTF-16/32 text.
         # A binary-looking file must not bypass checks entirely.
         views.append(data.replace(b"\0", b"").decode("utf-8", errors="replace"))
-    return views
+    return list(dict.fromkeys(views))
 
 
 def inspect(name, data):

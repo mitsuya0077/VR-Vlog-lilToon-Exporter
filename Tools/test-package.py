@@ -90,6 +90,9 @@ class PackageTests(unittest.TestCase):
                 self.assertIn((2, "access token"), findings)
                 self.assertNotIn(token, repr(findings))
         self.assertIn((1, "access token"), public.inspect("example.bin", b"\0" + token.encode()))
+        for encoding in ["utf-16", "utf-32"]:
+            with self.subTest(nul_prefix=encoding):
+                self.assertIn((1, "access token"), public.inspect("example.txt", ("\0credential=" + token).encode(encoding)))
 
 
 if __name__ == "__main__":
