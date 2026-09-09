@@ -20,7 +20,7 @@ VR Vlogでは見た目・表情・髪と衣装の追従・保存動画を確認�
 
 `Tools/build-package.py` はGitの追跡対象から、次のファイルだけをZIPに含めます。
 
-- `Editor/` のC#・アセンブリ定義とUnityメタファイル
+- `Editor/` のC#・シェーダー・アセンブリ定義とUnityメタファイル
 - `package.json`、`LICENSE`、`CHANGELOG.md`
 - パッケージ用の `Documentation~/README.md`
 - `ThirdPartyNotices/` のライセンス表示
@@ -30,7 +30,7 @@ VR Vlogでは見た目・表情・髪と衣装の追従・保存動画を確認�
 ## リリース手順
 
 1. レビューとCIを通したPRをmainへマージします。
-2. `package.json` と変更履歴を確認します。
+2. `package.json` と変更履歴、対応アプリの配布状況を確認し、READMEの配布・公開状況を更新します。
 3. GitHub Actionsの **Release VPM Packages** をmainから実行し、パッケージのバージョンと固定のUniVRMバージョンを指定します。
 4. 生成したタグが対象コミットを指し、ZIPの `package.json` と収録ファイルが一致することを確認します。
 5. [VPM一覧](https://mitsuya0077.github.io/VR-Vlog-lilToon-Exporter/index.json)のバージョン・ダウンロードURL・SHA-256を添付ZIPと照合します。

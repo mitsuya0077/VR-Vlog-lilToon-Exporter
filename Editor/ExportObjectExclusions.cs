@@ -42,6 +42,7 @@ namespace VRVlog.LilToonExporter
         }
 
         internal bool Contains(Transform transform) => transform != null && roots.Any(root => transform == root || transform.IsChildOf(root));
+        internal bool HasAny => roots.Count != 0;
 
         internal bool ContainsPath(string path)
         {

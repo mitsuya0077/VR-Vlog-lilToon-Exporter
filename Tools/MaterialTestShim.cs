@@ -8,15 +8,19 @@ namespace UnityEngine
         public static void DestroyImmediate(Object value) { if (!(value is Mesh)) throw new System.NotSupportedException("Unity lifetime is not simulated."); }
         public static T Instantiate<T>(T value) where T : Object => throw new System.NotSupportedException("Unity cloning is covered by Editor tests.");
     }
-    public class Texture : Object { public string name; public int width, height; }
+    public class Texture : Object
+    {
+        public string name;
+        public int width, height;
+        public FilterMode filterMode;
+        public TextureWrapMode wrapModeU, wrapModeV;
+    }
     public class Component : Object { }
     public class RuntimeAnimatorController : Object { }
     public class Texture2D : Texture
     {
         public static readonly Texture2D whiteTexture = new Texture2D();
         public int mipmapCount;
-        public FilterMode filterMode;
-        public TextureWrapMode wrapModeU, wrapModeV;
         public Texture2D() { }
         public Texture2D(int w, int h, TextureFormat format, bool mip, bool linear) => throw new System.NotSupportedException();
         public void ReadPixels(Rect rect, int x, int y, bool mip) => throw new System.NotSupportedException();

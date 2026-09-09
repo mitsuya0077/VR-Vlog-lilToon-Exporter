@@ -7,7 +7,7 @@ from pathlib import Path, PurePosixPath
 
 ROOT = Path(__file__).resolve().parents[1]
 ROOT_FILES = {"package.json", "LICENSE", "CHANGELOG.md", "Documentation~/README.md"}
-EDITOR_SUFFIXES = {".cs", ".asmdef", ".meta"}
+EDITOR_SUFFIXES = {".cs", ".asmdef", ".meta", ".shader"}
 
 
 def tracked_files(root):

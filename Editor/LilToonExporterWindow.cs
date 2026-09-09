@@ -16,8 +16,8 @@ namespace VRVlog.LilToonExporter
         private string fallbackPath = "";
         private bool showAdvanced;
         private bool showAppearanceOptions;
-        private bool suppressSharedTextureEmission = true;
-        private bool suppressHdrTextureEmission = true;
+        private bool suppressSharedTextureEmission = false;
+        private bool suppressHdrTextureEmission = false;
         private readonly List<GameObject> excludedObjects = new List<GameObject>();
         private Vector2 scrollPosition;
 
@@ -197,7 +197,11 @@ namespace VRVlog.LilToonExporter
                 // omitted items. Diagnostics remain in one expandable Console entry.
                 if (warnings != null && warnings.Count > 0) Debug.Log("VR Vlog 書き出し詳細\n・" + string.Join("\n・", warnings));
                 var expressionCount = VrmMenuExpressions.CountRegistered(bytes);
-                EditorUtility.DisplayDialog("書き出し完了", $"VRMを書き出しました（{bytes.Length:N0}バイト）。\nVRChat表情: {expressionCount}件。", "閉じる");
+                var completion = $"VRMを書き出しました（{bytes.Length:N0}バイト）。\nVRChat表情: {expressionCount}件。";
+                var changes = ExportAppearanceReport.Changes(warnings);
+                if (changes.Length == 0) EditorUtility.DisplayDialog("書き出し完了", completion, "閉じる");
+                else if (!EditorUtility.DisplayDialog("書き出し完了", completion + "\n\n見た目の変更: " + changes.Length + "件\n" + ExportAppearanceReport.Summary(changes), "閉じる", "詳細を見る"))
+                    ExportAppearanceReportWindow.Open(warnings);
             }
             catch (OperationCanceledException) { }
             catch (Exception exception)
@@ -224,7 +228,7 @@ namespace VRVlog.LilToonExporter
         private static string PackageVersion()
         {
             var info = PackageManagerPackageInfo.FindForAssembly(typeof(LilToonExporterWindow).Assembly);
-            return info != null && !string.IsNullOrWhiteSpace(info.version) ? info.version : "0.8.2";
+            return info != null && !string.IsNullOrWhiteSpace(info.version) ? info.version : "0.9.0";
         }
 
         private static string InstalledLilToonStatus()

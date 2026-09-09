@@ -12,8 +12,8 @@ namespace VRVlog.LilToonExporter
     {
         internal const string SupportedUniVrmSeries = "0.131";
 
-        public static byte[] Export(GameObject source, string avatarName, string author, ICollection<string> warnings = null, bool suppressSharedTextureEmission = true,
-            string exporterVersion = null, string lilToonVersion = null, bool suppressHdrTextureEmission = true,
+        public static byte[] Export(GameObject source, string avatarName, string author, ICollection<string> warnings = null, bool suppressSharedTextureEmission = false,
+            string exporterVersion = null, string lilToonVersion = null, bool suppressHdrTextureEmission = false,
             IEnumerable<GameObject> excludedObjects = null, MaterialBakeOptions bakeOptions = null)
         {
             if (source == null) throw new ArgumentNullException(nameof(source));
@@ -26,9 +26,6 @@ namespace VRVlog.LilToonExporter
             EnsureUniVrmVersion();
             using var exclusions = new ExportObjectExclusions(source, excludedObjects);
             NdmfExportPreparation.ValidateSource(source, exclusions.Contains);
-            // Report every material problem before cloning or evaluating any
-            // avatar scripts. Selection buttons can reference the real assets.
-            LilToonMainTextureBaker.ValidateAvatar(source, exclusions.Contains, bakeOptions);
             // Re-read the live assets on every export; a preview is never a stale
             // cached source of expression weights after the user edits a clip.
             var menu = VrChatExpressionSampler.Analyze(source, exclusions.ContainsPath);
@@ -41,12 +38,12 @@ namespace VRVlog.LilToonExporter
             var fixedRootJoints = new HashSet<Transform>();
             try
             {
-                AvatarBaseShape.Preserve(source, clone, temporaryMeshes, warnings, exclusions.Contains);
-                var expressions = VrChatExpressionBaker.Bake(source, clone, menu, temporaryMeshes, warnings);
-                exclusions.Apply(clone, warnings);
-                LilToonMainTextureBaker.Prepare(clone, temporaryMaterials, temporaryTextures, warnings, suppressSharedTextureEmission, suppressHdrTextureEmission, bakeOptions);
-                // Keep source-based FaceEmo bindings and explicit material
-                // omissions before the authoring pipeline changes paths/assets.
+                var expressionBindings = new PreparedExpressionBindings(clone, menu);
+                MaAppearanceSnapshot.Apply(source, clone, temporaryMeshes, exclusions, warnings);
+                LilToonMainTextureBaker.ValidateAvatar(clone, options: bakeOptions);
+                // Omission consent follows source identity before plugins clone
+                // materials. All actual baking waits for the final appearance.
+                LilToonMainTextureBaker.ApplyOmissions(clone, temporaryMaterials, warnings, bakeOptions);
                 var requiresPreparation = NdmfExportPreparation.NeedsProcessing(clone);
                 // MA can change rootBone for bounds or retarget it while merging
                 // rigs. Make implicit vertices explicit before those changes so
@@ -54,8 +51,11 @@ namespace VRVlog.LilToonExporter
                 if (requiresPreparation)
                     SkinnedMeshFallbackWeights.Preserve(clone, temporaryMeshes, warnings, fixedRootJoints);
                 using var preparation = NdmfExportPreparation.Prepare(source, clone, warnings);
-                if (requiresPreparation)
-                    LilToonMainTextureBaker.Prepare(clone, temporaryMaterials, temporaryTextures, warnings, suppressSharedTextureEmission, suppressHdrTextureEmission);
+                expressionBindings.Capture(menu);
+                AvatarBaseShape.Preserve(clone, clone, temporaryMeshes, warnings);
+                var expressions = VrChatExpressionBaker.Bake(null, clone, menu, temporaryMeshes, warnings, expressionBindings);
+                LilToonMainTextureBaker.ValidateAvatar(clone);
+                LilToonMainTextureBaker.Prepare(clone, temporaryMaterials, temporaryTextures, warnings, suppressSharedTextureEmission, suppressHdrTextureEmission);
                 // Also cover meshes/joints newly created by authoring passes.
                 SkinnedMeshFallbackWeights.Preserve(clone, temporaryMeshes, warnings, fixedRootJoints);
                 // MA has already applied its authored Merge Armature / Bone
@@ -67,14 +67,15 @@ namespace VRVlog.LilToonExporter
                         string.Join(", ", attachments.Parts.ConvertAll(part => part.Root.name)));
                 var preparedMaterials = new Dictionary<Renderer, Material[]>();
                 foreach (var renderer in ExportRendererSelection.Enumerate(clone)) preparedMaterials.Add(renderer, renderer.sharedMaterials);
-                ReplaceLilToonMaterials(clone, temporaryMaterials, temporaryTextures, warnings, suppressSharedTextureEmission);
+                var fallbackMaterials = ReplaceLilToonMaterials(clone, temporaryMaterials, temporaryTextures, warnings, suppressSharedTextureEmission);
+                var fallbackIndices = new Dictionary<Material, int>();
                 MakeRendererMeshesUnique(clone, temporaryMeshes);
-                var exported = Vrm10Exporter.Export(
-                    new GltfExportSettings(),
+                var exported = Vrm10AppearanceExporter.Export(
+                    new GltfExportSettings { ExportVertexColor = true },
                     clone,
                     materialExporter: new BuiltInVrm10MaterialExporter(),
                     textureSerializer: new MobileTextureSerializer(warnings),
-                    vrmMeta: CreateMeta(avatarName.Trim(), author.Trim()));
+                    vrmMeta: CreateMeta(avatarName.Trim(), author.Trim()), materialIndices: fallbackIndices);
                 exported = ExportSkinRoots.Repair(exported, warnings);
                 exported = VrmExpressionBindings.AddMissing(VrmMenuExpressions.Add(exported, expressions), warnings);
                 if (exporterVersion != null)
@@ -83,7 +84,9 @@ namespace VRVlog.LilToonExporter
                     // images are alive. Re-reading source assets here would undo
                     // the bake in apps that enable the lilToon extension.
                     foreach (var pair in preparedMaterials) pair.Key.sharedMaterials = pair.Value;
-                    exported = LilToonGlbExtension.Inject(exported, clone, exporterVersion, lilToonVersion, warnings, suppressSharedTextureEmission);
+                    var preparedIndices = new Dictionary<Material, int>();
+                    foreach (var pair in fallbackMaterials) preparedIndices.Add(pair.Key, fallbackIndices[pair.Value]);
+                    exported = LilToonGlbExtension.Inject(exported, clone, exporterVersion, lilToonVersion, warnings, suppressSharedTextureEmission, preparedIndices);
                 }
                 return exported;
             }
@@ -143,7 +146,7 @@ namespace VRVlog.LilToonExporter
             };
         }
 
-        private static void ReplaceLilToonMaterials(GameObject clone, List<Material> created, List<Texture2D> textures, ICollection<string> warnings, bool suppressSharedTextureEmission)
+        private static Dictionary<Material, Material> ReplaceLilToonMaterials(GameObject clone, List<Material> created, List<Texture2D> textures, ICollection<string> warnings, bool suppressSharedTextureEmission)
         {
             var converted = new Dictionary<Material, Material>();
             // Shared masks are converted once per export and owned until all
@@ -168,9 +171,10 @@ namespace VRVlog.LilToonExporter
                 if (changed) renderer.sharedMaterials = materials;
             }
             if (converted.Count == 0) throw new InvalidOperationException("選択したアバターに対応するlilToonマテリアルがありません。");
+            return converted;
         }
 
-        internal static Material CreateMToonFallback(Material source, List<Material> created, ICollection<string> warnings, bool suppressSharedTextureEmission = true, List<Texture2D> textures = null, IDictionary<Texture, Texture2D> outlineMasks = null)
+        internal static Material CreateMToonFallback(Material source, List<Material> created, ICollection<string> warnings, bool suppressSharedTextureEmission = false, List<Texture2D> textures = null, IDictionary<Texture, Texture2D> outlineMasks = null)
         {
             // Validate the full mobile subset before producing any fallback output.
             LilToonMaterialReader.Read(source, 0, (_, __) => 0, warnings, suppressSharedTextureEmission);

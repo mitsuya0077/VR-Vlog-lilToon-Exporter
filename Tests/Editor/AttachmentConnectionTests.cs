@@ -416,7 +416,9 @@ namespace VRVlog.LilToonExporter.Tests
                 var warnings = new List<string>();
                 // Use the same complete entry point as the window: no target
                 // selection callback, preview, or manual Attach call.
-                var bytes = UniVrmOneClickExporter.Export(f.Source, "Automatic MA hair", "Test", warnings);
+                f.Mesh.colors = Enumerable.Range(0, f.Mesh.vertexCount).Select(i => new Color(.25f + i*.1f,.6f,.7f,.8f - i*.1f)).ToArray();
+                var bytes = UniVrmOneClickExporter.Export(f.Source, "Automatic MA hair", "Test", warnings,
+                    exporterVersion: "0.9.0", lilToonVersion: "2.3.4");
                 Assert.That(sourceHair.parent, Is.SameAs(f.Source.transform));
                 Assert.That(f.Source.GetComponentsInChildren<Transform>(true).Select(t => t.localToWorldMatrix), Is.EqualTo(sourceBefore));
                 Assert.That(f.Source.transform.Find("Front").GetComponent<SkinnedMeshRenderer>().sharedMesh, Is.SameAs(f.Mesh));
@@ -426,6 +428,15 @@ namespace VRVlog.LilToonExporter.Tests
                 var skins = imported.GetComponentsInChildren<SkinnedMeshRenderer>();
                 var hairSkins = skins.Where(skin => skin.name == "Front" || skin.name == "Back").ToArray();
                 Assert.That(hairSkins.Length, Is.EqualTo(2));
+                foreach (var hairSkin in hairSkins)
+                {
+                    Assert.That(hairSkin.sharedMesh.colors, Has.Length.EqualTo(hairSkin.sharedMesh.vertexCount));
+                    for (var i = 0; i < hairSkin.sharedMesh.vertexCount; i++)
+                    {
+                        Assert.That(hairSkin.sharedMesh.colors[i].r, Is.EqualTo(.25f + i*.1f).Within(.005f));
+                        Assert.That(hairSkin.sharedMesh.colors[i].a, Is.EqualTo(.8f - i*.1f).Within(.005f));
+                    }
+                }
                 var before = hairSkins.ToDictionary(skin => skin, WorldVertices);
                 var petSkin = skins.FirstOrDefault(skin => skin.name == "Independent pet");
                 var petBefore = petSkin != null ? WorldVertices(petSkin) : null;
@@ -447,6 +458,79 @@ namespace VRVlog.LilToonExporter.Tests
                 if (imported != null) Object.DestroyImmediate(imported.gameObject);
                 if (petMesh != null) Object.DestroyImmediate(petMesh);
                 Object.DestroyImmediate(exportMaterial);
+            }
+        }
+
+        [TestCase(0)]
+        [TestCase(1)]
+        [TestCase(2)]
+        [TestCase(4)]
+        [TestCase(7)]
+        public async Task ManualAndMaAppearanceMatchAfterCompleteExportAndReload(int changes)
+        {
+            var proxyType = AppDomain.CurrentDomain.GetAssemblies().Select(a => a.GetType("nadena.dev.modular_avatar.core.ModularAvatarBoneProxy")).FirstOrDefault(t => t != null);
+            var markerType = AppDomain.CurrentDomain.GetAssemblies().Select(a => a.GetType("nadena.dev.ndmf.runtime.components.NDMFAvatarRoot")).FirstOrDefault(t => t != null);
+            if (proxyType == null || markerType == null) Assert.Ignore("Requires installed MA/NDMF.");
+            using var f = new Fixture();
+            var original = new Material(Shader.Find("lilToon"));
+            var replacement = new Material(original); replacement.SetColor("_Color",new Color(.3f,.6f,.8f,1));
+            Vrm10Instance ma = null, manual = null;
+            try
+            {
+                f.Source.AddComponent(markerType);
+                foreach(var root in new[] { f.Source,f.Copy })
+                    foreach(var skin in root.GetComponentsInChildren<SkinnedMeshRenderer>()) skin.sharedMaterial=original;
+                var sourceHair=f.Source.transform.Find("Independent hair");
+                var proxy=sourceHair.gameObject.AddComponent(proxyType);
+                proxyType.GetProperty("target").SetValue(proxy,f.Source.GetComponent<Animator>().GetBoneTransform(HumanBodyBones.Head));
+                var mode=proxyType.GetField("attachmentMode");
+                mode.SetValue(proxy,Enum.Parse(mode.FieldType,"AsChildKeepWorldPose"));
+                f.Hair.SetParent(f.Head,true);
+                var sourceFace=f.Source.transform.Find("Front").gameObject;
+                var manualFace=f.Copy.transform.Find("Front").GetComponent<SkinnedMeshRenderer>();
+                if((changes&1)!=0)
+                {
+                    AppearancePreparationTests.AddRule(f.Source,"ModularAvatarShapeChanger","Shapes","ChangedShape",sourceFace,
+                        ("ShapeName","Hair detail"),("ChangeType",1),("Value",75f));
+                    manualFace.SetBlendShapeWeight(0,75);
+                }
+                if((changes&2)!=0)
+                {
+                    AppearancePreparationTests.AddRule(f.Source,"ModularAvatarMaterialSetter","Objects","MaterialSwitchObject",sourceFace,
+                        ("Material",replacement),("MaterialIndex",0));
+                    manualFace.sharedMaterial=replacement;
+                }
+                if((changes&4)!=0)
+                {
+                    AppearancePreparationTests.AddRule(f.Source,"ModularAvatarObjectToggle","Objects","ToggledObject",f.Source.transform.Find("Back").gameObject,("Active",false));
+                    f.Copy.transform.Find("Back").gameObject.SetActive(false);
+                }
+                var maBytes=UniVrmOneClickExporter.Export(f.Source,"Appearance comparison","Test",exporterVersion:"0.9.0",lilToonVersion:"2.3.4");
+                var manualBytes=UniVrmOneClickExporter.Export(f.Copy,"Appearance comparison","Test",exporterVersion:"0.9.0",lilToonVersion:"2.3.4");
+                ma=await Vrm10.LoadBytesAsync(maBytes,canLoadVrm0X:false,awaitCaller:new ImmediateCaller());
+                manual=await Vrm10.LoadBytesAsync(manualBytes,canLoadVrm0X:false,awaitCaller:new ImmediateCaller());
+                foreach(var rotation in new[] { Quaternion.identity,Quaternion.Euler(12,40,0) })
+                {
+                    foreach(var model in new[] { ma,manual })
+                    { model.Runtime.ControlRig.GetBoneTransform(HumanBodyBones.Head).localRotation=rotation; model.Runtime.Process(); }
+                    var expected=manual.GetComponentsInChildren<SkinnedMeshRenderer>().ToDictionary(s=>s.name);
+                    var actual=ma.GetComponentsInChildren<SkinnedMeshRenderer>();
+                    Assert.That(actual.Select(s=>s.name),Is.EquivalentTo(expected.Keys));
+                    foreach(var skin in actual)
+                    {
+                        AssertVertices(WorldVertices(expected[skin.name]),WorldVertices(skin));
+                        Assert.That(skin.sharedMaterial.GetColor("_Color"),Is.EqualTo(expected[skin.name].sharedMaterial.GetColor("_Color")));
+                    }
+                }
+                Assert.That(sourceHair.parent,Is.SameAs(f.Source.transform));
+                Assert.That(sourceFace.GetComponent<SkinnedMeshRenderer>().GetBlendShapeWeight(0),Is.EqualTo(35));
+                Assert.That(sourceFace.GetComponent<SkinnedMeshRenderer>().sharedMaterial,Is.SameAs(original));
+            }
+            finally
+            {
+                if(ma!=null) Object.DestroyImmediate(ma.gameObject);
+                if(manual!=null) Object.DestroyImmediate(manual.gameObject);
+                Object.DestroyImmediate(original); Object.DestroyImmediate(replacement);
             }
         }
 

@@ -7,6 +7,11 @@ This is a Unity Editor exporter for VRM 1.0. It emits standard
 The optional extensions are listed in `extensionsUsed`, never
 `extensionsRequired`; ordinary VRM viewers can use the standard fallback.
 
+The main branch contains unreleased 0.9.0 (material schema 1.3); release it only
+after a compatible app is available. The latest published package is 0.8.1
+(schema 1.2). The website/VPM listing is currently paused; published ZIPs
+remain available from GitHub Releases.
+
 ## Installation
 
 - Tested editor: Unity 2022.3.22f1. Use the editor supported by VCC/ALCOM for
@@ -16,7 +21,9 @@ The optional extensions are listed in `extensionsUsed`, never
 - UniVRM 0.131.x is required. VCC/ALCOM resolves the published
   `com.vrmc.gltf` and `com.vrmc.vrm` 0.131.0 packages automatically.
 - For Modular Avatar authoring, install its dependencies in the source
-  project. The exporter supports NDMF 1.x starting at 1.8.3.
+  project. General connection processing supports NDMF 1.x starting at 1.8.3.
+  Current MA preview capture is tested with MA 1.18.7 / NDMF 1.14.8; it checks
+  the required APIs and stops clearly when they are unavailable.
 
 Add this repository URL in VCC/ALCOM and install **VR Vlog lilToon VRM Exporter**:
 
@@ -39,9 +46,10 @@ author name and choose the destination. The model name comes from the avatar
 object. Only `.vrm` destinations are accepted; an existing file requires
 overwrite confirmation.
 
-The exporter processes a temporary copy, preserves supported initial
-BlendShape values and expressions, applies supported NDMF authoring, converts
-materials, serializes with UniVRM, adds optional data and validates the file
+The exporter collects expressions, freezes current MA visibility, shape,
+material and Mesh Cutter settings on a temporary copy, then applies NDMF
+connections. It preserves prepared base geometry and expression residuals,
+converts materials, serializes with UniVRM, adds optional data and validates the file
 before replacing the destination. Source objects, meshes, materials, textures
 and importer settings are preserved.
 
@@ -68,7 +76,8 @@ main-color layers require one-click export.
 | Backlight | Additional data retains supported settings and texture; portable MToon approximates it with rim lighting |
 | Main 2nd/3rd layers and color adjustment | Supported static UV0 settings are baked into the output image, including supported decals, copied patterns and MSDF text |
 | Outline width mask | Source red-channel mask is converted to MToon's green-channel width mask |
-| Vertex-color outline width | Omitted with a warning in 0.8.x; not equivalent to an ordinary width texture |
+| Vertex-color outline width | Schema 1.3 preserves vertex R/A and source width masks for the compatible app; portable MToon omits vertex-driven outlines |
+| Static alpha masks | Replace, multiply, add and subtract are baked into the main image |
 | Fur, refraction, gem, tessellation, AudioLink and unsupported variants | Approximated or omitted, with warnings |
 
 UV animation, unsupported UV sets, sidedness, alpha operations and other
@@ -76,17 +85,20 @@ unbakeable combinations are reported with the affected material and next
 action. Omitting listed layers is an explicit retry action and applies to all
 uses of that material on the export copy.
 
-Both emission-suppression options default to on. The first omits emission
+Both emission-suppression options default to off in 0.9.0 (on in 0.8.x). The first omits emission
 when the base and emission maps use the same Unity texture object. The second
 also suppresses qualifying HDR emission with a separate image in one-click
-export. Disable the applicable option to retain intentional glow.
+export. Enable these options only when suppression is wanted.
 
 Output images are resized to a maximum dimension of 1024, preserving aspect
 ratio. Color images use alpha-aware linear-light filtering; numeric maps retain
 their channel meaning. The format validator accepts images up to 2048 for
 compatibility with older files; this is not a selectable export quality preset.
 
-0.8.x writes material schema 1.2. The full property contract is in
+0.9.0 writes material schema 1.3; published 0.8.x writes schema 1.2. The
+[current appearance contract](AppearanceFidelity.md) covers emission blending,
+RGBA masks and vertex-width controls. Earlier apps fall back to MToon for
+unsupported schema 1.3 data. Additional property contracts are in
 [Lighting.md](../Schema/Lighting.md) and the
 [JSON Schema](../Schema/VRVLOG_materials_liltoon.schema.json).
 Stored settings are not a promise of identical rendering. In VR Vlog versions
@@ -97,7 +109,7 @@ from an older file.
 
 ## Shape and expressions
 
-Initial renderer BlendShape weights become the exported base geometry.
+Prepared renderer BlendShape weights, after MA/NDMF processing, become the exported base geometry.
 Expressions are rebased against it so an initial value is not added twice.
 Shared meshes are copied per renderer. Multi-frame shapes are evaluated at
 the initial value; ordinary UniVRM morph targets retain the final-frame
@@ -142,7 +154,9 @@ first pose for viewers without playback support. Non-looping clips hold their
 end pose; changing the selected expression ends the previous animation.
 See [ExpressionAnimations.md](../Schema/ExpressionAnimations.md).
 
-Unsupported entries are reported in **VR Vlog 書き出し詳細** in Unity Console.
+Approximation, omission, resizing and correction produce a concise completion
+summary with an optional detail view. Full details are also reported in
+**VR Vlog 書き出し詳細** in Unity Console.
 The export does not silently truncate data exceeding its limits.
 
 ## Public reports and exported data

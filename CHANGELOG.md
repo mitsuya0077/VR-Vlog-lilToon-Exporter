@@ -1,12 +1,16 @@
 # Changelog
 
-## 0.8.2
+## 0.9.0
+
+- Freeze current MA preview visibility, Shape Changer, Material Setter/Swap and Mesh Cutter on the export copy before NDMF attachment preparation; retain original FaceEmo references and compute expression residuals from prepared geometry.
+- Bake static alpha masks, retain vertex red/alpha outline width and width masks, and preserve source emission blend/mask/main-color/fluorescence controls in schema 1.3. Intentional-emission suppression now defaults OFF.
+- Export mesh vertex colors, distinguish source outline masks from portable MToon masks, and show concise approximation/omission details on completion.
+- See Docs/AppearanceFidelity.md for the paired runtime contract, validation coverage and remaining device checks. Publish only after the compatible application is available.
 
 - Clarify the required lilToon 2.3.4 version, tested Unity environment, VR Vlog display/reload steps, and MA/PhysBone conversion limits.
 - Package only tracked Editor source, package metadata, licenses and a concise user guide. Keep developer tools, tests, CI configuration and local inputs out of the installed package.
 - Add checks for common accidental disclosures and an issue form explaining how to share relevant diagnostics without private inputs.
 - Simplify public documentation and generate future release notes from the matching changelog entry. Preserve a paused website/VPM deployment when publishing a GitHub release.
-- Keep the schema 1.2 output and export conversion behaviour from 0.8.1.
 
 ## 0.8.1
 

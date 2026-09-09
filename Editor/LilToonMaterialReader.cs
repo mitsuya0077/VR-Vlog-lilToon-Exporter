@@ -6,20 +6,20 @@ namespace VRVlog.LilToonExporter
 {
     internal static class LilToonMaterialReader
     {
-        private static readonly string[] FloatNames = { "_Cutoff", "_ShadowStrength", "_ShadowBorder", "_ShadowBlur", "_BacklightMainStrength", "_BacklightNormalStrength", "_BacklightBorder", "_BacklightBlur", "_BacklightDirectivity", "_BacklightViewStrength", "_BacklightReceiveShadow", "_BacklightBackfaceMask", "_BumpScale", "_EmissionBlend", "_RimBorder", "_RimBlur", "_RimFresnelPower", "_MatCapBlend", "_OutlineWidth", "_OutlineEnableLighting" };
+        private static readonly string[] FloatNames = { "_Cutoff", "_ShadowStrength", "_ShadowBorder", "_ShadowBlur", "_BacklightMainStrength", "_BacklightNormalStrength", "_BacklightBorder", "_BacklightBlur", "_BacklightDirectivity", "_BacklightViewStrength", "_BacklightReceiveShadow", "_BacklightBackfaceMask", "_BumpScale", "_EmissionBlend", "_EmissionBlendMode", "_EmissionMainStrength", "_EmissionFluorescence", "_OutlineVertexR2Width", "_RimBorder", "_RimBlur", "_RimFresnelPower", "_MatCapBlend", "_OutlineWidth", "_OutlineEnableLighting" };
         private static readonly string[] ColorNames = { "_Color", "_ShadowColor", "_BacklightColor", "_EmissionColor", "_RimColor", "_MatCapColor", "_OutlineColor" };
         private static readonly (string Name, string Semantic)[] TextureNames = {
             ("_MainTex", "mainColor"), ("_ShadowColorTex", "shadow"), ("_BumpMap", "normalMap"),
-            ("_BacklightColorTex", "backlight"), ("_EmissionMap", "emission"), ("_RimColorTex", "rimLight"), ("_MatCapTex", "matCap"), ("_OutlineTex", "outline")
+            ("_BacklightColorTex", "backlight"), ("_EmissionMap", "emission"), ("_EmissionBlendMask", "emission"), ("_OutlineWidthMask", "outline"), ("_RimColorTex", "rimLight"), ("_MatCapTex", "matCap"), ("_OutlineTex", "outline")
         };
         private static readonly string[] UnsupportedFeatureToggles = {
             "_UseMain2ndTex", "_UseMain3rdTex", "_UseAnisotropy",
             "_UseReflection", "_UseRefraction", "_UseFur", "_UseGem", "_UseAudioLink",
             "_UseDissolve", "_UseDistanceFade", "_UseGlitter", "_UseParallax", "_UseTessellation",
-            "_UseEmission2nd", "_UseBump2ndMap", "_UseMatCap2nd", "_AlphaMaskMode"
+            "_UseEmission2nd", "_UseBump2ndMap", "_UseMatCap2nd"
         };
 
-        public static LilToonMaterialRecord Read(Material material, int materialIndex, Func<Texture, string, int> textureIndex, ICollection<string> warnings = null, bool suppressSharedTextureEmission = true)
+        public static LilToonMaterialRecord Read(Material material, int materialIndex, Func<Texture, string, int> textureIndex, ICollection<string> warnings = null, bool suppressSharedTextureEmission = false)
         {
             if (material == null || material.shader == null) throw new ArgumentException("Material and shader are required.");
             var family = ShaderFamily(material.shader.name, warnings);
@@ -27,6 +27,23 @@ namespace VRVlog.LilToonExporter
                 throw new NotSupportedException($"Unsupported lilToon shader: {material.shader.name}.");
             foreach (var toggle in UnsupportedFeatureToggles)
                 if (Enabled(material, toggle)) AddWarning(warnings, $"{material.name}: 未対応機能 {toggle} は省略し、対応部分だけを書き出しました。");
+            if (EnabledOrTexture(material, "_UseEmission", "_EmissionMap"))
+            {
+                if ((material.HasProperty("_EmissionMap_UVMode") && material.GetFloat("_EmissionMap_UVMode") != 0) ||
+                    (material.HasProperty("_EmissionMap_ScrollRotate") && !material.GetVector("_EmissionMap_ScrollRotate").Equals(new Vector4(0, 0, 0, 0))) ||
+                    (material.HasProperty("_EmissionBlink") && material.GetVector("_EmissionBlink").x != 0) ||
+                    Enabled(material, "_EmissionUseGrad") ||
+                    (material.HasProperty("_EmissionParallaxDepth") && material.GetFloat("_EmissionParallaxDepth") != 0))
+                    AddWarning(warnings, $"{material.name}: 発光の特殊UV・回転・時間変化は省略し、UV0の固定した発光として近似しました。");
+                if ((HasTexture(material, "_EmissionBlendMask") && material.GetTexture("_EmissionBlendMask") != Texture2D.whiteTexture) ||
+                    (material.HasProperty("_EmissionBlendMode") && material.GetFloat("_EmissionBlendMode") != 1))
+                    AddWarning(warnings, $"{material.name}: 発光のマスク・合成方法は専用表示へ保存しました。標準MToonでは加算発光として近似します。");
+            }
+            if (HasOutline(material) && ((HasTexture(material, "_OutlineTex") && material.GetTexture("_OutlineTex") != Texture2D.whiteTexture) ||
+                (material.HasProperty("_OutlineFixWidth") && material.GetFloat("_OutlineFixWidth") != 0)))
+                AddWarning(warnings, $"{material.name}: 輪郭の色模様・カメラ距離による幅の補正は、単色・一定の幅として近似しました。");
+            if (HasOutline(material) && material.HasProperty("_OutlineWidth") && material.GetFloat("_OutlineWidth") > .5f)
+                AddWarning(warnings, $"{material.name}: 太い輪郭をモバイル表示の上限5mmへ近似します。");
             var record = new LilToonMaterialRecord {
                 materialIndex = materialIndex, shaderFamily = family, renderMode = RenderMode(material, warnings),
                 renderQueue = material.renderQueue, cullMode = CullMode(material)
@@ -41,11 +58,21 @@ namespace VRVlog.LilToonExporter
             AddFeature(record, "emission", !suppressEmission && EnabledOrTexture(material, "_UseEmission", "_EmissionMap"));
             AddFeature(record, "rimLight", Enabled(material, "_UseRim"));
             AddFeature(record, "matCap", Enabled(material, "_UseMatCap"));
-            AddFeature(record, "outline", HasPortableOutline(material));
+            AddFeature(record, "outline", HasOutline(material));
             if (HasOutline(material) && !HasPortableOutline(material))
-                AddWarning(warnings, $"{material.name}: 頂点カラーで太さを制御する輪郭線はMToonで再現できないため省略しました。口・目への輪郭線の突き抜けを防ぎます。");
+                AddWarning(warnings, $"{material.name}: 頂点カラーによる輪郭幅を専用表示へ保存しました。標準MToonの互換表示では輪郭線を省略します。");
 
-            foreach (var name in FloatNames) if (material.HasProperty(name)) record.floats.Add(new LilToonFloatProperty { name = name, value = suppressEmission && name == "_EmissionBlend" ? 0f : material.GetFloat(name) });
+            foreach (var name in FloatNames)
+                if (material.HasProperty(name))
+                {
+                    var value = suppressEmission && name == "_EmissionBlend" ? 0f : material.GetFloat(name);
+                    if (LilToonExtensionValidator.IsAppearanceProperty(name) && !LilToonExtensionValidator.ValidAppearanceValue(name, value))
+                    {
+                        value = name == "_EmissionBlendMode" ? 1 : 0;
+                        AddWarning(warnings, $"{material.name}: {name} を既定値へ調整して書き出しました。");
+                    }
+                    record.floats.Add(new LilToonFloatProperty { name = name, value = value });
+                }
             foreach (var property in LilToonLightingProfile.Properties)
                 if (property.AppliesTo(record.features))
                 {
@@ -83,18 +110,19 @@ namespace VRVlog.LilToonExporter
                 if (suppressEmission && item.Semantic == "emission") continue;
                 if (!TextureFeatureEnabled(material, item.Semantic)) continue;
                 if (!material.HasProperty(item.Name)) continue; var texture = material.GetTexture(item.Name); if (texture == null) continue;
-                if (item.Name == "_BacklightColorTex" && texture == Texture2D.whiteTexture) continue;
+                if ((item.Name == "_BacklightColorTex" || item.Name == "_EmissionBlendMask" || item.Name == "_OutlineWidthMask") && texture == Texture2D.whiteTexture) continue;
                 // Keep the base-image shade fallback when Unity exposes an
                 // unassigned lilToon shade map as its built-in white image.
                 if (item.Name == "_ShadowColorTex" && texture == Texture2D.whiteTexture) continue;
-                var index = textureIndex(texture, item.Semantic);
+                var index = textureIndex(texture, item.Name == "_EmissionBlendMask" ? "emissionMask" : item.Name == "_OutlineWidthMask" ? "outlineMask" : item.Semantic);
                 if (index < 0)
                 {
                     if (item.Semantic == "mainColor") throw new InvalidOperationException($"メイン画像 '{texture.name}' を元のVRMへ対応付けできません。");
                     AddWarning(warnings, $"{material.name}: {item.Name} はVRMへ対応付けできないため省略しました。");
                     continue;
                 }
-                var scale = material.GetTextureScale(item.Name); var offset = material.GetTextureOffset(item.Name);
+                var stName = item.Name == "_OutlineWidthMask" ? "_MainTex" : item.Name;
+                var scale = material.GetTextureScale(stName); var offset = material.GetTextureOffset(stName);
                 record.textures.Add(new LilToonTextureProperty { name = item.Name, semantic = item.Semantic, textureIndex = index, scaleX = scale.x, scaleY = scale.y, offsetX = offset.x, offsetY = offset.y });
             }
             return record;
@@ -143,7 +171,7 @@ namespace VRVlog.LilToonExporter
                 case "emission": return EnabledOrTexture(material, "_UseEmission", "_EmissionMap");
                 case "rimLight": return Enabled(material, "_UseRim");
                 case "matCap": return Enabled(material, "_UseMatCap");
-                case "outline": return HasPortableOutline(material);
+                case "outline": return HasOutline(material);
                 default: throw new NotSupportedException($"Unsupported texture semantic: {semantic}.");
             }
         }

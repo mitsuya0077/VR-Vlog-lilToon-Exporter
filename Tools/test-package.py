@@ -24,7 +24,7 @@ class PackageTests(unittest.TestCase):
         self.addCleanup(self.temp.cleanup)
         self.root = Path(self.temp.name)
         self.git("init", "--quiet")
-        for name in package.ROOT_FILES | {"Editor/Example.cs", "Editor/Example.cs.meta", "Editor/Test.asmdef", "ThirdPartyNotices/Example.md"}:
+        for name in package.ROOT_FILES | {"Editor/Example.cs", "Editor/Example.cs.meta", "Editor/Test.asmdef", "Editor/Example.shader", "ThirdPartyNotices/Example.md"}:
             self.write(name, name)
         self.git("add", ".")
 
@@ -46,6 +46,7 @@ class PackageTests(unittest.TestCase):
         names = package.build(self.root, archive)
         self.assertTrue(package.ROOT_FILES <= set(names))
         self.assertIn("Editor/Example.cs.meta", names)
+        self.assertIn("Editor/Example.shader", names)
         self.assertIn("ThirdPartyNotices/Example.md", names)
         self.assertFalse(set(excluded) & set(names))
         self.assertNotIn("Editor/Untracked.cs", names)

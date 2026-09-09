@@ -152,6 +152,41 @@ namespace VRVlog.LilToonExporter.Tests
             finally { Object.DestroyImmediate(avatar); Object.DestroyImmediate(material); Object.DestroyImmediate(source); Object.DestroyImmediate(decoded); }
         }
 
+        [TestCase(false)]
+        [TestCase(true)]
+        public void EmissionMaskInjectionStoresSampledLinearRgbaWithoutChangingSource(bool sourceLinear)
+        {
+            var material = new Material(Shader.Find("lilToon")) { name = "Body" };
+            var source = Image(2,2,sourceLinear,_ => new Color32(128,64,192,128));
+            var avatar = new GameObject("Avatar");
+            var decoded = new Texture2D(2,2,TextureFormat.RGBA32,false,true);
+            try
+            {
+                source.name = "Emission mask";
+                var original = source.GetPixels32();
+                material.SetTexture("_MainTex",null);
+                material.SetFloat("_UseEmission",1);
+                material.SetTexture("_EmissionBlendMask",source);
+                avatar.AddComponent<MeshRenderer>().sharedMaterial=material;
+                var fallback=GlbDocument.Read(MaterialBindingFixture.Build("Body"));
+                fallback.Json["buffers"]=new List<object>{Obj("byteLength",0L)};
+                var output=LilToonGlbExtension.Inject(fallback.Write(),avatar,"0.9.0","2.3.4");
+                var glb=GlbDocument.Read(output);
+                Assert.That(ImageConversion.LoadImage(decoded,ImageBytes(glb,0),false),Is.True);
+                var expected=(Color)new Color32(128,64,192,128);
+                if(!sourceLinear && QualitySettings.activeColorSpace==UnityEngine.ColorSpace.Linear) expected=expected.linear;
+                var actual=decoded.GetPixel(0,0);
+                Assert.That(actual.r,Is.EqualTo(expected.r).Within(.012f));
+                Assert.That(actual.g,Is.EqualTo(expected.g).Within(.012f));
+                Assert.That(actual.b,Is.EqualTo(expected.b).Within(.012f));
+                Assert.That(actual.a,Is.EqualTo(expected.a).Within(.005f));
+                Assert.That(source.GetPixels32(),Is.EqualTo(original));
+                Assert.That(material.GetTexture("_EmissionBlendMask"),Is.SameAs(source));
+                Assert.DoesNotThrow(()=>LilToonGlbExtension.Validate(output));
+            }
+            finally { Object.DestroyImmediate(avatar); Object.DestroyImmediate(material); Object.DestroyImmediate(source); Object.DestroyImmediate(decoded); }
+        }
+
         [Test]
         public void FourKOutlineWidthMaskIsResizedOnItsExportCopy()
         {
