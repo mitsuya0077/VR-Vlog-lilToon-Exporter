@@ -6,14 +6,18 @@ using UnityEngine;
 
 namespace VRVlog.LilToonExporter
 {
-    // Uses the installed, version-checked lilToon baker so layer blending and
-    // tone correction follow the shader that authored the avatar.
+    // Uses the installed, version-checked lilToon baker for ordinary layers,
+    // and its alpha-aware adaptation for static transparent/cutout layers.
     internal static class LilToonMainTextureBaker
     {
         internal static bool NeedsBake(Material material) => Enabled(material, "_UseMain2ndTex") ||
             Enabled(material, "_UseMain3rdTex") ||
             (material.HasProperty("_MainTexHSVG") && material.GetVector("_MainTexHSVG") != new Vector4(0, 1, 1, 1)) ||
             Value(material, "_MainGradationStrength") != 0;
+
+        internal static bool NeedsLayerAlphaBake(Material material, MaterialBakeOptions options = null) => !IsOpaque(material) &&
+            (Enabled(material, "_UseMain2ndTex") && options?.Omits(material, "2nd") != true && Value(material, "_Main2ndTexAlphaMode") != 0 ||
+             Enabled(material, "_UseMain3rdTex") && options?.Omits(material, "3rd") != true && Value(material, "_Main3rdTexAlphaMode") != 0);
 
         internal static void ValidateAvatar(GameObject avatar, Func<Transform, bool> excluded = null, MaterialBakeOptions options = null)
         {
@@ -31,8 +35,13 @@ namespace VRVlog.LilToonExporter
                     foreach (var layer in new[] { "2nd", "3rd" })
                     {
                         if (!Enabled(material, "_UseMain" + layer + "Tex") || options?.Omits(material, layer) == true) continue;
-                        issues.AddRange(LayerIssues(material, layer, path));
+                        var layerAlpha = NeedsLayerAlphaBake(material, options);
+                        issues.AddRange(LayerIssues(material, layer, path, layerAlpha));
                         var property = "_Main" + layer + "Tex";
+                        if (layerAlpha && !HasSingleUvTile(renderer, slot, material))
+                            issues.Add(Issue(material, path, layer, "透過を焼き込むUVの範囲",
+                                "メイン画像の配置を適用したUVが0〜1に収まらず、透かし模様を一枚の画像で保持できません。",
+                                "メイン画像の配置とメッシュのUVを0〜1に収めてください。このレイヤーを省略して出力することもできます。"));
                         // A decal or copied half is not periodic. Repeating a
                         // baked UV tile outside 0..1 would invent extra decals.
                         if ((Enabled(material, property + "IsDecal") || Enabled(material, property + "ShouldCopy") ||
@@ -46,7 +55,7 @@ namespace VRVlog.LilToonExporter
             if (issues.Count > 0) throw new MaterialBakeException(issues, true);
         }
 
-        private static bool HasSingleUvTile(Renderer renderer, int slot)
+        private static bool HasSingleUvTile(Renderer renderer, int slot, Material material = null)
         {
             var mesh = renderer is SkinnedMeshRenderer skin ? skin.sharedMesh : renderer.GetComponent<MeshFilter>()?.sharedMesh;
             if (mesh == null || mesh.subMeshCount == 0) return false;
@@ -55,8 +64,11 @@ namespace VRVlog.LilToonExporter
                 var uv = mesh.uv;
                 var indices = mesh.GetIndices(Mathf.Min(slot, mesh.subMeshCount - 1));
                 if (indices.Length == 0) return false;
+                var scale = material != null ? material.GetTextureScale("_MainTex") : Vector2.one;
+                var offset = material != null ? material.GetTextureOffset("_MainTex") : Vector2.zero;
                 return indices.All(index => index >= 0 && index < uv.Length &&
-                    uv[index].x >= 0 && uv[index].x <= 1 && uv[index].y >= 0 && uv[index].y <= 1);
+                    uv[index].x * scale.x + offset.x >= 0 && uv[index].x * scale.x + offset.x <= 1 &&
+                    uv[index].y * scale.y + offset.y >= 0 && uv[index].y * scale.y + offset.y <= 1);
             }
             catch (UnityException) { return false; }
         }
@@ -137,7 +149,8 @@ namespace VRVlog.LilToonExporter
             var issues = new[] { "2nd", "3rd" }.Where(layer => Enabled(material, "_UseMain" + layer + "Tex"))
                 .SelectMany(layer => LayerIssues(material, layer, "")).ToArray();
             if (issues.Length > 0) throw new MaterialBakeException(issues);
-            var shader = Shader.Find("Hidden/ltsother_baker");
+            var layerAlpha = NeedsLayerAlphaBake(material);
+            var shader = Shader.Find(layerAlpha ? "Hidden/VRVlog/LayerAlphaBaker" : "Hidden/ltsother_baker");
             if (shader == null || !shader.isSupported) throw new InvalidOperationException("lilToonのベイク用シェーダーを利用できません。");
             var baker = new Material(shader);
             RenderTexture target = null;
@@ -148,6 +161,12 @@ namespace VRVlog.LilToonExporter
             {
                 baker.CopyPropertiesFromMaterial(material);
                 baker.shaderKeywords = new string[0];
+                if (layerAlpha)
+                {
+                    var scale = material.GetTextureScale("_MainTex");
+                    var offset = material.GetTextureOffset("_MainTex");
+                    baker.SetVector("_VrvMainST", new Vector4(scale.x, scale.y, offset.x, offset.y));
+                }
                 // Apply base tint before the layers, as lilToon does. Both
                 // consumers receive white tint after it is baked into pixels.
                 var width = 4;
@@ -161,6 +180,30 @@ namespace VRVlog.LilToonExporter
                     if (texture == null) continue;
                     width = Mathf.Max(width, texture.width);
                     height = Mathf.Max(height, texture.height);
+                }
+                if (layerAlpha)
+                {
+                    // A layer compressed into part of the main image needs
+                    // more baked pixels, including the decal coverage edge.
+                    var mainScale = material.GetTextureScale("_MainTex");
+                    foreach (var layer in new[] { "2nd", "3rd" })
+                    {
+                        if (!Enabled(material, "_UseMain" + layer + "Tex")) continue;
+                        var property = "_Main" + layer + "Tex";
+                        var texture = material.GetTexture(property);
+                        if (texture == null) continue;
+                        var scale = material.GetTextureScale(property);
+                        var angle = Value(material, property + "Angle");
+                        var c = Math.Abs(Math.Cos(angle)); var s = Math.Abs(Math.Sin(angle));
+                        // lilCalcDecalUV rotates mesh UV before applying ST.
+                        var w = (texture.width * Math.Abs(scale.x) * c + texture.height * Math.Abs(scale.y) * s) / Math.Abs(mainScale.x);
+                        var h = (texture.width * Math.Abs(scale.x) * s + texture.height * Math.Abs(scale.y) * c) / Math.Abs(mainScale.y);
+                        // Keep the existing mobile limit and warning below;
+                        // bound conversion even for extreme imported scales.
+                        const double maximumDimension = 1048576;
+                        width = Mathf.Max(width, (int)Math.Ceiling(Math.Min(maximumDimension, w)));
+                        height = Mathf.Max(height, (int)Math.Ceiling(Math.Min(maximumDimension, h)));
+                    }
                 }
                 if (width > LilToonMobileProfile.DefaultMaximumTextureSize || height > LilToonMobileProfile.DefaultMaximumTextureSize)
                 {
@@ -192,7 +235,9 @@ namespace VRVlog.LilToonExporter
                 material.SetFloat("_UseMain3rdTex", 0);
                 material.SetVector("_MainTexHSVG", new Vector4(0, 1, 1, 1));
                 material.SetFloat("_MainGradationStrength", 0);
-                warnings?.Add(material.name + ": メインカラー2nd/3rd・色調補正を出力用の画像へ焼き込みました。");
+                warnings?.Add(material.name + (layerAlpha
+                    ? ": メインカラー2nd/3rdの色・透明度の合成と色調補正を出力用の画像へ焼き込みました。"
+                    : ": メインカラー2nd/3rd・色調補正を出力用の画像へ焼き込みました。"));
                 result = null; // ownership transferred to the export
             }
             finally
@@ -205,9 +250,10 @@ namespace VRVlog.LilToonExporter
             }
         }
 
-        private static IEnumerable<MaterialBakeIssue> LayerIssues(Material material, string layer, string path)
+        private static IEnumerable<MaterialBakeIssue> LayerIssues(Material material, string layer, string path, bool? alphaBake = null)
         {
             var property = "_Main" + layer + "Tex";
+            var layerAlpha = alphaBake ?? NeedsLayerAlphaBake(material);
             var uvMode = Value(material, property + "_UVMode");
             if (uvMode != 0)
                 yield return Issue(material, path, layer, "UV Mode: " + (uvMode == 4 ? "MatCap" : "UV" + uvMode),
@@ -218,13 +264,33 @@ namespace VRVlog.LilToonExporter
                     yield return Issue(material, path, layer, side.Item2,
                         "メッシュの向きに応じて模様を出し分けています。一枚の画像として焼くと左右が変わる可能性があります。",
                         "左右の出し分けを保つ変換は未対応です。このレイヤーを省略して出力することはできます。");
-            // The opaque shader does not execute its stored layer-alpha mode.
-            // The official baker does not implement layer alpha for cutout or
-            // transparent shaders, even though lilToon's editor copies the value.
-            if (Value(material, property + "AlphaMode") != 0 && !IsOpaque(material))
-                yield return Issue(material, path, layer, "透明度の合成: " + Value(material, property + "AlphaMode"),
-                    "このレイヤーで服や顔の透明度も変更しています。通常の色の焼き込みだけでは透明部分を再現できません。",
-                    "透明度を保つ変換は未対応です。省略すると、このレイヤーによる透明度の変更も出力されません。");
+            // Opaque lilToon ignores the stored alpha mode. For cutout and
+            // transparent layers, reproduce alpha AND the ensuing RGB blend.
+            var alphaMode = Value(material, property + "AlphaMode");
+            if (!IsOpaque(material) && (!Finite(alphaMode) || alphaMode < 0 || alphaMode > 4 || alphaMode != Mathf.RoundToInt(alphaMode)))
+                yield return Issue(material, path, layer, "透明度の合成: " + alphaMode,
+                    "透明度の合成方法が不正です。",
+                    "なし・置換・乗算・加算・減算のいずれかに設定してください。");
+            if (layerAlpha)
+            {
+                var scale = material.GetTextureScale("_MainTex");
+                var offset = material.GetTextureOffset("_MainTex");
+                if (!Finite(scale.x) || !Finite(scale.y) || scale.x == 0 || scale.y == 0 || !Finite(offset.x) || !Finite(offset.y))
+                    yield return Issue(material, path, layer, "メイン画像の配置",
+                        "メイン画像の倍率が0または不正な値のため、透かし模様の配置を画像へ変換できません。",
+                        "メイン画像の倍率・オフセットを確認してください。");
+                var layerScale = material.GetTextureScale(property);
+                var layerOffset = material.GetTextureOffset(property);
+                if (!Finite(layerScale.x) || !Finite(layerScale.y) || layerScale.x == 0 || layerScale.y == 0 ||
+                    !Finite(layerOffset.x) || !Finite(layerOffset.y) || !Finite(Value(material, property + "Angle")))
+                    yield return Issue(material, path, layer, "レイヤーの配置",
+                        "模様の倍率・オフセット・角度が不正なため、透過を焼き込めません。",
+                        "倍率を0以外にし、オフセット・角度を確認してください。");
+                if (Vector(material, "_MainTex_ScrollRotate", Vector4.zero) != Vector4.zero || Enabled(material, "_ShiftBackfaceUV"))
+                    yield return Issue(material, path, layer, "メイン画像の回転・移動・裏面UV",
+                        "メイン画像と透かし模様の配置が回転・時間・表裏によって変わる設定です。",
+                        "静止したUV配置にしてください。このレイヤーを省略して出力することもできます。");
+            }
 
             var atlas = Vector(material, property + "DecalAnimation", new Vector4(1, 1, 1, 30));
             // Live lilToon interprets z as a fixed frame index when fps is zero;
@@ -265,8 +331,8 @@ namespace VRVlog.LilToonExporter
                     "音に合わせて模様が変化する設定です。",
                     "一枚の画像では音による変化を残せません。このレイヤーを省略して出力することはできます。");
             var mainScroll = Vector(material, "_MainTex_ScrollRotate", Vector4.zero);
-            if (mainScroll != Vector4.zero || material.GetTextureScale("_MainTex") != Vector2.one ||
-                material.GetTextureOffset("_MainTex") != Vector2.zero)
+            if (!layerAlpha && (mainScroll != Vector4.zero || material.GetTextureScale("_MainTex") != Vector2.one ||
+                material.GetTextureOffset("_MainTex") != Vector2.zero))
                 yield return Issue(material, path, layer, "メイン画像の移動・拡縮・回転",
                     "メイン画像と追加の模様で画像の配置が異なるため、そのまま混ぜると位置がずれます。",
                     "位置を保つ多層焼き込みは未対応です。追加レイヤーを省略して出力することはできます。");

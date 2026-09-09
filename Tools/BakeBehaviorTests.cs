@@ -21,7 +21,7 @@ public static class ExporterBakeBehaviorTests
         ApprovedOmissionOnlyChangesExportCopies();
         UvProofUsesOnlyTheRenderedSubmesh();
         AtlasFrameZeroIsRequired();
-        OpaqueStoredAlphaIsIgnoredOnlyWhenActuallyOpaque();
+        StaticLayerAlphaIsAcceptedAndInvalidModesAreRejected();
         DynamicAndSurfaceDependentSettingsRemainBlocked();
         GuardRejectsBeforeGpuAllocation();
         Equal(GpuForbidden.Calls, 0, "No GPU operation was attempted");
@@ -319,7 +319,7 @@ public static class ExporterBakeBehaviorTests
         }
     }
 
-    private static void OpaqueStoredAlphaIsIgnoredOnlyWhenActuallyOpaque()
+    private static void StaticLayerAlphaIsAcceptedAndInvalidModesAreRejected()
     {
         foreach (var layer in new[] { "2nd", "3rd" })
         {
@@ -327,26 +327,57 @@ public static class ExporterBakeBehaviorTests
             material.SetFloat("_Main" + layer + "TexAlphaMode", 3);
             var avatar = Avatar(material);
             Valid(avatar, "Opaque ignores stored alpha mode: " + layer);
+            Check(!LilToonMainTextureBaker.NeedsLayerAlphaBake(material), "Opaque uses original RGB baker");
             foreach (var tag in new[] { "Transparent", "TransparentCutout", "" })
             {
                 material.SetOverrideTag("RenderType", tag);
-                OneIssue(avatar, "透明度の合成: 3");
+                Valid(avatar, "Static alpha accepted for tag " + tag);
+                Check(LilToonMainTextureBaker.NeedsLayerAlphaBake(material), "Alpha-aware baker selected");
             }
             material.SetOverrideTag("RenderType", "Opaque");
             material.SetFloat("_TransparentMode", 1);
-            OneIssue(avatar, "透明度の合成: 3");
+            Valid(avatar, "Cutout mode supports alpha");
             material.SetFloat("_TransparentMode", 0);
             foreach (var variant in new[] { "Cutout", "Transparent", "Refraction", "Gem", "Fur" })
             {
                 material.shader = Shader.Find("Hidden/lilToon" + variant);
-                OneIssue(avatar, "透明度の合成: 3");
+                Valid(avatar, "Static alpha supported for " + variant);
             }
             material.shader = Shader.Find("lilToon");
             foreach (var keyword in new[] { "UNITY_UI_CLIP_RECT", "UNITY_UI_ALPHACLIP", "_ALPHATEST_ON", "_ALPHABLEND_ON", "_ALPHAPREMULTIPLY_ON" })
             {
                 material.shaderKeywords = new[] { keyword };
-                OneIssue(avatar, "透明度の合成: 3");
+                Valid(avatar, "Static alpha supported for " + keyword);
             }
+            foreach (var mode in new[] { 0f, 1f, 2f, 3f, 4f })
+            {
+                material.SetFloat("_Main" + layer + "TexAlphaMode", mode);
+                Valid(avatar, "Accept valid alpha mode " + mode);
+            }
+            foreach (var mode in new[] { -1f, .5f, 5f, float.NaN, float.PositiveInfinity })
+            {
+                material.SetFloat("_Main" + layer + "TexAlphaMode", mode);
+                OneIssue(avatar, "透明度の合成:");
+            }
+            material.SetFloat("_Main" + layer + "TexAlphaMode", 2);
+            material.SetTextureScale("_MainTex", new Vector2(.5f, .5f));
+            material.SetTextureOffset("_MainTex", new Vector2(.25f, .25f));
+            Valid(avatar, "Contained transformed main UVs supported");
+            material.SetTextureScale("_MainTex", new Vector2(2, 2));
+            OneIssue(avatar, "透過を焼き込むUVの範囲");
+            material.SetTextureScale("_MainTex", Vector2.zero);
+            OneIssue(avatar, "メイン画像の配置");
+            material.SetTextureScale("_MainTex", Vector2.one);
+            material.SetTextureOffset("_MainTex", Vector2.zero);
+            material.SetVector("_MainTex_ScrollRotate", new Vector4(0, 0, .5f, 0));
+            OneIssue(avatar, "メイン画像の回転・移動・裏面UV");
+            material.SetVector("_MainTex_ScrollRotate", Vector4.zero);
+            material.SetTextureScale("_Main" + layer + "Tex", new Vector2(float.PositiveInfinity, 1));
+            OneIssue(avatar, "レイヤーの配置");
+            material.SetTextureScale("_Main" + layer + "Tex", Vector2.one);
+            var issue = new MaterialBakeIssue(material, "", layer, "省略", "", "");
+            var options = new MaterialBakeOptions().WithOmissions(new[] { issue });
+            Check(!LilToonMainTextureBaker.NeedsLayerAlphaBake(material, options), "Omitted alpha layer does not affect the selected baker");
             material.SetFloat("_Main" + layer + "TexAlphaMode", 0);
             Valid(avatar, "Transparent alpha guard ignores mode zero: " + layer);
         }
