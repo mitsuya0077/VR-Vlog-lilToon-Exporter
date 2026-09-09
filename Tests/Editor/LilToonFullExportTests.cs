@@ -17,6 +17,25 @@ namespace VRVlog.LilToonExporter.Tests
         static IEnumerable<string> OfficialShaders=>VRVlog.LilToon.LilToon234Catalogue.Shaders.Keys;
 
         [Test]
+        public void EditorGradientKeysAreExcludedWhileTheRenderedGradientTextureRemains()
+        {
+            var material=new Material(Shader.Find("lilToon"));
+            try
+            {
+                material.SetColor("_egc1",Color.red);material.SetFloat("_IDMaskCompile",1);
+                material.SetTexture("_EmissionGradTex",Texture2D.whiteTexture);
+                var snapshot=new LilToonFullSnapshot();
+                var record=(Dictionary<string,object>)typeof(LilToonFullSnapshot).GetMethod("ReadMaterial",BindingFlags.Instance|BindingFlags.NonPublic).Invoke(snapshot,new object[]{material});
+                var names=F.List(record,"values").Select(F.Object).Select(v=>F.Text(v,"name")).ToArray();
+                Assert.That(names,Does.Not.Contain("_egc1"));Assert.That(names,Does.Not.Contain("_IDMaskCompile"));
+                Assert.That(F.List(record,"textures").Select(F.Object).Any(v=>F.Text(v,"name")=="_EmissionGradTex" && F.Int(v,"texture")>=0),Is.True);
+                Assert.That(material.GetColor("_egc1"),Is.EqualTo(Color.red));
+                Assert.That(material.GetFloat("_IDMaskCompile"),Is.EqualTo(1));
+            }
+            finally {Object.DestroyImmediate(material);}
+        }
+
+        [Test]
         public void SourceVertexIdsRetainIntegerBitsAboveFloatPrecision()
         {
             var values = new[]{0,16777215,16777216,16777217,int.MaxValue};

@@ -289,4 +289,22 @@ assert {"VRM10", "UniGLTF", "VrmLib"}.issubset(test_assembly["references"])
 
 print("Exporter implementation, package, and schema checks passed.")
 
+# A name inventory alone must not hide an unclassified rendering property.
+catalogue = json.loads((root / "Schema/LilToon234Catalogue.json").read_text(encoding="utf-8"))
+properties = {p["name"]: p for p in catalogue["properties"]}
+assert len(properties) == len(catalogue["properties"]) == 614
+assert len(catalogue["shaders"]) == 65
+for shader in catalogue["shaders"]:
+    assert set(shader["propertyNames"]) <= properties.keys()
+for prop in properties.values():
+    assert prop["category"] in ("runtime", "editor", "external")
+    assert prop["rendering"]["kind"] and prop["storage"]
+    if prop["category"] == "runtime":
+        assert set(prop["validation"]) == {"snapshot", "active", "boundary"}
+        assert prop["rendering"]["sources"] or prop["rendering"]["kind"] == "declared-unused-by-pinned-passes"
+for name in ("_egci", "_egc1", "_e2ga7", "_IDMaskCompile"):
+    assert properties[name]["category"] == "editor"
+for name in ("_EmissionGradTex", "_Emission2ndGradTex", "_IDMask1"):
+    assert properties[name]["category"] == "runtime"
+
 assert "PreserveVertexColors(model, exporter.Storage)" in (root / "Editor/Vrm10AppearanceExporter.cs").read_text(encoding="utf-8")
