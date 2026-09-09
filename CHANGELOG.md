@@ -5,7 +5,7 @@
 - Clarify the required lilToon 2.3.4 version, tested Unity environment, VR Vlog display/reload steps, and MA/PhysBone conversion limits.
 - Package only tracked Editor source, package metadata, licenses and a concise user guide. Keep developer tools, tests, CI configuration and local inputs out of the installed package.
 - Add checks for common accidental disclosures and an issue form explaining how to share relevant diagnostics without private inputs.
-- Simplify public documentation and use a dedicated phone image instead of a full design source on the installation page. Generate future release notes from the matching changelog entry.
+- Simplify public documentation and generate future release notes from the matching changelog entry. Preserve a paused website/VPM deployment when publishing a GitHub release.
 - Keep the schema 1.2 output and export conversion behaviour from 0.8.1.
 
 ## 0.8.1

@@ -110,4 +110,9 @@ jobs:
             --title "VR Vlog lilToon VRM Exporter ${VERSION}" \
             --target "${GITHUB_SHA}" \
             --notes-file artifacts/release-notes.md
-          gh workflow run build-listing.yml --ref main
+          listing_state=$(gh api "repos/${GITHUB_REPOSITORY}/actions/workflows/build-listing.yml" --jq .state)
+          if [ "$listing_state" = "active" ]; then
+            gh workflow run build-listing.yml --ref main
+          else
+            echo "Release published. Website/VPM deployment remains paused (workflow state: ${listing_state})." >> "$GITHUB_STEP_SUMMARY"
+          fi
