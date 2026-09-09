@@ -1,6 +1,6 @@
 # VR Vlog lilToon VRM Exporter
 
-**UnityのアバターをVR Vlogで使う。**
+**お気に入りのアバターをVR Vlogで使う。**
 
 lilToonのアバターを、VR Vlogで使う **VRM 1.0** に書き出すUnity Editor用パッケージです。対応するマテリアル設定、BlendShapeで調整した形状、登録済みの表情を保存します。
 

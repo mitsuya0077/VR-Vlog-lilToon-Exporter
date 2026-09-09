@@ -31,8 +31,9 @@ img{display:block;max-width:100%;height:auto}
 .hero-copy{padding-block:2rem;min-width:0}
 .eyebrow{display:flex;align-items:center;gap:.65rem;font-weight:600;font-size:1.125rem;margin-bottom:1.4rem}
 .eyebrow::before{content:"";width:11px;height:11px;background:var(--brand);flex-shrink:0}
-h1{font-size:clamp(2.25rem,4.5vw,4.25rem);letter-spacing:-.035em;line-height:1.32;font-weight:800}
-h1 span{color:var(--brand)}
+h1{font-size:clamp(2.25rem,4.2vw,3.75rem);letter-spacing:-.035em;line-height:1.32;font-weight:800}
+.headline-phrase{display:inline-block}
+.brand-accent{color:var(--brand)}
 .hero-description{font-size:1.4375rem;line-height:1.85;margin-top:1.75rem}
 .button{border:1px solid var(--line);border-radius:8px;min-height:48px;display:inline-flex;justify-content:center;align-items:center;padding:.75rem 1.25rem;text-decoration:none;font-weight:700;line-height:1.5}
 .primary{margin-top:2.75rem;width:min(100%,530px);min-height:72px;background:var(--brand);border-color:var(--brand);color:var(--brand-ink);font-size:1.375rem}
@@ -42,7 +43,7 @@ h1 span{color:var(--brand)}
 .zip-link{margin-top:1.8rem;font-size:1.1875rem}
 .hero-note{margin-top:2rem;color:var(--muted);font-size:.9375rem}
 .camera-figure{justify-self:center;width:min(100%,370px)}
-.camera-image{width:100%;border-radius:10.4% / 4.8%}
+.camera-image{width:100%;border-radius:17% / 8.5%}
 .step{border-top:1px solid var(--line);display:grid;align-items:center;column-gap:3rem;padding-block:3rem 2.5rem}
 .export-step{grid-template-columns:1.2fr .88fr;min-height:675px}
 .export-figure{min-width:0}
