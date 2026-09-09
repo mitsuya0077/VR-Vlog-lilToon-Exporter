@@ -43,6 +43,20 @@ namespace VRVlog.LilToonExporter
                     }
         }
 
+        internal void FilterRemoved(VrChatExpressionMenu.Source menu, ISet<Renderer> removed, ICollection<string> warnings)
+        {
+            if (menu == null) return;
+            bool Excluded(string path) => bindings.TryGetValue(path, out var binding) && removed.Contains(binding.Renderer);
+            foreach (var entry in menu.Entries.Where(e => e.Error == null))
+            {
+                var count = entry.Values.RemoveAll(v => Excluded(v.Path)) + entry.Animation.RemoveAll(v => Excluded(v.Path));
+                if (count == 0) continue;
+                if (entry.Values.Count == 0 && entry.Animation.Count == 0)
+                    entry.Error = "除外した補助Rendererだけを変更する表情のため省略しました。";
+                else warnings?.Add(entry.Name + ": 補助Rendererの表情だけを省略し、残る表情を保持しました。");
+            }
+        }
+
         internal Binding Get(string path) => bindings[path];
     }
 }
