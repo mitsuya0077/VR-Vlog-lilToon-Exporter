@@ -547,7 +547,7 @@ namespace VRVlog.LilToonExporter.Tests
             for (var i = 0; i < expected.Length; i++) Assert.That(Vector3.Distance(expected[i], actual[i]), Is.LessThan(0.0005f));
         }
 
-        private sealed class Fixture : IDisposable
+        internal sealed class Fixture : IDisposable
         {
             internal GameObject Source, Copy;
             internal Transform Hair, Head;

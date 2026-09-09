@@ -103,7 +103,7 @@ namespace VRVlog.LilToonExporter
         }
 
         internal static void Prepare(GameObject avatar, List<Material> materials, List<Texture2D> textures,
-            ICollection<string> warnings, bool suppressSharedEmission, bool suppressHdrTextureEmission, MaterialBakeOptions options = null)
+            ICollection<string> warnings, bool suppressSharedEmission, bool suppressHdrTextureEmission, MaterialBakeOptions options = null, bool approximationOnly = false)
         {
             var copies = new Dictionary<Material, Material>();
             foreach (var renderer in ExportRendererSelection.Enumerate(avatar))
@@ -134,7 +134,15 @@ namespace VRVlog.LilToonExporter
                             copy.SetColor("_EmissionColor", Color.black);
                             warnings?.Add(original.name + ": 色変化を抑える設定に従い、テクスチャ発光を省略しました。発光を残す場合は書き出し設定を解除してください。");
                         }
-                        if (NeedsBake(copy)) Bake(copy, textures, warnings);
+                        if (NeedsBake(copy))
+                        {
+                            try { Bake(copy, textures, warnings); }
+                            catch (MaterialBakeException) when (approximationOnly)
+                            {
+                                copy.SetFloat("_UseMain2ndTex", 0); copy.SetFloat("_UseMain3rdTex", 0);
+                                warnings?.Add(original.name + ": 動的レイヤーは専用表示へ保存しました。標準MToonでは省略します。");
+                            }
+                        }
                         AlphaMaskBaker.Bake(copy, textures, warnings);
                     }
                     slots[i] = copy;

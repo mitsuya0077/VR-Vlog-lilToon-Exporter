@@ -60,6 +60,12 @@ namespace VRVlog.LilToonExporter
 
         public static void Validate(byte[] bytes, int expectedMaterials = -1)
         {
+            var fullDocument = GlbDocument.Read(bytes);
+            if (VRVlog.LilToon.LilToonFullContract.IsFull(fullDocument.Json))
+            {
+                VRVlog.LilToon.LilToonFullContract.Validate(fullDocument.Json, bytes.LongLength, fullDocument.Binary.Length);
+                return;
+            }
             var glb = GlbDocument.Read(bytes); var extensions = Object(glb.Json, "extensions", false);
             RequireVrm10Root(glb.Json);
             if (extensions == null || !extensions.TryGetValue(LilToonMobileProfile.ExtensionName, out var raw) || !(raw is Dictionary<string, object> root)) throw new InvalidOperationException("lilToon extension is missing after round trip.");

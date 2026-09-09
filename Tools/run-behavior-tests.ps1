@@ -3,6 +3,8 @@ $ErrorActionPreference = 'Stop'
 $taskRepo = Split-Path -Parent $PSScriptRoot
 $taskSources = @(
     (Join-Path $taskRepo 'Editor/JsonDom.cs'),
+    (Join-Path $taskRepo 'Editor/LilToonFullContract.cs'),
+    (Join-Path $taskRepo 'Editor/LilToon234Catalogue.cs'),
     (Join-Path $taskRepo 'Editor/GlbDocument.cs'),
     (Join-Path $taskRepo 'Editor/ExportSkinRoots.cs'),
     (Join-Path $taskRepo 'Editor/TextureResizePolicy.cs'),

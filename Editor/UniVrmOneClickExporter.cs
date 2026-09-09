@@ -55,10 +55,10 @@ namespace VRVlog.LilToonExporter
                 var expressionBindings = new PreparedExpressionBindings(clone, menu);
                 MaAppearanceSnapshot.Apply(source, clone, temporaryMeshes, exclusions, warnings);
                 gimmicks.Apply(expressionBindings, menu, warnings);
-                LilToonMainTextureBaker.ValidateAvatar(clone, options: bakeOptions);
+                if (exporterVersion == null) LilToonMainTextureBaker.ValidateAvatar(clone, options: bakeOptions);
                 // Omission consent follows source identity before plugins clone
                 // materials. All actual baking waits for the final appearance.
-                LilToonMainTextureBaker.ApplyOmissions(clone, temporaryMaterials, warnings, bakeOptions);
+                if (exporterVersion == null) LilToonMainTextureBaker.ApplyOmissions(clone, temporaryMaterials, warnings, bakeOptions);
                 var requiresPreparation = NdmfExportPreparation.NeedsProcessing(clone);
                 // MA can change rootBone for bounds or retarget it while merging
                 // rigs. Make implicit vertices explicit before those changes so
@@ -70,8 +70,11 @@ namespace VRVlog.LilToonExporter
                 expressionBindings.Capture(menu);
                 AvatarBaseShape.Preserve(clone, clone, temporaryMeshes, warnings);
                 var expressions = VrChatExpressionBaker.Bake(null, clone, menu, temporaryMeshes, warnings, expressionBindings);
-                LilToonMainTextureBaker.ValidateAvatar(clone);
-                LilToonMainTextureBaker.Prepare(clone, temporaryMaterials, temporaryTextures, warnings, suppressSharedTextureEmission, suppressHdrTextureEmission);
+                if(exporterVersion!=null) PreserveExtraMaterialSlots(clone,temporaryMeshes);
+                var fullSnapshot = exporterVersion != null ? LilToonFullSnapshot.Capture(clone,suppressSharedTextureEmission,suppressHdrTextureEmission) : null;
+                var fallbackWarnings=fullSnapshot==null?warnings:new List<string>();
+                if (fullSnapshot == null) LilToonMainTextureBaker.ValidateAvatar(clone);
+                LilToonMainTextureBaker.Prepare(clone, temporaryMaterials, temporaryTextures, fallbackWarnings, suppressSharedTextureEmission, suppressHdrTextureEmission, approximationOnly: fullSnapshot != null);
                 // Also cover meshes/joints newly created by authoring passes.
                 SkinnedMeshFallbackWeights.Preserve(clone, temporaryMeshes, warnings, fixedRootJoints);
                 // MA has already applied its authored Merge Armature / Bone
@@ -81,28 +84,23 @@ namespace VRVlog.LilToonExporter
                 if (attachments.Parts.Count > 0)
                     warnings?.Add("本体のボーンと独立したパーツは現在の接続を保持しました: " +
                         string.Join(", ", attachments.Parts.ConvertAll(part => part.Root.name)));
-                var preparedMaterials = new Dictionary<Renderer, Material[]>();
-                foreach (var renderer in ExportRendererSelection.Enumerate(clone)) preparedMaterials.Add(renderer, renderer.sharedMaterials);
-                var fallbackMaterials = ReplaceLilToonMaterials(clone, temporaryMaterials, temporaryTextures, warnings, suppressSharedTextureEmission);
-                var fallbackIndices = new Dictionary<Material, int>();
+                ReplaceLilToonMaterials(clone, temporaryMaterials, temporaryTextures, fallbackWarnings, suppressSharedTextureEmission);
                 MakeRendererMeshesUnique(clone, temporaryMeshes);
                 var exported = Vrm10AppearanceExporter.Export(
                     new GltfExportSettings { ExportVertexColor = true },
                     clone,
                     materialExporter: new BuiltInVrm10MaterialExporter(),
                     textureSerializer: new MobileTextureSerializer(warnings),
-                    vrmMeta: CreateMeta(avatarName.Trim(), author.Trim()), materialIndices: fallbackIndices);
+                    vrmMeta: CreateMeta(avatarName.Trim(), author.Trim()),
+                    afterExport: fullSnapshot == null ? null : fullSnapshot.Bind);
                 exported = ExportSkinRoots.Repair(exported, warnings);
                 exported = VrmExpressionBindings.AddMissing(VrmMenuExpressions.Add(exported, expressions), warnings);
                 if (exporterVersion != null)
                 {
-                    // Inject from the same prepared materials, while their baked
-                    // images are alive. Re-reading source assets here would undo
-                    // the bake in apps that enable the lilToon extension.
-                    foreach (var pair in preparedMaterials) pair.Key.sharedMaterials = pair.Value;
-                    var preparedIndices = new Dictionary<Material, int>();
-                    foreach (var pair in fallbackMaterials) preparedIndices.Add(pair.Key, fallbackIndices[pair.Value]);
-                    exported = LilToonGlbExtension.Inject(exported, clone, exporterVersion, lilToonVersion, warnings, suppressSharedTextureEmission, preparedIndices);
+                    // The dedicated snapshot predates fallback baking. Its binary
+                    // payloads no longer depend on mutable Unity texture objects.
+                    exported = fullSnapshot.Inject(exported, exporterVersion, lilToonVersion);
+                    foreach(var warning in fallbackWarnings)warnings?.Add("標準VRM表示の近似: "+warning);
                 }
                 return exported;
             }
@@ -112,6 +110,26 @@ namespace VRVlog.LilToonExporter
                 foreach (var material in temporaryMaterials) UnityEngine.Object.DestroyImmediate(material);
                 foreach (var mesh in temporaryMeshes) UnityEngine.Object.DestroyImmediate(mesh);
                 foreach (var texture in temporaryTextures) UnityEngine.Object.DestroyImmediate(texture);
+            }
+        }
+
+        static void PreserveExtraMaterialSlots(GameObject avatar,ICollection<Mesh> owned)
+        {
+            foreach(var renderer in ExportRendererSelection.Enumerate(avatar))
+            {
+                if (!(renderer is SkinnedMeshRenderer) && !(renderer is MeshRenderer)) continue;
+                var filter=renderer.GetComponent<MeshFilter>();
+                var original=renderer is SkinnedMeshRenderer skin?skin.sharedMesh:filter != null ? filter.sharedMesh : null;
+                var slots=renderer.sharedMaterials.Length;
+                if(original==null || original.subMeshCount==0 || slots<=original.subMeshCount)continue;
+                // Unity draws the last submesh once per extra material. glTF
+                // represents those additional draws as explicit primitives.
+                var mesh=UnityEngine.Object.Instantiate(original);owned.Add(mesh);
+                var count=mesh.subMeshCount;var indices=mesh.GetIndices(count-1);var topology=mesh.GetTopology(count-1);
+                mesh.subMeshCount=slots;
+                for(var slot=count;slot<slots;slot++)mesh.SetIndices(indices,topology,slot,false);
+                if(renderer is SkinnedMeshRenderer skinned)skinned.sharedMesh=mesh;
+                else renderer.GetComponent<MeshFilter>().sharedMesh=mesh;
             }
         }
 

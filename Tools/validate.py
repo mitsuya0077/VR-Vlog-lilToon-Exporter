@@ -18,7 +18,7 @@ listing = json.loads((root / "source.json").read_text(encoding="utf-8"))
 
 assert package["name"] == "com.vrvlog.liltoon-vrm-exporter"
 assert package["unity"] == "2022.3"
-assert package["version"] == "0.9.0"
+assert package["version"] == "0.10.0-preview.1"
 assert one_click.index("AvatarBaseShape.Preserve(clone, clone,") < one_click.index("Vrm10AppearanceExporter.Export(")
 assert "foreach (var mesh in temporaryMeshes) UnityEngine.Object.DestroyImmediate(mesh);" in one_click
 assert package["vpmDependencies"] == {
@@ -267,7 +267,9 @@ assert 'var targetExclusions = excludedObjects.ToArray();' in window
 assert 'ExportFailureWindow.Show(exception, omitAndRetry)' in window
 assert one_click.index('MaAppearanceSnapshot.Apply(source, clone,') < one_click.index('LilToonMainTextureBaker.ValidateAvatar(clone,') < one_click.index('NdmfExportPreparation.Prepare(source, clone,')
 assert 'LilToonMainTextureBaker.ApplyOmissions(clone, temporaryMaterials, warnings, bakeOptions);' in one_click
-assert 'LilToonGlbExtension.Inject(exported, clone,' in one_click
+assert 'fullSnapshot.Inject(exported, exporterVersion, lilToonVersion)' in one_click
+assert one_click.index('LilToonFullSnapshot.Capture(clone,suppressSharedTextureEmission,suppressHdrTextureEmission)') < one_click.index('LilToonMainTextureBaker.Prepare(clone,')
+assert 'afterExport: fullSnapshot == null ? null : fullSnapshot.Bind' in one_click
 assert 'excludedExpressions' not in window and 'DrawExpressions' not in window
 assert 'var menu = VrChatExpressionSampler.Analyze(source, exclusions.ContainsPath);' in one_click
 assert one_click.index('AvatarBaseShape.Preserve(clone, clone,') < one_click.index('VrChatExpressionBaker.Bake(') < one_click.index('Vrm10AppearanceExporter.Export(')
@@ -286,5 +288,23 @@ test_assembly = json.loads((root / "Tests/Editor/VRVlog.LilToonExporter.Editor.T
 assert {"VRM10", "UniGLTF", "VrmLib"}.issubset(test_assembly["references"])
 
 print("Exporter implementation, package, and schema checks passed.")
+
+# A name inventory alone must not hide an unclassified rendering property.
+catalogue = json.loads((root / "Schema/LilToon234Catalogue.json").read_text(encoding="utf-8"))
+properties = {p["name"]: p for p in catalogue["properties"]}
+assert len(properties) == len(catalogue["properties"]) == 614
+assert len(catalogue["shaders"]) == 65
+for shader in catalogue["shaders"]:
+    assert set(shader["propertyNames"]) <= properties.keys()
+for prop in properties.values():
+    assert prop["category"] in ("runtime", "editor", "external")
+    assert prop["rendering"]["kind"] and prop["storage"]
+    if prop["category"] == "runtime":
+        assert set(prop["validation"]) == {"snapshot", "active", "boundary"}
+        assert prop["rendering"]["sources"] or prop["rendering"]["kind"] == "declared-unused-by-pinned-passes"
+for name in ("_egci", "_egc1", "_e2ga7", "_IDMaskCompile"):
+    assert properties[name]["category"] == "editor"
+for name in ("_EmissionGradTex", "_Emission2ndGradTex", "_IDMask1"):
+    assert properties[name]["category"] == "runtime"
 
 assert "PreserveVertexColors(model, exporter.Storage)" in (root / "Editor/Vrm10AppearanceExporter.cs").read_text(encoding="utf-8")
