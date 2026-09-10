@@ -60,6 +60,14 @@ namespace VRVlog.LilToonExporter.Tests
             check(GlbBinaryOptimizer.Compact(doc) == 0, "Original partial overlaps preserve their aliasing semantics");
 
             doc = Document();
+            var independent = doc.AppendBinary(new byte[] { 71, 73, 79, 83 });
+            ((Dictionary<string, object>)Views(doc)[0])["extensions"] = D("EXT_meshopt_compression",
+                D("buffer", 0L, "byteOffset", (long)independent, "byteLength", 4L));
+            var extended = doc.Write();
+            check(GlbBinaryOptimizer.Compact(doc) == 0, "Opaque view extensions retain independently addressed storage");
+            check(extended.SequenceEqual(doc.Write()), "Extension offsets and otherwise unreferenced BIN payload remain byte-identical");
+
+            doc = Document();
             ((Dictionary<string, object>)Views(doc)[3])["byteLength"] = long.MaxValue;
             var refused = false;
             try { GlbBinaryOptimizer.Compact(doc); } catch (OverflowException) { refused = true; }

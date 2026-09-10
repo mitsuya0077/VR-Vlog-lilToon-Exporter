@@ -39,6 +39,13 @@ namespace VRVlog.LilToonExporter
                 if (range.Offset < previousEnd) return 0;
                 previousEnd = (long)range.Offset + range.Length;
             }
+            // An opaque extension may address BIN bytes independently of its
+            // outer view (e.g. EXT_meshopt_compression). Preserve the complete
+            // buffer until those nested ranges can be relocated explicitly.
+            foreach (var range in ranges)
+                if (range.View.TryGetValue("extensions", out var extensions) &&
+                    extensions is Dictionary<string, object> extensionMap && extensionMap.Count != 0)
+                    return 0;
             var writable = new HashSet<int>();
             if (document.Json.TryGetValue("accessors", out raw) && raw is List<object> accessors)
                 foreach (var item in accessors)
