@@ -37,7 +37,7 @@ https://mitsuya0077.github.io/VR-Vlog-lilToon-Exporter/index.json
 
 更新前にはUnityプロジェクトをバックアップしてください。
 
-導入済みの場合は、ALCOMのパッケージ一覧を更新し、**VR Vlog lilToon VRM Exporter 0.10.0** を選んで変更を適用します。新しい描画情報を使うには、更新後に元のアバターからVRMを書き出し直してください。
+導入済みの場合は、ALCOMのパッケージ一覧を更新し、**VR Vlog lilToon VRM Exporter 0.10.1** を選んで変更を適用します。新しい描画情報を使うには、更新後に元のアバターからVRMを書き出し直してください。
 
 ### ZIPで手動導入する
 
