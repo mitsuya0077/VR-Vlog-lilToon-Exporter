@@ -115,7 +115,10 @@ namespace VRVlog.LilToonExporter
             var chunks = new List<object>();
             var count = source is Texture2D two ? two.mipmapCount : ((Cubemap)source).mipmapCount;
             var faces = source is Cubemap ? 6 : 1;
-            var srgb = !normal && UnityEngine.Experimental.Rendering.GraphicsFormatUtility.IsSRGBFormat(source.graphicsFormat);
+            // Gamma rendering can expose an UNorm GPU view of sRGB pixels.
+            // Preserve the stored pixel encoding, independent of this Editor's
+            // sampling mode, so a Linear-space consumer decodes it correctly.
+            var srgb = !normal && source.isDataSRGB;
             var storage = StorageFormat(source.graphicsFormat, normal);
             var hdr = storage != "rgba32";
             var half = storage == "rgbaHalf";
