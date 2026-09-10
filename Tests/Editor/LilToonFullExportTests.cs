@@ -57,8 +57,12 @@ namespace VRVlog.LilToonExporter.Tests
             var values = new[]{0,16777215,16777216,16777217,int.MaxValue};
             var snapshot = new LilToonFullSnapshot();
             var index = snapshot.AddVertexIds(values);
-            var payloads = (List<byte[]>)typeof(LilToonFullSnapshot).GetField("payloads",BindingFlags.Instance|BindingFlags.NonPublic).GetValue(snapshot);
-            var bytes = payloads[index];
+            var payloads = (List<DeflatePayload>)typeof(LilToonFullSnapshot).GetField("payloads",BindingFlags.Instance|BindingFlags.NonPublic).GetValue(snapshot);
+            using var encoded = new MemoryStream(payloads[index].Encoded, false);
+            using var decoder = new System.IO.Compression.DeflateStream(encoded, System.IO.Compression.CompressionMode.Decompress);
+            using var decoded = new MemoryStream();
+            decoder.CopyTo(decoded);
+            var bytes = decoded.ToArray();
             Assert.That(bytes.Length,Is.EqualTo(values.Length*4));
             for(var i=0;i<values.Length;i++)Assert.That(BitConverter.ToUInt32(bytes,i*4),Is.EqualTo((uint)values[i]));
             var runtime = Type.GetType("FaceMaskVTuber.UniVrmRuntime.LilToonFullRuntime, FaceMaskVTuber.UniVrmRuntime");

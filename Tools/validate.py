@@ -18,7 +18,7 @@ listing = json.loads((root / "source.json").read_text(encoding="utf-8"))
 
 assert package["name"] == "com.vrvlog.liltoon-vrm-exporter"
 assert package["unity"] == "2022.3"
-assert package["version"] == "0.10.0"
+assert package["version"] == "0.10.1"
 assert one_click.index("AvatarBaseShape.Preserve(clone, clone,") < one_click.index("Vrm10AppearanceExporter.Export(")
 assert "foreach (var mesh in temporaryMeshes) UnityEngine.Object.DestroyImmediate(mesh);" in one_click
 assert package["vpmDependencies"] == {
@@ -123,7 +123,7 @@ assert 'Array(glb.Json,"bufferViews",true)' in injector
 assert 'Array(glb.Json,"images",true)' in injector
 assert 'Array(glb.Json,"samplers",true)' in injector
 assert 'Array(glb.Json,"textures",true)' in injector
-assert 'buffer["byteLength"] = (long)Binary.Length' in glb
+assert 'EmbeddedBuffer()["byteLength"] = (long)bytes.Length' in glb
 for unsupported_toggle in ("_UseEmission2nd", "_UseBump2ndMap", "_UseMatCap2nd"):
     assert f'"{unsupported_toggle}"' in reader
 assert "TextureFeatureEnabled" in reader

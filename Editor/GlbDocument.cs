@@ -60,42 +60,64 @@ namespace VRVlog.LilToonExporter
 
         public byte[] Write()
         {
-            var json = Pad(Encoding.UTF8.GetBytes(JsonDom.Serialize(Json)), 0x20);
-            var binary = Binary.Length == 0 ? Array.Empty<byte>() : Pad(Binary, 0x00);
-            var total = 12 + 8 + json.Length + (binary.Length == 0 ? 0 : 8 + binary.Length);
-            using var stream = new MemoryStream(total);
+            var json = Encoding.UTF8.GetBytes(JsonDom.Serialize(Json));
+            var jsonLength = Align(json.Length);
+            var binaryLength = Align(Binary.Length);
+            var total = checked(20 + jsonLength + (binaryLength == 0 ? 0 : 8 + binaryLength));
+            var result = new byte[total];
+            using var stream = new MemoryStream(result, true);
             using var writer = new BinaryWriter(stream);
             writer.Write(Magic); writer.Write((uint)2); writer.Write((uint)total);
-            writer.Write((uint)json.Length); writer.Write(JsonChunk); writer.Write(json);
-            if (binary.Length != 0)
+            writer.Write((uint)jsonLength); writer.Write(JsonChunk); writer.Write(json);
+            for (var i = json.Length; i < jsonLength; i++) writer.Write((byte)0x20);
+            if (binaryLength != 0)
             {
-                writer.Write((uint)binary.Length); writer.Write(BinChunk); writer.Write(binary);
+                writer.Write((uint)binaryLength); writer.Write(BinChunk); writer.Write(Binary);
             }
-            return stream.ToArray();
-        }
-
-        internal int AppendBinary(byte[] payload)
-        {
-            if (payload == null || payload.Length == 0) throw new ArgumentException("Binary payload is required.", nameof(payload));
-            if (!Json.TryGetValue("buffers", out var rawBuffers) || !(rawBuffers is List<object> buffers) || buffers.Count != 1 || !(buffers[0] is Dictionary<string, object> buffer))
-                throw new InvalidDataException("GLB must contain exactly one buffer before binary data can be appended.");
-            var offset = checked((Binary.Length + 3) & ~3);
-            var combined = new byte[checked(offset + payload.Length)];
-            Buffer.BlockCopy(Binary, 0, combined, 0, Binary.Length);
-            Buffer.BlockCopy(payload, 0, combined, offset, payload.Length);
-            Binary = combined;
-            buffer["byteLength"] = (long)Binary.Length;
-            return offset;
-        }
-
-        private static byte[] Pad(byte[] source, byte value)
-        {
-            var length = (source.Length + 3) & ~3;
-            if (length == source.Length) return source;
-            var result = new byte[length];
-            Buffer.BlockCopy(source, 0, result, 0, source.Length);
-            for (var i = source.Length; i < length; i++) result[i] = value;
             return result;
         }
+
+        internal int SerializedLength(int? binaryLength = null)
+        {
+            var binary = Align(binaryLength ?? Binary.Length);
+            return checked(20 + Align(Encoding.UTF8.GetByteCount(JsonDom.Serialize(Json))) + (binary == 0 ? 0 : 8 + binary));
+        }
+
+        internal Dictionary<string, object> EmbeddedBuffer()
+        {
+            if (!Json.TryGetValue("buffers", out var rawBuffers) || !(rawBuffers is List<object> buffers) || buffers.Count != 1 || !(buffers[0] is Dictionary<string, object> buffer))
+                throw new InvalidDataException("GLB must contain exactly one buffer before binary data can be appended.");
+            return buffer;
+        }
+
+        internal void ReplaceBinary(byte[] bytes)
+        {
+            EmbeddedBuffer()["byteLength"] = (long)bytes.Length;
+            Binary = bytes;
+        }
+
+        internal int AppendBinary(byte[] payload) => AppendBinaryBatch(new[] { payload })[0];
+
+        internal int[] AppendBinaryBatch(IReadOnlyList<byte[]> payloads)
+        {
+            EmbeddedBuffer();
+            var offsets = new int[payloads.Count];
+            var length = Binary.Length;
+            for (var i = 0; i < payloads.Count; i++)
+            {
+                var payload = payloads[i];
+                if (payload == null || payload.Length == 0) throw new ArgumentException("Binary payload is required.", nameof(payloads));
+                offsets[i] = Align(length);
+                length = checked(offsets[i] + payload.Length);
+            }
+            var combined = new byte[length];
+            Buffer.BlockCopy(Binary, 0, combined, 0, Binary.Length);
+            for (var i = 0; i < payloads.Count; i++)
+                Buffer.BlockCopy(payloads[i], 0, combined, offsets[i], payloads[i].Length);
+            ReplaceBinary(combined);
+            return offsets;
+        }
+
+        private static int Align(int length) => checked((length + 3) & ~3);
     }
 }

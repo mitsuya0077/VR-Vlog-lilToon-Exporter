@@ -6,6 +6,9 @@ $taskSources = @(
     (Join-Path $taskRepo 'Editor/LilToonFullContract.cs'),
     (Join-Path $taskRepo 'Editor/LilToon234Catalogue.cs'),
     (Join-Path $taskRepo 'Editor/GlbDocument.cs'),
+    (Join-Path $taskRepo 'Editor/GlbBinaryOptimizer.cs'),
+    (Join-Path $taskRepo 'Editor/DeflatePayload.cs'),
+    (Join-Path $taskRepo 'Tests/Editor/Fixtures/GlbBinaryFixture.cs'),
     (Join-Path $taskRepo 'Editor/ExportSkinRoots.cs'),
     (Join-Path $taskRepo 'Editor/TextureResizePolicy.cs'),
     (Join-Path $taskRepo 'Editor/MobileTextureEncoder.cs'),
@@ -44,4 +47,5 @@ Add-Type -Path $taskSources -CompilerOptions '/define:EXPORTER_BEHAVIOR_TESTS'
 [ExporterLightingBehaviorTests]::Run()
 [ExporterTextureResizeBehaviorTests]::Run()
 [ExporterSkinRootBehaviorTests]::Run()
+[VRVlog.LilToonExporter.Tests.GlbBinaryFixture]::Run({ param($condition, $message) if (-not $condition) { throw $message } })
 if ($LocalVrm) { [ExporterBehaviorTests]::VerifyLocalVrm($LocalVrm) }

@@ -1,7 +1,6 @@
 using System;
 using System.Collections.Generic;
 using System.IO;
-using System.IO.Compression;
 using System.Linq;
 using UnityEditor;
 using UnityEngine;
@@ -18,7 +17,7 @@ namespace VRVlog.LilToonExporter
         readonly Dictionary<Material, Dictionary<string, object>> records = new Dictionary<Material, Dictionary<string, object>>();
         readonly List<object> textures = new List<object>();
         readonly Dictionary<(Texture, bool), int> textureIds = new Dictionary<(Texture, bool), int>();
-        readonly List<byte[]> payloads = new List<byte[]>();
+        readonly List<DeflatePayload> payloads = new List<DeflatePayload>();
         readonly List<object> bindings = new List<object>();
         readonly Dictionary<int, Dictionary<string, object>> indexedRecords = new Dictionary<int, Dictionary<string, object>>();
         bool suppressSharedTextureEmission, suppressHdrTextureEmission;
@@ -124,7 +123,7 @@ namespace VRVlog.LilToonExporter
                 for (var mip = 0; mip < count; mip++)
                 {
                     var bytes = LilToonFullTexture.Read(source, mip, face, normal, srgb, hdr, half);
-                    chunks.Add(payloads.Count); payloads.Add(bytes);
+                    chunks.Add(payloads.Count); payloads.Add(new DeflatePayload(bytes));
                 }
             var index = textures.Count;
             textures.Add(new Dictionary<string, object> {
@@ -215,14 +214,14 @@ namespace VRVlog.LilToonExporter
                 if (id < 0) throw new InvalidDataException("負の元頂点ID。");
                 writer.Write((uint)id);
             }
-            var index = payloads.Count; payloads.Add(bytes.ToArray()); return index;
+            var index = payloads.Count; payloads.Add(new DeflatePayload(bytes.ToArray())); return index;
         }
 
         int AddVectors(IEnumerable<Vector4> values)
         {
             using var bytes = new MemoryStream(); using var writer = new BinaryWriter(bytes);
             foreach (var v in values) { if (!Finite(v)) throw new InvalidDataException("非有限の頂点データ。"); writer.Write(v.x); writer.Write(v.y); writer.Write(v.z); writer.Write(v.w); }
-            var index = payloads.Count; payloads.Add(bytes.ToArray()); return index;
+            var index = payloads.Count; payloads.Add(new DeflatePayload(bytes.ToArray())); return index;
         }
 
         internal byte[] Inject(byte[] bytes, string exporterVersion, string lilToonVersion)
@@ -231,14 +230,12 @@ namespace VRVlog.LilToonExporter
             var glb = GlbDocument.Read(bytes);
             var views = List(glb.Json, "bufferViews");
             var chunks = new List<object>();
-            foreach (var payload in payloads)
+            var offsets = glb.AppendBinaryBatch(payloads.Select(p => p.Encoded).ToArray());
+            for (var i = 0; i < payloads.Count; i++)
             {
-                using var compressed = new MemoryStream();
-                using (var encoder = new DeflateStream(compressed, System.IO.Compression.CompressionLevel.Optimal, true)) encoder.Write(payload, 0, payload.Length);
-                var encoded = compressed.ToArray();
-                var offset = glb.AppendBinary(encoded);
-                chunks.Add(new Dictionary<string, object> { {"bufferView", views.Count}, {"decodedBytes", payload.Length}, {"codec", "deflate"} });
-                views.Add(new Dictionary<string, object> { {"buffer", 0}, {"byteOffset", offset}, {"byteLength", encoded.Length} });
+                var payload = payloads[i];
+                chunks.Add(new Dictionary<string, object> { {"bufferView", views.Count}, {"decodedBytes", payload.DecodedBytes}, {"codec", "deflate"} });
+                views.Add(new Dictionary<string, object> { {"buffer", 0}, {"byteOffset", offsets[i]}, {"byteLength", payload.Encoded.Length} });
             }
             var extension = new Dictionary<string, object> {
                 {"schemaMajor", 2}, {"schemaMinor", 0}, {"sourceLilToonVersion", lilToonVersion}, {"sourceCommit", LilToon234Catalogue.Commit},
@@ -248,9 +245,9 @@ namespace VRVlog.LilToonExporter
             if (!glb.Json.TryGetValue("extensions", out var raw)) glb.Json["extensions"] = raw = new Dictionary<string, object>();
             ((Dictionary<string, object>)raw)[LilToonMobileProfile.ExtensionName] = extension;
             var used = List(glb.Json, "extensionsUsed"); if (!used.Contains(LilToonMobileProfile.ExtensionName)) used.Add(LilToonMobileProfile.ExtensionName);
+            GlbBinaryOptimizer.Compact(glb);
             if (System.Text.Encoding.UTF8.GetByteCount(JsonDom.Serialize(glb.Json)) > 8 * 1024 * 1024) throw new InvalidDataException("JSONが8MiB上限を超えています。");
             var output = glb.Write();
-            if (output.LongLength > 160L * 1024 * 1024) throw new InvalidDataException("VRMが160MiB上限を超えています。画像を自動縮小せず書き出しを中止しました。");
             LilToonFullContract.Validate(glb.Json, output.LongLength, glb.Binary.Length);
             return output;
         }
