@@ -16,6 +16,41 @@ namespace VRVlog.LilToonExporter.Tests
     {
         static IEnumerable<string> OfficialShaders=>VRVlog.LilToon.LilToon234Catalogue.Shaders.Keys;
 
+        [TestCase(false)][TestCase(true)]
+        public void StoredTextureEncodingAndAllMipPixelsSurviveCapture(bool srgb)
+        {
+            var source = new Texture2D(8, 8, TextureFormat.RGBA32, 4, !srgb) { filterMode = FilterMode.Point };
+            try
+            {
+                var expected = new List<byte[]>();
+                for (var mip = 0; mip < 4; mip++)
+                {
+                    var size = Math.Max(1, 8 >> mip);
+                    var color = new Color32((byte)(31 + mip * 7), 97, 181, 203);
+                    source.SetPixels32(Enumerable.Repeat(color, size * size).ToArray(), mip);
+                    expected.Add(Enumerable.Range(0, size * size).SelectMany(_ => new[] { color.r, color.g, color.b, color.a }).ToArray());
+                }
+                source.Apply(false, false);
+                var snapshot = new LilToonFullSnapshot();
+                var hidden = BindingFlags.Instance | BindingFlags.NonPublic;
+                typeof(LilToonFullSnapshot).GetMethod("Texture", hidden).Invoke(snapshot, new object[] { source, false });
+                var textures = (List<object>)typeof(LilToonFullSnapshot).GetField("textures", hidden).GetValue(snapshot);
+                var record = (Dictionary<string, object>)textures[0];
+                Assert.That(F.Bool(record, "srgb"), Is.EqualTo(srgb), "Pixel encoding must survive both Gamma and Linear Editor sampling");
+                var payloads = (List<DeflatePayload>)typeof(LilToonFullSnapshot).GetField("payloads", hidden).GetValue(snapshot);
+                Assert.That(payloads.Count, Is.EqualTo(4));
+                for (var mip = 0; mip < 4; mip++)
+                {
+                    using var encoded = new MemoryStream(payloads[mip].Encoded, false);
+                    using var decoder = new System.IO.Compression.DeflateStream(encoded, System.IO.Compression.CompressionMode.Decompress);
+                    using var decoded = new MemoryStream(); decoder.CopyTo(decoded);
+                    var actual = decoded.ToArray(); Assert.That(actual.Length, Is.EqualTo(expected[mip].Length));
+                    for (var i = 0; i < actual.Length; i++) Assert.That((int)actual[i], Is.EqualTo((int)expected[mip][i]).Within(1), "mip " + mip + " component " + i);
+                }
+            }
+            finally { Object.DestroyImmediate(source); }
+        }
+
         [TestCase(2)][TestCase(3)]
         public void ExternalProbeDataCannotBeSilentlyOmitted(int mode)
         {
@@ -57,8 +92,12 @@ namespace VRVlog.LilToonExporter.Tests
             var values = new[]{0,16777215,16777216,16777217,int.MaxValue};
             var snapshot = new LilToonFullSnapshot();
             var index = snapshot.AddVertexIds(values);
-            var payloads = (List<byte[]>)typeof(LilToonFullSnapshot).GetField("payloads",BindingFlags.Instance|BindingFlags.NonPublic).GetValue(snapshot);
-            var bytes = payloads[index];
+            var payloads = (List<DeflatePayload>)typeof(LilToonFullSnapshot).GetField("payloads",BindingFlags.Instance|BindingFlags.NonPublic).GetValue(snapshot);
+            using var encoded = new MemoryStream(payloads[index].Encoded, false);
+            using var decoder = new System.IO.Compression.DeflateStream(encoded, System.IO.Compression.CompressionMode.Decompress);
+            using var decoded = new MemoryStream();
+            decoder.CopyTo(decoded);
+            var bytes = decoded.ToArray();
             Assert.That(bytes.Length,Is.EqualTo(values.Length*4));
             for(var i=0;i<values.Length;i++)Assert.That(BitConverter.ToUInt32(bytes,i*4),Is.EqualTo((uint)values[i]));
             var runtime = Type.GetType("FaceMaskVTuber.UniVrmRuntime.LilToonFullRuntime, FaceMaskVTuber.UniVrmRuntime");

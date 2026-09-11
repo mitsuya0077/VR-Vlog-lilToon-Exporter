@@ -6,7 +6,9 @@ lilToonのアバターを、VR Vlogで使う **VRM 1.0** に書き出すUnity Ed
 
 [インストールページ](https://mitsuya0077.github.io/VR-Vlog-lilToon-Exporter/) · [最新リリース](https://github.com/mitsuya0077/VR-Vlog-lilToon-Exporter/releases/latest) · [変更履歴](CHANGELOG.md)
 
-以下は0.10.0の利用案内です。新しいlilToon専用データの表示には、schema 2.0に対応したVR Vlogが必要です。対応アプリは先行してTestFlightへ配布するため、アプリの更新内容を確認してください。全機能のiPhone実機比較はまだ完了していません。
+以下は0.10.1の利用案内です。VR Vlog **0.1.1（ビルド345）以降**を使用してください。schema 2.0の専用表示、160MiB制限の解除、追跡入力の受け渡しと録画用描画の修正を含む対応アプリをTestFlightへ先行配布します。全機能のiPhone実機比較はまだ完了していません。
+
+0.10.1は同じ内容の保存領域を共有し、画質や設定を変更せずに容量を減らします。専用画像の解像度・全ミップ・精度は保持します。削減率はモデル内の重複量により異なり、ファイルが小さくなっても、表示時に必要な画像・メッシュのメモリは残ります。使用可能なメモリが足りない場合は、対応アプリが理由を表示して読み込みを停止します。
 
 ## 必要な環境
 
@@ -35,7 +37,7 @@ https://mitsuya0077.github.io/VR-Vlog-lilToon-Exporter/index.json
 
 更新前にはUnityプロジェクトをバックアップしてください。
 
-導入済みの場合は、ALCOMのパッケージ一覧を更新し、**VR Vlog lilToon VRM Exporter 0.10.0** を選んで変更を適用します。新しい描画情報を使うには、更新後に元のアバターからVRMを書き出し直してください。
+導入済みの場合は、ALCOMのパッケージ一覧を更新し、**VR Vlog lilToon VRM Exporter 0.10.1** を選んで変更を適用します。新しい描画情報を使うには、更新後に元のアバターからVRMを書き出し直してください。
 
 ### ZIPで手動導入する
 

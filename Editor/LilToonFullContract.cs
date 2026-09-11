@@ -36,7 +36,8 @@ namespace VRVlog.LilToon
         }
         internal static void Validate(Dictionary<string, object> gltf, long fileLength, int binaryLength, long decodedByteBudget = long.MaxValue)
         {
-            if (fileLength > 160L * 1024 * 1024) Fail("VRM exceeds 160 MiB.");
+            if (fileLength < 20 || fileLength > int.MaxValue || binaryLength < 0 || binaryLength > fileLength)
+                Fail("VRM length exceeds the supported GLB array range or is invalid.");
             var root = Root(gltf) ?? throw new InvalidDataException("Missing full lilToon extension.");
             Keys(root, "schemaMajor", "schemaMinor", "sourceLilToonVersion", "sourceCommit", "exporterVersion", "materials", "textures", "bindings", "chunks");
             if (Int(root, "schemaMajor") != 2 || Int(root, "schemaMinor") != 0 || Text(root, "sourceLilToonVersion") != LilToon234Catalogue.Version || Text(root, "sourceCommit") != LilToon234Catalogue.Commit)
