@@ -64,6 +64,8 @@ https://mitsuya0077.github.io/VR-Vlog-lilToon-Exporter/index.json
 
 書き出し結果の **詳細を見る** で対象と対処方法を確認してください。解決しない場合は、バージョン・再現手順・該当エラーを添えて [Issues](https://github.com/mitsuya0077/VR-Vlog-lilToon-Exporter/issues/new/choose) へ報告できます。
 
+VR Vlogアプリ内の問い合わせからもご連絡いただけます。
+
 ## ライセンス
 
 [MIT License](LICENSE) · [lilToon](ThirdPartyNotices/lilToon.md) · [UniVRM](ThirdPartyNotices/UniVRM.md)
