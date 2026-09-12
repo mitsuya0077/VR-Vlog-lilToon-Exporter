@@ -15,7 +15,7 @@ namespace VRVlog.LilToonExporter
 
         public static byte[] Export(GameObject source, string avatarName, string author, ICollection<string> warnings = null, bool suppressSharedTextureEmission = false,
             string exporterVersion = null, string lilToonVersion = null, bool suppressHdrTextureEmission = false,
-            IEnumerable<GameObject> excludedObjects = null, MaterialBakeOptions bakeOptions = null, ExportGimmickOptions gimmickOptions = null)
+            IEnumerable<GameObject> excludedObjects = null, MaterialBakeOptions bakeOptions = null, ExportGimmickOptions gimmickOptions = null, BlinkExportOptions blinkOptions = null)
         {
             if (source == null) throw new ArgumentNullException(nameof(source));
             // Cloning detaches the avatar from its parents. Reject an inactive
@@ -43,6 +43,7 @@ namespace VRVlog.LilToonExporter
             // cached source of expression weights after the user edits a clip.
             var menu = VrChatExpressionSampler.Analyze(source, exclusions.ContainsPath);
             exclusions.FilterExpressions(menu, warnings);
+            var sourceBlink = BlinkExportSession.Resolve(source, blinkOptions, exclusions.Contains);
             var clone = UnityEngine.Object.Instantiate(source);
             clone.name = source.name;
             var temporaryMaterials = new List<Material>();
@@ -51,6 +52,7 @@ namespace VRVlog.LilToonExporter
             var fixedRootJoints = new HashSet<Transform>();
             try
             {
+                using var blink = sourceBlink.ForClone(source, clone);
                 using var gimmicks = new ExportGimmickSession(source, clone, gimmickOptions);
                 var expressionBindings = new PreparedExpressionBindings(clone, menu);
                 MaAppearanceSnapshot.Apply(source, clone, temporaryMeshes, exclusions, warnings);
@@ -68,6 +70,7 @@ namespace VRVlog.LilToonExporter
                 using var preparation = NdmfExportPreparation.Prepare(source, clone, warnings);
                 gimmicks.Apply(expressionBindings, menu, warnings);
                 expressionBindings.Capture(menu);
+                blink.Bake(clone, temporaryMeshes);
                 AvatarBaseShape.Preserve(clone, clone, temporaryMeshes, warnings);
                 var expressions = VrChatExpressionBaker.Bake(null, clone, menu, temporaryMeshes, warnings, expressionBindings);
                 if(exporterVersion!=null) PreserveExtraMaterialSlots(clone,temporaryMeshes);
@@ -92,9 +95,13 @@ namespace VRVlog.LilToonExporter
                     materialExporter: new BuiltInVrm10MaterialExporter(),
                     textureSerializer: new MobileTextureSerializer(warnings),
                     vrmMeta: CreateMeta(avatarName.Trim(), author.Trim()),
-                    afterExport: fullSnapshot == null ? null : fullSnapshot.Bind);
+                    afterExport: (converter, model, storage) =>
+                    {
+                        fullSnapshot?.Bind(converter, model, storage);
+                        blink.Bind(converter, model, storage);
+                    });
                 exported = ExportSkinRoots.Repair(exported, warnings);
-                exported = VrmExpressionBindings.AddMissing(VrmMenuExpressions.Add(exported, expressions), warnings);
+                exported = blink.Apply(VrmExpressionBindings.AddMissing(VrmMenuExpressions.Add(exported, expressions), warnings, inferBlink: false));
                 if (exporterVersion != null)
                 {
                     // The dedicated snapshot predates fallback baking. Its binary

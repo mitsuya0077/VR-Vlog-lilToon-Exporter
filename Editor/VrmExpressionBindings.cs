@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Linq;
 
 namespace VRVlog.LilToonExporter
 {
@@ -8,9 +9,6 @@ namespace VRVlog.LilToonExporter
     internal static class VrmExpressionBindings
     {
         private static readonly (string Preset, string[] Aliases)[] Mappings = {
-            ("blink", new[] { "eye_close", "Blink", "Fcl_EYE_Close", "まばたき" }),
-            ("blinkLeft", new[] { "eye_close_left", "Blink_L", "BlinkLeft", "EyeBlinkLeft", "Fcl_EYE_Close_L" }),
-            ("blinkRight", new[] { "eye_close_right", "Blink_R", "BlinkRight", "EyeBlinkRight", "Fcl_EYE_Close_R" }),
             ("aa", new[] { "vrc.v.aa", "vrc.v_aa", "mouth_a", "Aa", "A", "Fcl_MTH_A" }),
             ("ih", new[] { "vrc.v.ih", "vrc.v_ih", "mouth_i", "Ih", "I", "Fcl_MTH_I" }),
             ("ou", new[] { "vrc.v.ou", "vrc.v_ou", "vrc.v.u", "vrc.v_u", "mouth_u", "Ou", "U", "Fcl_MTH_U" }),
@@ -18,7 +16,7 @@ namespace VRVlog.LilToonExporter
             ("oh", new[] { "vrc.v.oh", "vrc.v_oh", "mouth_o", "Oh", "O", "Fcl_MTH_O" }),
         };
 
-        public static byte[] AddMissing(byte[] bytes, ICollection<string> warnings = null)
+        public static byte[] AddMissing(byte[] bytes, ICollection<string> warnings = null, bool inferBlink = true)
         {
             var glb = GlbDocument.Read(bytes);
             var vrm = Object(Object(glb.Json, "extensions"), "VRMC_vrm");
@@ -29,6 +27,63 @@ namespace VRVlog.LilToonExporter
             var expressions = Object(vrm, "expressions");
             var presets = Object(expressions, "preset");
             var changed = false;
+            if (inferBlink && !BlinkShapeNames.Presets.Any(key => presets != null && presets.ContainsKey(key)))
+            {
+                var blinkBinds = new[] { new List<object>(), new List<object>(), new List<object>() };
+                var completePairs = true;
+                var completeRenderers = true;
+                for (var nodeIndex = 0; nodeIndex < nodes.Count; nodeIndex++)
+                {
+                    var node = nodes[nodeIndex] as Dictionary<string, object>;
+                    if (node == null || !node.TryGetValue("mesh", out var rawMesh)) continue;
+                    var meshIndex = Index(rawMesh, meshes.Count, "mesh");
+                    var mesh = meshes[meshIndex] as Dictionary<string, object>;
+                    var names = List(Object(mesh, "extras"), "targetNames");
+                    if (names == null) continue;
+                    var resolved = BlinkShapeNames.Resolve(names.Select(n => n as string).ToArray());
+                    if (resolved[0] == -2)
+                    {
+                        Warn(warnings, "Blink: 同名の閉眼用シェイプが複数あります。確認・調整で指定してください。");
+                        completeRenderers = false;
+                        continue;
+                    }
+                    if (resolved[0] < 0 && resolved[1] == BlinkShapeNames.PartialPair)
+                    {
+                        Warn(warnings, "Blink: 閉眼用の左右がそろっていないメッシュがあります。確認・調整で指定してください。");
+                        completeRenderers = false;
+                        continue;
+                    }
+                    if (resolved[0] >= 0 && resolved[1] < 0) completePairs = false;
+                    for (var slot = 0; slot < resolved.Length; slot++)
+                    {
+                        var target = resolved[slot];
+                        if (target < 0) continue;
+                        var primitives = List(mesh, "primitives");
+                        if (primitives == null || primitives.Count == 0) continue;
+                        foreach (var rawPrimitive in primitives)
+                        {
+                            var targets = List(rawPrimitive as Dictionary<string, object>, "targets");
+                            if (targets == null || target >= targets.Count)
+                                throw new InvalidOperationException("表情名とmorph targetの対応が不正です。");
+                        }
+                        var bind = new Dictionary<string, object> {
+                            { "node", (long)nodeIndex }, { "index", (long)target }, { "weight", 1.0 }
+                        };
+                        blinkBinds[slot].Add(bind);
+                        if (resolved[0] < 0 && slot > 0) blinkBinds[0].Add(bind);
+                    }
+                }
+                for (var slot = 0; slot < blinkBinds.Length; slot++)
+                {
+                    if (!completeRenderers || blinkBinds[slot].Count == 0 || slot > 0 && !completePairs) continue;
+                    if (expressions == null) vrm["expressions"] = expressions = new Dictionary<string, object>();
+                    if (presets == null) expressions["preset"] = presets = new Dictionary<string, object>();
+                    presets[BlinkShapeNames.Presets[slot]] = new Dictionary<string, object> {
+                        { "morphTargetBinds", blinkBinds[slot] }, { "isBinary", false }
+                    };
+                    changed = true;
+                }
+            }
             foreach (var mapping in Mappings)
             {
                 // An authored preset, including an intentionally empty one,
@@ -72,8 +127,8 @@ namespace VRVlog.LilToonExporter
                 changed = true;
                 Warn(warnings, $"{mapping.Preset}: 既知の表情名からVRMの割り当てを追加しました。動作を確認してください。");
             }
-            if (presets == null || (!presets.ContainsKey("blink") &&
-                !(presets.ContainsKey("blinkLeft") && presets.ContainsKey("blinkRight"))))
+            if (inferBlink && (presets == null || (!presets.ContainsKey("blink") &&
+                !(presets.ContainsKey("blinkLeft") && presets.ContainsKey("blinkRight")))))
                 Warn(warnings, "瞬きのVRM設定を自動生成できませんでした。元アバターにVRMのBlink設定を追加してください。");
             return changed ? glb.Write() : bytes;
         }

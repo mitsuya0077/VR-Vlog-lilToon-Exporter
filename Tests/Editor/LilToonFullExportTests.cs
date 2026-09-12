@@ -61,7 +61,7 @@ namespace VRVlog.LilToonExporter.Tests
                 var skins=fixture.Source.GetComponentsInChildren<SkinnedMeshRenderer>();
                 foreach(var skin in skins)skin.sharedMaterial=source;
                 skins[0].lightProbeUsage=(UnityEngine.Rendering.LightProbeUsage)mode;
-                var error=Assert.Throws<InvalidDataException>(()=>UniVrmOneClickExporter.Export(fixture.Source,"External probes","Tests",exporterVersion:"0.10.0-preview.1",lilToonVersion:"2.3.4"));
+                var error=Assert.Throws<InvalidDataException>(()=>UniVrmOneClickExporter.Export(fixture.Source,"External probes","Tests",exporterVersion:"0.10.0-preview.1",lilToonVersion:"2.3.4", blinkOptions: new BlinkExportOptions { Mode = BlinkExportMode.None }));
                 Assert.That(error.Message,Does.Contain("external environment data"));
             }
             finally {Object.DestroyImmediate(source);}
@@ -178,7 +178,7 @@ namespace VRVlog.LilToonExporter.Tests
                 }
                 source.EnableKeyword("_EMISSION");source.EnableKeyword("GEOM_TYPE_BRANCH");
                 foreach(var renderer in fixture.Source.GetComponentsInChildren<SkinnedMeshRenderer>())renderer.sharedMaterial=source;
-                var glb=GlbDocument.Read(UniVrmOneClickExporter.Export(fixture.Source,"Emission setting","Tests",suppressSharedTextureEmission:shared,suppressHdrTextureEmission:hdr,exporterVersion:"0.10.0-preview.1",lilToonVersion:"2.3.4"));
+                var glb=GlbDocument.Read(UniVrmOneClickExporter.Export(fixture.Source,"Emission setting","Tests",suppressSharedTextureEmission:shared,suppressHdrTextureEmission:hdr,exporterVersion:"0.10.0-preview.1",lilToonVersion:"2.3.4", blinkOptions: new BlinkExportOptions { Mode = BlinkExportMode.None }));
                 foreach(var record in F.List(F.Root(glb.Json),"materials").Select(F.Object))
                 {
                     var values=F.List(record,"values").Select(F.Object).ToDictionary(v=>F.Text(v,"name"));
@@ -207,7 +207,7 @@ namespace VRVlog.LilToonExporter.Tests
                 foreach(var renderer in fixture.Source.GetComponentsInChildren<SkinnedMeshRenderer>())renderer.sharedMaterial=source;
                 particles.AddComponent<ParticleSystem>();particles.GetComponent<ParticleSystemRenderer>().sharedMaterial=source;
                 trailObject.AddComponent<TrailRenderer>().sharedMaterial=source;
-                var bytes=UniVrmOneClickExporter.Export(fixture.Source,"Mesh bindings","Tests",exporterVersion:"0.10.0-preview.1",lilToonVersion:"2.3.4");
+                var bytes=UniVrmOneClickExporter.Export(fixture.Source,"Mesh bindings","Tests",exporterVersion:"0.10.0-preview.1",lilToonVersion:"2.3.4", blinkOptions: new BlinkExportOptions { Mode = BlinkExportMode.None });
                 var glb=GlbDocument.Read(bytes);F.Validate(glb.Json,bytes.Length,glb.Binary.Length);
                 Assert.That(F.List(F.Root(glb.Json),"bindings").Count,Is.EqualTo(fixture.Source.GetComponentsInChildren<SkinnedMeshRenderer>().Length));
             }
@@ -247,7 +247,7 @@ namespace VRVlog.LilToonExporter.Tests
                 var renderers=fixture.Source.GetComponentsInChildren<SkinnedMeshRenderer>();
                 renderers[0].sharedMaterials=new[]{first,overlay};renderers[1].sharedMaterial=first;
                 var before=fixture.Mesh.subMeshCount;
-                var bytes=UniVrmOneClickExporter.Export(fixture.Source,"Extra draws","Tests",exporterVersion:"0.10.0-preview.1",lilToonVersion:"2.3.4");
+                var bytes=UniVrmOneClickExporter.Export(fixture.Source,"Extra draws","Tests",exporterVersion:"0.10.0-preview.1",lilToonVersion:"2.3.4", blinkOptions: new BlinkExportOptions { Mode = BlinkExportMode.None });
                 var glb=GlbDocument.Read(bytes);F.Validate(glb.Json,bytes.Length,glb.Binary.Length);
                 Assert.That(F.List(F.Root(glb.Json),"bindings").Select(F.Object).Any(b=>F.List(b,"materials").Count==2),Is.True);
                 Assert.That(fixture.Mesh.subMeshCount,Is.EqualTo(before));
@@ -285,7 +285,7 @@ namespace VRVlog.LilToonExporter.Tests
                 foreach(var renderer in renderers)renderer.sharedMaterial=source;
                 renderers[0].receiveShadows=false;renderers[0].shadowCastingMode=UnityEngine.Rendering.ShadowCastingMode.Off;
                 renderers[0].sortingOrder=9;renderers[1].sortingOrder=-4;
-                File.WriteAllBytes(path,UniVrmOneClickExporter.Export(fixture.Source,"Shader family","Tests",exporterVersion:"0.10.0-preview.1",lilToonVersion:"2.3.4"));
+                File.WriteAllBytes(path,UniVrmOneClickExporter.Export(fixture.Source,"Shader family","Tests",exporterVersion:"0.10.0-preview.1",lilToonVersion:"2.3.4", blinkOptions: new BlinkExportOptions { Mode = BlinkExportMode.None }));
                 loader.GetMethod("ConfigureLilToon").Invoke(null,new object[]{true});
                 loaded=await (Task<GameObject>)loader.GetMethod("LoadAsync").Invoke(null,new object[]{path,null,false,null});
                 Assert.That(loaded,Is.Not.Null,shaderName);
@@ -379,7 +379,7 @@ namespace VRVlog.LilToonExporter.Tests
                 var skins = fixture.Source.GetComponentsInChildren<SkinnedMeshRenderer>();
                 skins[0].sharedMaterial = source; skins[1].sharedMaterial = other;
                 fixture.Mesh.SetUVs(7, new List<Vector4> {new Vector4(5,6,7,8),Vector4.one,Vector4.zero});
-                var bytes = UniVrmOneClickExporter.Export(fixture.Source, "Full test", "Tests", exporterVersion:"0.10.0", lilToonVersion:"2.3.4");
+                var bytes = UniVrmOneClickExporter.Export(fixture.Source, "Full test", "Tests", exporterVersion:"0.10.0", lilToonVersion:"2.3.4", blinkOptions: new BlinkExportOptions { Mode = BlinkExportMode.None });
                 var glb = GlbDocument.Read(bytes); F.Validate(glb.Json, bytes.Length, glb.Binary.Length);
                 var root = F.Root(glb.Json); Assert.That(F.Int(root,"schemaMajor"), Is.EqualTo(2));
                 var materials = F.List(root,"materials").Select(F.Object).ToArray();
@@ -445,7 +445,7 @@ namespace VRVlog.LilToonExporter.Tests
                 source.SetFloat("_UseEmission2nd",1); source.SetColor("_Emission2ndColor",new Color(2,1,0,1)); other.SetColor("_Color",Color.blue);
                 source.SetFloat("_UseBumpMap",1);source.SetFloat("_BumpScale",-2);
                 source.SetShaderPassEnabled("ShadowCaster",false);
-                var exported=GlbDocument.Read(UniVrmOneClickExporter.Export(fixture.Source,"Runtime test","Tests",exporterVersion:"0.10.0",lilToonVersion:"2.3.4"));
+                var exported=GlbDocument.Read(UniVrmOneClickExporter.Export(fixture.Source,"Runtime test","Tests",exporterVersion:"0.10.0",lilToonVersion:"2.3.4", blinkOptions: new BlinkExportOptions { Mode = BlinkExportMode.None }));
                 var fullRecords=F.List(F.Root(exported.Json),"materials").Select(F.Object).ToArray();
                 var leftIndex=F.Int(fullRecords[0],"materialIndex");var rightIndex=F.Int(fullRecords[1],"materialIndex");
                 Dictionary<string,object> Expression(int material,string type,float[] color)=>new Dictionary<string,object>{{"materialColorBinds",new List<object>{new Dictionary<string,object>{{"material",material},{"type",type},{"targetValue",color.Cast<object>().ToList()}}}}};
