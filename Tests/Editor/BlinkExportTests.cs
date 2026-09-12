@@ -47,6 +47,46 @@ namespace VRVlog.LilToonExporter.Tests
             Assert.That(resolved.Slots[0].Single().Renderer, Is.SameAs(skin));
         }
 
+        [Test] public void StatusReusesScansUntilExpiryOrARelevantSettingChanges()
+        {
+            Skin("Blink");
+            var cache = new LilToonExporterWindow.BlinkStatusCache();
+            var calls = 0;
+            BlinkExportSession Resolve() { calls++; return BlinkExportSession.Resolve(root); }
+            cache.Refresh(10, Resolve);
+            var first = cache.Resolved;
+            for (var i = 1; i < 100; i++) cache.Refresh(10 + i * .01, Resolve);
+            Assert.That(calls, Is.EqualTo(1), "Layout, repaint and input must share the status scan.");
+            Assert.That(cache.Resolved, Is.SameAs(first));
+            cache.Refresh(11, Resolve);
+            Assert.That(calls, Is.EqualTo(2), "External avatar edits are picked up by the periodic refresh.");
+            cache.Invalidate();
+            cache.Refresh(11.01, Resolve);
+            Assert.That(calls, Is.EqualTo(3), "Changing bindings or exclusions must refresh immediately.");
+            cache.Invalidate();
+        }
+
+        [Test] public void StatusClearsAnEarlierSuccessWhenTheLiveBindingBecomesInvalid()
+        {
+            var skin = Skin("Blink");
+            var cache = new LilToonExporterWindow.BlinkStatusCache();
+            var calls = 0;
+            BlinkExportSession Resolve() { calls++; return BlinkExportSession.Resolve(root); }
+            cache.Refresh(0, Resolve);
+            skin.enabled = false;
+            cache.Refresh(1, Resolve);
+            Assert.That(cache.Resolved, Is.Null);
+            Assert.That(cache.Error, Is.Not.Empty);
+            cache.Refresh(1.1, Resolve);
+            Assert.That(calls, Is.EqualTo(2), "An invalid avatar must not be rescanned on every repaint either.");
+            skin.enabled = true;
+            cache.Invalidate();
+            cache.Refresh(1.2, Resolve);
+            Assert.That(cache.Resolved, Is.Not.Null);
+            Assert.That(cache.Error, Is.Null);
+            cache.Invalidate();
+        }
+
         [TestCase("eye_close")][TestCase("previewBlink")][TestCase("eye_close_left")]
         public void AmbiguousOrPartialNamesNeedAnExplicitChoice(string name)
         {
