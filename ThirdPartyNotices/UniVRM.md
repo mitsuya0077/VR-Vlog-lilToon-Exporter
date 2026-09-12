@@ -1,12 +1,6 @@
 # UniVRM
 
-The VPM release republishes the official `com.vrmc.gltf` and `com.vrmc.vrm`
-package contents from the pinned UniVRM release so VCC and ALCOM can resolve
-the exporter dependencies. The package contents are not maintained forks.
+- 出典：[UniVRM 0.131.0](https://github.com/vrm-c/UniVRM/tree/v0.131.0)
+- ライセンス：MIT
 
-- Upstream: https://github.com/vrm-c/UniVRM
-- Tested series: 0.131.x
-- License: MIT
-
-Each republished package archive includes the upstream `LICENSE.txt` as
-`UPSTREAM-LICENSE.txt`.
+依存パッケージ `com.vrmc.gltf`・`com.vrmc.vrm` は公式UniVRMの内容を使用しています。各配布ZIPにライセンス全文を `UPSTREAM-LICENSE.txt` として同梱しています。

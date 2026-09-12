@@ -4,25 +4,24 @@ body:
   - type: markdown
     attributes:
       value: |
-        この報告は公開されます。私有アバター・有料素材・元プロジェクト・ログ全文は添付しないでください。
-        エラーにはローカルパスや個人名が含まれる場合があります。認証情報・共有リンクも除いてから送信してください。
+        この報告は公開されます。個人情報・認証情報・非公開リンクを伏せ、有料素材・元プロジェクト・ログ全文は添付しないでください。
   - type: textarea
     id: versions
     attributes:
-      label: バージョン
-      description: エクスポーター、Unity、UniVRM、lilToon、関連するMA・NDMF・FaceEmo等のバージョン。アプリでの問題はVR Vlogの版と端末も記載してください。
+      label: 使用環境
+      description: エクスポーター・Unity・UniVRM・lilToonと関連プラグインのバージョン。アプリでの問題はVR Vlogのバージョンと端末名。
     validations:
       required: true
   - type: textarea
     id: steps
     attributes:
       label: 再現手順・期待した結果・実際の結果
-      description: 個人名や購入素材の配布URLを含めず、必要な構成と操作を説明してください。
+      description: 問題が起きるまでの操作と、どのような違いがあったかを記載してください。
     validations:
       required: true
   - type: textarea
     id: error
     attributes:
-      label: 該当するエラーの抜粋
-      description: 個人情報・ローカルパス・共有リンク・認証情報を伏せた、必要な部分のみ貼り付けてください。
+      label: エラーの抜粋
+      description: 個人名やファイルパスを伏せ、該当部分だけを貼り付けてください。
       render: text
