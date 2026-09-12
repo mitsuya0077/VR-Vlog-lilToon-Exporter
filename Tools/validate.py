@@ -18,7 +18,7 @@ listing = json.loads((root / "source.json").read_text(encoding="utf-8"))
 
 assert package["name"] == "com.vrvlog.liltoon-vrm-exporter"
 assert package["unity"] == "2022.3"
-assert package["version"] == "0.10.1"
+assert package["version"] == "0.10.2"
 assert one_click.index("AvatarBaseShape.Preserve(clone, clone,") < one_click.index("Vrm10AppearanceExporter.Export(")
 assert "foreach (var mesh in temporaryMeshes) UnityEngine.Object.DestroyImmediate(mesh);" in one_click
 assert package["vpmDependencies"] == {
@@ -260,8 +260,8 @@ assert "HasPortableOutline(source)" in one_click
 assert 'OutlineWidthMultiplyTexture = outlineEnabled ? Texture(source, "_OutlineTex")' not in one_click
 assert 'private string author = "";' in window
 assert 'private string avatarName = "";' not in window
-assert 'UniVrmOneClickExporter.Export(targetAvatar, targetName, targetAuthor, warnings, targetSharedEmission,' in window
-assert 'PackageVersion(), RequireSupportedLilToon(), targetHdrEmission, targetExclusions, bakeOptions, targetGimmicks);' in window
+assert 'UniVrmOneClickExporter.Export(targetAvatar, targetName, targetAuthor, warnings, false,' in window
+assert 'PackageVersion(), RequireSupportedLilToon(), false, targetExclusions, bakeOptions, targetGimmicks, targetBlink);' in window
 assert 'var targetOutput = outputPath;' in window
 assert 'var targetExclusions = excludedObjects.ToArray();' in window
 assert 'ExportFailureWindow.Show(exception, omitAndRetry)' in window
@@ -269,7 +269,8 @@ assert one_click.index('MaAppearanceSnapshot.Apply(source, clone,') < one_click.
 assert 'LilToonMainTextureBaker.ApplyOmissions(clone, temporaryMaterials, warnings, bakeOptions);' in one_click
 assert 'fullSnapshot.Inject(exported, exporterVersion, lilToonVersion)' in one_click
 assert one_click.index('LilToonFullSnapshot.Capture(clone,suppressSharedTextureEmission,suppressHdrTextureEmission)') < one_click.index('LilToonMainTextureBaker.Prepare(clone,')
-assert 'afterExport: fullSnapshot == null ? null : fullSnapshot.Bind' in one_click
+assert 'fullSnapshot?.Bind(converter, model, storage);' in one_click
+assert 'blink.Bind(converter, model, storage);' in one_click
 assert 'excludedExpressions' not in window and 'DrawExpressions' not in window
 assert 'var menu = VrChatExpressionSampler.Analyze(source, exclusions.ContainsPath);' in one_click
 assert one_click.index('AvatarBaseShape.Preserve(clone, clone,') < one_click.index('VrChatExpressionBaker.Bake(') < one_click.index('Vrm10AppearanceExporter.Export(')

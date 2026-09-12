@@ -13,6 +13,7 @@ $taskSources = @(
     (Join-Path $taskRepo 'Editor/TextureResizePolicy.cs'),
     (Join-Path $taskRepo 'Editor/MobileTextureEncoder.cs'),
     (Join-Path $taskRepo 'Editor/GlbTextureDownsizer.cs'),
+    (Join-Path $taskRepo 'Editor/BlinkShapeNames.cs'),
     (Join-Path $taskRepo 'Editor/VrmExpressionBindings.cs'),
     (Join-Path $taskRepo 'Editor/VrmMenuExpressions.cs'),
     (Join-Path $taskRepo 'Editor/VrChatExpressionMenu.cs'),

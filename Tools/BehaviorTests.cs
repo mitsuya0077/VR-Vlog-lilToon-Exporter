@@ -33,6 +33,11 @@ public static class ExporterBehaviorTests
     public static string Run()
     {
         _assertions = 0;
+        var plum = GlbDocument.Read(VrmExpressionBindings.AddMissing(Encode(Fixture("eye_close", "vrc.Blink", "eye_blink_1"))));
+        var plumBinds = (List<object>)((Dictionary<string, object>)Presets(plum.Json)["blink"])["morphTargetBinds"];
+        Check((long)((Dictionary<string, object>)plumBinds[0])["index"] == 1L,
+            "Plum blink must close eyelids (vrc.Blink), never move the eyes together (eye_close).");
+
         VRVlog.LilToonExporter.Tests.BaseShapeFixture.Run(Check);
         VRVlog.LilToonExporter.Tests.MenuExpressionFixture.Run(Check);
         VRVlog.LilToonExporter.Tests.MenuTraversalFixture.Run(Check);
@@ -52,7 +57,7 @@ public static class ExporterBehaviorTests
         var outlineWarnings=new List<string>();
         Check(LilToonMaterialReader.Read(vertexOutline,0,(_,__)=>0,outlineWarnings).features.Contains("outline") && outlineWarnings.Count>0, "Dedicated display retains vertex-controlled outlines and discloses the fallback difference.");
         CheckHiddenMaterialInjection();
-        var original = Encode(Fixture("unused", "eye_close", "eye_close_left", "eye_close_right", "mouth_a", "vrc.v.aa"));
+        var original = Encode(Fixture("unused", "Blink", "Blink_L", "Blink_R", "mouth_a", "vrc.v.aa"));
         var output = VrmExpressionBindings.AddMissing(original);
         var result = GlbDocument.Read(output);
         var presets = Presets(result.Json);
@@ -77,14 +82,14 @@ public static class ExporterBehaviorTests
         var unknown = Encode(Fixture("eye_close_extra", "previewBlink", "mouth_anger"));
         Check(VrmExpressionBindings.AddMissing(unknown, warnings).SequenceEqual(unknown), "Do not guess from substrings.");
         Check(warnings.Any(x => x.Contains("Blink")), "Report when blink could not be configured.");
-        var duplicate = Encode(Fixture("eye_close_left", "EYE_CLOSE_LEFT"));
+        var duplicate = Encode(Fixture("Blink_L", "BLINK_L", "Blink_R"));
         Check(VrmExpressionBindings.AddMissing(duplicate, warnings).SequenceEqual(duplicate), "Reject ambiguous duplicate aliases.");
         var invalid = Fixture("eye_close");
         ((Dictionary<string, object>)((List<object>)invalid["nodes"])[1])["mesh"] = 999L;
         bool threw = false;
         try { VrmExpressionBindings.AddMissing(Encode(invalid)); } catch (InvalidOperationException) { threw = true; }
         Check(threw, "Reject invalid node/mesh indices.");
-        var split = Fixture("eye_close_left");
+        var split = Fixture("Blink_L", "Blink_R");
         var mesh = (Dictionary<string, object>)((List<object>)split["meshes"])[0];
         ((List<object>)mesh["primitives"]).Add(Obj("targets", Arr()));
         threw = false;
@@ -187,19 +192,29 @@ public static class ExporterBehaviorTests
         var after = GlbDocument.Read(VrmExpressionBindings.AddMissing(source));
         Check(before.Binary.SequenceEqual(after.Binary), "Fixture geometry/textures changed.");
         var presets = Presets(after.Json);
-        Check(presets.ContainsKey("blinkLeft") && presets.ContainsKey("blinkRight"), "Fixture bilateral blink missing.");
-        foreach (var name in new[] { "blinkLeft", "blinkRight" })
+        var previous = Presets(before.Json);
+        foreach (var name in BlinkShapeNames.Presets)
         {
+            if (!presets.ContainsKey(name)) continue;
+            if (previous.ContainsKey(name))
+            {
+                Check(JsonDom.Serialize(previous[name]) == JsonDom.Serialize(presets[name]), "An explicit fixture preset changed.");
+                continue;
+            }
             var expression = (Dictionary<string, object>)presets[name];
             foreach (Dictionary<string, object> binding in (List<object>)expression["morphTargetBinds"])
             {
                 var node = (Dictionary<string, object>)((List<object>)after.Json["nodes"])[(int)(long)binding["node"]];
                 var mesh = (Dictionary<string, object>)((List<object>)after.Json["meshes"])[(int)(long)node["mesh"]];
                 var names = (List<object>)((Dictionary<string, object>)mesh["extras"])["targetNames"];
-                Check((string)names[(int)(long)binding["index"]] == (name == "blinkLeft" ? "eye_close_left" : "eye_close_right"), "Fixture binding resolves to the wrong shape.");
+                var candidates = BlinkShapeNames.Resolve(names.Cast<string>().ToArray());
+                var slot = Array.IndexOf(BlinkShapeNames.Presets, name);
+                var index = (int)(long)binding["index"];
+                Check(index == candidates[slot] || slot == 0 && candidates[0] < 0 &&
+                    (index == candidates[1] || index == candidates[2]), "Fixture binding resolves to the wrong shape.");
             }
         }
-        return $"Local VRM: preserved binary, generated {presets.Count} presets, verified bilateral blink bindings.";
+        return $"Local VRM: preserved binary, verified {presets.Count} presets and exact blink bindings.";
     }
 }
 #endif

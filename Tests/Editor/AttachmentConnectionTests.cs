@@ -418,7 +418,7 @@ namespace VRVlog.LilToonExporter.Tests
                 // selection callback, preview, or manual Attach call.
                 f.Mesh.colors = Enumerable.Range(0, f.Mesh.vertexCount).Select(i => new Color(.25f + i*.1f,.6f,.7f,.8f - i*.1f)).ToArray();
                 var bytes = UniVrmOneClickExporter.Export(f.Source, "Automatic MA hair", "Test", warnings,
-                    exporterVersion: "0.9.0", lilToonVersion: "2.3.4");
+                    exporterVersion: "0.9.0", lilToonVersion: "2.3.4", blinkOptions: new BlinkExportOptions { Mode = BlinkExportMode.None });
                 Assert.That(sourceHair.parent, Is.SameAs(f.Source.transform));
                 Assert.That(f.Source.GetComponentsInChildren<Transform>(true).Select(t => t.localToWorldMatrix), Is.EqualTo(sourceBefore));
                 Assert.That(f.Source.transform.Find("Front").GetComponent<SkinnedMeshRenderer>().sharedMesh, Is.SameAs(f.Mesh));
@@ -449,7 +449,8 @@ namespace VRVlog.LilToonExporter.Tests
                 foreach (var skin in hairSkins)
                 {
                     AssertVertices(before[skin].Select(delta.MultiplyPoint3x4).ToArray(), WorldVertices(skin));
-                    Assert.That(skin.sharedMesh.blendShapeCount, Is.EqualTo(1));
+                    Assert.That(Enumerable.Range(0, skin.sharedMesh.blendShapeCount)
+                        .Count(i => !skin.sharedMesh.GetBlendShapeName(i).StartsWith("__VRVlog_BlinkNone_")), Is.EqualTo(1));
                 }
                 if (petSkin != null) AssertVertices(petBefore, WorldVertices(petSkin));
             }
@@ -505,8 +506,8 @@ namespace VRVlog.LilToonExporter.Tests
                     AppearancePreparationTests.AddRule(f.Source,"ModularAvatarObjectToggle","Objects","ToggledObject",f.Source.transform.Find("Back").gameObject,("Active",false));
                     f.Copy.transform.Find("Back").gameObject.SetActive(false);
                 }
-                var maBytes=UniVrmOneClickExporter.Export(f.Source,"Appearance comparison","Test",exporterVersion:"0.9.0",lilToonVersion:"2.3.4");
-                var manualBytes=UniVrmOneClickExporter.Export(f.Copy,"Appearance comparison","Test",exporterVersion:"0.9.0",lilToonVersion:"2.3.4");
+                var maBytes=UniVrmOneClickExporter.Export(f.Source,"Appearance comparison","Test",exporterVersion:"0.9.0",lilToonVersion:"2.3.4", blinkOptions: new BlinkExportOptions { Mode = BlinkExportMode.None });
+                var manualBytes=UniVrmOneClickExporter.Export(f.Copy,"Appearance comparison","Test",exporterVersion:"0.9.0",lilToonVersion:"2.3.4", blinkOptions: new BlinkExportOptions { Mode = BlinkExportMode.None });
                 ma=await Vrm10.LoadBytesAsync(maBytes,canLoadVrm0X:false,awaitCaller:new ImmediateCaller());
                 manual=await Vrm10.LoadBytesAsync(manualBytes,canLoadVrm0X:false,awaitCaller:new ImmediateCaller());
                 foreach(var rotation in new[] { Quaternion.identity,Quaternion.Euler(12,40,0) })
