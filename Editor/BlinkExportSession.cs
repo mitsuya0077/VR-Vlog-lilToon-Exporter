@@ -18,6 +18,7 @@ namespace VRVlog.LilToonExporter
         internal string Description;
         internal bool PreserveAuthored;
         internal bool Disabled;
+        internal bool HasBilateralPreset => authored[0] || Slots[0].Count > 0;
         readonly Dictionary<SkinnedMeshRenderer, int> nodes = new Dictionary<SkinnedMeshRenderer, int>();
         readonly bool[] authored = new bool[3];
         readonly List<Object> expressionCopies = new List<Object>();
@@ -80,6 +81,8 @@ namespace VRVlog.LilToonExporter
                         var resolved = BlinkShapeNames.Resolve(names);
                         if (resolved[0] == -2)
                             throw new InvalidOperationException("閉眼用の名前が重複しています。「確認・調整」で設定してください。");
+                        if (resolved[0] < 0 && resolved[1] == BlinkShapeNames.PartialPair)
+                            throw new InvalidOperationException("閉眼用の左右がそろっていません: " + renderer.name + "。「確認・調整」で設定してください。");
                         if (resolved[0] >= 0 && resolved[1] < 0) completePairs = false;
                         for (var slot = 0; slot < resolved.Length; slot++)
                             if (resolved[slot] >= 0)

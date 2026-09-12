@@ -112,7 +112,7 @@ namespace VRVlog.LilToonExporter
                 if (entry.Key != null)
                     for (var i = 0; i < entry.Value.Length; i++) entry.Key.SetBlendShapeWeight(i, entry.Value[i]);
             if (blink.Disabled) return;
-            var slots = side > 0 ? new[] { side } : blink.Slots[1].Count > 0 && blink.Slots[2].Count > 0 ? new[] { 1, 2 } : new[] { 0 };
+            var slots = side > 0 ? new[] { side } : blink.HasBilateralPreset ? new[] { 0 } : new[] { 1, 2 };
             foreach (var slot in slots)
                 foreach (var binding in blink.Slots[slot])
                 {

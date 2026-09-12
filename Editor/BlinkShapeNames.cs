@@ -6,6 +6,7 @@ namespace VRVlog.LilToonExporter
     // Exact semantic names only. "eye_close" can mean eye spacing, as in Plum.
     internal static class BlinkShapeNames
     {
+        internal const int PartialPair = -3;
         internal static readonly string[] Presets = { "blink", "blinkLeft", "blinkRight" };
         static readonly string[] Both = { "vrc.Blink", "Blink", "Fcl_EYE_Close", "まばたき", "eye_blink_1", "eye_blink_2" };
         static readonly (string Left, string Right)[] Pairs = {
@@ -37,16 +38,22 @@ namespace VRVlog.LilToonExporter
                 result[0] = index;
                 break;
             }
+            var partial = false;
             foreach (var pair in Pairs)
             {
                 var left = Unique(names, pair.Left);
                 var right = Unique(names, pair.Right);
                 if (left == -2 || right == -2) return new[] { -2, -2, -2 };
-                if (left < 0 || right < 0) continue;
+                if (left < 0 || right < 0)
+                {
+                    partial |= left >= 0 || right >= 0;
+                    continue;
+                }
                 result[1] = left;
                 result[2] = right;
                 break;
             }
+            if (partial && result[1] < 0) result[1] = result[2] = PartialPair;
             return result;
         }
     }

@@ -31,6 +31,7 @@ namespace VRVlog.LilToonExporter
             {
                 var blinkBinds = new[] { new List<object>(), new List<object>(), new List<object>() };
                 var completePairs = true;
+                var completeRenderers = true;
                 for (var nodeIndex = 0; nodeIndex < nodes.Count; nodeIndex++)
                 {
                     var node = nodes[nodeIndex] as Dictionary<string, object>;
@@ -43,7 +44,13 @@ namespace VRVlog.LilToonExporter
                     if (resolved[0] == -2)
                     {
                         Warn(warnings, "Blink: 同名の閉眼用シェイプが複数あります。確認・調整で指定してください。");
-                        completePairs = false;
+                        completeRenderers = false;
+                        continue;
+                    }
+                    if (resolved[0] < 0 && resolved[1] == BlinkShapeNames.PartialPair)
+                    {
+                        Warn(warnings, "Blink: 閉眼用の左右がそろっていないメッシュがあります。確認・調整で指定してください。");
+                        completeRenderers = false;
                         continue;
                     }
                     if (resolved[0] >= 0 && resolved[1] < 0) completePairs = false;
@@ -68,7 +75,7 @@ namespace VRVlog.LilToonExporter
                 }
                 for (var slot = 0; slot < blinkBinds.Length; slot++)
                 {
-                    if (blinkBinds[slot].Count == 0 || slot > 0 && !completePairs) continue;
+                    if (!completeRenderers || blinkBinds[slot].Count == 0 || slot > 0 && !completePairs) continue;
                     if (expressions == null) vrm["expressions"] = expressions = new Dictionary<string, object>();
                     if (presets == null) expressions["preset"] = presets = new Dictionary<string, object>();
                     presets[BlinkShapeNames.Presets[slot]] = new Dictionary<string, object> {

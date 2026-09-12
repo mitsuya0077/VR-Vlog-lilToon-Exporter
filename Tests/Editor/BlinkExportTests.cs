@@ -67,6 +67,21 @@ namespace VRVlog.LilToonExporter.Tests
             Assert.Throws<InvalidOperationException>(() => BlinkExportSession.Resolve(root));
         }
 
+        [TestCase("Blink_L")][TestCase("Blink_R")]
+        public void APartialEyelashPairCannotBeHiddenByAnotherRenderersBlink(string shape)
+        {
+            Skin("Blink"); Skin(shape);
+            Assert.Throws<InvalidOperationException>(() => BlinkExportSession.Resolve(root));
+        }
+
+        [Test] public void ACompleteBilateralShapeCanCoverAnIncompleteAlternativePair()
+        {
+            Skin("Blink", "Blink_L");
+            var result = BlinkExportSession.Resolve(root);
+            Assert.That(result.Slots[0].Single().Shape, Is.EqualTo("Blink"));
+            Assert.That(result.Slots[1], Is.Empty);
+        }
+
         [Test] public void AllBlinkRenderersMustSupportTheIndividualPair()
         {
             Skin("Blink", "Blink_L", "Blink_R");
@@ -263,6 +278,36 @@ namespace VRVlog.LilToonExporter.Tests
                 Assert.That(skin.GetBlendShapeWeight(0), Is.EqualTo(15));
             }
             finally { Object.DestroyImmediate(window); }
+        }
+
+        [TestCase(false)][TestCase(true)]
+        public void PreviewUsesTheBilateralPresetAndFallsBackOnlyWhenItIsAbsent(bool bilateral)
+        {
+            var skin = Skin("both", "left", "right");
+            var material = new Material(Shader.Find("Standard")); owned.Add(material); skin.sharedMaterial = material;
+            var options = new BlinkExportOptions { Mode = BlinkExportMode.Manual };
+            if (bilateral) options.Both.Add(new BlinkShapeBinding { Renderer = skin, Shape = "both", Weight = 50 });
+            options.Left.Add(new BlinkShapeBinding { Renderer = skin, Shape = "left", Weight = 80 });
+            options.Right.Add(new BlinkShapeBinding { Renderer = skin, Shape = "right", Weight = 100 });
+            var window = ScriptableObject.CreateInstance<BlinkPreviewWindow>();
+            try
+            {
+                window.Prepare(root, options, Array.Empty<GameObject>(), new ExportGimmickOptions { AutoExclude = false });
+                var flags = BindingFlags.Instance | BindingFlags.NonPublic;
+                var previewCopy = (GameObject)typeof(BlinkPreviewWindow).GetField("copy", flags).GetValue(window);
+                var target = previewCopy.GetComponentInChildren<SkinnedMeshRenderer>();
+                typeof(BlinkPreviewWindow).GetField("closure", flags).SetValue(window, 1f);
+                var apply = typeof(BlinkPreviewWindow).GetMethod("ApplyPose", flags); apply.Invoke(window, null);
+                Assert.That(target.GetBlendShapeWeight(0), Is.EqualTo(bilateral ? 50 : 0));
+                Assert.That(target.GetBlendShapeWeight(1), Is.EqualTo(bilateral ? 0 : 80));
+                Assert.That(target.GetBlendShapeWeight(2), Is.EqualTo(bilateral ? 0 : 100));
+                typeof(BlinkPreviewWindow).GetField("side", flags).SetValue(window, 1); apply.Invoke(window, null);
+                Assert.That(target.GetBlendShapeWeight(0), Is.Zero);
+                Assert.That(target.GetBlendShapeWeight(1), Is.EqualTo(80));
+                Assert.That(target.GetBlendShapeWeight(2), Is.Zero);
+                Assert.That(skin.GetBlendShapeWeight(0), Is.Zero);
+            }
+            finally { window.Cleanup(); Object.DestroyImmediate(window); }
         }
     }
 }

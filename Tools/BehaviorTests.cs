@@ -37,6 +37,15 @@ public static class ExporterBehaviorTests
         var plumBinds = (List<object>)((Dictionary<string, object>)Presets(plum.Json)["blink"])["morphTargetBinds"];
         Check((long)((Dictionary<string, object>)plumBinds[0])["index"] == 1L,
             "Plum blink must close eyelids (vrc.Blink), never move the eyes together (eye_close).");
+        foreach (var shapes in new[] { new[] { "Blink_L" }, new[] { "Blink_R" }, new[] { "Blink", "BLINK" } })
+        {
+            var multi = Fixture("Blink", "vrc.v.aa");
+            ((List<object>)multi["nodes"]).Add(Obj("mesh", 1L));
+            ((List<object>)multi["meshes"]).Add(((List<object>)Fixture(shapes)["meshes"])[0]);
+            var inferred = Presets(GlbDocument.Read(VrmExpressionBindings.AddMissing(Encode(multi))).Json);
+            Check(!inferred.ContainsKey("blink") && inferred.ContainsKey("aa"),
+                "Incomplete or ambiguous eyelash renderers cannot be omitted behind another renderer's blink.");
+        }
 
         VRVlog.LilToonExporter.Tests.BaseShapeFixture.Run(Check);
         VRVlog.LilToonExporter.Tests.MenuExpressionFixture.Run(Check);
