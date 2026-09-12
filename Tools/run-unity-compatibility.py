@@ -8,6 +8,31 @@ import xml.etree.ElementTree as ET
 from pathlib import Path
 
 
+def validate_result(xml, supported):
+    tree = ET.parse(xml).getroot()
+    cases = tree.findall('.//test-case')
+    required = ['ActualInstalledPackagesMatchRequestedTestEnvironment']
+    if supported:
+        required.append('SupportedBackendPreservesMeshesMorphsAndMaterialBindingsOnReimport')
+    for name in required:
+        found = [c for c in cases if name in c.get('fullname', '')]
+        expected_count = 2 if name.startswith('SupportedBackend') else 1
+        if len(found) != expected_count or any(c.get('result') != 'Passed' for c in found):
+            raise SystemExit('Required real-package test did not pass: ' + name)
+    counts = {'DependencyEnvironmentTests': 1}
+    if supported:
+        counts.update(DependencyRoundTripTests=2, RendererSelectionTests=4, SkinnedMeshFallbackWeightTests=12)
+    for suite, count in counts.items():
+        found = [c for c in cases if c.get('classname') == 'VRVlog.LilToonExporter.Tests.' + suite]
+        if len(found) != count:
+            raise SystemExit('Required compatibility suite has missing or unexpected cases: ' + suite)
+    if len(cases) != sum(counts.values()):
+        raise SystemExit('Unexpected test cases in compatibility run')
+    if tree.get('result') != 'Passed' or any(c.get('result') != 'Passed' for c in cases):
+        raise SystemExit('Failed or skipped compatibility tests; see ' + str(xml))
+    return cases
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--unity', required=True, type=Path)
@@ -41,18 +66,7 @@ def main():
     result = subprocess.run(command, env=env, timeout=args.timeout, **flags)
     if result.returncode != 0 or not xml.exists():
         raise SystemExit('Unity failed or produced no test result. See ' + str(log))
-    tree = ET.parse(xml).getroot()
-    cases = tree.findall('.//test-case')
-    required = ['ActualInstalledPackagesMatchRequestedTestEnvironment']
-    if supported:
-        required.append('SupportedBackendPreservesMeshesMorphsAndMaterialBindingsOnReimport')
-    for name in required:
-        found = [c for c in cases if name in c.get('fullname', '')]
-        expected_count = 2 if name.startswith('SupportedBackend') else 1
-        if len(found) != expected_count or any(c.get('result') != 'Passed' for c in found):
-            raise SystemExit('Required real-package test did not pass: ' + name)
-    if tree.get('result') != 'Passed' or any(c.get('result') != 'Passed' for c in cases):
-        raise SystemExit('Failed or skipped compatibility tests; see ' + str(xml))
+    cases = validate_result(xml, supported)
     report = {'expectedUniVrm': args.expect_univrm, 'unity': args.expect_unity, 'tests': len(cases), 'result': 'Passed',
               'seconds': round(time.monotonic() - started), 'xml': xml.name, 'log': log.name}
     (output / (stamp + '.json')).write_text(json.dumps(report, indent=2) + '\n', encoding='utf-8')

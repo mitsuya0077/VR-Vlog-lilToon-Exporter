@@ -2,11 +2,61 @@ import importlib.util
 import json
 from pathlib import Path
 import unittest
+import tempfile
+import xml.etree.ElementTree as ET
 
 ROOT = Path(__file__).resolve().parents[1]
 spec = importlib.util.spec_from_file_location('upstream', Path(__file__).with_name('check-upstream-dependencies.py'))
 upstream = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(upstream)
+spec = importlib.util.spec_from_file_location('unity_runner', Path(__file__).with_name('run-unity-compatibility.py'))
+unity_runner = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(unity_runner)
+
+
+class UnityResultTests(unittest.TestCase):
+    def setUp(self):
+        self.temp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.temp.cleanup)
+        self.xml = Path(self.temp.name) / 'result.xml'
+        self.root = ET.Element('test-run', result='Passed')
+        methods = {
+            'DependencyEnvironmentTests': ('ActualInstalledPackagesMatchRequestedTestEnvironment', 1),
+            'DependencyRoundTripTests': ('SupportedBackendPreservesMeshesMorphsAndMaterialBindingsOnReimport', 2),
+            'RendererSelectionTests': ('RendererCase', 4),
+            'SkinnedMeshFallbackWeightTests': ('SkinCase', 12),
+        }
+        for suite, (method, count) in methods.items():
+            name = 'VRVlog.LilToonExporter.Tests.' + suite
+            for index in range(count):
+                ET.SubElement(self.root, 'test-case', classname=name, fullname=name + '.' + method + '(' + str(index) + ')', result='Passed')
+
+    def check(self):
+        ET.ElementTree(self.root).write(self.xml)
+        return unity_runner.validate_result(self.xml, True)
+
+    def test_all_required_suites_pass(self):
+        self.assertEqual(len(self.check()), 19)
+
+    def test_no_suite_can_disappear_from_a_passing_result(self):
+        for name in ['DependencyEnvironmentTests', 'DependencyRoundTripTests', 'RendererSelectionTests', 'SkinnedMeshFallbackWeightTests']:
+            with self.subTest(suite=name):
+                removed = [c for c in self.root if c.get('classname').endswith('.' + name)]
+                for case in removed: self.root.remove(case)
+                with self.assertRaises(SystemExit): self.check()
+                for case in removed: self.root.append(case)
+
+    def test_one_missing_skin_case_is_not_success(self):
+        self.root.remove(self.root[-1])
+        with self.assertRaises(SystemExit): self.check()
+
+    def test_skipped_or_failed_case_is_not_success(self):
+        for result in ['Skipped', 'Failed']:
+            self.root[-1].set('result', result)
+            with self.assertRaises(SystemExit): self.check()
+
+    def test_missing_result_is_not_success(self):
+        with self.assertRaises(FileNotFoundError): unity_runner.validate_result(self.xml, True)
 
 
 class UpstreamTests(unittest.TestCase):
