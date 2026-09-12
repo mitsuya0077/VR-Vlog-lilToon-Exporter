@@ -1,0 +1,7 @@
+{
+  "name": "VRVlog.LilToonExporter.Compatibility",
+  "rootNamespace": "VRVlog.LilToonExporter.Compatibility",
+  "references": [],
+  "includePlatforms": ["Editor"],
+  "autoReferenced": true
+}

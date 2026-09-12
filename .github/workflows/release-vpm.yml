@@ -32,7 +32,8 @@ jobs:
           assert os.environ["GITHUB_REF"] == "refs/heads/main", "Publish only the reviewed main branch"
           assert package["version"] == os.environ["EXPORTER_VERSION"]
           assert "-" not in package["version"], "This workflow publishes stable versions only"
-          assert os.environ["UNIVRM_VERSION"] == "0.131.0"
+          compat = json.load(open("Compatibility/dependencies.json", encoding="utf-8"))
+          assert os.environ["UNIVRM_VERSION"] == compat["uniVrm"]["releaseVersion"]
           PY
       - name: Validate exporter before packaging
         run: python3 Tools/validate.py
@@ -40,6 +41,13 @@ jobs:
         run: |
           python3 Tools/check-public-content.py
           python3 Tools/test-package.py
+      - name: Check dependency compatibility
+        run: |
+          python3 Tools/generate-compatibility.py
+          python3 Tools/test-compatibility-tooling.py
+      - name: Exercise dependency selection and unsupported environments
+        shell: pwsh
+        run: ./Tools/run-compatibility-tests.ps1
       - name: Run exporter behavior checks
         shell: pwsh
         run: ./Tools/run-behavior-tests.ps1
@@ -57,8 +65,8 @@ jobs:
       - name: Build UniVRM dependency packages
         env:
           UNIVRM_VERSION: ${{ inputs.univrm_version }}
-          UNIVRM_COMMIT: 3b99078d26b362733ad9bf463f98c83b8a1b4c9f
         run: |
+          UNIVRM_COMMIT=$(python3 -c 'import json, os; d=json.load(open("Compatibility/dependencies.json")); print(d["uniVrm"]["versions"][os.environ["UNIVRM_VERSION"]])')
           curl --fail --location --retry 3 "https://github.com/vrm-c/UniVRM/archive/${UNIVRM_COMMIT}.tar.gz" -o /tmp/univrm.tar.gz
           mkdir -p /tmp/univrm artifacts/unigltf artifacts/vrm10
           tar -xzf /tmp/univrm.tar.gz -C /tmp/univrm --strip-components=1

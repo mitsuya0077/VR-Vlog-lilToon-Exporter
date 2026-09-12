@@ -175,7 +175,7 @@ assert 'Guid.NewGuid().ToString("N")' in window
 assert "File.Replace(temporary, destination, null)" in window
 assert "finally { if (File.Exists(temporary)) File.Delete(temporary); }" in window
 assert "UniVrmOneClickExporter.Export" in window
-assert 'SupportedLilToonVersion = "2.3.4"' in window
+assert 'SupportedLilToonVersion = Compatibility.DependencyPolicy.LilToonVersion' in window
 assert 'package.name, "jp.lilxyzw.liltoon"' in window
 assert "RequireSupportedLilToon()" in window
 assert 'return info != null && !string.IsNullOrWhiteSpace(info.version) ? info.version : package["version"]' not in window
@@ -204,7 +204,7 @@ assert "context.Validate()" in one_click
 assert "using UnityEditor.PackageManager;" not in one_click
 assert "using PackageManagerPackageInfo = UnityEditor.PackageManager.PackageInfo;" in one_click
 assert "PackageManagerPackageInfo.FindForAssembly" in one_click
-assert 'version.StartsWith(SupportedUniVrmSeries + "."' in one_click
+assert 'Compatibility.DependencyPolicy.RequireUniVrm(package?.version, gltf?.version)' in one_click
 assert (root / ".github/workflows/build-listing.yml").is_file()
 assert (root / ".github/workflows/release-vpm.yml").is_file()
 assert (root / "Website/index.html").is_file()
@@ -229,13 +229,13 @@ assert "Generate VPM listing" in listing_workflow
 assert "Generate listing from a local release fixture" in listing_workflow
 assert "--package-listing-source-folder" in listing_workflow
 assert 'test -s "$fixture/output/index.json"' in listing_workflow
-assert "3b99078d26b362733ad9bf463f98c83b8a1b4c9f" in release_workflow
+assert 'Compatibility/dependencies.json' in release_workflow
 # Unreleased previews do not update the manual stable-release default. The
 # workflow separately requires its requested version to equal package.json.
 if "-" not in package["version"]:
     assert f"default: {package['version']}" in release_workflow
 assert '--target "${GITHUB_SHA}"' in release_workflow
-assert 'os.environ["UNIVRM_VERSION"] == "0.131.0"' in release_workflow
+assert 'os.environ["UNIVRM_VERSION"] == compat["uniVrm"]["releaseVersion"]' in release_workflow
 assert 'tag v${VERSION} already exists' in release_workflow
 assert 'git ls-remote --exit-code --tags origin' in release_workflow
 assert "gh workflow run build-listing.yml --ref main" in release_workflow

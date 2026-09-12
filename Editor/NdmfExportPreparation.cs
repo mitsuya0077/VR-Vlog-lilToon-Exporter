@@ -2,6 +2,7 @@ using System;
 using System.Collections.Generic;
 using System.Linq;
 using System.Reflection;
+using VRVlog.LilToonExporter.Compatibility;
 using UnityEditor;
 using UnityEngine;
 using Object = UnityEngine.Object;
@@ -17,7 +18,7 @@ namespace VRVlog.LilToonExporter
         private string temporaryAssetPath, temporaryAssetGuid;
         private const string MaNamespace = "nadena.dev.modular_avatar.core.";
         private const string CompatibilityMessage =
-            "Modular Avatar の準備に必要な NDMF API を利用できません。ALCOM で NDMF 1.8.3 以降の 1.x と Modular Avatar を更新してから書き出してください。";
+            "Modular Avatar の準備に必要な NDMF API を利用できません。NDMF " + DependencyPolicy.NdmfMinimum + " 以降の 1.x が必要です。確認済み構成: MA " + DependencyPolicy.ModularAvatarReference + " / NDMF " + DependencyPolicy.NdmfReference + "。" + DependencyPolicy.Recovery;
 
         internal static bool NeedsProcessing(GameObject avatar) => avatar != null && RelevantAuthoring(avatar).Count != 0;
 
@@ -485,7 +486,7 @@ namespace VRVlog.LilToonExporter
                 const BindingFlags publicInstance = BindingFlags.Public | BindingFlags.Instance;
                 const BindingFlags staticMembers = BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Static;
                 if (version == null || version.Contains("-") || !Version.TryParse(version, out var parsed) ||
-                    parsed.Major != 1 || parsed < new Version(1, 8, 3)) throw new InvalidOperationException(CompatibilityMessage);
+                    parsed.Major != DependencyPolicy.NdmfMajor || parsed < Version.Parse(DependencyPolicy.NdmfMinimum)) throw new InvalidOperationException(CompatibilityMessage);
                 var processor = find("nadena.dev.ndmf.AvatarProcessor");
                 var context = find("nadena.dev.ndmf.BuildContext");
                 var phase = find("nadena.dev.ndmf.BuildPhase");

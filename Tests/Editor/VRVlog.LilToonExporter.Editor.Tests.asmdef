@@ -1,8 +1,54 @@
 {
   "name": "VRVlog.LilToonExporter.Editor.Tests",
   "rootNamespace": "VRVlog.LilToonExporter.Tests",
-  "references": ["VRVlog.LilToonExporter.Editor", "VRM10", "UniGLTF", "UniGLTF.Utils", "VrmLib"],
-  "includePlatforms": ["Editor"],
-  "optionalUnityReferences": ["TestAssemblies"],
-  "autoReferenced": false
+  "references": [
+    "VRVlog.LilToonExporter.Editor",
+    "VRM10",
+    "UniGLTF",
+    "UniGLTF.Utils",
+    "VrmLib"
+  ],
+  "includePlatforms": [
+    "Editor"
+  ],
+  "optionalUnityReferences": [
+    "TestAssemblies"
+  ],
+  "autoReferenced": false,
+  "defineConstraints": [
+    "VRVLOG_VRM_0_131_0 || VRVLOG_VRM_0_131_1 || VRVLOG_VRM_0_131_2",
+    "VRVLOG_GLTF_0_131_0 || VRVLOG_GLTF_0_131_1 || VRVLOG_GLTF_0_131_2"
+  ],
+  "versionDefines": [
+    {
+      "name": "com.vrmc.vrm",
+      "expression": "[0.131.0]",
+      "define": "VRVLOG_VRM_0_131_0"
+    },
+    {
+      "name": "com.vrmc.vrm",
+      "expression": "[0.131.1]",
+      "define": "VRVLOG_VRM_0_131_1"
+    },
+    {
+      "name": "com.vrmc.vrm",
+      "expression": "[0.131.2]",
+      "define": "VRVLOG_VRM_0_131_2"
+    },
+    {
+      "name": "com.vrmc.gltf",
+      "expression": "[0.131.0]",
+      "define": "VRVLOG_GLTF_0_131_0"
+    },
+    {
+      "name": "com.vrmc.gltf",
+      "expression": "[0.131.1]",
+      "define": "VRVLOG_GLTF_0_131_1"
+    },
+    {
+      "name": "com.vrmc.gltf",
+      "expression": "[0.131.2]",
+      "define": "VRVLOG_GLTF_0_131_2"
+    }
+  ]
 }

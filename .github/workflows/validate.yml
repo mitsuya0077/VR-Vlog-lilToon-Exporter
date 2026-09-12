@@ -19,6 +19,13 @@ jobs:
       - run: python3 Tools/validate.py
       - run: python3 Tools/check-public-content.py
       - run: python3 Tools/test-package.py
+      - name: Check dependency compatibility
+        run: |
+          python3 Tools/generate-compatibility.py
+          python3 Tools/test-compatibility-tooling.py
+      - name: Exercise dependency selection and unsupported environments
+        shell: pwsh
+        run: ./Tools/run-compatibility-tests.ps1
       - name: Run exporter behavior checks
         shell: pwsh
         run: ./Tools/run-behavior-tests.ps1
