@@ -1,0 +1,7 @@
+{
+  "name": "VRVlog.LilToonExporter.Compatibility.Tests",
+  "references": ["VRVlog.LilToonExporter.Compatibility"],
+  "includePlatforms": ["Editor"],
+  "optionalUnityReferences": ["TestAssemblies"],
+  "autoReferenced": false
+}

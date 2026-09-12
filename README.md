@@ -12,7 +12,7 @@ lilToonのアバターを、iPhoneのVR Vlogで使う **VRM 1.0** に書き出�
 | --- | --- |
 | Unity | 2022.3。VRChatプロジェクトではVCC・ALCOMが案内する対応版 |
 | lilToon | **2.3.4**。アバターと一緒に事前に導入 |
-| UniVRM | **0.131.x**。VCC・ALCOMでは自動で導入 |
+| UniVRM | **0.131.0／0.131.1／0.131.2**。VCC・ALCOMでは0.131.xを自動導入し、対応版か確認 |
 | VR Vlog | **0.1.1（ビルド345）以降** |
 
 Modular Avatarを使うアバターは、Modular Avatarとその依存パッケージも事前に導入してください。
@@ -61,6 +61,10 @@ https://mitsuya0077.github.io/VR-Vlog-lilToon-Exporter/index.json
 - モデルによっては端末のメモリ不足で読み込めない場合があります。
 
 ## 困ったとき
+
+**VR Vlog → 動作環境を確認** で、必要なパッケージと現在のバージョンを確認できます。
+未対応版の場合は書き出しを停止し、対処方法を表示します。パッケージを自動で変更することはありません。
+今後の更新への対応手順は [互換性の管理](Compatibility/README.md) を参照してください。
 
 書き出し結果の **詳細を見る** で対象と対処方法を確認してください。解決しない場合は、バージョン・再現手順・該当エラーを添えて [Issues](https://github.com/mitsuya0077/VR-Vlog-lilToon-Exporter/issues/new/choose) へ報告できます。
 

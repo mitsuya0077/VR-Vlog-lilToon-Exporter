@@ -11,7 +11,6 @@ namespace VRVlog.LilToonExporter
 {
     internal static class UniVrmOneClickExporter
     {
-        internal const string SupportedUniVrmSeries = "0.131";
 
         public static byte[] Export(GameObject source, string avatarName, string author, ICollection<string> warnings = null, bool suppressSharedTextureEmission = false,
             string exporterVersion = null, string lilToonVersion = null, bool suppressHdrTextureEmission = false,
@@ -168,9 +167,8 @@ namespace VRVlog.LilToonExporter
         private static void EnsureUniVrmVersion()
         {
             var package = PackageManagerPackageInfo.FindForAssembly(typeof(Vrm10Exporter).Assembly);
-            var version = package != null ? package.version : null;
-            if (string.IsNullOrWhiteSpace(version) || !version.StartsWith(SupportedUniVrmSeries + ".", StringComparison.Ordinal))
-                throw new InvalidOperationException($"UniVRM {SupportedUniVrmSeries}.x が必要です。現在のバージョン：{version ?? "不明"}");
+            var gltf = PackageManagerPackageInfo.FindForAssembly(typeof(ExportingGltfData).Assembly);
+            Compatibility.DependencyPolicy.RequireUniVrm(package?.version, gltf?.version);
         }
 
         private static VRM10ObjectMeta CreateMeta(string avatarName, string author)

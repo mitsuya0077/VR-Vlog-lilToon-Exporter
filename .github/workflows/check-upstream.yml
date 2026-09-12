@@ -1,0 +1,29 @@
+name: Check upstream dependency releases
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: upstream-dependency-check
+  cancel-in-progress: true
+
+jobs:
+  inspect:
+    runs-on: ubuntu-latest
+    timeout-minutes: 2
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
+      - run: python3 Tools/check-upstream-dependencies.py --output upstream-report.json
+      - name: Summarize candidates
+        run: |
+          python3 - <<'PY'
+          import json, os
+          with open(os.environ['GITHUB_STEP_SUMMARY'], 'a') as summary:
+              summary.write('Upstream release inspection only. Packages and compatibility approvals are unchanged.\n\n')
+              for row in json.load(open('upstream-report.json')):
+                  state = 'requires compatibility review' if row['needsCompatibilityReview'] else 'no newer release'
+                  summary.write(f"- {row['package']}: {row['reference']} → {row['upstream']} ({state})\n")
+          PY

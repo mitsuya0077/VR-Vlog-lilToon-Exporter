@@ -10,7 +10,7 @@ namespace VRVlog.LilToonExporter
 {
     public sealed class LilToonExporterWindow : EditorWindow
     {
-        private const string SupportedLilToonVersion = "2.3.4";
+        private const string SupportedLilToonVersion = Compatibility.DependencyPolicy.LilToonVersion;
         private GameObject avatar;
         private string author = "";
         private string outputPath = "";
@@ -59,7 +59,9 @@ namespace VRVlog.LilToonExporter
             blinkStatus.Invalidate();
         }
 
-        [MenuItem("VR Vlog/lilToon VRM 1.0を書き出す")]
+        [InitializeOnLoadMethod]
+        private static void RegisterBackend() => Compatibility.DependencyDiagnostics.OpenExporter = Open;
+
         public static void Open()
         {
             var window = GetWindow<LilToonExporterWindow>(true, "VR Vlog VRM書き出し");
@@ -135,7 +137,8 @@ namespace VRVlog.LilToonExporter
             EditorGUILayout.Space(8f);
             EditorGUILayout.LabelField("動作環境", EditorStyles.boldLabel);
             EditorGUILayout.LabelField("lilToon", InstalledLilToonStatus());
-            EditorGUILayout.LabelField("UniVRM", UniVrmOneClickExporter.SupportedUniVrmSeries + ".x（VCC／ALCOMが自動インストール）");
+            if (GUILayout.Button("動作環境を確認")) Compatibility.DependencyDiagnostics.OpenDiagnostics();
+            EditorGUILayout.LabelField("UniVRM", Compatibility.DependencyPolicy.UniVrmVersions);
 
         }
 

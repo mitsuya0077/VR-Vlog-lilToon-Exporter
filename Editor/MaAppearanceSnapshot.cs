@@ -104,7 +104,7 @@ namespace VRVlog.LilToonExporter
             }
             catch (Exception error)
             {
-                throw new InvalidOperationException("Modular Avatar の現在の表示を固定できませんでした。MA 1.18.7 / NDMF 1.14.8 で確認済みのプレビュー API が必要です。ALCOM でパッケージを確認してください。原本は変更していません。", error);
+                throw new InvalidOperationException("Modular Avatar の現在の表示を固定できませんでした。MA " + Compatibility.DependencyPolicy.ModularAvatarReference + " / NDMF " + Compatibility.DependencyPolicy.NdmfReference + " で確認済みのプレビュー API が必要です。ALCOM でパッケージを確認してください。原本は変更していません。", error);
             }
         }
 
