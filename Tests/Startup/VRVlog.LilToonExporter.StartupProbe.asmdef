@@ -1,0 +1,10 @@
+{
+  "name": "VRVlog.LilToonExporter.StartupProbe",
+  "references": [
+    "VRVlog.LilToonExporter.Compatibility"
+  ],
+  "includePlatforms": [
+    "Editor"
+  ],
+  "autoReferenced": false
+}

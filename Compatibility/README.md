@@ -13,6 +13,15 @@ not make this exporter's UniVRM references break compilation before diagnostics.
 Compilation errors inside another package can still prevent Unity from loading
 any new editor code; this cannot repair those packages.
 
+The menu resolves the loaded backend's public `Open()` method when it is used;
+there is no startup registration callback. Missing lookups are not cached.
+Explicit **Reload** reimports this exporter's assembly definition and requests a
+clean script compilation only when dependencies are supported and the backend
+is absent. It never changes dependencies or avatar assets. The diagnostics copy
+includes package versions, compilation state, loaded backend and version defines,
+without absolute paths or avatar data. A missing backend alone is not evidence
+of a compile error in another tool.
+
 The VPM requirement stays at `0.131.x` to avoid forcing changes to an existing
 creator project. Only the explicitly listed patches can export. A future patch
 selected by VPM requires review before it is enabled. Diagnostics never install,
@@ -59,6 +68,20 @@ claim that every avatar or every combination is verified.
    device before release. Synthetic mesh tests do not prove visual equivalence.
 6. Record exact versions, editor, source commits, results and remaining limits.
    Review the PR and required checks before changing the supported matrix.
+
+For startup changes, also validate the release ZIP as embedded packages, as used
+by VCC/ALCOM, with the actual VRChat/MA/NDMF packages from a report. The focused
+runner includes a menu test that removes the old startup registration to verify
+the menu cannot become permanently unavailable. Test the production menu once
+without exporter test assemblies or `testables`, so test-only references cannot hide
+an assembly-loading problem. For the production probe, copy
+`Tests/Startup/ExporterStartupProbe.cs` into the isolated project's `Assets/Editor`
+and run Unity with `-batchmode -quit -projectPath TEST_PROJECT -executeMethod
+ExporterStartupProbe.Run -logFile STARTUP_LOG`. The probe rejects exporter test assemblies and `testables`, and checks the real
+menu, refresh and diagnostic report. UniGLTF itself depends on Test Framework;
+that upstream dependency is preserved.
+A successful clean startup does not reproduce every
+user project's import/reload history; record this limit explicitly.
 
 The file format remains schema 2.0 for full lilToon (legacy 1.x remains readable).
 The app's embedded 2.3.4 catalogue and shaders are unchanged. More versions mean
