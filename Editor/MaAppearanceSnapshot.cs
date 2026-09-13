@@ -124,18 +124,34 @@ namespace VRVlog.LilToonExporter
         static Dictionary<string, string> ParameterMap(object analyzer, Dictionary<Object, Object> objects)
         {
             var result = new Dictionary<string, string>();
+            var getter = analyzer.GetType().GetMethod("GetGameObjectStateProperty")
+                ?? throw new MissingMethodException(analyzer.GetType().FullName, "GetGameObjectStateProperty");
+            var menuItemType = Required(Ma + "ModularAvatarMenuItem");
+            MethodInfo assign = null;
+            string MenuParameter(Object item)
+            {
+                if (item == null) return null;
+                // Use the same read-only simulation path as MA's simulator UI.
+                // Auto parameters contain the component identity, so they must
+                // be remapped along with the selected MenuItem object.
+                assign = assign ?? Required(Ma + "editor.ParameterAssignerPass").GetMethod("AssignMenuItemParameter", Members,
+                    null, new[] { menuItemType, typeof(Dictionary<string, float>), typeof(IDictionary<,>).MakeGenericType(typeof(string), menuItemType), typeof(bool?) }, null)
+                    ?? throw new MissingMethodException("ParameterAssignerPass.AssignMenuItemParameter");
+                var condition = assign.Invoke(null, new object[] { item, null, null, true });
+                return condition == null ? null : (string)Field(condition, "Parameter");
+            }
+            void Add(string before, string after)
+            {
+                if (before == null) return;
+                // Shared named parameters stay valid for surviving controls.
+                if (!result.ContainsKey(before) || after != null) result[before] = after;
+            }
             foreach (var pair in objects)
             {
-                if (!(pair.Key is GameObject from)) continue;
-                foreach (var method in new[] { "GetGameObjectStateProperty", "GetMenuItemProperty" })
-                {
-                    var getter = analyzer.GetType().GetMethod(method);
-                    var before = (string)getter.Invoke(analyzer, new object[] { from });
-                    if (before == null) continue;
-                    var after = pair.Value == null ? null : (string)getter.Invoke(analyzer, new object[] { pair.Value });
-                    // Shared named parameters stay valid for surviving controls.
-                    if (!result.ContainsKey(before) || after != null) result[before] = after;
-                }
+                if (pair.Key is GameObject from)
+                    Add((string)getter.Invoke(analyzer, new object[] { from }),
+                        pair.Value == null ? null : (string)getter.Invoke(analyzer, new object[] { pair.Value }));
+                else if (menuItemType.IsInstanceOfType(pair.Key)) Add(MenuParameter(pair.Key), MenuParameter(pair.Value));
             }
             return result;
         }

@@ -81,7 +81,9 @@ namespace VRVlog.LilToonExporter.Tests
             var transition = DelayedTransition(next);
             if (ongoingTransition) { transition.exitTime = 0.5f; transition.duration = 10; }
             if (petUsesMenuParameter) transition.AddCondition(AnimatorConditionMode.If, 0, "Smile");
-            Assert.Throws<InvalidOperationException>(() => Sample(controller));
+            if (petUsesMenuParameter) Assert.Throws<InvalidOperationException>(() => Sample(controller));
+            else Assert.That(Sample(controller).Single().Weight, Is.EqualTo(60).Within(.01f),
+                "A disjoint layer with explicit, nonempty WD-Off motions cannot affect the face.");
             using var exclusions = new ExportObjectExclusions(avatar, new[] { pet });
             Assert.That(VrChatExpressionSampler.FindExcludedLayers(controller, controller, exclusions.ContainsPath).Contains(1), Is.True);
             var values = Sample(controller, exclusions.ContainsPath);
