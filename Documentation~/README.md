@@ -17,6 +17,8 @@ Unity 2022.3、lilToon **2.3.4**、UniVRM **0.131.0／0.131.1／0.131.2**、VR V
 
 パッケージが不足・未対応の場合は **VR Vlog → 動作環境を確認** で現在の版と対処方法を確認できます。パッケージを自動で変更することはありません。
 
+対応版が入っているのに書き出し画面が開かない場合は、同画面の **再読み込み** を押し、Unityのコンパイル完了を待ってください。直らない場合は **診断情報をコピー** の内容を不具合報告に添えてください。
+
 元のアバターは変更しません。更新内容を反映するには元アバターから再書き出ししてください。すべてのシェーダー効果やVRChatの動作を再現するものではありません。
 
 [導入ガイド・対応範囲](https://github.com/mitsuya0077/VR-Vlog-lilToon-Exporter#readme) · [変更履歴](https://github.com/mitsuya0077/VR-Vlog-lilToon-Exporter/blob/main/CHANGELOG.md) · [不具合報告](https://github.com/mitsuya0077/VR-Vlog-lilToon-Exporter/issues/new/choose)

@@ -59,9 +59,6 @@ namespace VRVlog.LilToonExporter
             blinkStatus.Invalidate();
         }
 
-        [InitializeOnLoadMethod]
-        private static void RegisterBackend() => Compatibility.DependencyDiagnostics.OpenExporter = Open;
-
         public static void Open()
         {
             var window = GetWindow<LilToonExporterWindow>(true, "VR Vlog VRM書き出し");
@@ -386,7 +383,7 @@ namespace VRVlog.LilToonExporter
         private static string PackageVersion()
         {
             var info = PackageManagerPackageInfo.FindForAssembly(typeof(LilToonExporterWindow).Assembly);
-            return info != null && !string.IsNullOrWhiteSpace(info.version) ? info.version : "0.10.3";
+            return info != null && !string.IsNullOrWhiteSpace(info.version) ? info.version : "0.10.4";
         }
 
         private static string InstalledLilToonStatus()

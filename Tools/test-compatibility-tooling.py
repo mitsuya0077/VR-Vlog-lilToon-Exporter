@@ -22,6 +22,7 @@ class UnityResultTests(unittest.TestCase):
         self.root = ET.Element('test-run', result='Passed')
         methods = {
             'DependencyEnvironmentTests': ('ActualInstalledPackagesMatchRequestedTestEnvironment', 1),
+            'DependencyStartupTests': ('MenuResolvesBackendWithoutInitializationRegistration', 1),
             'DependencyRoundTripTests': ('SupportedBackendPreservesMeshesMorphsAndMaterialBindingsOnReimport', 2),
             'RendererSelectionTests': ('RendererCase', 4),
             'SkinnedMeshFallbackWeightTests': ('SkinCase', 12),
@@ -36,10 +37,10 @@ class UnityResultTests(unittest.TestCase):
         return unity_runner.validate_result(self.xml, True)
 
     def test_all_required_suites_pass(self):
-        self.assertEqual(len(self.check()), 19)
+        self.assertEqual(len(self.check()), 20)
 
     def test_no_suite_can_disappear_from_a_passing_result(self):
-        for name in ['DependencyEnvironmentTests', 'DependencyRoundTripTests', 'RendererSelectionTests', 'SkinnedMeshFallbackWeightTests']:
+        for name in ['DependencyEnvironmentTests', 'DependencyStartupTests', 'DependencyRoundTripTests', 'RendererSelectionTests', 'SkinnedMeshFallbackWeightTests']:
             with self.subTest(suite=name):
                 removed = [c for c in self.root if c.get('classname').endswith('.' + name)]
                 for case in removed: self.root.remove(case)

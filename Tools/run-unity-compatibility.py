@@ -19,7 +19,7 @@ def validate_result(xml, supported):
         expected_count = 2 if name.startswith('SupportedBackend') else 1
         if len(found) != expected_count or any(c.get('result') != 'Passed' for c in found):
             raise SystemExit('Required real-package test did not pass: ' + name)
-    counts = {'DependencyEnvironmentTests': 1}
+    counts = {'DependencyEnvironmentTests': 1, 'DependencyStartupTests': 1}
     if supported:
         counts.update(DependencyRoundTripTests=2, RendererSelectionTests=4, SkinnedMeshFallbackWeightTests=12)
     for suite, count in counts.items():
@@ -51,7 +51,8 @@ def main():
     root = Path(__file__).resolve().parents[1]
     config = json.loads((root / 'Compatibility/dependencies.json').read_text(encoding='utf-8'))
     supported = args.expect_univrm in config['uniVrm']['versions']
-    filters = ['VRVlog.LilToonExporter.Tests.DependencyEnvironmentTests']
+    filters = ['VRVlog.LilToonExporter.Tests.DependencyEnvironmentTests',
+               'VRVlog.LilToonExporter.Tests.DependencyStartupTests']
     if supported:
         filters.extend(['VRVlog.LilToonExporter.Tests.DependencyRoundTripTests',
                         'VRVlog.LilToonExporter.Tests.RendererSelectionTests',
