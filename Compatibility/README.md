@@ -41,11 +41,12 @@ claim that every avatar or every combination is verified.
 4. Run the focused test runner for every supported version:
 
    ```text
-   python3 Tools/run-unity-compatibility.py --unity UNITY_EXECUTABLE --project TEST_PROJECT --expect-univrm 0.131.1 --output TEST_RESULTS
+   python3 Tools/run-unity-compatibility.py --unity UNITY_EXECUTABLE --project TEST_PROJECT --expect-univrm 0.131.1 --expect-unity 2022.3.22f1 --output TEST_RESULTS
    ```
 
-   The default expected editor is the app release editor, 2022.3.62f3. An explicit
-   `--expect-unity` can record another editor for development checks. The runner
+   Use 2022.3.22f1 for the existing creator environment. Also test the app's
+   separate release baseline with `--expect-unity 2022.3.62f3` (the runner default).
+   This does not require creators to upgrade their editor. The runner
    rejects missing/old results, skipped required tests and unexpected installed
    versions. It tests ordinary and full-lilToon export/reimport, meshes, morphs,
    material bindings, source preservation, renderer selection and skin weights.
