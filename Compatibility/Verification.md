@@ -1,16 +1,22 @@
 # Local verification, 2026-09-13
 
-Development editor: Windows Unity **2022.3.22f1**. The formal app release editor
-2022.3.62f3 was unavailable; these results do not establish that release baseline.
+Creator/exporter editor: Windows Unity **2022.3.22f1**. The same matrix also
+passed in a separate Windows **2022.3.62f3** installation, the app's existing
+release baseline. Creators do not need to change their 22f1 editor for this work.
 lilToon: actual 2.3.4 package. Test Framework: 1.4.6. Collections: 2.1.4.
 
-| UniVRM / UniGLTF | Official source commit | Focused EditMode result |
-| --- | --- | --- |
-| 0.131.0 / 0.131.0 | `3b99078d26b362733ad9bf463f98c83b8a1b4c9f` | 19 passed, 0 skipped |
-| 0.131.1 / 0.131.1 | `66558744b7fa50790d7cec217c6dd94b58c7441e` | 19 passed, 0 skipped |
-| 0.131.2 / 0.131.2 | `a4711bbf8c4d10659d3e5568c2e3d7d595005e51` | 19 passed, 0 skipped |
-| Not installed | No VRM/UniGLTF/lilToon package | Independent diagnostics test passed |
-| Synthetic unsupported 0.132.0 | 0.131.2 source with fixture package metadata changed | Backend excluded; independent diagnostics test passed |
+| UniVRM / UniGLTF | Official source commit | 2022.3.22f1 | 2022.3.62f3 |
+| --- | --- | --- | --- |
+| 0.131.0 / 0.131.0 | `3b99078d26b362733ad9bf463f98c83b8a1b4c9f` | 19 passed | 19 passed |
+| 0.131.1 / 0.131.1 | `66558744b7fa50790d7cec217c6dd94b58c7441e` | 19 passed | 19 passed |
+| 0.131.2 / 0.131.2 | `a4711bbf8c4d10659d3e5568c2e3d7d595005e51` | 19 passed | 19 passed |
+| Not installed | No VRM/UniGLTF/lilToon package | Diagnostics passed | Diagnostics passed |
+| Synthetic unsupported 0.132.0 | 0.131.2 source with fixture package metadata changed | Backend excluded; diagnostics passed | Backend excluded; diagnostics passed |
+
+Each editor completed all 59 required cases, with none skipped. The 62f3 projects
+were newly created with empty Assets and no copied Library or lock. The runner
+asserted editor identity and actual installed package versions inside Unity;
+its unique XML/log/report outputs confirmed all required cases passed.
 
 The last row is deliberately an exclusion fixture, **not** a real 0.132.0 test.
 Actual package versions and editor identity were asserted inside Unity. Both
