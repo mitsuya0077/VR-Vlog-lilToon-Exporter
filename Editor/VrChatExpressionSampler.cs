@@ -25,7 +25,7 @@ namespace VRVlog.LilToonExporter
                     if (entry.Error != null) continue;
                     if (EditorUtility.DisplayCancelableProgressBar("VRChatの表情を読み込み中", entry.Name, (float)index / source.Entries.Count))
                         throw new OperationCanceledException();
-                    try { entry.Values.AddRange(Sample(avatar, source.Controller, source.Defaults, entry.Parameters, excludedPath)); }
+                    try { entry.Values.AddRange(Sample(avatar, source.Controller, source.Defaults, entry.Parameters, excludedPath, source, entry.Unevaluated)); }
                     catch (InvalidOperationException error) { entry.Error = error.Message; }
                 }
                 VrChatGestureExpressions.Add(avatar, source, excludedPath);
@@ -35,21 +35,22 @@ namespace VRVlog.LilToonExporter
             return source;
         }
 
-        // Only stable, discrete, morph-based FX expressions are portable. Do not
-        // silently flatten clothes, material swaps, drivers or animated puppets.
+        // Stable, discrete, morph-based FX expressions, including deterministic
+        // parameter drivers. Each menu is evaluated from its own fresh defaults.
         internal static List<MorphValue> Sample(GameObject avatar, RuntimeAnimatorController runtime,
-            IDictionary<string, float> defaults, IDictionary<string, float> selected, Func<string, bool> excludedPath = null)
+            IDictionary<string, float> defaults, IDictionary<string, float> selected, Func<string, bool> excludedPath = null,
+            VrChatExpressionMenu.Source metadata = null, IList<MorphValue> unevaluated = null)
         {
-            var controller = runtime as AnimatorController;
-            if (runtime is AnimatorOverrideController overrides) controller = overrides.runtimeAnimatorController as AnimatorController;
-            if (controller == null) throw new InvalidOperationException("FX Animator Controllerを取得できません。");
-            ValidateBehaviours(controller);
-            var layers = controller.layers;
-            if (layers.Any(l => l.syncedLayerIndex >= 0)) throw new InvalidOperationException("同期Animatorレイヤーの表情変換は未対応です。");
-            var excludedLayers = FindExcludedLayers(controller, runtime, excludedPath);
-            var affected = Enumerable.Range(0, layers.Length)
-                .Where(i => !excludedLayers.Contains(i) && Uses(layers[i].stateMachine, selected.Keys)).ToArray();
+            var originalController = ExpressionDependencies.Controller(runtime);
+            var dependencies = ExpressionDependencies.Analyze(runtime, selected.Keys, excludedPath, metadata);
+            dependencies.Layers.ExceptWith(FindExcludedLayers(originalController, runtime, excludedPath, dependencies.Parameters));
+            var affected = dependencies.Layers.OrderBy(i => i).ToArray();
             if (affected.Length == 0) throw new InvalidOperationException("このメニューに対応するFXの表情がありません。");
+            var excludedLayers = new HashSet<int>(Enumerable.Range(0, originalController.layers.Length).Except(affected));
+            using var evaluation = new ExpressionEvaluationSession(runtime, dependencies, metadata?.ExpressionParameters,
+                !defaults.TryGetValue("IsLocal", out var local) || local != 0);
+            var controller = evaluation.Controller;
+            unevaluated = unevaluated ?? new List<MorphValue>();
 
             var scene = EditorSceneManager.NewPreviewScene();
             GameObject clone = null;
@@ -67,35 +68,36 @@ namespace VRVlog.LilToonExporter
                 animator.cullingMode = AnimatorCullingMode.AlwaysAnimate;
                 animator.applyRootMotion = false;
                 animator.fireEvents = false;
+                evaluation.Animator = animator;
                 clone.SetActive(true);
                 graph = PlayableGraph.Create("VR Vlog expression sampling");
                 graph.SetTimeUpdateMode(DirectorUpdateMode.Manual);
-                var playable = AnimatorControllerPlayable.Create(graph, runtime);
+                var playable = AnimatorControllerPlayable.Create(graph, controller);
                 var output = AnimationPlayableOutput.Create(graph, "Expression", animator);
                 output.SetSourcePlayable(playable);
                 SetParameters(playable, controller, defaults);
                 graph.Play();
                 var history = new HashSet<EditorCurveBinding>();
                 var visitedClips = new HashSet<AnimationClip>();
-                Action remember = () => RememberBindings(playable, affected, history, visitedClips, excludedPath);
+                Action remember = () => { evaluation.Check(); RememberBindings(playable, affected, history, visitedClips, excludedPath); };
                 Advance(graph, 120, remember);
                 SetParameters(playable, controller, selected);
                 Advance(graph, 120, remember);
-                ValidateFixedPose(playable, controller, excludedPath, excludedLayers);
+                ValidateFixedPose(avatar, playable, controller, excludedPath, excludedLayers);
                 var bindings = ActiveBindings(playable, affected, excludedPath);
-                var values = Capture(avatar, clone, history, excludedPath);
+                var values = Capture(avatar, clone, history, excludedPath, dependencies.Morphs, unevaluated);
                 // A state transition, a changing curve or changing active clip
                 // set cannot be represented as one fixed VRM expression.
                 for (var checkpoint = 0; checkpoint < 3; checkpoint++)
                 {
-                    Advance(graph, 7 + checkpoint);
+                    Advance(graph, 7 + checkpoint, evaluation.Check);
                     var nextBindings = ActiveBindings(playable, affected, excludedPath);
                     if (!bindings.SetEquals(nextBindings)) throw new InvalidOperationException("表情が時間で切り替わるため、固定表情に変換できません。");
-                    var next = Capture(avatar, clone, history, excludedPath);
+                    var next = Capture(avatar, clone, history, excludedPath, dependencies.Morphs, unevaluated);
                     if (values.Count != next.Count || values.Where((v, i) => v.Path != next[i].Path || v.Shape != next[i].Shape || Math.Abs(v.Weight - next[i].Weight) > 0.01f).Any())
                         throw new InvalidOperationException("表情のアニメーションが静止しません。固定表情のみ取り込めます。");
                 }
-                if (values.Count == 0) throw new InvalidOperationException("有効な顔のBlendShapeアニメーションがありません。");
+                if (values.Count == 0 && unevaluated.Count == 0) throw new InvalidOperationException("有効な顔のBlendShapeアニメーションがありません。");
                 return values;
             }
             finally
@@ -110,9 +112,9 @@ namespace VRVlog.LilToonExporter
         // Ignore a layer only after proving every possible motion writes solely
         // to excluded objects. Write Defaults and empty motions can reset
         // properties not listed in their own curves, so they do not establish
-        // that proof. Global StateMachineBehaviours are checked first.
+        // that proof. Parameter dependencies and unknown behaviours are checked first.
         internal static HashSet<int> FindExcludedLayers(AnimatorController controller, RuntimeAnimatorController runtime,
-            Func<string, bool> excludedPath)
+            Func<string, bool> excludedPath, ISet<string> requiredParameters = null)
         {
             var result = new HashSet<int>();
             if (excludedPath == null) return result;
@@ -158,8 +160,11 @@ namespace VRVlog.LilToonExporter
                     if (machine == null || !machineStack.Add(machine)) return false;
                     try
                     {
-                        return machine.states.Length + machine.stateMachines.Length > 0 &&
-                            machine.states.All(child => !child.state.writeDefaultValues && !child.state.iKOnFeet && MotionIsExcluded(child.state.motion)) &&
+                        bool HasEffect(IEnumerable<StateMachineBehaviour> behaviours) => behaviours.Any(b =>
+                            !VrChatParameterDriver.IsTracking(b) && (!VrChatParameterDriver.IsDriver(b) ||
+                            requiredParameters == null || VrChatParameterDriver.Read(b, machine.name).Operations.Any(op => requiredParameters.Contains(op.Destination))));
+                        return machine.states.Length + machine.stateMachines.Length > 0 && !HasEffect(machine.behaviours) &&
+                            machine.states.All(child => !child.state.writeDefaultValues && !child.state.iKOnFeet && !HasEffect(child.state.behaviours) && MotionIsExcluded(child.state.motion)) &&
                             machine.stateMachines.All(child => MachineIsExcluded(child.stateMachine));
                     }
                     finally { machineStack.Remove(machine); }
@@ -184,6 +189,7 @@ namespace VRVlog.LilToonExporter
                         throw new InvalidOperationException("表情への遷移にマテリアル・オブジェクトの差し替えが含まれます。");
                     foreach (var binding in AnimationUtility.GetCurveBindings(info.clip))
                     {
+                        if (binding.type == typeof(Animator)) continue; // Parameter curves are checked for stability separately.
                         if (excludedPath?.Invoke(binding.path) == true) continue;
                         if (binding.type != typeof(SkinnedMeshRenderer) || !binding.propertyName.StartsWith("blendShape.", StringComparison.Ordinal))
                             throw new InvalidOperationException("表情への遷移にBlendShape以外の変化が含まれます: " + binding.propertyName);
@@ -195,7 +201,7 @@ namespace VRVlog.LilToonExporter
         // Short samples alone cannot prove a fixed pose. Inspect every active
         // state's possible timed exits and the entire lifetime of active morph
         // and parameter curves, including delayed steps after the sample window.
-        private static void ValidateFixedPose(AnimatorControllerPlayable playable, AnimatorController controller, Func<string, bool> excludedPath,
+        private static void ValidateFixedPose(GameObject avatar, AnimatorControllerPlayable playable, AnimatorController controller, Func<string, bool> excludedPath,
             ISet<int> excludedLayers)
         {
             var layers = controller.layers;
@@ -229,6 +235,11 @@ namespace VRVlog.LilToonExporter
                             if (excludedPath?.Invoke(binding.path) == true) continue;
                             if (binding.type != typeof(Animator) &&
                                 !(binding.type == typeof(SkinnedMeshRenderer) && binding.propertyName.StartsWith("blendShape.", StringComparison.Ordinal))) continue;
+                            // Missing source morphs cannot be sampled. Defer
+                            // them to prepared bindings, which either omit a
+                            // stale reference or reject an unresolved new morph.
+                            if (binding.type == typeof(SkinnedMeshRenderer) && FindRenderer(avatar, binding.path).sharedMesh
+                                .GetBlendShapeIndex(binding.propertyName.Substring("blendShape.".Length)) < 0) continue;
                             var curve = AnimationUtility.GetEditorCurve(info.clip, binding);
                             if (!IsConstant(curve)) throw new InvalidOperationException("時間で変わるBlendShape・パラメーター曲線は固定表情に変換できません。");
                         }
@@ -273,6 +284,7 @@ namespace VRVlog.LilToonExporter
                         throw new InvalidOperationException("マテリアル・オブジェクトの差し替えを含む表情は未対応です。");
                     foreach (var binding in AnimationUtility.GetCurveBindings(info.clip))
                     {
+                        if (binding.type == typeof(Animator)) continue;
                         if (excludedPath?.Invoke(binding.path) == true) continue;
                         if (binding.type != typeof(SkinnedMeshRenderer) || !binding.propertyName.StartsWith("blendShape.", StringComparison.Ordinal))
                             throw new InvalidOperationException("BlendShape以外の変化を含みます: " + binding.propertyName);
@@ -283,7 +295,8 @@ namespace VRVlog.LilToonExporter
             return bindings;
         }
 
-        private static List<MorphValue> Capture(GameObject source, GameObject clone, IEnumerable<EditorCurveBinding> bindings, Func<string, bool> excludedPath)
+        private static List<MorphValue> Capture(GameObject source, GameObject clone, IEnumerable<EditorCurveBinding> bindings,
+            Func<string, bool> excludedPath, ISet<EditorCurveBinding> relevant, IList<MorphValue> unevaluated)
         {
             var owned = new HashSet<EditorCurveBinding>(bindings);
             // WD-Off values can outlive the clips that wrote them. Also capture
@@ -298,8 +311,10 @@ namespace VRVlog.LilToonExporter
                 if (animated.sharedMesh != renderer.sharedMesh)
                     throw new InvalidOperationException("FXによるメッシュ差し替えは表情変換に未対応です: " + path);
                 for (var i = 0; i < renderer.sharedMesh.blendShapeCount; i++)
-                    if (animated.GetBlendShapeWeight(i) != renderer.GetBlendShapeWeight(i))
-                        owned.Add(EditorCurveBinding.FloatCurve(path, typeof(SkinnedMeshRenderer), "blendShape." + renderer.sharedMesh.GetBlendShapeName(i)));
+                {
+                    var binding = EditorCurveBinding.FloatCurve(path, typeof(SkinnedMeshRenderer), "blendShape." + renderer.sharedMesh.GetBlendShapeName(i));
+                    if (relevant.Contains(binding) && animated.GetBlendShapeWeight(i) != renderer.GetBlendShapeWeight(i)) owned.Add(binding);
+                }
             }
             var result = new List<MorphValue>();
             foreach (var binding in owned.OrderBy(b => b.path, StringComparer.Ordinal).ThenBy(b => b.propertyName, StringComparer.Ordinal))
@@ -310,7 +325,12 @@ namespace VRVlog.LilToonExporter
                     throw new InvalidOperationException("非表示のRendererを動かす項目は取り込めません: " + binding.path);
                 var shape = binding.propertyName.Substring("blendShape.".Length);
                 var index = animated.sharedMesh.GetBlendShapeIndex(shape);
-                if (index < 0) throw new InvalidOperationException("BlendShapeが見つかりません: " + binding.path + "/" + shape);
+                if (index < 0)
+                {
+                    if (!unevaluated.Any(v => v.Path == binding.path && v.Shape == shape))
+                        unevaluated.Add(new MorphValue { Path = binding.path, Shape = shape });
+                    continue;
+                }
                 var weight = animated.GetBlendShapeWeight(index);
                 if (float.IsNaN(weight) || float.IsInfinity(weight)) throw new InvalidOperationException("表情のBlendShape値が不正です。");
                 result.Add(new MorphValue { Path = binding.path, Shape = shape, Weight = weight });
@@ -330,49 +350,5 @@ namespace VRVlog.LilToonExporter
             return matches[0];
         }
 
-        private static bool Uses(AnimatorStateMachine machine, IEnumerable<string> names)
-        {
-            var parameters = new HashSet<string>(names, StringComparer.Ordinal);
-            bool Conditions(IEnumerable<AnimatorCondition> conditions) => conditions.Any(c => parameters.Contains(c.parameter));
-            if (machine.anyStateTransitions.Any(t => Conditions(t.conditions)) || machine.entryTransitions.Any(t => Conditions(t.conditions))) return true;
-            foreach (var child in machine.states)
-            {
-                var state = child.state;
-                if (state.transitions.Any(t => Conditions(t.conditions)) || UsesMotion(state.motion, parameters) ||
-                    state.timeParameterActive && parameters.Contains(state.timeParameter)) return true;
-            }
-            return machine.stateMachines.Any(child => Uses(child.stateMachine, parameters) ||
-                machine.GetStateMachineTransitions(child.stateMachine).Any(t => Conditions(t.conditions)));
-        }
-
-        private static bool UsesMotion(Motion motion, HashSet<string> names)
-        {
-            if (!(motion is BlendTree tree)) return false;
-            return names.Contains(tree.blendParameter) || names.Contains(tree.blendParameterY) ||
-                tree.children.Any(c => names.Contains(c.directBlendParameter) || UsesMotion(c.motion, names));
-        }
-
-        private static void ValidateBehaviours(AnimatorController controller)
-        {
-            void Check(IEnumerable<StateMachineBehaviour> behaviours)
-            {
-                foreach (var behaviour in behaviours)
-                {
-                    if (behaviour == null) throw new InvalidOperationException("FXに欠けたState Behaviourがあります。");
-                    var name = behaviour.GetType().Name;
-                    // Tracking control only tells VRChat whether to run its own
-                    // blink/lip tracking. Imported fixed faces block VRM tracking.
-                    if (name == "VRCAnimatorTrackingControl" || name == "VRC_AnimatorTrackingControl") continue;
-                    throw new InvalidOperationException("FXのState Behaviourは未対応です: " + name + "（Parameter Driver・Layer Control等は自動変換しません）");
-                }
-            }
-            void Visit(AnimatorStateMachine machine)
-            {
-                Check(machine.behaviours);
-                foreach (var state in machine.states) Check(state.state.behaviours);
-                foreach (var child in machine.stateMachines) Visit(child.stateMachine);
-            }
-            foreach (var layer in controller.layers) Visit(layer.stateMachine);
-        }
     }
 }

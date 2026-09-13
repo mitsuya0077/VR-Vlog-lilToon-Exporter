@@ -177,6 +177,55 @@ namespace VRVlog.LilToonExporter.Tests
             }
         }
 
+        [TestCase(false, false)]
+        [TestCase(false, true)]
+        [TestCase(true, false)]
+        [TestCase(true, true)]
+        public void ExclusionsPreserveSimulatorMenuSelectionForAutomaticAndNamedParameters(bool named, bool forceOff)
+        {
+            var marker = TypeNamed("nadena.dev.ndmf.runtime.components.NDMFAvatarRoot");
+            var menuType = TypeNamed("nadena.dev.modular_avatar.core.ModularAvatarMenuItem");
+            if (marker == null || menuType == null || TypeNamed("VRC.SDK3.Avatars.Components.VRCAvatarDescriptor") == null) Assert.Ignore("Install MA/NDMF and VRChat SDK.");
+            var source = new GameObject("Avatar"); source.AddComponent(marker);
+            var face = new GameObject("Face"); face.transform.SetParent(source.transform, false);
+            var skin = face.AddComponent<SkinnedMeshRenderer>(); var mesh = BaseShapeFixture.Create(); skin.sharedMesh = mesh;
+            skin.SetBlendShapeWeight(0, 25);
+            var selected = new GameObject("Selected menu"); selected.transform.SetParent(source.transform, false);
+            var item = selected.AddComponent(menuType);
+            var portable = menuType.GetProperty("PortableControl").GetValue(item);
+            var type = portable.GetType().GetProperty("Type"); type.SetValue(portable, Enum.Parse(type.PropertyType, "Toggle"));
+            portable.GetType().GetProperty("Parameter").SetValue(portable, named ? "SharedMenu" : "");
+            portable.GetType().GetProperty("Value").SetValue(portable, 1f);
+            menuType.GetField("isDefault").SetValue(item, forceOff);
+            AddRule(selected, "ModularAvatarShapeChanger", "Shapes", "ChangedShape", face, ("ShapeName", "Face size"), ("ChangeType", 1), ("Value", 75f));
+            var omitted = new GameObject("Excluded gimmick"); omitted.transform.SetParent(source.transform, false);
+            var simulator = TypeNamed("nadena.dev.modular_avatar.core.editor.Simulator.ROSimulator");
+            var published = simulator.GetField("MenuItemOverrides").GetValue(null);
+            var property = published.GetType().GetProperty("Value"); var previous = property.GetValue(published);
+            var owned = new List<Mesh>(); GameObject clone = null;
+            try
+            {
+                var assign = TypeNamed("nadena.dev.modular_avatar.core.editor.ParameterAssignerPass").GetMethod("AssignMenuItemParameter", System.Reflection.BindingFlags.Static | System.Reflection.BindingFlags.NonPublic);
+                var condition = assign.Invoke(null, new object[] { item, null, null, true });
+                var key = condition.GetType().GetField("Parameter").GetValue(condition);
+                var analyzer = TypeNamed("nadena.dev.modular_avatar.core.editor.ReactiveObjectAnalyzer").GetConstructor(new[] { TypeNamed("nadena.dev.ndmf.preview.ComputeContext") }).Invoke(new object[] { null });
+                var dictionary = analyzer.GetType().GetProperty("ForceMenuItems").GetValue(analyzer);
+                property.SetValue(published, dictionary.GetType().GetMethod("SetItem").Invoke(dictionary, new[] { key, forceOff ? null : item }));
+                var before = UnityEditor.EditorJsonUtility.ToJson(item);
+                clone = Object.Instantiate(source);
+                using var exclusions = new ExportObjectExclusions(source, new[] { omitted });
+                MaAppearanceSnapshot.Apply(source, clone, owned, exclusions);
+                Assert.That(clone.GetComponentInChildren<SkinnedMeshRenderer>().GetBlendShapeWeight(0), Is.EqualTo(forceOff ? 25 : 75));
+                Assert.That(UnityEditor.EditorJsonUtility.ToJson(item), Is.EqualTo(before));
+                Assert.That(skin.GetBlendShapeWeight(0), Is.EqualTo(25));
+            }
+            finally
+            {
+                property.SetValue(published, previous); Object.DestroyImmediate(clone); Object.DestroyImmediate(source);
+                foreach (var value in owned) Object.DestroyImmediate(value); Object.DestroyImmediate(mesh);
+            }
+        }
+
         static VrChatExpressionMenu.Source Menu()
         {
             var menu = new VrChatExpressionMenu.Source();

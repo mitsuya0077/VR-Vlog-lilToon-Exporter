@@ -383,7 +383,7 @@ namespace VRVlog.LilToonExporter
         private static string PackageVersion()
         {
             var info = PackageManagerPackageInfo.FindForAssembly(typeof(LilToonExporterWindow).Assembly);
-            return info != null && !string.IsNullOrWhiteSpace(info.version) ? info.version : "0.10.4";
+            return info != null && !string.IsNullOrWhiteSpace(info.version) ? info.version : "0.10.5";
         }
 
         private static string InstalledLilToonStatus()

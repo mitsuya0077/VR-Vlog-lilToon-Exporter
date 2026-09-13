@@ -25,6 +25,10 @@ namespace VRVlog.LilToonExporter
             internal readonly List<AnimatedMorph> Animation = new List<AnimatedMorph>();
             internal readonly Dictionary<string, float> Parameters = new Dictionary<string, float>(StringComparer.Ordinal);
             internal readonly List<MorphValue> Values = new List<MorphValue>();
+            // A sampled menu cannot supply a weight for a morph which does not
+            // exist yet. Recheck these references after authoring preparation.
+            internal readonly List<MorphValue> Unevaluated = new List<MorphValue>();
+            internal readonly List<string> Messages = new List<string>();
         }
 
         internal sealed class AnimatedMorph
@@ -37,6 +41,9 @@ namespace VRVlog.LilToonExporter
         {
             internal RuntimeAnimatorController Controller;
             internal readonly Dictionary<string, float> Defaults = new Dictionary<string, float>(StringComparer.Ordinal);
+            internal readonly HashSet<string> ExpressionParameters = new HashSet<string>(StringComparer.Ordinal);
+            internal readonly List<RuntimeAnimatorController> OtherControllers = new List<RuntimeAnimatorController>();
+            internal readonly HashSet<string> ExternalParameters = new HashSet<string>(StringComparer.Ordinal);
             internal readonly List<Entry> Entries = new List<Entry>();
             internal readonly List<string> Messages = new List<string>();
             internal int VisitedMenus;
@@ -56,12 +63,31 @@ namespace VRVlog.LilToonExporter
             foreach (var parameter in Items(Member(Member(descriptor, "expressionParameters"), "parameters")))
             {
                 var name = Member(parameter, "name") as string;
-                if (!string.IsNullOrEmpty(name)) result.Defaults[name] = Number(Member(parameter, "defaultValue"));
+                if (!string.IsNullOrEmpty(name))
+                {
+                    result.Defaults[name] = Number(Member(parameter, "defaultValue"));
+                    result.ExpressionParameters.Add(name);
+                }
             }
             if (Member(descriptor, "customizeAnimationLayers") is bool custom && custom)
-                foreach (var layer in Items(Member(descriptor, "baseAnimationLayers")))
-                    if (Member(layer, "type")?.ToString() == "FX" && !(Member(layer, "isDefault") is bool isDefault && isDefault))
-                        result.Controller = Member(layer, "animatorController") as RuntimeAnimatorController;
+                foreach (var layer in Items(Member(descriptor, "baseAnimationLayers")).Concat(Items(Member(descriptor, "specialAnimationLayers"))))
+                {
+                    if (Member(layer, "isDefault") is bool isDefault && isDefault) continue;
+                    var runtime = Member(layer, "animatorController") as RuntimeAnimatorController;
+                    if (Member(layer, "type")?.ToString() == "FX") result.Controller = runtime;
+                    else if (runtime != null) result.OtherControllers.Add(runtime);
+                }
+            foreach (var component in avatar.GetComponentsInChildren<Component>(true))
+            {
+                if (component == null) continue;
+                var name = component.GetType().Name;
+                var parameter = Member(component, "parameter") as string;
+                if (string.IsNullOrEmpty(parameter)) continue;
+                if (name == "VRCContactReceiver") result.ExternalParameters.Add(parameter);
+                if (name == "VRCPhysBone")
+                    foreach (var suffix in new[] { "_IsGrabbed", "_IsPosed", "_Angle", "_Stretch", "_Squish" })
+                        result.ExternalParameters.Add(parameter + suffix);
+            }
             if (result.Controller == null) result.Messages.Add("カスタムFX Animatorがありません。メニューの表情を解決できません。");
             return result;
         }

@@ -17,7 +17,14 @@ namespace VRVlog.LilToonExporter
             PreparedExpressionBindings prepared)
         {
             var result = new List<VrmMenuExpressions.Expression>();
+            if (prepared == null) new PreparedExpressionBindings(clone, menu, source).Capture(menu);
             foreach (var message in menu.Messages) warnings?.Add(message);
+            // A controller-wide limitation or a stale shared curve should not
+            // print the same explanation once for every menu item.
+            var diagnostics = menu.Entries.SelectMany(e => e.Messages.Concat(e.Error == null ? Array.Empty<string>() : new[] { e.Error })
+                .Select(message => (e.Name, Message: message)));
+            foreach (var group in diagnostics.GroupBy(d => d.Message, StringComparer.Ordinal))
+                warnings?.Add(string.Join(", ", group.Select(d => d.Name).Distinct()) + ": " + group.Key);
             // Unique internal names survive UniVRM's renderer/node reordering.
             // Bind against the actual exported names, never guessed mesh indices.
             var prefix = "__VRVlog_Menu_" + Guid.NewGuid().ToString("N") + "_";
@@ -32,7 +39,7 @@ namespace VRVlog.LilToonExporter
             }
             foreach (var entry in menu.Entries)
             {
-                if (entry.Error != null) { warnings?.Add(entry.Name + ": " + entry.Error); continue; }
+                if (entry.Error != null) continue;
                 var expression = new VrmMenuExpressions.Expression { Name = entry.Name };
                 foreach (var group in entry.Values.GroupBy(v => v.Path))
                 {

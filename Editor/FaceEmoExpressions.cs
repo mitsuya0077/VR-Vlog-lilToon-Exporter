@@ -145,24 +145,7 @@ namespace VRVlog.LilToonExporter
                 var clip = Resolve(animation);
                 if (clip == null) throw new InvalidOperationException("FaceEmoに登録されたアニメーションGUIDを解決できません。");
                 entry.Name = path + " / " + clip.name;
-                entry.Values.AddRange(VrChatGestureExpressions.ReadPose(avatar, clip, excludedPath));
-                foreach (var binding in AnimationUtility.GetCurveBindings(clip))
-                {
-                    if (excludedPath?.Invoke(binding.path) == true) continue;
-                    var curve = VrChatGestureExpressions.ReadCurve(AnimationUtility.GetEditorCurve(clip, binding));
-                    curve.Range(out var minimum, out var maximum);
-                    if (minimum == maximum) continue;
-                    entry.Animation.Add(new VrChatExpressionMenu.AnimatedMorph
-                    {
-                        Path = binding.path, Shape = binding.propertyName.Substring("blendShape.".Length), Curve = curve
-                    });
-                }
-                if (entry.Animation.Count > 0)
-                {
-                    entry.Duration = clip.length;
-                    entry.Loop = clip.isLooping;
-                    if (entry.Duration <= 0 || entry.Duration > 600) throw new InvalidOperationException("FaceEmoの表情アニメーションは0秒より長く600秒以下である必要があります。");
-                }
+                VrChatGestureExpressions.ReadClip(avatar, clip, entry, excludedPath);
             }
             catch (InvalidOperationException error) { entry.Error = error.Message; }
             source.Entries.Add(entry);
