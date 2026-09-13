@@ -22,6 +22,14 @@ namespace VRVlog.LilToonExporter.Tests
             var original = legacyField?.GetValue(null);
             try
             {
+                if (legacyField == null)
+                {
+                    // Environment tests may already have resolved the backend.
+                    // Require and reset the new resolver before exercising the menu.
+                    var refresh = typeof(DependencyDiagnostics).GetMethod("RefreshBackend", BindingFlags.Public | BindingFlags.Static);
+                    Assert.That(refresh, Is.Not.Null);
+                    refresh.Invoke(null, null);
+                }
                 legacyField?.SetValue(null, null);
                 Assert.That(EditorApplication.ExecuteMenuItem("VR Vlog/lilToon VRM 1.0を書き出す"), Is.True);
                 var exporter = Resources.FindObjectsOfTypeAll<EditorWindow>()
