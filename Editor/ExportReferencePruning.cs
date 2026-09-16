@@ -17,6 +17,7 @@ namespace VRVlog.LilToonExporter
             ICollection<Object> temporaryAssets, ICollection<string> warnings, ISet<Renderer> removedRenderers = null)
         {
             bool Removed(Transform value) => value != null && removedRoots.Any(root => value == root || value.IsChildOf(root));
+            PhysBoneSpringExport.PruneRemovedRoots(clone, Removed, warnings);
             bool RemovedComponent(Component value) => value == null || Removed(value.transform);
             bool RemovedRenderer(Renderer value) => Removed(value.transform) || removedRenderers?.Contains(value) == true;
             void RequireLocal(Component value)

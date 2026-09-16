@@ -86,6 +86,7 @@ namespace VRVlog.LilToonExporter
                 if (attachments.Parts.Count > 0)
                     warnings?.Add("本体のボーンと独立したパーツは現在の接続を保持しました: " +
                         string.Join(", ", attachments.Parts.ConvertAll(part => part.Root.name)));
+                var springs = PhysBoneSpringExport.Convert(source, clone, warnings);
                 ReplaceLilToonMaterials(clone, temporaryMaterials, temporaryTextures, fallbackWarnings, suppressSharedTextureEmission);
                 MakeRendererMeshesUnique(clone, temporaryMeshes);
                 var exported = Vrm10AppearanceExporter.Export(
@@ -108,6 +109,7 @@ namespace VRVlog.LilToonExporter
                     exported = fullSnapshot.Inject(exported, exporterVersion, lilToonVersion);
                     foreach(var warning in fallbackWarnings)warnings?.Add("標準VRM表示の近似: "+warning);
                 }
+                PhysBoneSpringExport.VerifyOutput(exported, springs);
                 return exported;
             }
             finally

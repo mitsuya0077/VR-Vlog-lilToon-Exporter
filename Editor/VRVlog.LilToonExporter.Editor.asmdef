@@ -3,6 +3,7 @@
   "rootNamespace": "VRVlog.LilToonExporter",
   "references": [
     "UniGLTF",
+    "SpringBoneJobs",
     "UniGLTF.Editor",
     "VRM10",
     "VRM10.MToon10",
