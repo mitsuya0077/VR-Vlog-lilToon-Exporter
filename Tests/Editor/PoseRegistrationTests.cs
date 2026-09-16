@@ -79,6 +79,7 @@ namespace VRVlog.LilToonExporter.Tests
         [TestCase(false, false, true)]
         [TestCase(true, false, false)]
         [TestCase(true, true, false)]
+        [TestCase(false, true, false)]
         [TestCase(false, false, false, "Action")]
         [TestCase(false, false, false, "Action", true)]
         [TestCase(false, false, false, "Gesture", true, 0f)]
@@ -118,24 +119,23 @@ namespace VRVlog.LilToonExporter.Tests
                 var folder = Add((IList)PoseMenuResolver.Member(menu, "controls")); Set(folder, "name", "カテゴリー"); Set(folder, "type", "SubMenu"); Set(folder, "subMenu", sub);
                 var toggle = Add((IList)PoseMenuResolver.Member(sub, "controls")); Set(toggle, "name", "メニュー名"); Set(toggle, "type", "Toggle"); Set(toggle, "value", 1f);
                 var parameter = Activator.CreateInstance(toggle.GetType().GetField("parameter").FieldType); Set(parameter, "name", "Pose"); Set(toggle, "parameter", parameter);
+                // Supported fixtures use explicitly neutral other layers;
+                // unresolved SDK defaults remain an external-input dependency.
+                if (!defaultLocomotion)
+                {
+                    foreach (var key in new[] { "baseAnimationLayers", "specialAnimationLayers" })
+                    {
+                        var field = descriptor.GetType().GetField(key); var array = (Array)field.GetValue(descriptor);
+                        for (var i = 0; i < array.Length; i++)
+                        {
+                            var empty = new AnimatorController(); owned.Add(empty);
+                            var layer = array.GetValue(i); Set(layer, "isDefault", false); Set(layer, "animatorController", empty); array.SetValue(layer, i);
+                        }
+                        field.SetValue(descriptor, array);
+                    }
+                }
                 if (modularAvatar)
                 {
-                    // An explicitly neutral avatar proves MA menu generation
-                    // independently from VRChat's external-input locomotion.
-                    // The defaultLocomotion case below must remain rejected.
-                    if (!defaultLocomotion)
-                    {
-                        foreach (var key in new[] { "baseAnimationLayers", "specialAnimationLayers" })
-                        {
-                            var field = descriptor.GetType().GetField(key); var array = (Array)field.GetValue(descriptor);
-                            for (var i = 0; i < array.Length; i++)
-                            {
-                                var empty = new AnimatorController(); owned.Add(empty);
-                                var layer = array.GetValue(i); Set(layer, "isDefault", false); Set(layer, "animatorController", empty); array.SetValue(layer, i);
-                            }
-                            field.SetValue(descriptor, array);
-                        }
-                    }
                     var installType = Find("nadena.dev.modular_avatar.core.ModularAvatarMenuInstaller");
                     var mergeType = Find("nadena.dev.modular_avatar.core.ModularAvatarMergeAnimator");
                     if (installType == null || mergeType == null) Assert.Ignore("Install MA/NDMF for generated menus.");

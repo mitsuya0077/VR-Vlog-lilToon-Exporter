@@ -206,6 +206,26 @@ namespace VRVlog.LilToonExporter.Tests
             finally { Object.DestroyImmediate(machine); }
         }
         [Test]
+        public void MenuGraphAppliesSoloFilteringBeforeConditionsAndMute()
+        {
+            var machine = new AnimatorStateMachine();
+            try
+            {
+                machine.AddState("Idle"); var pose = machine.AddState("Pose");
+                var normal = machine.AddAnyStateTransition(pose); normal.hasExitTime = false; normal.duration = 0; normal.canTransitionToSelf = false;
+                normal.AddCondition(AnimatorConditionMode.Equals, 1, "Pose");
+                var solo = machine.AddAnyStateTransition(pose); solo.hasExitTime = false; solo.duration = 0; solo.canTransitionToSelf = false; solo.solo = true;
+                solo.AddCondition(AnimatorConditionMode.Equals, 2, "Pose");
+                var values = new Dictionary<string, float> { ["Pose"] = 1 };
+                Assert.Throws<InvalidOperationException>(() => PoseMenuResolver.Resolve(machine, values));
+                solo.mute = true;
+                Assert.Throws<InvalidOperationException>(() => PoseMenuResolver.Resolve(machine, values));
+                solo.mute = false; values["Pose"] = 2;
+                Assert.That(PoseMenuResolver.Resolve(machine, values), Is.SameAs(pose));
+            }
+            finally { Object.DestroyImmediate(machine); }
+        }
+        [Test]
         public void MenuGraphRejectsNestedStateMachineTransitions()
         {
             var root = new AnimatorStateMachine();

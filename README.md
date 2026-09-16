@@ -48,6 +48,8 @@ https://mitsuya0077.github.io/VR-Vlog-lilToon-Exporter/index.json
 
 対応するAPL登録・VRChat/MAメニューのHumanoid静止ポーズも自動で同梱します。**ポーズを確認・調整** では取得元・名前・カテゴリー・未対応理由を確認し、プレビュー、除外、名称変更、複数.animの手動追加と採用時刻の指定ができます。動くモーションの再生は行いません。[対応範囲・データ仕様](Documentation~/HumanoidPoses.md)
 
+初版では、標準のBase・Gesture等が有効で移動・ジェスチャーからの姿勢寄与を確定できないメニューは、MAの有無にかかわらず理由付きで対象外にします。APL登録の直接収集と、手動追加したクリップの時刻指定は独立して利用できます。
+
 ### iPhoneで読み込む
 
 1. 書き出した `.vrm` をiPhoneの「ファイル」に保存します。

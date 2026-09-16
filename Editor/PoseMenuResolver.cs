@@ -21,8 +21,8 @@ namespace VRVlog.LilToonExporter
             if (descriptor == null) return result;
             var menu = VrChatExpressionMenu.Read(avatar);
             menu.ExternalParameters.UnionWith(VrChatParameterDriver.BuiltIn);
-            var layers = Items(Member(descriptor, "baseAnimationLayers")).Concat(Items(Member(descriptor, "specialAnimationLayers")))
-                .Where(l => !(Member(l, "isDefault") is bool d && d) && Member(l, "animatorController") is RuntimeAnimatorController).ToArray();
+            var avatarLayers = Items(Member(descriptor, "baseAnimationLayers")).Concat(Items(Member(descriptor, "specialAnimationLayers"))).ToArray();
+            var layers = avatarLayers.Where(l => !(Member(l, "isDefault") is bool d && d) && Member(l, "animatorController") is RuntimeAnimatorController).ToArray();
             foreach (var entry in menu.Entries)
             {
                 var split = entry.Name.LastIndexOf(" / ", StringComparison.Ordinal);
@@ -83,6 +83,15 @@ namespace VRVlog.LilToonExporter
                             if (hasBody) resolved.Add((type, layer, state, Clip(state), i, skipMuscles, outer));
                         }
                     }
+                    // Standard body controllers depend on built-in inputs. Do
+                    // not silently replace their contribution with rest bones.
+                    // A selected immediate control may explicitly disable them.
+                    foreach (var source in avatarLayers.Where(l => Member(l, "isDefault") is bool d && d))
+                    {
+                        var type = Member(source, "type")?.ToString() ?? "";
+                        if (type != "FX" && (!weights.TryGetValue(type, out var weight) || weight > 0))
+                            throw new InvalidOperationException("VRChat標準の" + type + "レイヤーが有効で、外部入力からの姿勢寄与を確定できません。");
+                    }
                     foreach (var item in resolved.OrderBy(r => Array.IndexOf(new[] { "Base", "Additive", "Gesture", "Action", "FX", "Sitting", "TPose", "IKPose" }, r.type)))
                     {
                         if (!weights.TryGetValue(item.type, out var playableWeight)) throw new InvalidOperationException("不明なPlayable Layerです。");
@@ -139,7 +148,7 @@ namespace VRVlog.LilToonExporter
             foreach (var state in states)
             {
                 AnimatorState destination = null;
-                foreach (var transition in parents[state].SelectMany(m => m.anyStateTransitions).Concat(state.transitions).Where(t => !t.mute))
+                foreach (var transition in parents[state].SelectMany(m => ActiveTransitions(m.anyStateTransitions)).Concat(ActiveTransitions(state.transitions)))
                 {
                     // Check *all* conditions before evaluating: a currently false
                     // condition cannot hide an external or historical dependency.
@@ -147,7 +156,7 @@ namespace VRVlog.LilToonExporter
                         if (!selected.ContainsKey(c.parameter) || external?.Contains(c.parameter) == true)
                             throw new InvalidOperationException("他のメニュー・外部入力・操作履歴に依存します: " + c.parameter);
                     if (!transition.conditions.All(c => Condition(c, selected[c.parameter]))) continue;
-                    if (transition.hasExitTime || transition.duration != 0 || transition.offset != 0 || transition.isExit || transition.destinationState == null || transition.solo)
+                    if (transition.hasExitTime || transition.duration != 0 || transition.offset != 0 || transition.isExit || transition.destinationState == null)
                         throw new InvalidOperationException("開始・終了・時間付きまたは複雑な遷移は未対応です。");
                     if (transition.destinationState == state && !transition.canTransitionToSelf) continue;
                     if (destination != null && destination != transition.destinationState) throw new InvalidOperationException("複数の遷移先があり姿勢を確定できません。");
@@ -167,6 +176,12 @@ namespace VRVlog.LilToonExporter
             }
             if (machine.entryTransitions.Length != 0) throw new InvalidOperationException("条件付きEntry遷移は未対応です。");
             return final;
+        }
+        static IEnumerable<AnimatorStateTransition> ActiveTransitions(AnimatorStateTransition[] siblings)
+        {
+            // Solo suppresses non-solo siblings even when muted or false.
+            var hasSolo = siblings.Any(t => t.solo);
+            return siblings.Where(t => !t.mute && (!hasSolo || t.solo));
         }
         static bool Condition(AnimatorCondition c, float value)
         {
