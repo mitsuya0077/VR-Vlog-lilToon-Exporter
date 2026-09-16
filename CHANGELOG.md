@@ -1,10 +1,11 @@
 # 変更履歴
 
-## 未リリース
+## 0.10.6
 
 - Modular Avatar / NDMF処理後の一時コピーでPhysBoneをVRM SpringBoneへ変換し、髪・衣装の揺れ設定を保存します。SDKは任意依存です。
 - 分岐・末端・除外・カーブ・コライダー・角度制限を扱い、既存VRMの揺れ設定を優先します。変換件数・近似・省略理由を表示し、出力から揺れ設定が失われた場合は保存を止めます。
-- VRChatとの完全一致ではありません。詳細は [揺れ物変換](Compatibility/PhysBone.md) を参照してください。揺れ設定のない既存VRMは元モデルから再出力が必要です。
+- アバター最上位のコライダーとその衝突参照を、元モデルを変更せずに保持します。PhysBoneがない既存VRM設定にも対応します。
+- VRChatとの完全一致ではありません。詳細は [揺れ物変換](https://github.com/mitsuya0077/VR-Vlog-lilToon-Exporter/blob/v0.10.6/Compatibility/PhysBone.md) を参照してください。揺れ設定のない既存VRMは元モデルから再出力が必要です。
 
 ## 0.10.5
 
