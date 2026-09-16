@@ -90,7 +90,9 @@ namespace VRVlog.LilToonExporter.Tests
                 var output = spring.ColliderGroups.Single().Colliders.Single();
                 Assert.That(output.ColliderType, Is.EqualTo(VRM10SpringBoneColliderTypes.Capsule));
                 Assert.That(Vector3.Distance(output.Offset, output.Tail), Is.EqualTo(.2f).Within(.001));
-                Assert.That(output.transform, Is.EqualTo(copy.transform));
+                Assert.That(output.transform.parent, Is.EqualTo(copy.transform));
+                Assert.That(output.transform.localToWorldMatrix, Is.EqualTo(copy.transform.localToWorldMatrix));
+                Assert.That(source.GetComponentsInChildren<VRM10SpringBoneCollider>(), Is.Empty);
             }
             finally { Object.DestroyImmediate(copy); Object.DestroyImmediate(source); }
         }
@@ -245,10 +247,11 @@ namespace VRVlog.LilToonExporter.Tests
             finally { Object.DestroyImmediate(copy); Object.DestroyImmediate(source); }
         }
 
-        [TestCase(false, false)]
-        [TestCase(true, false)]
-        [TestCase(true, true)]
-        public async Task ActualExportImportsSpringsAndMovesHairWithoutChangingOriginal(bool full, bool modularAvatar)
+        [TestCase(false, false, false)]
+        [TestCase(true, false, false)]
+        [TestCase(true, true, false)]
+        [TestCase(true, false, true)]
+        public async Task ActualExportImportsSpringsAndMovesHairWithoutChangingOriginal(bool full, bool modularAvatar, bool rootCollider)
         {
             using var fixture = new AttachmentConnectionTests.Fixture();
             var hair = fixture.Source.transform.Find("Independent hair/Head");
@@ -269,7 +272,7 @@ namespace VRVlog.LilToonExporter.Tests
             var pb = PhysBone(hair.gameObject);
             Set(pb, "pull", .25f); Set(pb, "spring", .6f); Set(pb, "gravity", 0f);
             Set(pb, "immobile", 0f); Set(pb, "limitType", 1); Set(pb, "maxAngleX", 60f);
-            var collider = head.gameObject.AddComponent(Sdk("VRC.SDK3.Dynamics.PhysBone.Components.VRCPhysBoneCollider"));
+            var collider = (rootCollider ? fixture.Source : head.gameObject).AddComponent(Sdk("VRC.SDK3.Dynamics.PhysBone.Components.VRCPhysBoneCollider"));
             Set(collider, "radius", .025f); Set(collider, "position", Vector3.left);
             using (var data = new SerializedObject(pb))
             {
@@ -277,6 +280,10 @@ namespace VRVlog.LilToonExporter.Tests
                 list.GetArrayElementAtIndex(0).objectReferenceValue = collider; data.ApplyModifiedPropertiesWithoutUndo();
             }
             foreach (var skin in fixture.Source.GetComponentsInChildren<SkinnedMeshRenderer>()) skin.sharedMaterial.shader = Shader.Find("lilToon");
+            // A scene-root collider must survive on an identity child; an
+            // exported bone's orphan is serialized even without a group.
+            fixture.Source.AddComponent<VRM10SpringBoneCollider>().Radius = .123f;
+            head.gameObject.AddComponent<VRM10SpringBoneCollider>().Radius = .234f;
             var positions = fixture.Source.GetComponentsInChildren<Transform>().Select(t => t.localPosition).ToArray();
             var originalParent = hair.parent.parent;
             var warnings = new List<string>(); Vrm10Instance imported = null;
@@ -288,18 +295,23 @@ namespace VRVlog.LilToonExporter.Tests
                 var solver = new Vrm10FastSpringboneRuntimeStandalone();
                 imported = await Vrm10.LoadBytesAsync(bytes, canLoadVrm0X: false, awaitCaller: new ImmediateCaller(), springboneRuntime: solver);
                 Assert.That(imported.SpringBone.Springs.Count, Is.EqualTo(1));
+                Assert.That(imported.GetComponentsInChildren<VRM10SpringBoneCollider>().Length, Is.EqualTo(3),
+                    "Both authored unreferenced colliders and the converted collider must survive export.");
                 imported.UpdateType = Vrm10Instance.UpdateTypes.None;
                 Assert.That(solver.ReconstructSpringBone(), Is.True);
                 for (var i = 0; i < 30; i++) solver.Process(1f / 60);
                 var joint = imported.SpringBone.Springs.Single().Joints[0].transform;
                 Assert.That(joint.GetComponent<VRM10SpringBoneJoint>().m_pitch, Is.EqualTo(60 * Mathf.Deg2Rad).Within(.001));
                 var rest = joint.localRotation;
-                joint.parent.localRotation *= Quaternion.Euler(0, 0, 25);
+                Assert.That(imported.TryGetBoneTransform(HumanBodyBones.Head, out var importedHead), Is.True);
+                importedHead.localRotation *= Quaternion.Euler(0, 0, 25);
                 solver.Process(1f / 60);
                 Assert.That(Quaternion.Angle(rest, joint.localRotation), Is.GreaterThan(1), "A serialized count alone does not prove secondary motion.");
                 for (var i = 0; i < 240; i++) solver.Process(1f / 60);
                 Assert.That(Quaternion.Angle(rest, joint.localRotation), Is.LessThan(1), "Hair must settle after the parent stops.");
                 var importedCollider = imported.SpringBone.Springs.Single().ColliderGroups.Single().Colliders.Single();
+                Assert.That(importedCollider.Radius, Is.EqualTo(.025f).Within(.00001),
+                    "Omitted scene-root components must not shift the group's collider index.");
                 var tip = imported.SpringBone.Springs.Single().Joints.Last().transform;
                 importedCollider.Offset = importedCollider.transform.InverseTransformPoint(tip.position + Vector3.right * .01f);
                 Assert.That(solver.ReconstructSpringBone(), Is.True);

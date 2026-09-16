@@ -147,6 +147,7 @@ namespace VRVlog.LilToonExporter
                 ReportApproximations(component, warnings);
             }
             result.Colliders = colliders.Count;
+            PreserveRootColliders(copy, warnings);
             warnings?.Add($"PhysBone変換: 元{result.Sources}件 / 変換{result.Converted}件 / 連鎖{result.Chains}件 / 関節{result.Joints}件 / コライダー{result.Colliders}件 / 省略{result.Skipped}件。");
             if (result.Converted > 0 && (result.Chains == 0 || result.Joints == 0))
                 throw new InvalidOperationException("PhysBone変換対象から揺れ設定を作成できませんでした。");
@@ -232,6 +233,30 @@ namespace VRVlog.LilToonExporter
             if (EnumNumber(source, "limitType", 0) != 0)
                 warnings?.Add(source.name + ": 角度制限はUniVRMの制限へ近似しました。PolarのZ角度は0〜90度に制限します。");
             warnings?.Add(source.name + ": Grab・Pose・外部衝突・PhysBoneパラメーターの連動は変換対象外です。");
+        }
+
+        static void PreserveRootColliders(GameObject copy, ICollection<string> warnings)
+        {
+            // UniVRM 0.131 omits the scene root from model.Nodes, but indexes
+            // collider groups against the unfiltered component array. Preserve
+            // root colliders on an identity child so neither data nor indices
+            // are lost. Do this after building chains to keep the helper out
+            // of PhysBone hierarchy traversal. Only the export copy is changed.
+            var rootColliders = copy.GetComponents<VRM10SpringBoneCollider>();
+            if (rootColliders.Length == 0) return;
+            var anchor = new GameObject("VRVlog Spring Colliders");
+            anchor.transform.SetParent(copy.transform, false);
+            var groups = copy.GetComponentsInChildren<VRM10SpringBoneColliderGroup>(true);
+            foreach (var original in rootColliders)
+            {
+                var relocated = anchor.AddComponent<VRM10SpringBoneCollider>();
+                EditorUtility.CopySerialized(original, relocated);
+                foreach (var group in groups)
+                    for (var i = 0; i < group.Colliders.Count; i++)
+                        if (group.Colliders[i] == original) group.Colliders[i] = relocated;
+                Object.DestroyImmediate(original);
+            }
+            warnings?.Add("アバター最上位のコライダーを出力用の子オブジェクトへ移し、位置と衝突参照を保持しました。");
         }
 
         internal static void VerifyOutput(byte[] bytes, Result result)

@@ -18,6 +18,8 @@ VRChat SDKが導入済みの場合、元モデルのPhysBoneを読み、MA / NDM
   各値とカーブの積を使い、長い分岐の末端を深度1とします。
 - Sphere / Capsule / Planeと内側判定、位置・回転・半径を変換します。
   Capsuleの長さは半径を含む全高から両端の中心を求めます。
+  アバター最上位のコライダーは、出力用コピーの子オブジェクトへ移して保持します。
+  UniVRMが最上位を省略する際のコライダー欠落と衝突参照のずれを防ぎます。
 - Cone / Hinge / Polarの角度と回転を、UniVRMのCone / Hinge / Sphericalへ写します。
   UniVRM既存のVRMC_springBone_limit・VRMC_springBone_extended_colliderを使用します。
   独自拡張は追加しません。これらを扱わないビューアーでは制限・特殊衝突は再現されません。
