@@ -367,6 +367,8 @@ namespace VRVlog.LilToonExporter
                 if (warnings != null && warnings.Count > 0) Debug.Log("VR Vlog 書き出し詳細\n・" + string.Join("\n・", warnings));
                 var expressionCount = VrmMenuExpressions.CountRegistered(bytes);
                 var completion = $"VRMを書き出しました（{bytes.Length:N0}バイト）。\nVRChat表情: {expressionCount}件。";
+                var springSummary = warnings?.FirstOrDefault(message => message.StartsWith("PhysBone変換:", StringComparison.Ordinal));
+                if (springSummary != null) completion += "\n" + springSummary;
                 var changes = ExportAppearanceReport.Changes(warnings);
                 if (changes.Length == 0) EditorUtility.DisplayDialog("書き出し完了", completion, "閉じる");
                 else if (!EditorUtility.DisplayDialog("書き出し完了", completion + "\n\n見た目の変更: " + changes.Length + "件\n" + ExportAppearanceReport.Summary(changes), "閉じる", "詳細を見る"))
