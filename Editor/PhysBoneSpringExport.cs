@@ -20,6 +20,7 @@ namespace VRVlog.LilToonExporter
         internal sealed class Result
         {
             internal int Sources, Converted, Chains, Joints, Colliders, Skipped;
+            internal int ExistingChains, ExistingJoints, ExistingColliders;
         }
 
         internal static bool IsPhysBone(Component component) => component != null && component.GetType().FullName == PhysBoneType;
@@ -47,8 +48,12 @@ namespace VRVlog.LilToonExporter
             var result = new Result { Sources = components.Length };
             if (components.Length == 0) return result;
             var instance = copy.GetComponent<Vrm10Instance>() ?? copy.AddComponent<Vrm10Instance>();
-            var occupied = new HashSet<Transform>(instance.SpringBone.Springs.Where(s => s != null)
-                .SelectMany(s => s.Joints.Take(Math.Max(0, s.Joints.Count - 1))).Where(j => j != null).Select(j => j.transform));
+            var authored = instance.SpringBone.Springs.Where(s => s != null).ToArray();
+            result.ExistingChains = authored.Length;
+            result.ExistingJoints = authored.Sum(s => Math.Max(0, s.Joints.Count - 1));
+            result.ExistingColliders = copy.GetComponentsInChildren<VRM10SpringBoneCollider>().Length;
+            // Terminal components also contain authored fields and must not be overwritten.
+            var occupied = new HashSet<Transform>(authored.SelectMany(s => s.Joints).Where(j => j != null).Select(j => j.transform));
             var existing = new HashSet<Transform>(occupied);
             var roots = components.Where(Active).ToDictionary(c => c, c => Root(c));
             var colliders = new Dictionary<Component, VRM10SpringBoneCollider>();
@@ -57,6 +62,7 @@ namespace VRVlog.LilToonExporter
                 if (!Active(component)) { Skip(result, warnings, component, "無効または非表示"); continue; }
                 var root = roots[component];
                 RequireLocal(copy, root);
+                if (!root.gameObject.activeInHierarchy) { Skip(result, warnings, component, "Root Transformが非表示"); continue; }
                 if (existing.Contains(root)) { Skip(result, warnings, component, "既存のVRM揺れ設定を優先"); continue; }
                 var ignored = new HashSet<Transform>(Items(Read<object>(component, "ignoreTransforms", null)).OfType<Transform>());
                 if (Read(component, "ignoreOtherPhysBones", true))
@@ -79,7 +85,7 @@ namespace VRVlog.LilToonExporter
                     if (depth > 256) throw Unsupported(component, "256段を超えるボーン階層");
                     depths[node] = depth; maximumDepth = Math.Max(maximumDepth, depth);
                     path.Add(node);
-                    var children = node.Cast<Transform>().Where(t => !ignored.Contains(t)).ToArray();
+                    var children = node.Cast<Transform>().Where(t => t.gameObject.activeInHierarchy && !ignored.Contains(t)).ToArray();
                     if (children.Length == 0)
                     {
                         if (endpoint.sqrMagnitude > 1e-12f) { path.Add(Tip(node, endpoint)); maximumDepth = Math.Max(maximumDepth, depth + 1); }
@@ -181,9 +187,12 @@ namespace VRVlog.LilToonExporter
                 if (!(item is Component collider) || collider == null) continue;
                 if (!Active(collider)) { warnings?.Add(source.name + ": 無効なPhysBoneコライダーを省略しました。"); continue; }
                 if (collider.GetType().FullName != ColliderType) throw Unsupported(source, "未対応のコライダー型");
+                var colliderRoot = Root(collider); RequireLocal(copy, colliderRoot);
+                if (!colliderRoot.gameObject.activeInHierarchy)
+                { warnings?.Add(source.name + ": 非表示のRoot Transformを持つコライダーを省略しました。"); continue; }
                 if (!cache.TryGetValue(collider, out var converted))
                 {
-                    var root = Root(collider); RequireLocal(copy, root);
+                    var root = colliderRoot;
                     var shape = EnumNumber(collider, "shapeType", 0);
                     var inside = Read(collider, "insideBounds", false);
                     if (shape < 0 || shape > 2 || shape == 2 && inside) throw Unsupported(collider, "Collider Shape");
@@ -235,7 +244,8 @@ namespace VRVlog.LilToonExporter
             var movingJoints = chains?.OfType<Dictionary<string, object>>().Sum(chain =>
                 chain.TryGetValue("joints", out var joints) && joints is List<object> list ? Math.Max(0, list.Count - 1) : 0) ?? 0;
             var colliderCount = springs != null && springs.TryGetValue("colliders", out raw) && raw is List<object> colliderList ? colliderList.Count : 0;
-            if (chains == null || chains.Count < result.Chains || movingJoints < result.Joints || colliderCount < result.Colliders)
+            if (chains == null || chains.Count < result.ExistingChains + result.Chains ||
+                movingJoints < result.ExistingJoints + result.Joints || colliderCount < result.ExistingColliders + result.Colliders)
                 throw new InvalidOperationException("出力VRMから変換済みの揺れ設定が失われました。ファイルは保存しません。");
         }
 

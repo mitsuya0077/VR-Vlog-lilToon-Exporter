@@ -181,6 +181,70 @@ namespace VRVlog.LilToonExporter.Tests
             Assert.Throws<InvalidOperationException>(() => PhysBoneSpringExport.VerifyOutput(document.Write(), result));
         }
 
+        [Test]
+        public void InactiveExplicitRootsChildrenAndColliderRootsAreSkipped()
+        {
+            var source = new GameObject("source"); GameObject copy = null;
+            try
+            {
+                var hidden = Child(source.transform, "hidden", Vector3.up); hidden.gameObject.SetActive(false);
+                Child(hidden, "tip", Vector3.down);
+                var externalHost = PhysBone(source); Set(externalHost, "rootTransform", hidden);
+                var active = Child(source.transform, "active", Vector3.zero);
+                var pb = PhysBone(active.gameObject); Set(pb, "endpointPosition", Vector3.down * .1f);
+                var hiddenChild = Child(active, "hiddenChild", Vector3.down); hiddenChild.gameObject.SetActive(false);
+                var collider = source.AddComponent(Sdk("VRC.SDK3.Dynamics.PhysBone.Components.VRCPhysBoneCollider"));
+                Set(collider, "rootTransform", hidden);
+                using (var data = new SerializedObject(pb))
+                {
+                    var list = data.FindProperty("colliders"); list.arraySize = 1;
+                    list.GetArrayElementAtIndex(0).objectReferenceValue = collider; data.ApplyModifiedPropertiesWithoutUndo();
+                }
+                copy = Object.Instantiate(source); var warnings = new List<string>();
+                var result = PhysBoneSpringExport.Convert(source, copy, warnings);
+                Assert.That(result.Skipped, Is.EqualTo(1)); Assert.That(result.Chains, Is.EqualTo(1));
+                Assert.That(result.Colliders, Is.Zero);
+                Assert.That(copy.transform.Find("hidden").GetComponentsInChildren<VRM10SpringBoneJoint>(true), Is.Empty);
+                Assert.That(copy.transform.Find("active/hiddenChild").GetComponent<VRM10SpringBoneJoint>(), Is.Null);
+                Assert.That(warnings.Any(w => w.Contains("Root Transformが非表示")), Is.True);
+            }
+            finally { Object.DestroyImmediate(copy); Object.DestroyImmediate(source); }
+        }
+
+        [Test]
+        public void ExistingTerminalFieldsAndVerificationBaselinesAreProtected()
+        {
+            var source = new GameObject("source"); GameObject copy = null;
+            try
+            {
+                var root = Child(source.transform, "root", Vector3.zero);
+                var terminal = Child(root, "terminal", Vector3.down);
+                var a = root.gameObject.AddComponent<VRM10SpringBoneJoint>();
+                var b = terminal.gameObject.AddComponent<VRM10SpringBoneJoint>(); b.m_dragForce = .123f; b.m_pitch = .234f;
+                source.AddComponent<Vrm10Instance>().SpringBone.Springs.Add(new Vrm10InstanceSpringBone.Spring("authored") { Joints = { a, b } });
+                source.AddComponent<VRM10SpringBoneCollider>();
+                var pb = PhysBone(terminal.gameObject); Set(pb, "endpointPosition", Vector3.down * .1f);
+                var independent = Child(source.transform, "independent", Vector3.right);
+                var other = PhysBone(independent.gameObject); Set(other, "endpointPosition", Vector3.down * .1f);
+                copy = Object.Instantiate(source);
+                var result = PhysBoneSpringExport.Convert(source, copy, new List<string>());
+                var kept = copy.transform.Find("root/terminal").GetComponent<VRM10SpringBoneJoint>();
+                Assert.That(kept.m_dragForce, Is.EqualTo(.123f)); Assert.That(kept.m_pitch, Is.EqualTo(.234f));
+                Assert.That(result.Converted, Is.EqualTo(1)); Assert.That(result.ExistingChains, Is.EqualTo(1));
+                Assert.That(result.ExistingJoints, Is.EqualTo(1)); Assert.That(result.ExistingColliders, Is.EqualTo(1));
+                // A serialized old chain alone must not mask the newly converted chain disappearing.
+                var document = GlbDocument.Create(new Dictionary<string, object> {
+                    ["extensions"] = new Dictionary<string, object> {
+                        ["VRMC_springBone"] = new Dictionary<string, object> {
+                            ["springs"] = new List<object> { new Dictionary<string, object> {
+                                ["joints"] = new List<object> { new Dictionary<string, object>(), new Dictionary<string, object>() } } },
+                            ["colliders"] = new List<object> { new Dictionary<string, object>() }
+                        } } }, null);
+                Assert.Throws<InvalidOperationException>(() => PhysBoneSpringExport.VerifyOutput(document.Write(), result));
+            }
+            finally { Object.DestroyImmediate(copy); Object.DestroyImmediate(source); }
+        }
+
         [TestCase(false, false)]
         [TestCase(true, false)]
         [TestCase(true, true)]
