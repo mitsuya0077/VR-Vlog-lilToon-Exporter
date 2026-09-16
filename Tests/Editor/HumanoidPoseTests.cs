@@ -49,6 +49,29 @@ namespace VRVlog.LilToonExporter.Tests
                 upperArmTwist = .5f, lowerArmTwist = .5f, upperLegTwist = .5f, lowerLegTwist = .5f });
             Assert.That(avatar.isValid && avatar.isHuman, Is.True); animator.avatar = avatar; return avatar;
         }
+        [TestCase(HumanBodyBones.Neck)]
+        [TestCase(HumanBodyBones.Head)]
+        [TestCase(HumanBodyBones.LeftEye)]
+        [TestCase(HumanBodyBones.Jaw)]
+        public void TrackingOnlyMusclesCannotBecomeBodyPoses(HumanBodyBones bone)
+        {
+            using var f = new AttachmentConnectionTests.Fixture(); var clip = new AnimationClip();
+            try
+            {
+                var muscle = Enumerable.Range(0, HumanTrait.MuscleCount).First(i => HumanTrait.BoneFromMuscle(i) == (int)bone);
+                AnimationUtility.SetEditorCurve(clip, EditorCurveBinding.FloatCurve("", typeof(Animator), HumanTrait.MuscleName[muscle]), AnimationCurve.Constant(0, 1, .5f));
+                Assert.That(PoseMenuResolver.HasBody(clip), Is.False);
+                var candidate = new PoseCandidate { Id = "tracking-only", Name = "Tracking", Source = "test" };
+                candidate.Layers.Add(new PoseLayer { Clip = clip });
+                Assert.Throws<InvalidOperationException>(() => PoseSampling.Sample(f.Source, candidate));
+                AnimationUtility.SetEditorCurve(clip, EditorCurveBinding.FloatCurve("", typeof(Animator), "Left Arm Down-Up"), AnimationCurve.Constant(0, 1, .5f));
+                Assert.That(PoseMenuResolver.HasBody(clip), Is.True);
+                var clean = PoseSampling.BodyClip(f.Source, f.Source.GetComponent<Animator>(), clip);
+                try { Assert.That(AnimationUtility.GetCurveBindings(clean).Select(b => b.propertyName), Is.EquivalentTo(new[] { "Left Arm Down-Up" })); }
+                finally { Object.DestroyImmediate(clean); }
+            }
+            finally { Object.DestroyImmediate(clip); }
+        }
         [Test]
         public void FingerMusclesMasksAndWeightsAreEvaluatedByUnity()
         {

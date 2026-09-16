@@ -171,7 +171,8 @@ namespace VRVlog.LilToonExporter
             }
         }
         static bool Tracking(StateMachineBehaviour b) => b != null && (b.GetType().Name == "VRCAnimatorTrackingControl" || b.GetType().Name == "VRCAnimatorLocomotionControl");
-        internal static bool HasBody(AnimationClip clip, bool skipMuscles = false) => clip != null && AnimationUtility.GetCurveBindings(clip).Any(b => !skipMuscles && b.type == typeof(Animator) || b.type == typeof(Transform));
+        internal static bool HasBody(AnimationClip clip, bool skipMuscles = false) => clip != null && AnimationUtility.GetCurveBindings(clip).Any(b =>
+            !skipMuscles && b.type == typeof(Animator) && b.path == "" && PoseSampling.IsBodyMuscle(b.propertyName) || b.type == typeof(Transform));
         static IEnumerable<AnimatorStateMachine> Machines(AnimatorStateMachine root)
         {
             var pending = new Stack<AnimatorStateMachine>(); var visited = new HashSet<AnimatorStateMachine>(); pending.Push(root);

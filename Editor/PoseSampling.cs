@@ -154,7 +154,7 @@ namespace VRVlog.LilToonExporter
                 // Empty humanoid streams evaluate Unity's muscle defaults,
                 // which need not equal the avatar's authored rest (notably
                 // fingers). Supply its actual rest as the bottom layer.
-                var hasMuscles = candidate.Layers.Any(l => !l.SkipMuscles && AnimationUtility.GetCurveBindings(l.Clip).Any(b => b.type == typeof(Animator)));
+                var hasMuscles = candidate.Layers.Any(l => !l.SkipMuscles && AnimationUtility.GetCurveBindings(l.Clip).Any(b => b.type == typeof(Animator) && b.path == "" && IsBodyMuscle(b.propertyName)));
                 var hasTransforms = candidate.Layers.Any(l => AnimationUtility.GetCurveBindings(l.Clip).Any(b => b.type == typeof(Transform)));
                 if (hasMuscles && hasTransforms) throw new InvalidOperationException("HumanoidカーブとTransformカーブの混合は未対応です。");
                 if (hasMuscles && candidate.Layers.Count(l => l.Weight > 0 && l.GroupWeight > 0) > 1)
@@ -241,13 +241,6 @@ namespace VRVlog.LilToonExporter
             var paths = new HashSet<string>(HumanoidPoseData.BoneNames.Select(n => animator.GetBoneTransform(HumanBone(n)))
                 .Where(t => t != null).Select(t => AnimationUtility.CalculateTransformPath(t, root.transform)));
             var hips = AnimationUtility.CalculateTransformPath(animator.GetBoneTransform(HumanBodyBones.Hips), root.transform);
-            var muscles = new HashSet<string>(HumanTrait.MuscleName);
-            foreach (var side in new[] { "Left", "Right" })
-                foreach (var finger in new[] { "Thumb", "Index", "Middle", "Ring", "Little" })
-                {
-                    muscles.Add(side + "Hand." + finger + ".Spread");
-                    for (var joint = 1; joint <= 3; joint++) muscles.Add(side + "Hand." + finger + "." + joint + " Stretched");
-                }
             foreach (var binding in AnimationUtility.GetCurveBindings(result))
             {
                 var p = binding.propertyName;
@@ -263,7 +256,7 @@ namespace VRVlog.LilToonExporter
                     (p.StartsWith("m_LocalScale.") || binding.path != hips && p.StartsWith("m_LocalPosition.")))
                 { Object.DestroyImmediate(result); throw new InvalidOperationException("腰以外の位置や骨スケールを変更するポーズは未対応です。"); }
                 var allowed = !skipMuscles && binding.type == typeof(Animator) && binding.path == "" &&
-                    (muscles.Contains(p) || p.StartsWith("RootT.") || p.StartsWith("RootQ."));
+                    IsBodyMuscle(p);
                 allowed |= binding.type == typeof(Transform) && paths.Contains(binding.path) &&
                     (p.StartsWith("m_LocalRotation.") || p.StartsWith("localEulerAngles") || binding.path == hips && p.StartsWith("m_LocalPosition."));
                 if (!allowed) AnimationUtility.SetEditorCurve(result, binding, null);
@@ -381,6 +374,19 @@ namespace VRVlog.LilToonExporter
                         return side + "Hand." + finger + "." + name.Substring((side + " " + finger + " ").Length);
             return name;
         }
+        static readonly HashSet<string> BodyMuscles = BuildBodyMuscles();
+        static HashSet<string> BuildBodyMuscles()
+        {
+            var bones = new HashSet<HumanBodyBones>(HumanoidPoseData.BoneNames.Select(HumanBone));
+            var result = new HashSet<string>(StringComparer.Ordinal);
+            for (var i = 0; i < HumanTrait.MuscleCount; i++)
+                if (bones.Contains((HumanBodyBones)HumanTrait.BoneFromMuscle(i)))
+                { result.Add(HumanTrait.MuscleName[i]); result.Add(MuscleProperty(HumanTrait.MuscleName[i])); }
+            foreach (var axis in "xyz") result.Add("RootT." + axis);
+            foreach (var axis in "xyzw") result.Add("RootQ." + axis);
+            return result;
+        }
+        internal static bool IsBodyMuscle(string property) => BodyMuscles.Contains(property);
         internal static AvatarMaskBodyPart Part(string bone)
         {
             var left = bone.StartsWith("left");
