@@ -198,6 +198,26 @@ namespace VRVlog.LilToonExporter.Tests
             finally { Object.DestroyImmediate(machine); }
         }
         [Test]
+        public void MenuGraphRejectsNestedStateMachineTransitions()
+        {
+            var root = new AnimatorStateMachine();
+            try
+            {
+                var child = root.AddStateMachine("Nested"); var pose = child.AddState("Pose");
+                var edge = root.AddAnyStateTransition(pose); edge.hasExitTime = false; edge.duration = 0; edge.canTransitionToSelf = false;
+                var selected = new Dictionary<string, float>();
+                Assert.That(PoseMenuResolver.Resolve(root, selected), Is.SameAs(pose));
+                var transition = new AnimatorTransition { destinationState = pose };
+                try
+                {
+                    root.SetStateMachineTransitions(child, new[] { transition });
+                    Assert.That(Assert.Throws<InvalidOperationException>(() => PoseMenuResolver.Resolve(root, selected)).Message, Does.Contain("サブStateMachine"));
+                }
+                finally { Object.DestroyImmediate(transition); }
+            }
+            finally { Object.DestroyImmediate(root); }
+        }
+        [Test]
         public void ContractRejectsVersionNonFiniteInvalidBonesAndDuplicates()
         {
             var pose = new HumanoidPoseData { Id = "a", Name = "Pose", Category = "", Source = "test" };

@@ -120,7 +120,12 @@ namespace VRVlog.LilToonExporter
                 var chain = new List<AnimatorStateMachine>(ancestors) { current };
                 if (current.entryTransitions.Length != 0) throw new InvalidOperationException("条件付きEntry遷移は未対応です。");
                 foreach (var s in current.states) parents.Add(s.state, chain);
-                foreach (var child in current.stateMachines) Index(child.stateMachine, chain);
+                foreach (var child in current.stateMachines)
+                {
+                    if (current.GetStateMachineTransitions(child.stateMachine).Length != 0)
+                        throw new InvalidOperationException("サブStateMachine間の遷移は未対応です。");
+                    Index(child.stateMachine, chain);
+                }
             }
             Index(machine, new List<AnimatorStateMachine>());
             if (states.Length > 256) throw new InvalidOperationException("Animatorの状態数が上限を超えています。");
