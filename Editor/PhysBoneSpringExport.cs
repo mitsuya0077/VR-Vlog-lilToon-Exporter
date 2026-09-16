@@ -46,7 +46,11 @@ namespace VRVlog.LilToonExporter
                 throw new InvalidOperationException("揺れ物変換には元アバターから独立した一時コピーが必要です。");
             var components = copy.GetComponentsInChildren<Component>(true).Where(IsPhysBone).ToArray();
             var result = new Result { Sources = components.Length };
-            if (components.Length == 0) return result;
+            if (components.Length == 0)
+            {
+                PreserveRootColliders(copy, warnings);
+                return result;
+            }
             var instance = copy.GetComponent<Vrm10Instance>() ?? copy.AddComponent<Vrm10Instance>();
             var authored = instance.SpringBone.Springs.Where(s => s != null).ToArray();
             result.ExistingChains = authored.Length;

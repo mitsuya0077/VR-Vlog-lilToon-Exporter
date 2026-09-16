@@ -247,6 +247,41 @@ namespace VRVlog.LilToonExporter.Tests
             finally { Object.DestroyImmediate(copy); Object.DestroyImmediate(source); }
         }
 
+        [Test]
+        public async Task AuthoredRootColliderSurvivesWithoutAnyPhysBoneOrSdkDependency()
+        {
+            using var fixture = new AttachmentConnectionTests.Fixture();
+            var hair = fixture.Source.transform.Find("Independent hair/Head");
+            var head = fixture.Source.GetComponent<Animator>().GetBoneTransform(HumanBodyBones.Head);
+            hair.parent.SetParent(head, true);
+            var authored = fixture.Source.AddComponent<Vrm10Instance>();
+            var joint = hair.gameObject.AddComponent<VRM10SpringBoneJoint>();
+            var tip = Child(hair, "Authored tip", Vector3.down * .15f).gameObject.AddComponent<VRM10SpringBoneJoint>();
+            var collider = fixture.Source.AddComponent<VRM10SpringBoneCollider>();
+            collider.Radius = .025f; collider.Offset = Vector3.left;
+            var group = fixture.Source.AddComponent<VRM10SpringBoneColliderGroup>(); group.Colliders.Add(collider);
+            authored.SpringBone.ColliderGroups.Add(group);
+            authored.SpringBone.Springs.Add(new Vrm10InstanceSpringBone.Spring("authored") {
+                Joints = { joint, tip }, ColliderGroups = { group }
+            });
+            foreach (var skin in fixture.Source.GetComponentsInChildren<SkinnedMeshRenderer>()) skin.sharedMaterial.shader = Shader.Find("lilToon");
+            Vrm10Instance imported = null;
+            try
+            {
+                var bytes = UniVrmOneClickExporter.Export(fixture.Source, "Authored spring", "Tests",
+                    blinkOptions: new BlinkExportOptions { Mode = BlinkExportMode.None });
+                imported = await Vrm10.LoadBytesAsync(bytes, canLoadVrm0X: false, awaitCaller: new ImmediateCaller());
+                var restored = imported.SpringBone.Springs.Single().ColliderGroups.Single().Colliders.Single();
+                Assert.That(restored.Radius, Is.EqualTo(collider.Radius).Within(.00001));
+                Assert.That(Vector3.Distance(restored.transform.TransformPoint(restored.Offset),
+                    collider.transform.TransformPoint(collider.Offset)), Is.LessThan(.00001));
+                Assert.That(fixture.Source.GetComponent<VRM10SpringBoneCollider>(), Is.SameAs(collider));
+                Assert.That(group.Colliders.Single(), Is.SameAs(collider));
+                Assert.That(fixture.Source.transform.Find("VRVlog Spring Colliders"), Is.Null);
+            }
+            finally { if (imported != null) Object.DestroyImmediate(imported.gameObject); }
+        }
+
         [TestCase(false, false, false)]
         [TestCase(true, false, false)]
         [TestCase(true, true, false)]
