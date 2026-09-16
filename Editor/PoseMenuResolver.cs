@@ -78,7 +78,7 @@ namespace VRVlog.LilToonExporter
                                 if (controlledWeights.TryGetValue(target, out var previous) && previous != weight)
                                     throw new InvalidOperationException("複数レイヤーから重みが変更されるため順序を確定できません。");
                                 controlledWeights[target] = weights[target] = weight;
-                                if (selectedByMenu && weight > 0) selectedWeightTargets.Add(target);
+                                if (selectedByMenu) selectedWeightTargets.Add(target);
                             }
                             if (hasBody) resolved.Add((type, layer, state, Clip(state), i, skipMuscles, outer));
                         }
@@ -87,12 +87,14 @@ namespace VRVlog.LilToonExporter
                     {
                         if (!weights.TryGetValue(item.type, out var playableWeight)) throw new InvalidOperationException("不明なPlayable Layerです。");
                         var weight = item.index == 0 ? 1 : item.layer.defaultWeight;
-                        if (weight == 0 || playableWeight == 0) continue;
                         if (!PoseSampling.Finite(weight) || weight < 0 || weight > 1) throw new InvalidOperationException("レイヤー重みが不正です。");
+                        if (weight == 0) continue;
+                        // Disabling a body layer can expose a lower static pose.
+                        selectedAffectsBody |= HasBody(item.clip, item.skipMuscles) && selectedWeightTargets.Contains(item.type);
+                        if (playableWeight == 0) continue;
                         if (item.state.motion == null) continue;
                         if (item.clip == null) throw new InvalidOperationException("BlendTreeによる合成は未対応です。");
                         if (!HasBody(item.clip, item.skipMuscles)) continue;
-                        selectedAffectsBody |= selectedWeightTargets.Contains(item.type);
                         if (item.state.writeDefaultValues && resolved.Count > 1)
                             throw new InvalidOperationException("複数レイヤーのWrite Defaultsによる暗黙の姿勢合成は未対応です。");
                         if (item.layer.blendingMode != AnimatorLayerBlendingMode.Override || item.type == "Additive")

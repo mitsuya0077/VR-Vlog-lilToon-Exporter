@@ -186,7 +186,9 @@ namespace VRVlog.LilToonExporter
                     if (layer.Clip == null || !Finite(layer.Time) || layer.Time < 0 || layer.Time > 600 || layer.Time > layer.Clip.length)
                         throw new InvalidOperationException("クリップまたは採用時刻が不正です（0秒〜クリップ末尾、最大600秒）。");
                     var clean = BodyClip(copy, animator, layer.Clip, layer.SkipMuscles); clips.Add(clean);
-                    any |= AnimationUtility.GetCurveBindings(clean).Length > 0;
+                    any |= AnimationUtility.GetCurveBindings(clean).Length > 0 &&
+                        (bones.Any(b => WritesBone(layer, b.name, b.bone, copy)) ||
+                         WritesHipsPosition(layer, AnimationUtility.CalculateTransformPath(hips, copy.transform)));
                     var playable = AnimationClipPlayable.Create(graph, clean);
                     playable.SetApplyFootIK(false); playable.SetApplyPlayableIK(false); playable.SetSpeed(0); playable.SetTime(layer.Time);
                     graph.Connect(playable, 0, inner, i + 1); inner.SetInputWeight(i + 1, layer.Weight);
@@ -194,7 +196,7 @@ namespace VRVlog.LilToonExporter
                     if (layer.Mask != null) inner.SetLayerMaskFromAvatarMask((uint)(i + 1), layer.Mask);
                     }
                 }
-                if (!any) throw new InvalidOperationException("書き出すHumanoidの体・手足・指のカーブがありません。");
+                if (!any) throw new InvalidOperationException("有効なマスク・重みで書き出すHumanoidの体・手足・指のカーブがありません。");
                 if (hasTransforms) EvaluateTransforms(copy, animator, candidate.Layers);
                 else
                 {
@@ -283,7 +285,7 @@ namespace VRVlog.LilToonExporter
                 foreach (var b in AnimationUtility.GetCurveBindings(layer.Clip).Where(b => b.type == typeof(Animator) && b.path == ""))
                 {
                     var p = b.propertyName; var axis = "xyzw".IndexOf(p[p.Length - 1]);
-                    if (axis < 0 || !(p.StartsWith("RootT.") || p.StartsWith("RootQ."))) continue;
+                    if (axis < 0 || !IsBodyMuscle(p) || !(p.StartsWith("RootT.") || p.StartsWith("RootQ."))) continue;
                     var value = AnimationUtility.GetEditorCurve(layer.Clip, b).Evaluate(layer.Time);
                     if (!Finite(value)) throw new InvalidOperationException("HumanoidのRoot評価値が有限ではありません。");
                     if (p.StartsWith("RootT.") && axis < 3) { position[axis] = value; hasPosition = true; }
@@ -411,8 +413,9 @@ namespace VRVlog.LilToonExporter
             foreach (var binding in AnimationUtility.GetCurveBindings(layer.Clip))
             {
                 if (binding.type == typeof(Transform) && binding.path == path &&
+                    (binding.propertyName.StartsWith("m_LocalRotation.") || binding.propertyName.StartsWith("localEulerAngles") || name == "hips" && binding.propertyName.StartsWith("m_LocalPosition.")) &&
                     MaskAllows(layer.Mask, part, path, false) && MaskAllows(layer.OuterMask, part, path, false)) return true;
-                if (layer.SkipMuscles || binding.type != typeof(Animator) || binding.path != "") continue;
+                if (layer.SkipMuscles || binding.type != typeof(Animator) || binding.path != "" || !IsBodyMuscle(binding.propertyName)) continue;
                 if (name == "hips" && binding.propertyName.StartsWith("RootQ."))
                 {
                     if (MaskAllows(layer.Mask, AvatarMaskBodyPart.Root, "", true) && MaskAllows(layer.OuterMask, AvatarMaskBodyPart.Root, "", true)) return true;
@@ -430,7 +433,7 @@ namespace VRVlog.LilToonExporter
         }
         static bool WritesHipsPosition(PoseLayer layer, string hipsPath) => layer.Weight > 0 && layer.GroupWeight > 0 &&
             AnimationUtility.GetCurveBindings(layer.Clip).Any(b =>
-                b.type == typeof(Animator) && !layer.SkipMuscles && b.propertyName.StartsWith("RootT.") &&
+                b.type == typeof(Animator) && b.path == "" && !layer.SkipMuscles && IsBodyMuscle(b.propertyName) && b.propertyName.StartsWith("RootT.") &&
                 MaskAllows(layer.Mask, AvatarMaskBodyPart.Root, "", true) && MaskAllows(layer.OuterMask, AvatarMaskBodyPart.Root, "", true) ||
                 b.type == typeof(Transform) && b.path == hipsPath && b.propertyName.StartsWith("m_LocalPosition.") &&
                 MaskAllows(layer.Mask, AvatarMaskBodyPart.Body, hipsPath, false) && MaskAllows(layer.OuterMask, AvatarMaskBodyPart.Body, hipsPath, false));

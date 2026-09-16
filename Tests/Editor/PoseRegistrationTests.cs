@@ -81,7 +81,8 @@ namespace VRVlog.LilToonExporter.Tests
         [TestCase(true, true, false)]
         [TestCase(false, false, false, "Action")]
         [TestCase(false, false, false, "Action", true)]
-        public void SubmenuAndMaGeneratedGestureMenuResolveOnlySelectedStaticPose(bool modularAvatar, bool defaultLocomotion, bool overrideClip, string layerType = "Gesture", bool crossLayerWeight = false)
+        [TestCase(false, false, false, "Gesture", true, 0f)]
+        public void SubmenuAndMaGeneratedGestureMenuResolveOnlySelectedStaticPose(bool modularAvatar, bool defaultLocomotion, bool overrideClip, string layerType = "Gesture", bool crossLayerWeight = false, float controlWeight = 1f)
         {
             using var f = new AttachmentConnectionTests.Fixture(); var descriptor = Descriptor(f.Source);
             var menuType = Find("VRC.SDK3.Avatars.ScriptableObjects.VRCExpressionsMenu");
@@ -157,10 +158,17 @@ namespace VRVlog.LilToonExporter.Tests
                         var idle = fxMachine.AddState("Idle"); idle.writeDefaultValues = false;
                         var enable = fxMachine.AddState("Enable Action"); enable.writeDefaultValues = false;
                         var control = enable.AddStateMachineBehaviour(Find("VRC.SDK3.Avatars.Components.VRCPlayableLayerControl"));
-                        Set(control, "layer", "Action"); Set(control, "goalWeight", 1f); Set(control, "blendDuration", 0f);
+                        Set(control, "layer", layerType); Set(control, "goalWeight", controlWeight); Set(control, "blendDuration", 0f);
                         var t = fxMachine.AddAnyStateTransition(enable); t.canTransitionToSelf = false; t.hasExitTime = false; t.duration = 0; t.AddCondition(AnimatorConditionMode.Equals, 1, "Pose");
                         fx.layers = new[] { new AnimatorControllerLayer { name = "Enable body", defaultWeight = 1, stateMachine = fxMachine } };
                         var fxLayer = array.GetValue(4); Set(fxLayer, "isDefault", false); Set(fxLayer, "animatorController", fx); array.SetValue(fxLayer, 4); field.SetValue(descriptor, array);
+                        if (controlWeight == 0)
+                        {
+                            var lower = new AnimatorController(); owned.Add(lower); var lowerMachine = new AnimatorStateMachine();
+                            var lowerState = lowerMachine.AddState("Lower pose"); lowerState.writeDefaultValues = false; lowerState.motion = unrelated;
+                            lower.layers = new[] { new AnimatorControllerLayer { name = "Base pose", defaultWeight = 1, stateMachine = lowerMachine } };
+                            var baseLayer = array.GetValue(0); Set(baseLayer, "isDefault", false); Set(baseLayer, "animatorController", lower); array.SetValue(baseLayer, 0); field.SetValue(descriptor, array);
+                        }
                     }
                 }
                 var before = EditorJsonUtility.ToJson(controller); var beforeMenu = EditorJsonUtility.ToJson(menu);
@@ -187,7 +195,7 @@ namespace VRVlog.LilToonExporter.Tests
                 Assert.That(result[0].Layers.Count, Is.EqualTo(1));
                 if (overrideClip) Assert.That(result[0].Layers[0].Clip, Is.SameAs(unrelated));
                 var sample = PoseSampling.Sample(clone, result[0]);
-                Assert.That(sample.Bones.Single(b => b.Name == "leftUpperArm").Rotation[2] * (overrideClip ? -1 : 1), Is.LessThan(0), "Use the effective selected clip, including AnimatorOverrideController.");
+                Assert.That(sample.Bones.Single(b => b.Name == "leftUpperArm").Rotation[2] * (overrideClip || crossLayerWeight && controlWeight == 0 ? -1 : 1), Is.LessThan(0), "Use the effective selected clip, including overrides and a revealed lower layer.");
                 Assert.That(EditorJsonUtility.ToJson(controller), Is.EqualTo(before)); Assert.That(EditorJsonUtility.ToJson(menu), Is.EqualTo(beforeMenu));
             }
             finally

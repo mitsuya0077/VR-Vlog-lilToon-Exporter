@@ -88,12 +88,16 @@ namespace VRVlog.LilToonExporter.Tests
                 var half = PoseSampling.Sample(f.Source, candidate).Bones.Single(b => b.Name == "leftIndexProximal").Rotation;
                 Assert.That(Math.Abs(half[3]), Is.GreaterThan(Math.Abs(full[3])).And.LessThan(.999));
                 candidate.Layers[0].Weight = 0;
-                var zero = PoseSampling.Sample(f.Source, candidate).Bones.Single(b => b.Name == "leftIndexProximal").Rotation;
-                Assert.That(Math.Abs(zero[3]), Is.GreaterThan(.999));
+                Assert.Throws<InvalidOperationException>(() => PoseSampling.Sample(f.Source, candidate));
                 candidate.Layers[0].Weight = 1;
                 mask.SetHumanoidBodyPartActive(AvatarMaskBodyPart.LeftFingers, false); candidate.Layers[0].Mask = mask;
-                var masked = PoseSampling.Sample(f.Source, candidate).Bones.Single(b => b.Name == "leftIndexProximal").Rotation;
-                Assert.That(Math.Abs(masked[3]), Is.GreaterThan(.999));
+                Assert.Throws<InvalidOperationException>(() => PoseSampling.Sample(f.Source, candidate));
+                candidate.Layers[0].Mask = null; candidate.Layers[0].OuterMask = mask;
+                Assert.Throws<InvalidOperationException>(() => PoseSampling.Sample(f.Source, candidate));
+                AnimationUtility.SetEditorCurve(clip, EditorCurveBinding.FloatCurve("", typeof(Animator), "Right Arm Down-Up"), AnimationCurve.Constant(0, 1, .5f));
+                var masked = PoseSampling.Sample(f.Source, candidate);
+                Assert.That(Math.Abs(masked.Bones.Single(b => b.Name == "leftIndexProximal").Rotation[3]), Is.GreaterThan(.999));
+                Assert.That(Math.Abs(masked.Bones.Single(b => b.Name == "rightUpperArm").Rotation[3]), Is.LessThan(.999));
             }
             finally { Object.DestroyImmediate(clip); Object.DestroyImmediate(mask); Object.DestroyImmediate(avatar); }
         }
@@ -129,6 +133,8 @@ namespace VRVlog.LilToonExporter.Tests
                 var active = PoseSampling.Sample(f.Source, candidate).Bones.Single(b => b.Name == "hips").Rotation;
                 Assert.That(Math.Abs(active[3]), Is.LessThan(.99));
                 mask.SetHumanoidBodyPartActive(AvatarMaskBodyPart.Root, false); mask.SetHumanoidBodyPartActive(AvatarMaskBodyPart.Body, true);
+                Assert.Throws<InvalidOperationException>(() => PoseSampling.Sample(f.Source, candidate));
+                AnimationUtility.SetEditorCurve(clip, EditorCurveBinding.FloatCurve("", typeof(Animator), "Left Arm Down-Up"), AnimationCurve.Constant(0, 1, .5f));
                 var blocked = PoseSampling.Sample(f.Source, candidate).Bones.Single(b => b.Name == "hips").Rotation;
                 Assert.That(Math.Abs(blocked[3]), Is.GreaterThan(.999));
             }
@@ -151,6 +157,8 @@ namespace VRVlog.LilToonExporter.Tests
                 var placed = PoseSampling.Sample(f.Source, candidate);
                 Assert.That(placed.HipsOffset[1], Is.EqualTo(first.HipsOffset[1]).Within(.002));
                 mask.SetHumanoidBodyPartActive(AvatarMaskBodyPart.Root, false); mask.SetHumanoidBodyPartActive(AvatarMaskBodyPart.Body, true);
+                Assert.Throws<InvalidOperationException>(() => PoseSampling.Sample(f.Source, candidate));
+                AnimationUtility.SetEditorCurve(clip, EditorCurveBinding.FloatCurve("", typeof(Animator), "Left Arm Down-Up"), AnimationCurve.Constant(0, 1, .5f));
                 Assert.That(PoseSampling.Sample(f.Source, candidate).HipsOffset[1], Is.EqualTo(0).Within(.002));
             }
             finally { Object.DestroyImmediate(clip); Object.DestroyImmediate(mask); }
