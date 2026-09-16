@@ -1,0 +1,179 @@
+using System;
+using System.Collections;
+using System.Collections.Generic;
+using System.Linq;
+using NUnit.Framework;
+using UnityEditor;
+using UnityEditor.Animations;
+using UnityEngine;
+using Object = UnityEngine.Object;
+
+namespace VRVlog.LilToonExporter.Tests
+{
+    public sealed class PoseRegistrationTests
+    {
+        static Type Find(string name) => AppDomain.CurrentDomain.GetAssemblies().Select(a => a.GetType(name)).FirstOrDefault(t => t != null);
+        static void Set(object target, string name, object value)
+        {
+            var field = target.GetType().GetField(name);
+            Assert.That(field, Is.Not.Null, name);
+            field.SetValue(target, field.FieldType.IsEnum ? Enum.Parse(field.FieldType, value.ToString()) : value);
+        }
+        static object Add(IList list)
+        { var value = Activator.CreateInstance(list.GetType().GetGenericArguments()[0]); list.Add(value); return value; }
+        static Component Descriptor(GameObject root)
+        {
+            var type = Find("VRC.SDK3.Avatars.Components.VRCAvatarDescriptor");
+            if (type == null) Assert.Ignore("Install VRChat SDK for registration tests.");
+            var result = root.AddComponent(type); Set(result, "customExpressions", true); Set(result, "customizeAnimationLayers", true);
+            Layers(result, "baseAnimationLayers", new[] { "Base", "Additive", "Gesture", "Action", "FX" });
+            Layers(result, "specialAnimationLayers", new[] { "Sitting", "TPose", "IKPose" });
+            return result;
+        }
+        static void Layers(Component descriptor, string fieldName, string[] types)
+        {
+            var field = descriptor.GetType().GetField(fieldName); var element = field.FieldType.GetElementType();
+            var array = Array.CreateInstance(element, types.Length);
+            for (var i = 0; i < types.Length; i++) { var layer = Activator.CreateInstance(element); Set(layer, "type", types[i]); Set(layer, "isDefault", true); array.SetValue(layer, i); }
+            field.SetValue(descriptor, array);
+        }
+        [Test]
+        public void AplSnapshotKeepsSourceNamesCategoriesExclusionsAndRejectsBeforeAnimation()
+        {
+            var type = Find(PoseExportSession.AplType);
+            if (type == null) Assert.Ignore("Install APL runtime for the real serialized registration test.");
+            using var f = new AttachmentConnectionTests.Fixture(); Descriptor(f.Source);
+            var child = new GameObject("Library"); child.transform.SetParent(f.Source.transform, false);
+            var component = child.AddComponent(type); var clip = HumanoidPoseTests.Clip(f.Source);
+            try
+            {
+                var data = Activator.CreateInstance(type.GetField("data").FieldType); Set(component, "data", data);
+                var category = Add((IList)PoseMenuResolver.Member(data, "categories")); Set(category, "name", "座り");
+                var entry = Add((IList)PoseMenuResolver.Member(category, "poses")); Set(entry, "name", "登録名"); Set(entry, "animationClip", clip);
+                var before = EditorJsonUtility.ToJson(component);
+                var options = new PoseExportOptions(); options.Manual.Add(new ManualPose { Clip = clip });
+                using (var snapshot = new PoseExportSession(f.Source, options))
+                {
+                    Assert.That(snapshot.Entries[0].Name, Is.EqualTo("登録名")); Assert.That(snapshot.Entries[0].Category, Is.EqualTo("座り"));
+                    Assert.That(snapshot.Entries[0].Layers[0].Clip, Is.SameAs(clip));
+                    var clone = Object.Instantiate(f.Source);
+                    try
+                    {
+                        PoseExportSession.RemoveAplFromCopy(f.Source, clone);
+                        Assert.That(clone.GetComponentInChildren(type), Is.Null); Assert.That(component, Is.Not.Null);
+                        snapshot.CollectPrepared(clone);
+                        Assert.That(snapshot.Entries.Count, Is.EqualTo(1), "Same clip/time/conditions has one pose with combined provenance.");
+                        Assert.That(snapshot.Entries[0].Source, Does.Contain("APL").And.Contain("手動"));
+                    }
+                    finally { Object.DestroyImmediate(clone); }
+                }
+                Assert.That(EditorJsonUtility.ToJson(component), Is.EqualTo(before));
+                using (var excluded = new PoseExportSession(f.Source, null, t => t == child.transform)) Assert.That(excluded.Entries.Count, Is.Zero);
+                Set(entry, "beforeAnimationClip", clip);
+                using (var unsupported = new PoseExportSession(f.Source, null)) Assert.That(unsupported.Entries[0].Error, Does.Contain("開始"));
+            }
+            finally { Object.DestroyImmediate(clip); }
+        }
+
+        [TestCase(false, false, false)]
+        [TestCase(false, false, true)]
+        [TestCase(true, false, false)]
+        [TestCase(true, true, false)]
+        [TestCase(false, false, false, "Action")]
+        public void SubmenuAndMaGeneratedGestureMenuResolveOnlySelectedStaticPose(bool modularAvatar, bool defaultLocomotion, bool overrideClip, string layerType = "Gesture")
+        {
+            using var f = new AttachmentConnectionTests.Fixture(); var descriptor = Descriptor(f.Source);
+            var menuType = Find("VRC.SDK3.Avatars.ScriptableObjects.VRCExpressionsMenu");
+            var menu = ScriptableObject.CreateInstance(menuType); var sub = ScriptableObject.CreateInstance(menuType);
+            var controller = new AnimatorController(); var machine = new AnimatorStateMachine();
+            var parameters = ScriptableObject.CreateInstance(Find("VRC.SDK3.Avatars.ScriptableObjects.VRCExpressionParameters"));
+            var parameterField = parameters.GetType().GetField("parameters"); var parameterType = parameterField.FieldType.GetElementType();
+            var parameterArray = Array.CreateInstance(parameterType, 1); var parameterRow = Activator.CreateInstance(parameterType);
+            Set(parameterRow, "name", "Pose"); Set(parameterRow, "valueType", "Int"); parameterArray.SetValue(parameterRow, 0); parameterField.SetValue(parameters, parameterArray); Set(descriptor, "expressionParameters", parameters);
+            var clip = HumanoidPoseTests.Clip(f.Source); var unrelated = HumanoidPoseTests.Clip(f.Source, -80);
+            var owned = new List<Object>();
+            var folderPath = "Assets/PoseRegistrationTest-" + Guid.NewGuid().ToString("N");
+            AssetDatabase.CreateFolder("Assets", folderPath.Substring("Assets/".Length));
+            GameObject clone = null;
+            try
+            {
+                controller.AddParameter("Pose", AnimatorControllerParameterType.Int);
+                var idle = machine.AddState("Idle"); idle.writeDefaultValues = false;
+                var state = machine.AddState("Selected"); state.writeDefaultValues = false; state.motion = clip;
+                if (layerType == "Action")
+                {
+                    var control = state.AddStateMachineBehaviour(Find("VRC.SDK3.Avatars.Components.VRCPlayableLayerControl"));
+                    Set(control, "layer", "Action"); Set(control, "goalWeight", 1f); Set(control, "blendDuration", 0f);
+                }
+                var other = machine.AddState("Unselected"); other.writeDefaultValues = false; other.motion = unrelated;
+                var t = machine.AddAnyStateTransition(state); t.canTransitionToSelf = false; t.hasExitTime = false; t.duration = 0; t.AddCondition(AnimatorConditionMode.Equals, 1, "Pose");
+                controller.layers = new[] { new AnimatorControllerLayer { name = "Static pose", defaultWeight = 1, stateMachine = machine } };
+                RuntimeAnimatorController effective = controller;
+                if (overrideClip) { var replacement = new AnimatorOverrideController(controller); replacement[clip] = unrelated; owned.Add(replacement); effective = replacement; }
+                var folder = Add((IList)PoseMenuResolver.Member(menu, "controls")); Set(folder, "name", "カテゴリー"); Set(folder, "type", "SubMenu"); Set(folder, "subMenu", sub);
+                var toggle = Add((IList)PoseMenuResolver.Member(sub, "controls")); Set(toggle, "name", "メニュー名"); Set(toggle, "type", "Toggle"); Set(toggle, "value", 1f);
+                var parameter = Activator.CreateInstance(toggle.GetType().GetField("parameter").FieldType); Set(parameter, "name", "Pose"); Set(toggle, "parameter", parameter);
+                if (modularAvatar)
+                {
+                    // An explicitly neutral avatar proves MA menu generation
+                    // independently from VRChat's external-input locomotion.
+                    // The defaultLocomotion case below must remain rejected.
+                    if (!defaultLocomotion)
+                    {
+                        foreach (var key in new[] { "baseAnimationLayers", "specialAnimationLayers" })
+                        {
+                            var field = descriptor.GetType().GetField(key); var array = (Array)field.GetValue(descriptor);
+                            for (var i = 0; i < array.Length; i++)
+                            {
+                                var empty = new AnimatorController(); owned.Add(empty);
+                                var layer = array.GetValue(i); Set(layer, "isDefault", false); Set(layer, "animatorController", empty); array.SetValue(layer, i);
+                            }
+                            field.SetValue(descriptor, array);
+                        }
+                    }
+                    var installType = Find("nadena.dev.modular_avatar.core.ModularAvatarMenuInstaller");
+                    var mergeType = Find("nadena.dev.modular_avatar.core.ModularAvatarMergeAnimator");
+                    if (installType == null || mergeType == null) Assert.Ignore("Install MA/NDMF for generated menus.");
+                    var go = new GameObject("Menu authoring"); go.transform.SetParent(f.Source.transform, false);
+                    Set(go.AddComponent(installType), "menuToAppend", menu);
+                    var merge = go.AddComponent(mergeType); Set(merge, "animator", effective); Set(merge, "layerType", "Gesture"); Set(merge, "pathMode", "Absolute");
+                }
+                else
+                {
+                    Set(descriptor, "expressionsMenu", menu);
+                    var field = descriptor.GetType().GetField("baseAnimationLayers"); var array = (Array)field.GetValue(descriptor);
+                    var index = layerType == "Action" ? 3 : 2;
+                    var layer = array.GetValue(index); Set(layer, "isDefault", false); Set(layer, "animatorController", effective); array.SetValue(layer, index); field.SetValue(descriptor, array);
+                }
+                var before = EditorJsonUtility.ToJson(controller); var beforeMenu = EditorJsonUtility.ToJson(menu);
+                var assets = new Object[] { controller, menu, sub, parameters, effective }.Concat(owned).Distinct().ToArray();
+                var counter = 0;
+                foreach (var asset in assets)
+                    if (!EditorUtility.IsPersistent(asset)) AssetDatabase.CreateAsset(asset, folderPath + "/asset" + counter++ + ".asset");
+                foreach (var dependency in EditorUtility.CollectDependencies(new Object[] { controller }))
+                    if (dependency != null && !EditorUtility.IsPersistent(dependency)) AssetDatabase.AddObjectToAsset(dependency, controller);
+                AssetDatabase.SaveAssets();
+                foreach (var dependency in EditorUtility.CollectDependencies(new Object[] { f.Source }))
+                    if (dependency != null && !(dependency is GameObject) && !(dependency is Component) && !EditorUtility.IsPersistent(dependency))
+                        AssetDatabase.CreateAsset(dependency, folderPath + "/source" + counter++ + ".asset");
+                AssetDatabase.SaveAssets();
+                before = EditorJsonUtility.ToJson(controller); beforeMenu = EditorJsonUtility.ToJson(menu);
+                if (overrideClip) Assert.That(ExpressionDependencies.Overrides(effective)[clip], Is.SameAs(unrelated));
+                clone = Object.Instantiate(f.Source);
+                using var preparation = NdmfExportPreparation.Prepare(f.Source, clone);
+                var result = PoseMenuResolver.Read(clone);
+                Assert.That(result.Count, Is.EqualTo(1));
+                if (defaultLocomotion) { Assert.That(result[0].Error, Does.Contain("外部入力")); return; }
+                Assert.That(result[0].Error, Is.Null, result[0].Error);
+                Assert.That(result[0].Name, Is.EqualTo("メニュー名")); Assert.That(result[0].Category, Is.EqualTo("カテゴリー"));
+                Assert.That(result[0].Layers.Count, Is.EqualTo(1));
+                if (overrideClip) Assert.That(result[0].Layers[0].Clip, Is.SameAs(unrelated));
+                var sample = PoseSampling.Sample(clone, result[0]);
+                Assert.That(sample.Bones.Single(b => b.Name == "leftUpperArm").Rotation[2] * (overrideClip ? -1 : 1), Is.LessThan(0), "Use the effective selected clip, including AnimatorOverrideController.");
+                Assert.That(EditorJsonUtility.ToJson(controller), Is.EqualTo(before)); Assert.That(EditorJsonUtility.ToJson(menu), Is.EqualTo(beforeMenu));
+            }
+            finally
+            { if (clone != null) Object.DestroyImmediate(clone); AssetDatabase.DeleteAsset(folderPath); foreach (var item in owned.Concat(new Object[] { menu, sub, parameters, controller, machine, clip, unrelated })) if (item != null && !EditorUtility.IsPersistent(item)) Object.DestroyImmediate(item); }
+        }
+    }
+}

@@ -1,0 +1,171 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/mitsuya0077/VR-Vlog-lilToon-Exporter/VRVLOG_humanoid_poses/1/schema.json",
+  "title": "VRVLOG_humanoid_poses 1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schemaVersion",
+    "space",
+    "poses"
+  ],
+  "properties": {
+    "schemaVersion": {
+      "const": 1
+    },
+    "space": {
+      "const": "vrm1AvatarRestDelta"
+    },
+    "poses": {
+      "type": "array",
+      "minItems": 1,
+      "maxItems": 128,
+      "items": {
+        "$ref": "#/$defs/pose"
+      }
+    }
+  },
+  "$defs": {
+    "bone": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "bone",
+        "node",
+        "rotation"
+      ],
+      "properties": {
+        "bone": {
+          "enum": [
+            "hips",
+            "spine",
+            "chest",
+            "upperChest",
+            "leftShoulder",
+            "rightShoulder",
+            "leftUpperArm",
+            "leftLowerArm",
+            "leftHand",
+            "rightUpperArm",
+            "rightLowerArm",
+            "rightHand",
+            "leftUpperLeg",
+            "leftLowerLeg",
+            "leftFoot",
+            "leftToes",
+            "rightUpperLeg",
+            "rightLowerLeg",
+            "rightFoot",
+            "rightToes",
+            "leftThumbMetacarpal",
+            "leftThumbProximal",
+            "leftThumbDistal",
+            "leftIndexProximal",
+            "leftIndexIntermediate",
+            "leftIndexDistal",
+            "leftMiddleProximal",
+            "leftMiddleIntermediate",
+            "leftMiddleDistal",
+            "leftRingProximal",
+            "leftRingIntermediate",
+            "leftRingDistal",
+            "leftLittleProximal",
+            "leftLittleIntermediate",
+            "leftLittleDistal",
+            "rightThumbMetacarpal",
+            "rightThumbProximal",
+            "rightThumbDistal",
+            "rightIndexProximal",
+            "rightIndexIntermediate",
+            "rightIndexDistal",
+            "rightMiddleProximal",
+            "rightMiddleIntermediate",
+            "rightMiddleDistal",
+            "rightRingProximal",
+            "rightRingIntermediate",
+            "rightRingDistal",
+            "rightLittleProximal",
+            "rightLittleIntermediate",
+            "rightLittleDistal"
+          ]
+        },
+        "node": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 65535
+        },
+        "rotation": {
+          "type": "array",
+          "minItems": 4,
+          "maxItems": 4,
+          "items": {
+            "type": "number",
+            "minimum": -1.001,
+            "maximum": 1.001
+          }
+        }
+      }
+    },
+    "pose": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "id",
+        "name",
+        "category",
+        "source",
+        "sampleTime",
+        "sampledMotion",
+        "hipsOffset",
+        "bones"
+      ],
+      "properties": {
+        "id": {
+          "type": "string",
+          "maxLength": 256,
+          "minLength": 1
+        },
+        "name": {
+          "type": "string",
+          "maxLength": 256,
+          "minLength": 1
+        },
+        "category": {
+          "type": "string",
+          "maxLength": 256
+        },
+        "source": {
+          "type": "string",
+          "maxLength": 256,
+          "minLength": 1
+        },
+        "sampleTime": {
+          "type": "number",
+          "minimum": 0,
+          "maximum": 600
+        },
+        "sampledMotion": {
+          "type": "boolean"
+        },
+        "hipsOffset": {
+          "type": "array",
+          "minItems": 3,
+          "maxItems": 3,
+          "items": {
+            "type": "number",
+            "minimum": -10,
+            "maximum": 10
+          }
+        },
+        "bones": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 50,
+          "items": {
+            "$ref": "#/$defs/bone"
+          }
+        }
+      }
+    }
+  }
+}

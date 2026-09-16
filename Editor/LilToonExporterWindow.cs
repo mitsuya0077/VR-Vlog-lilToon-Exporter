@@ -17,6 +17,7 @@ namespace VRVlog.LilToonExporter
         private bool showAppearanceOptions;
         private bool showBlink;
         private BlinkExportOptions blinkOptions = new BlinkExportOptions();
+        private PoseExportOptions poseOptions = new PoseExportOptions();
         private readonly List<GameObject> excludedObjects = new List<GameObject>();
         private bool autoExcludeGimmicks = true;
         private readonly List<GameObject> includedGimmicks = new List<GameObject>();
@@ -88,6 +89,7 @@ namespace VRVlog.LilToonExporter
             if (selectedAvatar != avatar)
             {
                 blinkOptions = new BlinkExportOptions();
+                poseOptions = new PoseExportOptions();
                 showBlink = false;
                 excludedObjects.Clear();
                 includedGimmicks.Clear();
@@ -105,6 +107,10 @@ namespace VRVlog.LilToonExporter
             EditorGUILayout.HelpBox("Modular Avatar の髪・衣装は、設定済みの接続先を自動で反映します。ここでボーンを指定する必要はありません。", MessageType.None);
 
             DrawBlink();
+            using (new EditorGUI.DisabledScope(avatar == null))
+                if (GUILayout.Button("ポーズを確認・調整"))
+                    PoseReviewWindow.Show(avatar, poseOptions, excludedObjects.ToArray(),
+                        new ExportGimmickOptions { AutoExclude = autoExcludeGimmicks, IncludedObjects = includedGimmicks.ToArray() });
             showAppearanceOptions = EditorGUILayout.Foldout(showAppearanceOptions, "書き出し設定");
             if (showAppearanceOptions)
             {
@@ -301,6 +307,7 @@ namespace VRVlog.LilToonExporter
             var targetAuthor = author;
             var targetOutput = outputPath;
             var targetBlink = blinkOptions.Copy();
+            var targetPoses = poseOptions.Copy();
             var targetExclusions = excludedObjects.ToArray();
             var targetGimmicks = new ExportGimmickOptions { AutoExclude = autoExcludeGimmicks, IncludedObjects = includedGimmicks.ToArray() };
             MaterialBakeOptions bakeOptions = null;
@@ -311,7 +318,7 @@ namespace VRVlog.LilToonExporter
                 {
                     if (targetAvatar == null) throw new InvalidOperationException("この書き出しで選んだアバターが見つかりません。アバターを指定し直してください。");
                     return UniVrmOneClickExporter.Export(targetAvatar, targetName, targetAuthor, warnings, false,
-                        PackageVersion(), RequireSupportedLilToon(), false, targetExclusions, bakeOptions, targetGimmicks, targetBlink);
+                        PackageVersion(), RequireSupportedLilToon(), false, targetExclusions, bakeOptions, targetGimmicks, targetBlink, targetPoses);
                 }, warnings, targetOutput, failure =>
                 {
                     try
