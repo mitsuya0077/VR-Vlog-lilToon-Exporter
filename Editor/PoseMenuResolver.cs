@@ -66,7 +66,16 @@ namespace VRVlog.LilToonExporter
                                 throw new InvalidOperationException("StateMachine Behaviourによる重み変更は未対応です。");
                             if (all.Where(s => s != state).Any(s => s.behaviours.Any(b => !Tracking(b))))
                                 throw new InvalidOperationException("開始／終了状態のBehaviourに依存する重みは未対応です。");
-                            var selectedByMenu = Transitions(layer.stateMachine).Any(t => t.conditions.Any(c => entry.Parameters.ContainsKey(c.parameter)));
+                            var selectedByMenu = false;
+                            if (Transitions(layer.stateMachine).Any(t => t.conditions.Length > 0 &&
+                                t.conditions.All(c => entry.Parameters.TryGetValue(c.parameter, out var value) && Condition(c, value))))
+                            {
+                                // If removing the matched menu edges still
+                                // converges to the same pose, the menu did not
+                                // select that pose (e.g. an unconditional path).
+                                try { selectedByMenu = Resolve(layer.stateMachine, entry.Parameters, menu.ExternalParameters, true) != state; }
+                                catch (InvalidOperationException) { selectedByMenu = true; }
+                            }
                             selectedAffectsBody |= hasBody && selectedByMenu;
                             foreach (var b in state.behaviours.Where(b => !Tracking(b)))
                             {
@@ -125,7 +134,7 @@ namespace VRVlog.LilToonExporter
             return result;
         }
 
-        internal static AnimatorState Resolve(AnimatorStateMachine machine, IDictionary<string, float> selected, ISet<string> external = null)
+        internal static AnimatorState Resolve(AnimatorStateMachine machine, IDictionary<string, float> selected, ISet<string> external = null, bool omitMatchedMenuEdges = false)
         {
             var states = States(machine).ToArray();
             var parents = new Dictionary<AnimatorState, List<AnimatorStateMachine>>();
@@ -156,6 +165,7 @@ namespace VRVlog.LilToonExporter
                         if (!selected.ContainsKey(c.parameter) || external?.Contains(c.parameter) == true)
                             throw new InvalidOperationException("他のメニュー・外部入力・操作履歴に依存します: " + c.parameter);
                     if (!transition.conditions.All(c => Condition(c, selected[c.parameter]))) continue;
+                    if (omitMatchedMenuEdges && transition.conditions.Any(c => selected.ContainsKey(c.parameter))) continue;
                     if (transition.hasExitTime || transition.duration != 0 || transition.offset != 0 || transition.isExit || transition.destinationState == null)
                         throw new InvalidOperationException("開始・終了・時間付きまたは複雑な遷移は未対応です。");
                     if (transition.destinationState == state && !transition.canTransitionToSelf) continue;
@@ -170,7 +180,12 @@ namespace VRVlog.LilToonExporter
             {
                 var current = start; var visited = new HashSet<AnimatorState>();
                 while (edges.TryGetValue(current, out var next) && next != null)
-                { if (!visited.Add(current)) throw new InvalidOperationException("循環遷移または再入場があるため静止姿勢を確定できません。"); current = next; }
+                {
+                    if (visited.Count > 0 && current.motion != null)
+                        throw new InvalidOperationException("開始／終了アニメーションを含む中間状態は未対応です。");
+                    if (!visited.Add(current)) throw new InvalidOperationException("循環遷移または再入場があるため静止姿勢を確定できません。");
+                    current = next;
+                }
                 if (final != null && final != current) throw new InvalidOperationException("以前の操作で到達姿勢が変わります。");
                 final = current;
             }

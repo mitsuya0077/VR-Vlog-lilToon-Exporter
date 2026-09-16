@@ -206,6 +206,23 @@ namespace VRVlog.LilToonExporter.Tests
             finally { Object.DestroyImmediate(machine); }
         }
         [Test]
+        public void MenuGraphRejectsAnimatedIntermediateStates()
+        {
+            var machine = new AnimatorStateMachine(); var clip = new AnimationClip();
+            try
+            {
+                var idle = machine.AddState("Idle"); var intro = machine.AddState("Intro"); var pose = machine.AddState("Pose");
+                intro.motion = clip;
+                var begin = idle.AddTransition(intro); begin.hasExitTime = false; begin.duration = 0; begin.AddCondition(AnimatorConditionMode.Equals, 1, "Pose");
+                var end = intro.AddTransition(pose); end.hasExitTime = false; end.duration = 0;
+                var values = new Dictionary<string, float> { ["Pose"] = 1 };
+                Assert.That(Assert.Throws<InvalidOperationException>(() => PoseMenuResolver.Resolve(machine, values)).Message, Does.Contain("中間状態"));
+                intro.motion = null;
+                Assert.That(PoseMenuResolver.Resolve(machine, values), Is.SameAs(pose), "Empty routing states remain supported.");
+            }
+            finally { Object.DestroyImmediate(machine); Object.DestroyImmediate(clip); }
+        }
+        [Test]
         public void MenuGraphAppliesSoloFilteringBeforeConditionsAndMute()
         {
             var machine = new AnimatorStateMachine();

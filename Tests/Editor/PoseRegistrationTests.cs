@@ -84,7 +84,9 @@ namespace VRVlog.LilToonExporter.Tests
         [TestCase(false, false, false, "Action", true)]
         [TestCase(false, false, false, "Gesture", true, 0f)]
         [TestCase(false, false, false, "Gesture", false, 1f, true)]
-        public void SubmenuAndMaGeneratedGestureMenuResolveOnlySelectedStaticPose(bool modularAvatar, bool defaultLocomotion, bool overrideClip, string layerType = "Gesture", bool crossLayerWeight = false, float controlWeight = 1f, bool unrelatedSolo = false)
+        [TestCase(false, false, false, "Gesture", false, 1f, false, 1)]
+        [TestCase(false, false, false, "Gesture", false, 1f, false, 2)]
+        public void SubmenuAndMaGeneratedGestureMenuResolveOnlySelectedStaticPose(bool modularAvatar, bool defaultLocomotion, bool overrideClip, string layerType = "Gesture", bool crossLayerWeight = false, float controlWeight = 1f, bool unrelatedSolo = false, int unconditionalFallback = 0)
         {
             using var f = new AttachmentConnectionTests.Fixture(); var descriptor = Descriptor(f.Source);
             var menuType = Find("VRC.SDK3.Avatars.ScriptableObjects.VRCExpressionsMenu");
@@ -112,7 +114,11 @@ namespace VRVlog.LilToonExporter.Tests
                 {
                     var idle = machine.AddState("Idle"); idle.writeDefaultValues = false;
                     var other = machine.AddState("Unselected"); other.writeDefaultValues = false; other.motion = unrelated;
-                    var t = machine.AddAnyStateTransition(state); t.canTransitionToSelf = false; t.hasExitTime = false; t.duration = 0; t.AddCondition(AnimatorConditionMode.Equals, 1, "Pose");
+                    var t = machine.AddAnyStateTransition(state); t.canTransitionToSelf = false; t.hasExitTime = false; t.duration = 0; t.AddCondition(AnimatorConditionMode.Equals, unconditionalFallback == 1 ? 2 : 1, "Pose");
+                    if (unconditionalFallback > 0)
+                    {
+                        var fallback = machine.AddAnyStateTransition(state); fallback.canTransitionToSelf = false; fallback.hasExitTime = false; fallback.duration = 0;
+                    }
                     if (unrelatedSolo)
                     {
                         var solo = machine.AddAnyStateTransition(state); solo.canTransitionToSelf = false; solo.hasExitTime = false; solo.duration = 0; solo.solo = true;
@@ -195,7 +201,7 @@ namespace VRVlog.LilToonExporter.Tests
                 var result = PoseMenuResolver.Read(clone);
                 Assert.That(result.Count, Is.EqualTo(1));
                 if (defaultLocomotion) { Assert.That(result[0].Error, Does.Contain("外部入力")); return; }
-                if (unrelatedSolo) { Assert.That(result[0].Error, Does.Contain("確定"), "A suppressed parameter edge cannot relate this menu to the unconditional solo pose."); return; }
+                if (unrelatedSolo || unconditionalFallback > 0) { Assert.That(result[0].Error, Does.Contain("確定"), "A suppressed or irrelevant parameter edge cannot relate this menu to an unconditional pose."); return; }
                 Assert.That(result[0].Error, Is.Null, result[0].Error);
                 Assert.That(result[0].Name, Is.EqualTo("メニュー名")); Assert.That(result[0].Category, Is.EqualTo("カテゴリー"));
                 Assert.That(result[0].Layers.Count, Is.EqualTo(1));
