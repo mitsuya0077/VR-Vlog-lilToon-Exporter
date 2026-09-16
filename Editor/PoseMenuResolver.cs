@@ -38,6 +38,7 @@ namespace VRVlog.LilToonExporter
                         ["Sitting"] = 0, ["TPose"] = 0, ["IKPose"] = 0 };
                     var resolved = new List<(string type, AnimatorControllerLayer layer, AnimatorState state, AnimationClip clip, int index, bool skipMuscles, AvatarMask outer)>();
                     var controlledWeights = new Dictionary<string, float>();
+                    var selectedWeightTargets = new HashSet<string>();
                     var selectedAffectsBody = false;
                     foreach (var source in layers)
                     {
@@ -65,7 +66,8 @@ namespace VRVlog.LilToonExporter
                                 throw new InvalidOperationException("StateMachine Behaviourによる重み変更は未対応です。");
                             if (all.Where(s => s != state).Any(s => s.behaviours.Any(b => !Tracking(b))))
                                 throw new InvalidOperationException("開始／終了状態のBehaviourに依存する重みは未対応です。");
-                            selectedAffectsBody |= hasBody && Transitions(layer.stateMachine).Any(t => t.conditions.Any(c => entry.Parameters.ContainsKey(c.parameter)));
+                            var selectedByMenu = Transitions(layer.stateMachine).Any(t => t.conditions.Any(c => entry.Parameters.ContainsKey(c.parameter)));
+                            selectedAffectsBody |= hasBody && selectedByMenu;
                             foreach (var b in state.behaviours.Where(b => !Tracking(b)))
                             {
                                 var target = Member(b, "layer")?.ToString();
@@ -76,6 +78,7 @@ namespace VRVlog.LilToonExporter
                                 if (controlledWeights.TryGetValue(target, out var previous) && previous != weight)
                                     throw new InvalidOperationException("複数レイヤーから重みが変更されるため順序を確定できません。");
                                 controlledWeights[target] = weights[target] = weight;
+                                if (selectedByMenu && weight > 0) selectedWeightTargets.Add(target);
                             }
                             if (hasBody) resolved.Add((type, layer, state, Clip(state), i, skipMuscles, outer));
                         }
@@ -89,6 +92,7 @@ namespace VRVlog.LilToonExporter
                         if (item.state.motion == null) continue;
                         if (item.clip == null) throw new InvalidOperationException("BlendTreeによる合成は未対応です。");
                         if (!HasBody(item.clip, item.skipMuscles)) continue;
+                        selectedAffectsBody |= selectedWeightTargets.Contains(item.type);
                         if (item.state.writeDefaultValues && resolved.Count > 1)
                             throw new InvalidOperationException("複数レイヤーのWrite Defaultsによる暗黙の姿勢合成は未対応です。");
                         if (item.layer.blendingMode != AnimatorLayerBlendingMode.Override || item.type == "Additive")

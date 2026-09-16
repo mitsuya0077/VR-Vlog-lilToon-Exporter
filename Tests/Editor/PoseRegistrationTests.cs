@@ -80,7 +80,8 @@ namespace VRVlog.LilToonExporter.Tests
         [TestCase(true, false, false)]
         [TestCase(true, true, false)]
         [TestCase(false, false, false, "Action")]
-        public void SubmenuAndMaGeneratedGestureMenuResolveOnlySelectedStaticPose(bool modularAvatar, bool defaultLocomotion, bool overrideClip, string layerType = "Gesture")
+        [TestCase(false, false, false, "Action", true)]
+        public void SubmenuAndMaGeneratedGestureMenuResolveOnlySelectedStaticPose(bool modularAvatar, bool defaultLocomotion, bool overrideClip, string layerType = "Gesture", bool crossLayerWeight = false)
         {
             using var f = new AttachmentConnectionTests.Fixture(); var descriptor = Descriptor(f.Source);
             var menuType = Find("VRC.SDK3.Avatars.ScriptableObjects.VRCExpressionsMenu");
@@ -98,15 +99,18 @@ namespace VRVlog.LilToonExporter.Tests
             try
             {
                 controller.AddParameter("Pose", AnimatorControllerParameterType.Int);
-                var idle = machine.AddState("Idle"); idle.writeDefaultValues = false;
                 var state = machine.AddState("Selected"); state.writeDefaultValues = false; state.motion = clip;
-                if (layerType == "Action")
+                if (layerType == "Action" && !crossLayerWeight)
                 {
                     var control = state.AddStateMachineBehaviour(Find("VRC.SDK3.Avatars.Components.VRCPlayableLayerControl"));
                     Set(control, "layer", "Action"); Set(control, "goalWeight", 1f); Set(control, "blendDuration", 0f);
                 }
-                var other = machine.AddState("Unselected"); other.writeDefaultValues = false; other.motion = unrelated;
-                var t = machine.AddAnyStateTransition(state); t.canTransitionToSelf = false; t.hasExitTime = false; t.duration = 0; t.AddCondition(AnimatorConditionMode.Equals, 1, "Pose");
+                if (!crossLayerWeight)
+                {
+                    var idle = machine.AddState("Idle"); idle.writeDefaultValues = false;
+                    var other = machine.AddState("Unselected"); other.writeDefaultValues = false; other.motion = unrelated;
+                    var t = machine.AddAnyStateTransition(state); t.canTransitionToSelf = false; t.hasExitTime = false; t.duration = 0; t.AddCondition(AnimatorConditionMode.Equals, 1, "Pose");
+                }
                 controller.layers = new[] { new AnimatorControllerLayer { name = "Static pose", defaultWeight = 1, stateMachine = machine } };
                 RuntimeAnimatorController effective = controller;
                 if (overrideClip) { var replacement = new AnimatorOverrideController(controller); replacement[clip] = unrelated; owned.Add(replacement); effective = replacement; }
@@ -144,13 +148,27 @@ namespace VRVlog.LilToonExporter.Tests
                     var field = descriptor.GetType().GetField("baseAnimationLayers"); var array = (Array)field.GetValue(descriptor);
                     var index = layerType == "Action" ? 3 : 2;
                     var layer = array.GetValue(index); Set(layer, "isDefault", false); Set(layer, "animatorController", effective); array.SetValue(layer, index); field.SetValue(descriptor, array);
+                    if (crossLayerWeight)
+                    {
+                        // FX has no body clips. Its menu-controlled behaviour
+                        // enables an unconditional static pose in Action.
+                        var fx = new AnimatorController(); var fxMachine = new AnimatorStateMachine(); owned.Add(fx);
+                        fx.AddParameter("Pose", AnimatorControllerParameterType.Int);
+                        var idle = fxMachine.AddState("Idle"); idle.writeDefaultValues = false;
+                        var enable = fxMachine.AddState("Enable Action"); enable.writeDefaultValues = false;
+                        var control = enable.AddStateMachineBehaviour(Find("VRC.SDK3.Avatars.Components.VRCPlayableLayerControl"));
+                        Set(control, "layer", "Action"); Set(control, "goalWeight", 1f); Set(control, "blendDuration", 0f);
+                        var t = fxMachine.AddAnyStateTransition(enable); t.canTransitionToSelf = false; t.hasExitTime = false; t.duration = 0; t.AddCondition(AnimatorConditionMode.Equals, 1, "Pose");
+                        fx.layers = new[] { new AnimatorControllerLayer { name = "Enable body", defaultWeight = 1, stateMachine = fxMachine } };
+                        var fxLayer = array.GetValue(4); Set(fxLayer, "isDefault", false); Set(fxLayer, "animatorController", fx); array.SetValue(fxLayer, 4); field.SetValue(descriptor, array);
+                    }
                 }
                 var before = EditorJsonUtility.ToJson(controller); var beforeMenu = EditorJsonUtility.ToJson(menu);
                 var assets = new Object[] { controller, menu, sub, parameters, effective }.Concat(owned).Distinct().ToArray();
                 var counter = 0;
                 foreach (var asset in assets)
                     if (!EditorUtility.IsPersistent(asset)) AssetDatabase.CreateAsset(asset, folderPath + "/asset" + counter++ + ".asset");
-                foreach (var dependency in EditorUtility.CollectDependencies(new Object[] { controller }))
+                foreach (var dependency in EditorUtility.CollectDependencies(assets.OfType<RuntimeAnimatorController>().Cast<Object>().ToArray()))
                     if (dependency != null && !EditorUtility.IsPersistent(dependency)) AssetDatabase.AddObjectToAsset(dependency, controller);
                 AssetDatabase.SaveAssets();
                 foreach (var dependency in EditorUtility.CollectDependencies(new Object[] { f.Source }))
