@@ -63,6 +63,24 @@ namespace VRVlog.LilToonExporter
         }
         internal static Quaternion Reflect(Quaternion q) => new Quaternion(q.x, -q.y, -q.z, q.w);
         internal static Vector3 Reflect(Vector3 v) => new Vector3(-v.x, v.y, v.z);
+        internal static HashSet<string> BodyPaths(GameObject root)
+        {
+            var animator = root.GetComponent<Animator>();
+            if (animator == null || !animator.isHuman) return new HashSet<string>();
+            return new HashSet<string>(HumanoidPoseData.BoneNames.Select(n => animator.GetBoneTransform(HumanBone(n)))
+                .Where(t => t != null).Select(t => AnimationUtility.CalculateTransformPath(t, root.transform)));
+        }
+        internal static bool HasEffectiveBody(GameObject root, PoseLayer layer)
+        {
+            var animator = root.GetComponent<Animator>();
+            if (layer.Clip == null || animator == null || !animator.isHuman) return false;
+            var hips = animator.GetBoneTransform(HumanBodyBones.Hips);
+            return HumanoidPoseData.BoneNames.Any(name =>
+            {
+                var bone = animator.GetBoneTransform(HumanBone(name));
+                return bone != null && WritesBone(layer, name, bone, root);
+            }) || hips != null && WritesHipsPosition(layer, AnimationUtility.CalculateTransformPath(hips, root.transform));
+        }
         internal static string Hash(string text)
         { using var sha = SHA256.Create(); return BitConverter.ToString(sha.ComputeHash(Encoding.UTF8.GetBytes(text))).Replace("-", "").ToLowerInvariant(); }
 
@@ -240,8 +258,7 @@ namespace VRVlog.LilToonExporter
             var result = Object.Instantiate(source); result.name = source.name;
             // All events and non-pose curves are removed from this owned clip.
             AnimationUtility.SetAnimationEvents(result, Array.Empty<AnimationEvent>());
-            var paths = new HashSet<string>(HumanoidPoseData.BoneNames.Select(n => animator.GetBoneTransform(HumanBone(n)))
-                .Where(t => t != null).Select(t => AnimationUtility.CalculateTransformPath(t, root.transform)));
+            var paths = BodyPaths(root);
             var hips = AnimationUtility.CalculateTransformPath(animator.GetBoneTransform(HumanBodyBones.Hips), root.transform);
             foreach (var binding in AnimationUtility.GetCurveBindings(result))
             {

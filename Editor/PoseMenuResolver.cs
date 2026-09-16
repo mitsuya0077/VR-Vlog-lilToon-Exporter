@@ -19,6 +19,7 @@ namespace VRVlog.LilToonExporter
             var result = new List<PoseCandidate>();
             var descriptor = avatar.GetComponents<Component>().FirstOrDefault(c => c != null && c.GetType().FullName == "VRC.SDK3.Avatars.Components.VRCAvatarDescriptor");
             if (descriptor == null) return result;
+            var bodyPaths = PoseSampling.BodyPaths(avatar);
             var menu = VrChatExpressionMenu.Read(avatar);
             menu.ExternalParameters.UnionWith(VrChatParameterDriver.BuiltIn);
             var avatarLayers = Items(Member(descriptor, "baseAnimationLayers")).Concat(Items(Member(descriptor, "specialAnimationLayers"))).ToArray();
@@ -36,7 +37,7 @@ namespace VRVlog.LilToonExporter
                         throw new InvalidOperationException("カスタムPlayable Layerが無効です。");
                     var weights = new Dictionary<string, float> { ["Base"] = 1, ["Additive"] = 1, ["Gesture"] = 1, ["Action"] = 0, ["FX"] = 1,
                         ["Sitting"] = 0, ["TPose"] = 0, ["IKPose"] = 0 };
-                    var resolved = new List<(string type, AnimatorControllerLayer layer, AnimatorState state, AnimationClip clip, int index, bool skipMuscles, AvatarMask outer)>();
+                    var resolved = new List<(string type, AnimatorControllerLayer layer, AnimatorState state, AnimationClip clip, int index, bool skipMuscles, AvatarMask outer, bool selected)>();
                     var controlledWeights = new Dictionary<string, float>();
                     var selectedWeightTargets = new HashSet<string>();
                     var selectedAffectsBody = false;
@@ -52,7 +53,7 @@ namespace VRVlog.LilToonExporter
                             var layer = controller.layers[i];
                             var all = States(layer.stateMachine).ToArray();
                             AnimationClip Clip(AnimatorState state) => state.motion is AnimationClip clip && replacements.TryGetValue(clip, out var replacement) ? replacement : state.motion as AnimationClip;
-                            var hasBody = all.Any(s => HasBody(Clip(s), skipMuscles)) || all.Any(s => s.motion is BlendTree);
+                            var hasBody = all.Any(s => HasBody(Clip(s), skipMuscles, bodyPaths)) || all.Any(s => s.motion is BlendTree);
                             var behaviours = all.SelectMany(s => s.behaviours).Concat(Behaviours(layer.stateMachine)).ToArray();
                             var controls = behaviours.Any(b => b == null || !Tracking(b));
                             if (!hasBody && !controls) continue;
@@ -76,7 +77,6 @@ namespace VRVlog.LilToonExporter
                                 try { selectedByMenu = Resolve(layer.stateMachine, entry.Parameters, menu.ExternalParameters, true) != state; }
                                 catch (InvalidOperationException) { selectedByMenu = true; }
                             }
-                            selectedAffectsBody |= hasBody && selectedByMenu;
                             foreach (var b in state.behaviours.Where(b => !Tracking(b)))
                             {
                                 var target = Member(b, "layer")?.ToString();
@@ -89,7 +89,7 @@ namespace VRVlog.LilToonExporter
                                 controlledWeights[target] = weights[target] = weight;
                                 if (selectedByMenu) selectedWeightTargets.Add(target);
                             }
-                            if (hasBody) resolved.Add((type, layer, state, Clip(state), i, skipMuscles, outer));
+                            if (hasBody) resolved.Add((type, layer, state, Clip(state), i, skipMuscles, outer, selectedByMenu));
                         }
                     }
                     // Standard body controllers depend on built-in inputs. Do
@@ -108,11 +108,15 @@ namespace VRVlog.LilToonExporter
                         if (!PoseSampling.Finite(weight) || weight < 0 || weight > 1) throw new InvalidOperationException("レイヤー重みが不正です。");
                         if (weight == 0) continue;
                         // Disabling a body layer can expose a lower static pose.
-                        selectedAffectsBody |= HasBody(item.clip, item.skipMuscles) && selectedWeightTargets.Contains(item.type);
+                        var poseLayer = new PoseLayer { Clip = item.clip, Weight = weight, Mask = item.layer.avatarMask, SkipMuscles = item.skipMuscles,
+                            OuterMask = item.outer, Group = item.type, GroupWeight = 1 };
+                        var contributes = PoseSampling.HasEffectiveBody(avatar, poseLayer);
+                        selectedAffectsBody |= contributes && (selectedWeightTargets.Contains(item.type) || item.selected && playableWeight > 0);
+                        poseLayer.GroupWeight = playableWeight;
                         if (playableWeight == 0) continue;
                         if (item.state.motion == null) continue;
                         if (item.clip == null) throw new InvalidOperationException("BlendTreeによる合成は未対応です。");
-                        if (!HasBody(item.clip, item.skipMuscles)) continue;
+                        if (!HasBody(item.clip, item.skipMuscles, bodyPaths)) continue;
                         if (item.state.writeDefaultValues && resolved.Count > 1)
                             throw new InvalidOperationException("複数レイヤーのWrite Defaultsによる暗黙の姿勢合成は未対応です。");
                         if (item.layer.blendingMode != AnimatorLayerBlendingMode.Override || item.type == "Additive")
@@ -122,8 +126,8 @@ namespace VRVlog.LilToonExporter
                         if (PoseSampling.Moving(item.clip)) throw new InvalidOperationException("動くメニュークリップです。手動追加で採用時刻を指定できます。");
                         if (AnimationUtility.GetAnimationEvents(item.clip).Length != 0)
                             throw new InvalidOperationException("Animation Eventを伴うメニューです。");
-                        row.Layers.Add(new PoseLayer { Clip = item.clip, Weight = weight, Mask = item.layer.avatarMask, SkipMuscles = item.skipMuscles,
-                            OuterMask = item.outer, Group = item.type, GroupWeight = playableWeight, ClipIdentity = PoseSampling.GeneratedClipIdentity(item.clip) });
+                        poseLayer.ClipIdentity = PoseSampling.GeneratedClipIdentity(item.clip);
+                        row.Layers.Add(poseLayer);
                     }
                     if (!selectedAffectsBody || row.Layers.Count == 0) throw new InvalidOperationException("この操作から適用するHumanoid静止姿勢を確定できません。");
                 }
@@ -212,8 +216,11 @@ namespace VRVlog.LilToonExporter
             }
         }
         static bool Tracking(StateMachineBehaviour b) => b != null && (b.GetType().Name == "VRCAnimatorTrackingControl" || b.GetType().Name == "VRCAnimatorLocomotionControl");
-        internal static bool HasBody(AnimationClip clip, bool skipMuscles = false) => clip != null && AnimationUtility.GetCurveBindings(clip).Any(b =>
-            !skipMuscles && b.type == typeof(Animator) && b.path == "" && PoseSampling.IsBodyMuscle(b.propertyName) || b.type == typeof(Transform));
+        internal static bool HasBody(AnimationClip clip, bool skipMuscles = false, ISet<string> bodyPaths = null) => clip != null && AnimationUtility.GetCurveBindings(clip).Any(b =>
+            !skipMuscles && b.type == typeof(Animator) && b.path == "" && PoseSampling.IsBodyMuscle(b.propertyName) ||
+            b.type == typeof(Transform) && bodyPaths?.Contains(b.path) == true &&
+            (b.propertyName.StartsWith("m_LocalRotation.") || b.propertyName.StartsWith("localEulerAngles") ||
+             b.propertyName.StartsWith("m_LocalPosition.") || b.propertyName.StartsWith("m_LocalScale.")));
         static IEnumerable<AnimatorStateMachine> Machines(AnimatorStateMachine root)
         {
             var pending = new Stack<AnimatorStateMachine>(); var visited = new HashSet<AnimatorStateMachine>(); pending.Push(root);

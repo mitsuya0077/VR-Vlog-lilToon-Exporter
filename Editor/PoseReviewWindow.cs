@@ -64,6 +64,9 @@ namespace VRVlog.LilToonExporter
             EditorGUILayout.HelpBox("対応した静止ポーズは自動で含まれます。首・顔・視線はアプリの追跡を使います。", MessageType.Info);
             if (GUILayout.Button("登録情報を再取得")) Rebuild();
             if (error != null) EditorGUILayout.HelpBox(error, MessageType.Warning);
+            if (session != null)
+                EditorGUILayout.HelpBox("同梱するポーズ: " + session.SelectedCount + " / 128" +
+                    (session.SelectedCount > 128 ? " — 不要な項目を除外してください。" : ""), session.SelectedCount > 128 ? MessageType.Warning : MessageType.None);
             scroll = EditorGUILayout.BeginScrollView(scroll, GUILayout.Height(position.height * .42f));
             if (session != null)
                 for (var i = 0; i < session.Entries.Count; i++)

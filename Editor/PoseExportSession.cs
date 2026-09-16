@@ -30,7 +30,6 @@ namespace VRVlog.LilToonExporter
                 foreach (var category in PoseMenuResolver.Items(PoseMenuResolver.Member(data, "categories")))
                     foreach (var pose in PoseMenuResolver.Items(PoseMenuResolver.Member(category, "poses")))
                     {
-                        if (Entries.Count >= HumanoidPoseData.MaximumPoses) throw new InvalidOperationException("登録ポーズは128件までです。");
                         var clip = PoseMenuResolver.Member(pose, "animationClip") as AnimationClip;
                         var name = PoseMenuResolver.Member(pose, "name") as string;
                         var row = new PoseCandidate { Name = string.IsNullOrWhiteSpace(name) ? clip?.name ?? "未設定" : name,
@@ -119,7 +118,14 @@ namespace VRVlog.LilToonExporter
                     bone.Node = model.Nodes.IndexOf(node);
                 }
         }
-        List<HumanoidPoseData> Selected() => Entries.Where(e => e.Error == null && e.Data != null && !options.Excluded.Contains(e.Id)).Select(e => e.Data).ToList();
+        internal int SelectedCount => Entries.Count(e => e.Error == null && e.Data != null && !options.Excluded.Contains(e.Id));
+        internal List<HumanoidPoseData> Selected()
+        {
+            var selected = Entries.Where(e => e.Error == null && e.Data != null && !options.Excluded.Contains(e.Id)).Select(e => e.Data).ToList();
+            if (selected.Count > HumanoidPoseData.MaximumPoses)
+                throw new InvalidOperationException("同梱ポーズは128件までです。「ポーズを確認・調整」で不要な項目を除外してください。");
+            return selected;
+        }
         internal byte[] Inject(byte[] bytes)
         {
             var poses = Selected(); if (poses.Count == 0) return bytes;

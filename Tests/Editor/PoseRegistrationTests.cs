@@ -50,6 +50,10 @@ namespace VRVlog.LilToonExporter.Tests
                 var data = Activator.CreateInstance(type.GetField("data").FieldType); Set(component, "data", data);
                 var category = Add((IList)PoseMenuResolver.Member(data, "categories")); Set(category, "name", "座り");
                 var entry = Add((IList)PoseMenuResolver.Member(category, "poses")); Set(entry, "name", "登録名"); Set(entry, "animationClip", clip);
+                for (var i = 0; i < 128; i++)
+                {
+                    var duplicate = Add((IList)PoseMenuResolver.Member(category, "poses")); Set(duplicate, "name", "重複" + i); Set(duplicate, "animationClip", clip);
+                }
                 var before = EditorJsonUtility.ToJson(component);
                 var options = new PoseExportOptions(); options.Manual.Add(new ManualPose { Clip = clip });
                 using (var snapshot = new PoseExportSession(f.Source, options))
@@ -86,7 +90,9 @@ namespace VRVlog.LilToonExporter.Tests
         [TestCase(false, false, false, "Gesture", false, 1f, true)]
         [TestCase(false, false, false, "Gesture", false, 1f, false, 1)]
         [TestCase(false, false, false, "Gesture", false, 1f, false, 2)]
-        public void SubmenuAndMaGeneratedGestureMenuResolveOnlySelectedStaticPose(bool modularAvatar, bool defaultLocomotion, bool overrideClip, string layerType = "Gesture", bool crossLayerWeight = false, float controlWeight = 1f, bool unrelatedSolo = false, int unconditionalFallback = 0)
+        [TestCase(false, false, false, "Gesture", false, 1f, false, 0, true, TestName = "PropOnlyMenuDoesNotCaptureAnUnconditionalBodyLayer")]
+        [TestCase(false, false, false, "Gesture", false, 1f, false, 0, false, true, TestName = "MaskedMenuDoesNotCaptureAnUnconditionalBodyLayer")]
+        public void SubmenuAndMaGeneratedGestureMenuResolveOnlySelectedStaticPose(bool modularAvatar, bool defaultLocomotion, bool overrideClip, string layerType = "Gesture", bool crossLayerWeight = false, float controlWeight = 1f, bool unrelatedSolo = false, int unconditionalFallback = 0, bool propOnly = false, bool maskedSelection = false)
         {
             using var f = new AttachmentConnectionTests.Fixture(); var descriptor = Descriptor(f.Source);
             var menuType = Find("VRC.SDK3.Avatars.ScriptableObjects.VRCExpressionsMenu");
@@ -96,7 +102,12 @@ namespace VRVlog.LilToonExporter.Tests
             var parameterField = parameters.GetType().GetField("parameters"); var parameterType = parameterField.FieldType.GetElementType();
             var parameterArray = Array.CreateInstance(parameterType, 1); var parameterRow = Activator.CreateInstance(parameterType);
             Set(parameterRow, "name", "Pose"); Set(parameterRow, "valueType", "Int"); parameterArray.SetValue(parameterRow, 0); parameterField.SetValue(parameters, parameterArray); Set(descriptor, "expressionParameters", parameters);
-            var clip = HumanoidPoseTests.Clip(f.Source); var unrelated = HumanoidPoseTests.Clip(f.Source, -80);
+            var clip = propOnly ? new AnimationClip { name = "Prop" } : HumanoidPoseTests.Clip(f.Source); var unrelated = HumanoidPoseTests.Clip(f.Source, -80);
+            if (propOnly)
+            {
+                new GameObject("Prop").transform.SetParent(f.Source.transform, false);
+                AnimationUtility.SetEditorCurve(clip, EditorCurveBinding.FloatCurve("Prop", typeof(Transform), "localEulerAnglesRaw.y"), AnimationCurve.Constant(0, 1, 30));
+            }
             var owned = new List<Object>();
             var folderPath = "Assets/PoseRegistrationTest-" + Guid.NewGuid().ToString("N");
             AssetDatabase.CreateFolder("Assets", folderPath.Substring("Assets/".Length));
@@ -124,7 +135,13 @@ namespace VRVlog.LilToonExporter.Tests
                         var solo = machine.AddAnyStateTransition(state); solo.canTransitionToSelf = false; solo.hasExitTime = false; solo.duration = 0; solo.solo = true;
                     }
                 }
-                controller.layers = new[] { new AnimatorControllerLayer { name = "Static pose", defaultWeight = 1, stateMachine = machine } };
+                AvatarMask sourceMask = null;
+                if (maskedSelection)
+                {
+                    sourceMask = new AvatarMask(); owned.Add(sourceMask); sourceMask.AddTransformPath(f.Source.transform, true);
+                    for (var i = 0; i < sourceMask.transformCount; i++) sourceMask.SetTransformActive(i, false);
+                }
+                controller.layers = new[] { new AnimatorControllerLayer { name = "Static pose", defaultWeight = 1, stateMachine = machine, avatarMask = sourceMask } };
                 RuntimeAnimatorController effective = controller;
                 if (overrideClip) { var replacement = new AnimatorOverrideController(controller); replacement[clip] = unrelated; owned.Add(replacement); effective = replacement; }
                 var folder = Add((IList)PoseMenuResolver.Member(menu, "controls")); Set(folder, "name", "カテゴリー"); Set(folder, "type", "SubMenu"); Set(folder, "subMenu", sub);
@@ -173,13 +190,13 @@ namespace VRVlog.LilToonExporter.Tests
                         var t = fxMachine.AddAnyStateTransition(enable); t.canTransitionToSelf = false; t.hasExitTime = false; t.duration = 0; t.AddCondition(AnimatorConditionMode.Equals, 1, "Pose");
                         fx.layers = new[] { new AnimatorControllerLayer { name = "Enable body", defaultWeight = 1, stateMachine = fxMachine } };
                         var fxLayer = array.GetValue(4); Set(fxLayer, "isDefault", false); Set(fxLayer, "animatorController", fx); array.SetValue(fxLayer, 4); field.SetValue(descriptor, array);
-                        if (controlWeight == 0)
-                        {
-                            var lower = new AnimatorController(); owned.Add(lower); var lowerMachine = new AnimatorStateMachine();
-                            var lowerState = lowerMachine.AddState("Lower pose"); lowerState.writeDefaultValues = false; lowerState.motion = unrelated;
-                            lower.layers = new[] { new AnimatorControllerLayer { name = "Base pose", defaultWeight = 1, stateMachine = lowerMachine } };
-                            var baseLayer = array.GetValue(0); Set(baseLayer, "isDefault", false); Set(baseLayer, "animatorController", lower); array.SetValue(baseLayer, 0); field.SetValue(descriptor, array);
-                        }
+                    }
+                    if (crossLayerWeight && controlWeight == 0 || propOnly || maskedSelection)
+                    {
+                        var lower = new AnimatorController(); owned.Add(lower); var lowerMachine = new AnimatorStateMachine();
+                        var lowerState = lowerMachine.AddState("Lower pose"); lowerState.writeDefaultValues = false; lowerState.motion = unrelated;
+                        lower.layers = new[] { new AnimatorControllerLayer { name = "Base pose", defaultWeight = 1, stateMachine = lowerMachine } };
+                        var baseLayer = array.GetValue(0); Set(baseLayer, "isDefault", false); Set(baseLayer, "animatorController", lower); array.SetValue(baseLayer, 0); field.SetValue(descriptor, array);
                     }
                 }
                 var before = EditorJsonUtility.ToJson(controller); var beforeMenu = EditorJsonUtility.ToJson(menu);
@@ -201,7 +218,7 @@ namespace VRVlog.LilToonExporter.Tests
                 var result = PoseMenuResolver.Read(clone);
                 Assert.That(result.Count, Is.EqualTo(1));
                 if (defaultLocomotion) { Assert.That(result[0].Error, Does.Contain("外部入力")); return; }
-                if (unrelatedSolo || unconditionalFallback > 0) { Assert.That(result[0].Error, Does.Contain("確定"), "A suppressed or irrelevant parameter edge cannot relate this menu to an unconditional pose."); return; }
+                if (unrelatedSolo || unconditionalFallback > 0 || propOnly || maskedSelection) { Assert.That(result[0].Error, Does.Contain("確定"), "A suppressed or irrelevant parameter edge cannot relate this menu to an unconditional pose."); return; }
                 Assert.That(result[0].Error, Is.Null, result[0].Error);
                 Assert.That(result[0].Name, Is.EqualTo("メニュー名")); Assert.That(result[0].Category, Is.EqualTo("カテゴリー"));
                 Assert.That(result[0].Layers.Count, Is.EqualTo(1));

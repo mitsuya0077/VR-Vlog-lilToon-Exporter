@@ -263,6 +263,27 @@ namespace VRVlog.LilToonExporter.Tests
             finally { Object.DestroyImmediate(root); }
         }
         [Test]
+        public void PoseLimitCountsSelectedDeduplicatedOutputAndKeepsReviewAvailable()
+        {
+            using var f = new AttachmentConnectionTests.Fixture(); var clip = Clip(f.Source);
+            try
+            {
+                var options = new PoseExportOptions();
+                for (var i = 0; i < 129; i++) options.Manual.Add(new ManualPose { Clip = clip, Time = i / 256f });
+                using var session = new PoseExportSession(f.Source, options);
+                options.Excluded.Add(session.Entries[128].Id);
+                session.CollectPrepared(f.Copy);
+                Assert.That(session.Entries.Count, Is.EqualTo(129), "All rows remain reviewable.");
+                Assert.That(session.SelectedCount, Is.EqualTo(128));
+                Assert.That(session.Selected().Count, Is.EqualTo(128));
+                Assert.DoesNotThrow(() => HumanoidPoseData.Write(session.Selected()));
+                options.Excluded.Clear();
+                Assert.That(session.SelectedCount, Is.EqualTo(129));
+                Assert.Throws<InvalidOperationException>(() => session.Selected());
+            }
+            finally { Object.DestroyImmediate(clip); }
+        }
+        [Test]
         public void ContractRejectsVersionNonFiniteInvalidBonesAndDuplicates()
         {
             var pose = new HumanoidPoseData { Id = "a", Name = "Pose", Category = "", Source = "test" };
