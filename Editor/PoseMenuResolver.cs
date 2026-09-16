@@ -48,15 +48,17 @@ namespace VRVlog.LilToonExporter
                         var controller = ExpressionDependencies.Controller(runtime); var replacements = ExpressionDependencies.Overrides(runtime);
                         var outer = Member(source, "mask") as AvatarMask;
                         var skipMuscles = type == "FX" && controller.layers.Length > 0 && controller.layers[0].avatarMask == null;
+                        AnimationClip Clip(AnimatorState state) => state.motion is AnimationClip clip && replacements.TryGetValue(clip, out var replacement) ? replacement : state.motion as AnimationClip;
+                        var controllerHasBody = controller.layers.Any(l => States(l.stateMachine).Any(s => HasBody(Clip(s), skipMuscles, bodyPaths) || s.motion is BlendTree));
                         for (var i = 0; i < controller.layers.Length; i++)
                         {
                             var layer = controller.layers[i];
                             var all = States(layer.stateMachine).ToArray();
-                            AnimationClip Clip(AnimatorState state) => state.motion is AnimationClip clip && replacements.TryGetValue(clip, out var replacement) ? replacement : state.motion as AnimationClip;
                             var hasBody = all.Any(s => HasBody(Clip(s), skipMuscles, bodyPaths)) || all.Any(s => s.motion is BlendTree);
                             var behaviours = all.SelectMany(s => s.behaviours).Concat(Behaviours(layer.stateMachine)).ToArray();
                             var controls = behaviours.Any(b => b == null || !Tracking(b));
-                            if (!hasBody && !controls) continue;
+                            var writesDefaults = controllerHasBody && all.Any(s => s.writeDefaultValues);
+                            if (!hasBody && !controls && !writesDefaults) continue;
                             if (layer.syncedLayerIndex >= 0) throw new InvalidOperationException("同期Animatorレイヤーは未対応です。");
                             foreach (var b in behaviours)
                                 if (b == null || !Tracking(b) && b.GetType().Name != "VRCPlayableLayerControl")
@@ -89,7 +91,7 @@ namespace VRVlog.LilToonExporter
                                 controlledWeights[target] = weights[target] = weight;
                                 if (selectedByMenu) selectedWeightTargets.Add(target);
                             }
-                            if (hasBody) resolved.Add((type, layer, state, Clip(state), i, skipMuscles, outer, selectedByMenu));
+                            if (hasBody || writesDefaults) resolved.Add((type, layer, state, Clip(state), i, skipMuscles, outer, selectedByMenu));
                         }
                     }
                     // Standard body controllers depend on built-in inputs. Do
@@ -114,11 +116,11 @@ namespace VRVlog.LilToonExporter
                         selectedAffectsBody |= contributes && (selectedWeightTargets.Contains(item.type) || item.selected && playableWeight > 0);
                         poseLayer.GroupWeight = playableWeight;
                         if (playableWeight == 0) continue;
+                        if (item.state.writeDefaultValues && resolved.Count > 1)
+                            throw new InvalidOperationException("複数レイヤーのWrite Defaultsによる暗黙の姿勢合成は未対応です。");
                         if (item.state.motion == null) continue;
                         if (item.clip == null) throw new InvalidOperationException("BlendTreeによる合成は未対応です。");
                         if (!HasBody(item.clip, item.skipMuscles, bodyPaths)) continue;
-                        if (item.state.writeDefaultValues && resolved.Count > 1)
-                            throw new InvalidOperationException("複数レイヤーのWrite Defaultsによる暗黙の姿勢合成は未対応です。");
                         if (item.layer.blendingMode != AnimatorLayerBlendingMode.Override || item.type == "Additive")
                             throw new InvalidOperationException("加算レイヤーの姿勢は未対応です。");
                         if (item.state.mirror || item.state.mirrorParameterActive || item.state.timeParameterActive || item.state.speedParameterActive || item.state.cycleOffsetParameterActive || item.state.iKOnFeet)

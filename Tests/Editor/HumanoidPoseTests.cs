@@ -101,6 +101,25 @@ namespace VRVlog.LilToonExporter.Tests
             }
             finally { Object.DestroyImmediate(clip); Object.DestroyImmediate(mask); Object.DestroyImmediate(avatar); }
         }
+        [TestCase(false)]
+        [TestCase(true)]
+        public void DiscardedTransformsDoNotForceMixedMuscleSampling(bool prop)
+        {
+            using var f = new AttachmentConnectionTests.Fixture(); var clip = new AnimationClip();
+            try
+            {
+                if (prop) new GameObject("Prop").transform.SetParent(f.Source.transform, false);
+                AnimationUtility.SetEditorCurve(clip, EditorCurveBinding.FloatCurve("", typeof(Animator), "Left Arm Down-Up"), AnimationCurve.Constant(0, 1, .5f));
+                var candidate = new PoseCandidate { Id = "body", Name = "Body", Source = "test" }; candidate.Layers.Add(new PoseLayer { Clip = clip });
+                var expected = PoseSampling.Sample(f.Source, candidate).Bones.Single(b => b.Name == "leftUpperArm").Rotation;
+                AnimationUtility.SetEditorCurve(clip, EditorCurveBinding.FloatCurve(prop ? "Prop" : "", typeof(Transform), prop ? "localEulerAnglesRaw.y" : "m_LocalPosition.x"), AnimationCurve.Constant(0, 1, prop ? 30 : 0));
+                var before = EditorJsonUtility.ToJson(clip);
+                var actual = PoseSampling.Sample(f.Source, candidate).Bones.Single(b => b.Name == "leftUpperArm").Rotation;
+                Assert.That(actual, Is.EqualTo(expected).Within(.0001));
+                Assert.That(EditorJsonUtility.ToJson(clip), Is.EqualTo(before));
+            }
+            finally { Object.DestroyImmediate(clip); }
+        }
         [Test]
         public void ASingleArmMusclePreservesUnboundAuthoredJointLocals()
         {

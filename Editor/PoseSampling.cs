@@ -172,8 +172,15 @@ namespace VRVlog.LilToonExporter
                 // Empty humanoid streams evaluate Unity's muscle defaults,
                 // which need not equal the avatar's authored rest (notably
                 // fingers). Supply its actual rest as the bottom layer.
-                var hasMuscles = candidate.Layers.Any(l => !l.SkipMuscles && AnimationUtility.GetCurveBindings(l.Clip).Any(b => b.type == typeof(Animator) && b.path == "" && IsBodyMuscle(b.propertyName)));
-                var hasTransforms = candidate.Layers.Any(l => AnimationUtility.GetCurveBindings(l.Clip).Any(b => b.type == typeof(Transform)));
+                var bodyClips = new Dictionary<PoseLayer, AnimationClip>();
+                foreach (var layer in candidate.Layers)
+                {
+                    if (layer.Clip == null || !Finite(layer.Time) || layer.Time < 0 || layer.Time > 600 || layer.Time > layer.Clip.length)
+                        throw new InvalidOperationException("クリップまたは採用時刻が不正です（0秒〜クリップ末尾、最大600秒）。");
+                    var clean = BodyClip(copy, animator, layer.Clip, layer.SkipMuscles); clips.Add(clean); bodyClips.Add(layer, clean);
+                }
+                var hasMuscles = bodyClips.Values.Any(c => AnimationUtility.GetCurveBindings(c).Any(b => b.type == typeof(Animator)));
+                var hasTransforms = bodyClips.Values.Any(c => AnimationUtility.GetCurveBindings(c).Any(b => b.type == typeof(Transform)));
                 if (hasMuscles && hasTransforms) throw new InvalidOperationException("HumanoidカーブとTransformカーブの混合は未対応です。");
                 if (hasMuscles && candidate.Layers.Count(l => l.Weight > 0 && l.GroupWeight > 0) > 1)
                     throw new InvalidOperationException("複数Humanoidクリップの筋肉カーブ合成は未対応です。");
@@ -201,9 +208,7 @@ namespace VRVlog.LilToonExporter
                     for (var i = 0; i < layers.Length; i++)
                     {
                     var layer = layers[i];
-                    if (layer.Clip == null || !Finite(layer.Time) || layer.Time < 0 || layer.Time > 600 || layer.Time > layer.Clip.length)
-                        throw new InvalidOperationException("クリップまたは採用時刻が不正です（0秒〜クリップ末尾、最大600秒）。");
-                    var clean = BodyClip(copy, animator, layer.Clip, layer.SkipMuscles); clips.Add(clean);
+                    var clean = bodyClips[layer];
                     any |= AnimationUtility.GetCurveBindings(clean).Length > 0 &&
                         (bones.Any(b => WritesBone(layer, b.name, b.bone, copy)) ||
                          WritesHipsPosition(layer, AnimationUtility.CalculateTransformPath(hips, copy.transform)));

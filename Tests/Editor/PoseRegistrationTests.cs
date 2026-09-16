@@ -92,7 +92,10 @@ namespace VRVlog.LilToonExporter.Tests
         [TestCase(false, false, false, "Gesture", false, 1f, false, 2)]
         [TestCase(false, false, false, "Gesture", false, 1f, false, 0, true, TestName = "PropOnlyMenuDoesNotCaptureAnUnconditionalBodyLayer")]
         [TestCase(false, false, false, "Gesture", false, 1f, false, 0, false, true, TestName = "MaskedMenuDoesNotCaptureAnUnconditionalBodyLayer")]
-        public void SubmenuAndMaGeneratedGestureMenuResolveOnlySelectedStaticPose(bool modularAvatar, bool defaultLocomotion, bool overrideClip, string layerType = "Gesture", bool crossLayerWeight = false, float controlWeight = 1f, bool unrelatedSolo = false, int unconditionalFallback = 0, bool propOnly = false, bool maskedSelection = false)
+        [TestCase(false, false, false, "Gesture", false, 1f, false, 0, false, false, 1, TestName = "EmptyWriteDefaultsStateDoesNotExposeLowerPose")]
+        [TestCase(false, false, false, "Gesture", false, 1f, false, 0, false, false, 2, TestName = "NonBodyWriteDefaultsStateDoesNotExposeLowerPose")]
+        [TestCase(false, false, false, "Gesture", false, 1f, false, 0, false, false, 3, TestName = "EmptyWriteDefaultsLayerRespectsControllerBodyBindings")]
+        public void SubmenuAndMaGeneratedGestureMenuResolveOnlySelectedStaticPose(bool modularAvatar, bool defaultLocomotion, bool overrideClip, string layerType = "Gesture", bool crossLayerWeight = false, float controlWeight = 1f, bool unrelatedSolo = false, int unconditionalFallback = 0, bool propOnly = false, bool maskedSelection = false, int upperDefaults = 0)
         {
             using var f = new AttachmentConnectionTests.Fixture(); var descriptor = Descriptor(f.Source);
             var menuType = Find("VRC.SDK3.Avatars.ScriptableObjects.VRCExpressionsMenu");
@@ -142,6 +145,18 @@ namespace VRVlog.LilToonExporter.Tests
                     for (var i = 0; i < sourceMask.transformCount; i++) sourceMask.SetTransformActive(i, false);
                 }
                 controller.layers = new[] { new AnimatorControllerLayer { name = "Static pose", defaultWeight = 1, stateMachine = machine, avatarMask = sourceMask } };
+                if (upperDefaults > 0)
+                {
+                    var upper = new AnimatorStateMachine(); var empty = upper.AddState("Default writes"); empty.writeDefaultValues = true;
+                    var previous = upper.AddState("Previous"); previous.writeDefaultValues = false; previous.motion = upperDefaults == 3 ? null : clip;
+                    if (upperDefaults == 2)
+                    {
+                        var propClip = new AnimationClip(); owned.Add(propClip); empty.motion = propClip;
+                        AnimationUtility.SetEditorCurve(propClip, EditorCurveBinding.FloatCurve("Prop", typeof(Transform), "localEulerAnglesRaw.y"), AnimationCurve.Constant(0, 1, 30));
+                    }
+                    var t = upper.AddAnyStateTransition(empty); t.canTransitionToSelf = false; t.hasExitTime = false; t.duration = 0;
+                    controller.layers = controller.layers.Concat(new[] { new AnimatorControllerLayer { name = "Upper default writes", defaultWeight = 1, stateMachine = upper } }).ToArray();
+                }
                 RuntimeAnimatorController effective = controller;
                 if (overrideClip) { var replacement = new AnimatorOverrideController(controller); replacement[clip] = unrelated; owned.Add(replacement); effective = replacement; }
                 var folder = Add((IList)PoseMenuResolver.Member(menu, "controls")); Set(folder, "name", "カテゴリー"); Set(folder, "type", "SubMenu"); Set(folder, "subMenu", sub);
@@ -218,6 +233,7 @@ namespace VRVlog.LilToonExporter.Tests
                 var result = PoseMenuResolver.Read(clone);
                 Assert.That(result.Count, Is.EqualTo(1));
                 if (defaultLocomotion) { Assert.That(result[0].Error, Does.Contain("外部入力")); return; }
+                if (upperDefaults > 0) { Assert.That(result[0].Error, Does.Contain("Write Defaults")); return; }
                 if (unrelatedSolo || unconditionalFallback > 0 || propOnly || maskedSelection) { Assert.That(result[0].Error, Does.Contain("確定"), "A suppressed or irrelevant parameter edge cannot relate this menu to an unconditional pose."); return; }
                 Assert.That(result[0].Error, Is.Null, result[0].Error);
                 Assert.That(result[0].Name, Is.EqualTo("メニュー名")); Assert.That(result[0].Category, Is.EqualTo("カテゴリー"));
