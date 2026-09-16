@@ -212,6 +212,6 @@ namespace VRVlog.LilToonExporter
         }
         static IEnumerable<AnimatorState> States(AnimatorStateMachine m) => Machines(m).SelectMany(s => s.states.Select(c => c.state));
         static IEnumerable<StateMachineBehaviour> Behaviours(AnimatorStateMachine m) => Machines(m).SelectMany(s => s.behaviours);
-        static IEnumerable<AnimatorStateTransition> Transitions(AnimatorStateMachine m) => Machines(m).SelectMany(s => s.anyStateTransitions).Concat(States(m).SelectMany(s => s.transitions));
+        static IEnumerable<AnimatorStateTransition> Transitions(AnimatorStateMachine m) => Machines(m).SelectMany(s => ActiveTransitions(s.anyStateTransitions)).Concat(States(m).SelectMany(s => ActiveTransitions(s.transitions)));
     }
 }
