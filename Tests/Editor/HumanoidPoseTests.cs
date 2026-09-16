@@ -75,6 +75,64 @@ namespace VRVlog.LilToonExporter.Tests
             finally { Object.DestroyImmediate(clip); Object.DestroyImmediate(mask); Object.DestroyImmediate(avatar); }
         }
         [Test]
+        public void ASingleArmMusclePreservesUnboundAuthoredJointLocals()
+        {
+            using var f = new AttachmentConnectionTests.Fixture(); var clip = new AnimationClip();
+            try
+            {
+                var animator = f.Source.GetComponent<Animator>();
+                animator.GetBoneTransform(HumanBodyBones.LeftLowerArm).localRotation = Quaternion.Euler(15, 8, 24);
+                animator.GetBoneTransform(HumanBodyBones.LeftHand).localRotation = Quaternion.Euler(-12, 17, 9);
+                var muscle = Array.FindIndex(HumanTrait.MuscleName, n => n == "Left Arm Down-Up"); Assert.That(muscle, Is.GreaterThanOrEqualTo(0));
+                AnimationUtility.SetEditorCurve(clip, EditorCurveBinding.FloatCurve("", typeof(Animator), HumanTrait.MuscleName[muscle]), AnimationCurve.Constant(0, 1, -.6f));
+                var candidate = new PoseCandidate { Id = "arm-muscle", Name = "Arm", Category = "", Source = "test" }; candidate.Layers.Add(new PoseLayer { Clip = clip });
+                var data = PoseSampling.Sample(f.Source, candidate);
+                Quaternion Delta(string name) { var q = data.Bones.Single(b => b.Name == name).Rotation; return new Quaternion((float)q[0],(float)q[1],(float)q[2],(float)q[3]); }
+                Assert.That(Quaternion.Angle(Delta("leftUpperArm"), Delta("leftLowerArm")), Is.LessThan(.05));
+                Assert.That(Quaternion.Angle(Delta("leftLowerArm"), Delta("leftHand")), Is.LessThan(.05));
+            }
+            finally { Object.DestroyImmediate(clip); }
+        }
+        [Test]
+        public void RootRotationUsesRootMaskIndependentlyOfBodyMask()
+        {
+            using var f = new AttachmentConnectionTests.Fixture(); var clip = new AnimationClip(); var mask = new AvatarMask();
+            try
+            {
+                var q = Quaternion.Euler(0, 35, 0);
+                for (var i = 0; i < 4; i++) AnimationUtility.SetEditorCurve(clip, EditorCurveBinding.FloatCurve("", typeof(Animator), "RootQ." + "xyzw"[i]), AnimationCurve.Constant(0, 1, q[i]));
+                var candidate = new PoseCandidate { Id = "root-mask", Name = "Root", Category = "", Source = "test" }; candidate.Layers.Add(new PoseLayer { Clip = clip, Mask = mask });
+                mask.SetHumanoidBodyPartActive(AvatarMaskBodyPart.Root, true); mask.SetHumanoidBodyPartActive(AvatarMaskBodyPart.Body, false);
+                var active = PoseSampling.Sample(f.Source, candidate).Bones.Single(b => b.Name == "hips").Rotation;
+                Assert.That(Math.Abs(active[3]), Is.LessThan(.99));
+                mask.SetHumanoidBodyPartActive(AvatarMaskBodyPart.Root, false); mask.SetHumanoidBodyPartActive(AvatarMaskBodyPart.Body, true);
+                var blocked = PoseSampling.Sample(f.Source, candidate).Bones.Single(b => b.Name == "hips").Rotation;
+                Assert.That(Math.Abs(blocked[3]), Is.GreaterThan(.999));
+            }
+            finally { Object.DestroyImmediate(clip); Object.DestroyImmediate(mask); }
+        }
+        [Test]
+        public void HumanoidRootTranslationUsesMetersAndIgnoresScenePlacementScale()
+        {
+            using var f = new AttachmentConnectionTests.Fixture(); var clip = new AnimationClip(); var mask = new AvatarMask();
+            try
+            {
+                var animator = f.Source.GetComponent<Animator>(); var pose = new HumanPose();
+                using (var handler = new HumanPoseHandler(animator.avatar, f.Source.transform)) handler.GetHumanPose(ref pose);
+                AnimationUtility.SetEditorCurve(clip, EditorCurveBinding.FloatCurve("", typeof(Animator), "RootT.y"), AnimationCurve.Constant(0, 1, pose.bodyPosition.y - .25f));
+                var candidate = new PoseCandidate { Id = "root-position", Name = "Crouch", Category = "", Source = "test" }; candidate.Layers.Add(new PoseLayer { Clip = clip, Mask = mask });
+                mask.SetHumanoidBodyPartActive(AvatarMaskBodyPart.Root, true); mask.SetHumanoidBodyPartActive(AvatarMaskBodyPart.Body, false);
+                var first = PoseSampling.Sample(f.Source, candidate);
+                Assert.That(first.HipsOffset[1], Is.EqualTo(-.25f * animator.humanScale).Within(.002));
+                f.Source.transform.SetPositionAndRotation(new Vector3(3, 2, -4), Quaternion.Euler(0, 55, 0)); f.Source.transform.localScale = Vector3.one * 3;
+                var placed = PoseSampling.Sample(f.Source, candidate);
+                Assert.That(placed.HipsOffset[1], Is.EqualTo(first.HipsOffset[1]).Within(.002));
+                mask.SetHumanoidBodyPartActive(AvatarMaskBodyPart.Root, false); mask.SetHumanoidBodyPartActive(AvatarMaskBodyPart.Body, true);
+                Assert.That(PoseSampling.Sample(f.Source, candidate).HipsOffset[1], Is.EqualTo(0).Within(.002));
+            }
+            finally { Object.DestroyImmediate(clip); Object.DestroyImmediate(mask); }
+        }
+        [Test]
         public void ManualSamplingIsIsolatedAndKeepsDifferentTimesAndConditions()
         {
             using var f = new AttachmentConnectionTests.Fixture(); var clip = Clip(f.Source);

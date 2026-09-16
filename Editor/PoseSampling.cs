@@ -159,6 +159,8 @@ namespace VRVlog.LilToonExporter
                 if (hasMuscles && hasTransforms) throw new InvalidOperationException("HumanoidカーブとTransformカーブの混合は未対応です。");
                 if (hasMuscles && candidate.Layers.Count(l => l.Weight > 0 && l.GroupWeight > 0) > 1)
                     throw new InvalidOperationException("複数Humanoidクリップの筋肉カーブ合成は未対応です。");
+                var restHumanPose = new HumanPose();
+                if (hasMuscles) using (var handler = new HumanPoseHandler(animator.avatar, copy.transform)) handler.GetHumanPose(ref restHumanPose);
                 var baseline = hasMuscles ? RestClip(animator, copy) : TransformRestClip(animator, copy);
                 clips.Add(baseline);
                 AnimationClipPlayable Baseline()
@@ -194,7 +196,11 @@ namespace VRVlog.LilToonExporter
                 }
                 if (!any) throw new InvalidOperationException("書き出すHumanoidの体・手足・指のカーブがありません。");
                 if (hasTransforms) EvaluateTransforms(copy, animator, candidate.Layers);
-                else { graph.Play(); graph.Evaluate(0); }
+                else
+                {
+                    graph.Play(); graph.Evaluate(0);
+                    ApplyHumanoidRoot(animator, copy, restHumanPose, candidate.Layers);
+                }
                 // A clip playable can populate unbound humanoid channels with
                 // defaults. Retain the exact authored locals outside its body
                 // parts, and outside every effective mask, before capturing.
@@ -268,6 +274,38 @@ namespace VRVlog.LilToonExporter
             return result;
         }
         internal static bool Finite(float value) => !float.IsNaN(value) && !float.IsInfinity(value);
+
+        static void ApplyHumanoidRoot(Animator animator, GameObject root, HumanPose baseline, List<PoseLayer> layers)
+        {
+            // RootQ/RootT are humanoid body coordinates. With root motion
+            // disabled, a clip playable can extract them instead of moving the
+            // body. Transfer those channels through HumanPose explicitly;
+            // never move/rotate the avatar's scene placement transform.
+            foreach (var layer in layers)
+            {
+                if (layer.SkipMuscles || layer.Weight <= 0 || layer.GroupWeight <= 0 ||
+                    !MaskAllows(layer.Mask, AvatarMaskBodyPart.Root, "", true) || !MaskAllows(layer.OuterMask, AvatarMaskBodyPart.Root, "", true)) continue;
+                var position = baseline.bodyPosition; var rotation = baseline.bodyRotation;
+                var hasPosition = false; var hasRotation = false;
+                foreach (var b in AnimationUtility.GetCurveBindings(layer.Clip).Where(b => b.type == typeof(Animator) && b.path == ""))
+                {
+                    var p = b.propertyName; var axis = "xyzw".IndexOf(p[p.Length - 1]);
+                    if (axis < 0 || !(p.StartsWith("RootT.") || p.StartsWith("RootQ."))) continue;
+                    var value = AnimationUtility.GetEditorCurve(layer.Clip, b).Evaluate(layer.Time);
+                    if (!Finite(value)) throw new InvalidOperationException("HumanoidのRoot評価値が有限ではありません。");
+                    if (p.StartsWith("RootT.") && axis < 3) { position[axis] = value; hasPosition = true; }
+                    else if (p.StartsWith("RootQ.")) { rotation[axis] = value; hasRotation = true; }
+                }
+                if (!hasPosition && !hasRotation) continue;
+                if (hasRotation && Quaternion.Dot(rotation, rotation) < 1e-8f) throw new InvalidOperationException("HumanoidのRoot回転が不正です。");
+                using var handler = new HumanPoseHandler(animator.avatar, root.transform);
+                var pose = new HumanPose(); handler.GetHumanPose(ref pose);
+                var weight = layer.Weight * layer.GroupWeight;
+                if (hasPosition) pose.bodyPosition = Vector3.Lerp(baseline.bodyPosition, position, weight);
+                if (hasRotation) pose.bodyRotation = Quaternion.Slerp(baseline.bodyRotation, rotation.normalized, weight);
+                handler.SetHumanPose(ref pose);
+            }
+        }
 
         // Transform-bound clips already name the authored local axes. Sending
         // these through a humanoid playable retargets/clamps them a second time.
@@ -369,14 +407,17 @@ namespace VRVlog.LilToonExporter
                 if (binding.type == typeof(Transform) && binding.path == path &&
                     MaskAllows(layer.Mask, part, path, false) && MaskAllows(layer.OuterMask, part, path, false)) return true;
                 if (layer.SkipMuscles || binding.type != typeof(Animator) || binding.path != "") continue;
+                if (name == "hips" && binding.propertyName.StartsWith("RootQ."))
+                {
+                    if (MaskAllows(layer.Mask, AvatarMaskBodyPart.Root, "", true) && MaskAllows(layer.OuterMask, AvatarMaskBodyPart.Root, "", true)) return true;
+                    continue;
+                }
                 if (!MaskAllows(layer.Mask, part, path, true) || !MaskAllows(layer.OuterMask, part, path, true)) continue;
-                if (name == "hips" && binding.propertyName.StartsWith("RootQ.")) return true;
                 for (var i = 0; i < HumanTrait.MuscleCount; i++)
                     if (MuscleProperty(HumanTrait.MuscleName[i]) == binding.propertyName || HumanTrait.MuscleName[i] == binding.propertyName)
                     {
                         var human = (HumanBodyBones)HumanTrait.BoneFromMuscle(i);
-                        var muscleName = char.ToLowerInvariant(human.ToString()[0]) + human.ToString().Substring(1);
-                        if (Part(muscleName) == part) return true;
+                        if (HumanBone(name) == human) return true;
                     }
             }
             return false;
