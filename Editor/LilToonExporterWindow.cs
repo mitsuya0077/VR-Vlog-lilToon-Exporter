@@ -15,6 +15,7 @@ namespace VRVlog.LilToonExporter
         private string author = "";
         private string outputPath = "";
         private bool showAppearanceOptions;
+        private bool showEnvironment;
         private bool showBlink;
         private BlinkExportOptions blinkOptions = new BlinkExportOptions();
         private PoseExportOptions poseOptions = new PoseExportOptions();
@@ -25,6 +26,11 @@ namespace VRVlog.LilToonExporter
         private double nextGimmickScan;
         private readonly BlinkStatusCache blinkStatus = new BlinkStatusCache();
         private Vector2 scrollPosition;
+        private GUIStyle requiredLabelStyle;
+        private GUIStyle hintStyle;
+        private GUIStyle centeredHintStyle;
+        private GUIStyle placeholderStyle;
+        private const string AuthorControlName = "VRVlogExporterAuthor";
 
         // IMGUI runs for layout, repaint and input. Only the status label may
         // reuse a scan; export and preview still resolve the live avatar.
@@ -63,7 +69,7 @@ namespace VRVlog.LilToonExporter
         public static void Open()
         {
             var window = GetWindow<LilToonExporterWindow>(true, "VR Vlog VRM書き出し");
-            window.minSize = new Vector2(430f, 300f);
+            window.minSize = new Vector2(430f, 430f);
         }
 
         private void OnGUI()
@@ -71,21 +77,31 @@ namespace VRVlog.LilToonExporter
             using (var scroll = new EditorGUILayout.ScrollViewScope(scrollPosition))
             {
                 scrollPosition = scroll.scrollPosition;
-                DrawWindow();
+                using (new EditorGUILayout.VerticalScope(GUILayout.ExpandWidth(true)))
+                {
+                    EditorGUILayout.Space(16f);
+                    using (new EditorGUILayout.HorizontalScope())
+                    {
+                        GUILayout.Space(16f);
+                        using (new EditorGUILayout.VerticalScope(GUILayout.ExpandWidth(true))) DrawWindow();
+                        GUILayout.Space(16f);
+                    }
+                    EditorGUILayout.Space(16f);
+                }
             }
         }
 
         private void DrawWindow()
         {
-            EditorGUILayout.HelpBox(
-                "アバターを選び、作者名を入力するだけでVRMを書き出せます。\nMToon互換データとlilToonデータは自動で追加されます。",
-                MessageType.Info);
-            EditorGUILayout.Space(4f);
+            EnsureStyles();
+            EditorGUILayout.LabelField("アバターと作者名を指定して、VRMを書き出します。", EditorStyles.wordWrappedLabel);
+            EditorGUILayout.Space(18f);
+            DrawRequiredLabel("アバター", "Hierarchyにあるアバターの一番上のオブジェクトを指定します。");
             var selectedAvatar = (GameObject)EditorGUILayout.ObjectField(
-                new GUIContent("① アバター（必須）", "Hierarchyにあるアバターの一番上のオブジェクトを指定します。"),
                 avatar,
                 typeof(GameObject),
-                true);
+                true,
+                GUILayout.Height(24f));
             if (selectedAvatar != avatar)
             {
                 blinkOptions = new BlinkExportOptions();
@@ -97,23 +113,33 @@ namespace VRVlog.LilToonExporter
                 InvalidateAvatarScan();
             }
             avatar = selectedAvatar;
-            EditorGUILayout.HelpBox("Hierarchyから、書き出したいアバターの一番上のオブジェクトを指定してください。", MessageType.None);
+            EditorGUILayout.LabelField("Hierarchyからアバターを指定", hintStyle);
 
-            author = EditorGUILayout.TextField(
-                new GUIContent("② 作者名（必須）", "VRMファイルに記録される作者名です。"),
-                author);
-            EditorGUILayout.HelpBox("VRMファイルに記録する作者名を入力してください。", MessageType.None);
-            EditorGUILayout.HelpBox("現在有効な衣装・オブジェクトを書き出します。非表示のオブジェクトや無効なRendererは含まれません。", MessageType.None);
-            EditorGUILayout.HelpBox("Modular Avatar の髪・衣装は、設定済みの接続先を自動で反映します。ここでボーンを指定する必要はありません。", MessageType.None);
+            EditorGUILayout.Space(14f);
+            DrawRequiredLabel("作者名", "VRMファイルに記録される作者名です。");
+            var authorRect = EditorGUILayout.GetControlRect(false, 24f);
+            GUI.SetNextControlName(AuthorControlName);
+            author = EditorGUI.TextField(authorRect, author);
+            if (string.IsNullOrEmpty(author) && GUI.GetNameOfFocusedControl() != AuthorControlName)
+                GUI.Label(authorRect, "作者名を入力", placeholderStyle);
 
-            DrawBlink();
-            using (new EditorGUI.DisabledScope(avatar == null))
-                if (GUILayout.Button("ポーズを確認・調整"))
-                    PoseReviewWindow.Show(avatar, poseOptions, excludedObjects.ToArray(),
-                        new ExportGimmickOptions { AutoExclude = autoExcludeGimmicks, IncludedObjects = includedGimmicks.ToArray() });
-            showAppearanceOptions = EditorGUILayout.Foldout(showAppearanceOptions, "書き出し設定");
+            EditorGUILayout.Space(12f);
+            using (new EditorGUILayout.HorizontalScope())
+            {
+                GUILayout.FlexibleSpace();
+                using (new EditorGUI.DisabledScope(avatar == null))
+                    if (GUILayout.Button("ポーズを確認・調整", GUILayout.Width(160f), GUILayout.Height(26f)))
+                        PoseReviewWindow.Show(avatar, poseOptions, excludedObjects.ToArray(),
+                            new ExportGimmickOptions { AutoExclude = autoExcludeGimmicks, IncludedObjects = includedGimmicks.ToArray() });
+            }
+
+            DrawSeparator();
+            showAppearanceOptions = EditorGUILayout.Foldout(showAppearanceOptions, "書き出し設定", true);
             if (showAppearanceOptions)
             {
+                EditorGUILayout.Space(6f);
+                DrawBlink();
+                EditorGUILayout.Space(6f);
                 DrawGimmicks();
                 EditorGUILayout.Space(4f);
                 EditorGUILayout.LabelField("書き出さないオブジェクト（ペット・ギミックなど）");
@@ -130,19 +156,67 @@ namespace VRVlog.LilToonExporter
                 if (GUILayout.Button("除外するオブジェクトを追加")) { excludedObjects.Add(null); InvalidateAvatarScan(); }
             }
 
-            EditorGUILayout.Space(4f);
-            using (new EditorGUI.DisabledScope(avatar == null || string.IsNullOrWhiteSpace(author)))
-                if (GUILayout.Button("③ 保存先を選んでVRMを書き出す", GUILayout.Height(32f))) ExportOneClick();
+            EditorGUILayout.Space(14f);
+            var canExport = avatar != null && !string.IsNullOrWhiteSpace(author);
+            using (new EditorGUI.DisabledScope(!canExport))
+                if (GUILayout.Button("保存先を選んでVRMを書き出す", GUILayout.Height(40f))) ExportOneClick();
 
-            if (avatar == null || string.IsNullOrWhiteSpace(author))
-                EditorGUILayout.HelpBox("上の2項目を入力すると書き出せます。", MessageType.Warning);
+            EditorGUILayout.Space(6f);
+            EditorGUILayout.LabelField(canExport ? "" : "アバターと作者名を入力してください", centeredHintStyle);
 
-            EditorGUILayout.Space(8f);
-            EditorGUILayout.LabelField("動作環境", EditorStyles.boldLabel);
-            EditorGUILayout.LabelField("lilToon", InstalledLilToonStatus());
-            if (GUILayout.Button("動作環境を確認")) Compatibility.DependencyDiagnostics.OpenDiagnostics();
-            EditorGUILayout.LabelField("UniVRM", Compatibility.DependencyPolicy.UniVrmVersions);
+            DrawSeparator();
+            showEnvironment = EditorGUILayout.Foldout(showEnvironment, "動作環境", true);
+            if (showEnvironment)
+            {
+                EditorGUILayout.Space(4f);
+                EditorGUILayout.LabelField("lilToon", InstalledLilToonStatus());
+                EditorGUILayout.LabelField("UniVRM", Compatibility.DependencyPolicy.UniVrmVersions);
+            }
+        }
 
+        private void EnsureStyles()
+        {
+            if (requiredLabelStyle != null) return;
+            requiredLabelStyle = new GUIStyle(EditorStyles.helpBox)
+            {
+                fontSize = 10,
+                alignment = TextAnchor.MiddleCenter,
+                padding = new RectOffset(5, 5, 1, 1),
+                margin = new RectOffset(6, 0, 0, 0)
+            };
+            hintStyle = new GUIStyle(EditorStyles.miniLabel)
+            {
+                wordWrap = true,
+                normal = { textColor = EditorStyles.centeredGreyMiniLabel.normal.textColor }
+            };
+            centeredHintStyle = new GUIStyle(hintStyle) { alignment = TextAnchor.MiddleCenter };
+            placeholderStyle = new GUIStyle(EditorStyles.label)
+            {
+                alignment = TextAnchor.MiddleLeft,
+                padding = new RectOffset(5, 5, 0, 0),
+                normal = { textColor = EditorStyles.centeredGreyMiniLabel.normal.textColor }
+            };
+        }
+
+        private void DrawRequiredLabel(string label, string tooltip)
+        {
+            using (new EditorGUILayout.HorizontalScope())
+            {
+                GUILayout.Label(new GUIContent(label, tooltip), EditorStyles.boldLabel, GUILayout.ExpandWidth(false));
+                GUILayout.Label("必須", requiredLabelStyle, GUILayout.ExpandWidth(false));
+                GUILayout.FlexibleSpace();
+            }
+            EditorGUILayout.Space(3f);
+        }
+
+        private static void DrawSeparator()
+        {
+            EditorGUILayout.Space(12f);
+            var rect = EditorGUILayout.GetControlRect(false, 1f);
+            EditorGUI.DrawRect(rect, EditorGUIUtility.isProSkin
+                ? new Color(1f, 1f, 1f, 0.14f)
+                : new Color(0f, 0f, 0f, 0.18f));
+            EditorGUILayout.Space(10f);
         }
 
         private BlinkExportSession ResolveBlink()
@@ -296,7 +370,14 @@ namespace VRVlog.LilToonExporter
         private void ExportOneClick()
         {
             try { ResolveBlink(); }
-            catch (Exception) { blinkStatus.Invalidate(); showBlink = true; Repaint(); return; }
+            catch (Exception)
+            {
+                blinkStatus.Invalidate();
+                showAppearanceOptions = true;
+                showBlink = true;
+                Repaint();
+                return;
+            }
             outputPath = EditorUtility.SaveFilePanel("VRMの保存先", "", DefaultFileName(), "vrm");
             if (string.IsNullOrEmpty(outputPath)) return;
             // A nonmodal failure window may remain open while the user changes
@@ -392,7 +473,7 @@ namespace VRVlog.LilToonExporter
         private static string PackageVersion()
         {
             var info = PackageManagerPackageInfo.FindForAssembly(typeof(LilToonExporterWindow).Assembly);
-            return info != null && !string.IsNullOrWhiteSpace(info.version) ? info.version : "0.11.0";
+            return info != null && !string.IsNullOrWhiteSpace(info.version) ? info.version : "0.11.1";
         }
 
         private static string InstalledLilToonStatus()

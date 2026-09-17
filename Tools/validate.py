@@ -18,7 +18,7 @@ listing = json.loads((root / "source.json").read_text(encoding="utf-8"))
 
 assert package["name"] == "com.vrvlog.liltoon-vrm-exporter"
 assert package["unity"] == "2022.3"
-assert package["version"] == "0.11.0"
+assert package["version"] == "0.11.1"
 assert one_click.index("AvatarBaseShape.Preserve(clone, clone,") < one_click.index("Vrm10AppearanceExporter.Export(")
 assert "foreach (var mesh in temporaryMeshes) UnityEngine.Object.DestroyImmediate(mesh);" in one_click
 assert package["vpmDependencies"] == {
@@ -278,9 +278,9 @@ assert 'VrmMenuExpressions.Add(exported, expressions)' in one_click
 assert 'return avatar != null && !string.IsNullOrWhiteSpace(avatar.name) ? avatar.name.Trim() : "avatar";' in window
 assert 'var name = AvatarName();' in window
 assert 'EditorUtility.SaveFilePanel("VRMの保存先", "", DefaultFileName(), "vrm")' in window
-assert 'new GUIContent("① アバター（必須）"' in window
-assert 'new GUIContent("② 作者名（必須）"' in window
-assert '③ 保存先を選んでVRMを書き出す' in window
+assert 'DrawRequiredLabel("アバター"' in window
+assert 'DrawRequiredLabel("作者名"' in window
+assert 'GUILayout.Button("保存先を選んでVRMを書き出す"' in window
 assert "ValidateAllEncodedTextures(glb, textureSources);" in injector
 assert "materialCount > LilToonMobileProfile.MaximumMaterials" in injector
 assert (root / "Tests/Editor/GlbDocumentTests.cs").is_file()
