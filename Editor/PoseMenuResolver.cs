@@ -1,0 +1,318 @@
+using System;
+using System.Collections;
+using System.Collections.Generic;
+using System.Linq;
+using UnityEditor;
+using UnityEditor.Animations;
+using UnityEngine;
+
+namespace VRVlog.LilToonExporter
+{
+    // A proof over the reachable state graph, not a bag of referenced clips or
+    // a few sampled frames. Anything outside this bounded subset is reported.
+    internal static class PoseMenuResolver
+    {
+        static readonly string[] BodyTrackingParts = { "trackingLeftHand", "trackingRightHand", "trackingHip", "trackingLeftFoot", "trackingRightFoot", "trackingLeftFingers", "trackingRightFingers" };
+        static bool TrackingControl(StateMachineBehaviour b) => b != null && b.GetType().Name == "VRCAnimatorTrackingControl";
+        internal static object Member(object value, string name) => VrChatExpressionMenu.Member(value, name);
+        internal static IEnumerable<object> Items(object value) => value is IEnumerable e ? e.Cast<object>() : Enumerable.Empty<object>();
+        internal static List<PoseCandidate> Read(GameObject avatar)
+        {
+            var result = new List<PoseCandidate>();
+            var descriptor = avatar.GetComponents<Component>().FirstOrDefault(c => c != null && c.GetType().FullName == "VRC.SDK3.Avatars.Components.VRCAvatarDescriptor");
+            if (descriptor == null) return result;
+            var bodyPaths = PoseSampling.BodyPaths(avatar);
+            var menu = VrChatExpressionMenu.Read(avatar);
+            var expressionDefinitions = Items(Member(Member(descriptor, "expressionParameters"), "parameters"))
+                .ToLookup(p => Member(p, "name") as string ?? "", StringComparer.Ordinal);
+            menu.ExternalParameters.UnionWith(VrChatParameterDriver.BuiltIn);
+            var avatarLayers = Items(Member(descriptor, "baseAnimationLayers")).Concat(Items(Member(descriptor, "specialAnimationLayers"))).ToArray();
+            var layers = avatarLayers.Where(l => !(Member(l, "isDefault") is bool d && d) && Member(l, "animatorController") is RuntimeAnimatorController).ToArray();
+            foreach (var entry in menu.Entries)
+            {
+                var split = entry.Name.LastIndexOf(" / ", StringComparison.Ordinal);
+                var row = new PoseCandidate { Name = split < 0 ? entry.Name : entry.Name.Substring(split + 3),
+                    Category = split < 0 ? "VRChat" : entry.Name.Substring(0, split), Source = "VRChat menu",
+                    Conditions = JsonDom.Serialize(new Dictionary<string, object> { ["parameters"] = entry.Parameters.ToDictionary(p => p.Key, p => (object)p.Value),
+                        ["controlType"] = entry.ControlType, ["controlParameter"] = entry.ControlParameter }), Error = entry.Error };
+                try
+                {
+                    if (row.Error != null) throw new InvalidOperationException(row.Error);
+                    foreach (var pair in entry.Parameters)
+                    {
+                        var definitions = expressionDefinitions[pair.Key].ToArray();
+                        if (!menu.ExpressionParameters.Contains(pair.Key) || definitions.Length != 1 || menu.ExternalParameters.Contains(pair.Key))
+                            throw new InvalidOperationException("Expression Parametersが未定義・重複または外部入力に依存します: " + pair.Key);
+                        var type = Member(definitions[0], "valueType")?.ToString();
+                        var value = pair.Value;
+                        if (!PoseSampling.Finite(value) || !(type == "Bool" && value == 1 ||
+                            type == "Int" && value >= 0 && value <= 255 && value == Math.Floor(value) ||
+                            type == "Float" && value >= -1 && value <= 1))
+                            throw new InvalidOperationException("Expression Parametersの型・操作値を確定できません: " + pair.Key);
+                    }
+                    if (Member(descriptor, "customizeAnimationLayers") is bool custom && !custom)
+                        throw new InvalidOperationException("カスタムPlayable Layerが無効です。");
+                    var weights = new Dictionary<string, float> { ["Base"] = 1, ["Additive"] = 1, ["Gesture"] = 1, ["Action"] = 0, ["FX"] = 1,
+                        ["Sitting"] = 0, ["TPose"] = 0, ["IKPose"] = 0 };
+                    var initialWeights = new Dictionary<string, float>(weights);
+                    var resolved = new List<(string type, AnimatorControllerLayer layer, AnimatorState state, AnimationClip clip, int index, bool skipMuscles, AvatarMask outer, bool selected, bool retainsHistory)>();
+                    var controlledWeights = new Dictionary<string, float>();
+                    var selectedWeightTargets = new HashSet<string>();
+                    var unconditionalWeightTargets = new HashSet<string>();
+                    var animatedTracking = new List<(string type, float weight)>();
+                    var selectedAffectsBody = false;
+                    foreach (var source in layers)
+                    {
+                        var type = Member(source, "type")?.ToString() ?? "";
+                        var runtime = (RuntimeAnimatorController)Member(source, "animatorController");
+                        var controller = ExpressionDependencies.Controller(runtime); var replacements = ExpressionDependencies.Overrides(runtime);
+                        foreach (var parameter in controller.parameters.Where(p => entry.Parameters.ContainsKey(p.name)))
+                            if (parameter.type.ToString() != Member(expressionDefinitions[parameter.name].Single(), "valueType")?.ToString())
+                                throw new InvalidOperationException("Expression ParametersとAnimatorパラメーターの型が一致しません: " + parameter.name);
+                        var outer = Member(source, "mask") as AvatarMask;
+                        var skipMuscles = type == "FX" && controller.layers.Length > 0 && controller.layers[0].avatarMask == null;
+                        AnimationClip Clip(AnimatorState state) => state.motion is AnimationClip clip && replacements.TryGetValue(clip, out var replacement) ? replacement : state.motion as AnimationClip;
+                        var controllerHasBody = controller.layers.Any(l => States(l.stateMachine).Any(s => HasBody(Clip(s), skipMuscles, bodyPaths) || s.motion is BlendTree));
+                        for (var i = 0; i < controller.layers.Length; i++)
+                        {
+                            var layer = controller.layers[i];
+                            var all = States(layer.stateMachine).ToArray();
+                            var hasBody = all.Any(s => HasBody(Clip(s), skipMuscles, bodyPaths)) || all.Any(s => s.motion is BlendTree);
+                            var behaviours = all.SelectMany(s => s.behaviours).Concat(Behaviours(layer.stateMachine)).ToArray();
+                            // Tracking controls persist across states and can
+                            // affect clips in other (even bodyless) layers.
+                            // Do not replace externally tracked limbs with a
+                            // snapshot of the animation they would override.
+                            foreach (var b in behaviours.Where(TrackingControl))
+                                foreach (var part in BodyTrackingParts)
+                                {
+                                    var mode = Member(b, part)?.ToString();
+                                    if (mode != "Animation")
+                                        throw new InvalidOperationException("体・手足・指のTracking Controlが外部入力・履歴に依存します（Animation指定が必要）: " + part);
+                                }
+                            var controls = behaviours.Any(b => b == null || !Tracking(b) || TrackingControl(b));
+                            var writesDefaults = controllerHasBody && all.Any(s => s.writeDefaultValues);
+                            if (!hasBody && !controls && !writesDefaults) continue;
+                            if (layer.syncedLayerIndex >= 0) throw new InvalidOperationException("同期Animatorレイヤーは未対応です。");
+                            foreach (var b in behaviours)
+                                if (b == null || !Tracking(b) && b.GetType().Name != "VRCPlayableLayerControl")
+                                    throw new InvalidOperationException("外部操作・パラメーター変更を伴うBehaviourは未対応です: " + (b == null ? "missing" : b.GetType().Name));
+                            var state = Resolve(layer.stateMachine, entry.Parameters, menu.ExternalParameters, parameters: controller.parameters);
+                            if (state == null) continue;
+                            if (entry.ControlType == "Button")
+                            {
+                                var released = new Dictionary<string, float>(entry.Parameters) { [entry.ControlParameter] = 0 };
+                                if (Resolve(layer.stateMachine, released, menu.ExternalParameters, parameters: controller.parameters, startingState: state) != state)
+                                    throw new InvalidOperationException("Button解除後にAnimator状態が変わるため、静止姿勢の持続を確定できません。");
+                                row.Note = "Button解除後も同じ静止状態が維持される登録です。";
+                            }
+                            if (state.behaviours.Concat(AncestorBehaviours(layer.stateMachine, state)).Any(TrackingControl))
+                                animatedTracking.Add((type, i == 0 ? 1 : layer.defaultWeight));
+                            if (Behaviours(layer.stateMachine).Any(b => !Tracking(b)))
+                                throw new InvalidOperationException("StateMachine Behaviourによる重み変更は未対応です。");
+                            if (all.Where(s => s != state).Any(s => s.behaviours.Any(b => !Tracking(b))))
+                                throw new InvalidOperationException("開始／終了状態のBehaviourに依存する重みは未対応です。");
+                            var selectedByMenu = false;
+                            if (Transitions(layer.stateMachine).Any(t => t.conditions.Length > 0 &&
+                                t.conditions.All(c => entry.Parameters.TryGetValue(c.parameter, out var value) && Condition(c, value))))
+                            {
+                                // If removing the matched menu edges still
+                                // converges to the same pose, the menu did not
+                                // select that pose (e.g. an unconditional path).
+                                try { selectedByMenu = Resolve(layer.stateMachine, entry.Parameters, menu.ExternalParameters, true, controller.parameters) != state; }
+                                catch (InvalidOperationException) { selectedByMenu = true; }
+                            }
+                            foreach (var b in state.behaviours.Where(b => !Tracking(b)))
+                            {
+                                var target = Member(b, "layer")?.ToString();
+                                var weight = Convert.ToSingle(Member(b, "goalWeight"));
+                                var duration = Convert.ToSingle(Member(b, "blendDuration"));
+                                if (duration != 0 || !PoseSampling.Finite(weight) || weight < 0 || weight > 1 || target == null || !weights.ContainsKey(target))
+                                    throw new InvalidOperationException("時間依存のPlayable Layer重みは未対応です。");
+                                if (controlledWeights.TryGetValue(target, out var previous) && previous != weight)
+                                    throw new InvalidOperationException("複数レイヤーから重みが変更されるため順序を確定できません。");
+                                controlledWeights[target] = weights[target] = weight;
+                                if (selectedByMenu && weight != initialWeights[target]) selectedWeightTargets.Add(target);
+                                if (!selectedByMenu) unconditionalWeightTargets.Add(target);
+                            }
+                            IEnumerable<EditorCurveBinding> Bindings(AnimatorState s) => PoseSampling.EffectiveBodyBindings(avatar,
+                                new PoseLayer { Clip = Clip(s), Mask = layer.avatarMask, OuterMask = outer, SkipMuscles = skipMuscles });
+                            var terminalBindings = new HashSet<EditorCurveBinding>(Bindings(state));
+                            var retainsHistory = all.Where(s => s != state).Any(s => s.mirror || s.mirrorParameterActive || s.iKOnFeet ||
+                                s.motion != null && (Clip(s) == null || Bindings(s).Any(b => !terminalBindings.Contains(b))));
+                            if (hasBody || writesDefaults) resolved.Add((type, layer, state, Clip(state), i, skipMuscles, outer, selectedByMenu, retainsHistory));
+                        }
+                    }
+                    // A weight already set by an unconditional terminal does
+                    // not become menu-driven; do not depend on iteration order.
+                    selectedWeightTargets.ExceptWith(unconditionalWeightTargets);
+                    // Standard body controllers depend on built-in inputs. Do
+                    // not silently replace their contribution with rest bones.
+                    // A selected immediate control may explicitly disable them.
+                    foreach (var source in avatarLayers.Where(l => Member(l, "isDefault") is bool d && d))
+                    {
+                        var type = Member(source, "type")?.ToString() ?? "";
+                        if (type != "FX" && (!weights.TryGetValue(type, out var weight) || weight > 0))
+                            throw new InvalidOperationException("VRChat標準の" + type + "レイヤーが有効で、外部入力からの姿勢寄与を確定できません。");
+                    }
+                    foreach (var item in resolved.OrderBy(r => Array.IndexOf(new[] { "Base", "Additive", "Gesture", "Action", "FX", "Sitting", "TPose", "IKPose" }, r.type)))
+                    {
+                        if (!weights.TryGetValue(item.type, out var playableWeight)) throw new InvalidOperationException("不明なPlayable Layerです。");
+                        var weight = item.index == 0 ? 1 : item.layer.defaultWeight;
+                        if (!PoseSampling.Finite(weight) || weight < 0 || weight > 1) throw new InvalidOperationException("レイヤー重みが不正です。");
+                        if (weight == 0) continue;
+                        // Disabling a body layer can expose a lower static pose.
+                        var poseLayer = new PoseLayer { Clip = item.clip, Weight = weight, Mask = item.layer.avatarMask, SkipMuscles = item.skipMuscles,
+                            OuterMask = item.outer, Group = item.type, GroupWeight = 1 };
+                        var contributes = PoseSampling.HasEffectiveBody(avatar, poseLayer);
+                        selectedAffectsBody |= contributes && (selectedWeightTargets.Contains(item.type) || item.selected && playableWeight > 0);
+                        poseLayer.GroupWeight = playableWeight;
+                        if (playableWeight == 0) continue;
+                        if (item.state.writeDefaultValues && resolved.Count > 1)
+                            throw new InvalidOperationException("複数レイヤーのWrite Defaultsによる暗黙の姿勢合成は未対応です。");
+                        if (!item.state.writeDefaultValues && item.retainsHistory)
+                            throw new InvalidOperationException("Write Defaultsが無効で以前の状態の未上書きカーブが残るため、姿勢を確定できません。");
+                        if (item.state.motion == null) continue;
+                        if (item.clip == null) throw new InvalidOperationException("BlendTreeによる合成は未対応です。");
+                        if (!HasBody(item.clip, item.skipMuscles, bodyPaths)) continue;
+                        if (item.layer.blendingMode != AnimatorLayerBlendingMode.Override || item.type == "Additive")
+                            throw new InvalidOperationException("加算レイヤーの姿勢は未対応です。");
+                        if (item.state.mirror || item.state.mirrorParameterActive || item.state.timeParameterActive || item.state.speedParameterActive || item.state.cycleOffsetParameterActive || item.state.iKOnFeet)
+                            throw new InvalidOperationException("ミラー・時刻パラメーター・IKに依存する状態は未対応です。");
+                        if (PoseSampling.Moving(avatar, poseLayer)) throw new InvalidOperationException("体の動くメニュークリップです。手動追加で採用時刻を指定できます。");
+                        if (AnimationUtility.GetAnimationEvents(item.clip).Length != 0)
+                            throw new InvalidOperationException("Animation Eventを伴うメニューです。");
+                        poseLayer.ClipIdentity = PoseSampling.GeneratedClipIdentity(item.clip);
+                        row.Layers.Add(poseLayer);
+                    }
+                    if (!selectedAffectsBody || row.Layers.Count == 0) throw new InvalidOperationException("この操作から適用するHumanoid静止姿勢を確定できません。");
+                    if (!animatedTracking.Any(t => t.weight > 0 && weights.TryGetValue(t.type, out var w) && w > 0))
+                        throw new InvalidOperationException("有効な終端状態に体のAnimation指定がなく、Tracking Controlの外部入力・履歴を確定できません。");
+                }
+                catch (Exception e) when (e is InvalidOperationException || e is ArgumentException || e is FormatException) { row.Error = e.Message; }
+                row.Id = PoseSampling.Identity(row);
+                result.Add(row);
+            }
+            return result;
+        }
+
+        internal static AnimatorState Resolve(AnimatorStateMachine machine, IDictionary<string, float> selected, ISet<string> external = null, bool omitMatchedMenuEdges = false, AnimatorControllerParameter[] parameters = null, AnimatorState startingState = null)
+        {
+            var states = States(machine).ToArray();
+            var definitions = parameters?.ToLookup(p => p.name, StringComparer.Ordinal);
+            var parents = new Dictionary<AnimatorState, List<AnimatorStateMachine>>();
+            void Index(AnimatorStateMachine current, List<AnimatorStateMachine> ancestors)
+            {
+                if (ancestors.Contains(current)) throw new InvalidOperationException("Animator状態機械の参照が循環しています。");
+                var chain = new List<AnimatorStateMachine>(ancestors) { current };
+                if (current.entryTransitions.Length != 0) throw new InvalidOperationException("条件付きEntry遷移は未対応です。");
+                foreach (var s in current.states) parents.Add(s.state, chain);
+                foreach (var child in current.stateMachines)
+                {
+                    if (current.GetStateMachineTransitions(child.stateMachine).Length != 0)
+                        throw new InvalidOperationException("サブStateMachine間の遷移は未対応です。");
+                    Index(child.stateMachine, chain);
+                }
+            }
+            Index(machine, new List<AnimatorStateMachine>());
+            if (states.Length > 256) throw new InvalidOperationException("Animatorの状態数が上限を超えています。");
+            var edges = new Dictionary<AnimatorState, AnimatorState>();
+            foreach (var state in states)
+            {
+                AnimatorState destination = null;
+                foreach (var transition in parents[state].SelectMany(m => ActiveTransitions(m.anyStateTransitions)).Concat(ActiveTransitions(state.transitions)))
+                {
+                    // Check *all* conditions before evaluating: a currently false
+                    // condition cannot hide an external or historical dependency.
+                    foreach (var c in transition.conditions)
+                    {
+                        if (!selected.ContainsKey(c.parameter) || external?.Contains(c.parameter) == true)
+                            throw new InvalidOperationException("他のメニュー・外部入力・操作履歴に依存します: " + c.parameter);
+                        if (definitions != null)
+                        {
+                            var matches = definitions[c.parameter].ToArray();
+                            if (matches.Length != 1) throw new InvalidOperationException("Animatorパラメーターが未定義または重複しています: " + c.parameter);
+                            var type = matches[0].type;
+                            var boolean = c.mode == AnimatorConditionMode.If || c.mode == AnimatorConditionMode.IfNot;
+                            var comparison = c.mode == AnimatorConditionMode.Greater || c.mode == AnimatorConditionMode.Less;
+                            var equality = c.mode == AnimatorConditionMode.Equals || c.mode == AnimatorConditionMode.NotEqual;
+                            var valid = type == AnimatorControllerParameterType.Bool && boolean ||
+                                type == AnimatorControllerParameterType.Float && comparison ||
+                                type == AnimatorControllerParameterType.Int && (comparison || equality);
+                            var value = selected[c.parameter];
+                            if (!valid || !PoseSampling.Finite(value) || !PoseSampling.Finite(c.threshold) ||
+                                type == AnimatorControllerParameterType.Int && (value != Math.Floor(value) || (double)value < int.MinValue || (double)value > int.MaxValue || c.threshold != Math.Floor(c.threshold)))
+                                throw new InvalidOperationException("Animatorパラメーターの型・条件・値を確定できません（Triggerも未対応）: " + c.parameter);
+                        }
+                    }
+                    if (!transition.conditions.All(c => Condition(c, selected[c.parameter]))) continue;
+                    if (omitMatchedMenuEdges && transition.conditions.Any(c => selected.ContainsKey(c.parameter))) continue;
+                    if (transition.hasExitTime || transition.duration != 0 || transition.offset != 0 || transition.isExit || transition.destinationState == null)
+                        throw new InvalidOperationException("開始・終了・時間付きまたは複雑な遷移は未対応です。");
+                    if (transition.destinationState == state && !transition.canTransitionToSelf) continue;
+                    if (destination != null && destination != transition.destinationState) throw new InvalidOperationException("複数の遷移先があり姿勢を確定できません。");
+                    destination = transition.destinationState;
+                }
+                edges[state] = destination;
+            }
+            // Every possible previous state must converge to the same terminal.
+            AnimatorState final = null;
+            foreach (var start in startingState == null ? states : new[] { startingState })
+            {
+                var current = start; var visited = new HashSet<AnimatorState>();
+                while (edges.TryGetValue(current, out var next) && next != null)
+                {
+                    if (visited.Count > 0 && current.motion != null)
+                        throw new InvalidOperationException("開始／終了アニメーションを含む中間状態は未対応です。");
+                    if (!visited.Add(current)) throw new InvalidOperationException("循環遷移または再入場があるため静止姿勢を確定できません。");
+                    current = next;
+                }
+                if (final != null && final != current) throw new InvalidOperationException("以前の操作で到達姿勢が変わります。");
+                final = current;
+            }
+            if (machine.entryTransitions.Length != 0) throw new InvalidOperationException("条件付きEntry遷移は未対応です。");
+            return final;
+        }
+        static IEnumerable<AnimatorStateTransition> ActiveTransitions(AnimatorStateTransition[] siblings)
+        {
+            // Solo suppresses non-solo siblings even when muted or false.
+            var hasSolo = siblings.Any(t => t.solo);
+            return siblings.Where(t => !t.mute && (!hasSolo || t.solo));
+        }
+        static bool Condition(AnimatorCondition c, float value)
+        {
+            switch (c.mode)
+            {
+                case AnimatorConditionMode.If: return value != 0;
+                case AnimatorConditionMode.IfNot: return value == 0;
+                case AnimatorConditionMode.Equals: return value == c.threshold;
+                case AnimatorConditionMode.NotEqual: return value != c.threshold;
+                case AnimatorConditionMode.Greater: return value > c.threshold;
+                case AnimatorConditionMode.Less: return value < c.threshold;
+                default: throw new InvalidOperationException("未対応のAnimator条件です。");
+            }
+        }
+        static bool Tracking(StateMachineBehaviour b) => b != null && (b.GetType().Name == "VRCAnimatorTrackingControl" || b.GetType().Name == "VRCAnimatorLocomotionControl");
+        internal static bool HasBody(AnimationClip clip, bool skipMuscles = false, ISet<string> bodyPaths = null) => clip != null && AnimationUtility.GetCurveBindings(clip).Any(b =>
+            !skipMuscles && b.type == typeof(Animator) && b.path == "" && PoseSampling.IsBodyMuscle(b.propertyName) ||
+            b.type == typeof(Transform) && bodyPaths?.Contains(b.path) == true &&
+            (b.propertyName.StartsWith("m_LocalRotation.") || b.propertyName.StartsWith("localEulerAngles") ||
+             b.propertyName.StartsWith("m_LocalPosition.") || b.propertyName.StartsWith("m_LocalScale.")));
+        static IEnumerable<AnimatorStateMachine> Machines(AnimatorStateMachine root)
+        {
+            var pending = new Stack<AnimatorStateMachine>(); var visited = new HashSet<AnimatorStateMachine>(); pending.Push(root);
+            while (pending.Count > 0)
+            {
+                var next = pending.Pop();
+                if (next == null || !visited.Add(next) || visited.Count > 256) throw new InvalidOperationException("Animator状態機械の循環または件数上限です。");
+                yield return next;
+                foreach (var child in next.stateMachines) pending.Push(child.stateMachine);
+            }
+        }
+        static IEnumerable<AnimatorState> States(AnimatorStateMachine m) => Machines(m).SelectMany(s => s.states.Select(c => c.state));
+        static IEnumerable<StateMachineBehaviour> Behaviours(AnimatorStateMachine m) => Machines(m).SelectMany(s => s.behaviours);
+        static IEnumerable<StateMachineBehaviour> AncestorBehaviours(AnimatorStateMachine root, AnimatorState state) =>
+            Machines(root).Where(m => States(m).Contains(state)).SelectMany(m => m.behaviours);
+        static IEnumerable<AnimatorStateTransition> Transitions(AnimatorStateMachine m) => Machines(m).SelectMany(s => ActiveTransitions(s.anyStateTransitions)).Concat(States(m).SelectMany(s => ActiveTransitions(s.transitions)));
+    }
+}

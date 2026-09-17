@@ -308,7 +308,24 @@ namespace VRVlog.LilToonExporter
             foreach (var value in toCopy)
             {
                 Object copy;
-                try { copy = Object.Instantiate(value); }
+                try
+                {
+                    // Unity's native Instantiate remapper asserts on an
+                    // Animator graph's strong state/behaviour pointers.
+                    // Copy serialized fields, then redirect every reference in
+                    // the same owned replacement map used below.
+                    if (value is UnityEditor.Animations.AnimatorStateMachine)
+                    {
+                        copy = new UnityEditor.Animations.AnimatorStateMachine();
+                        EditorUtility.CopySerialized(value, copy);
+                    }
+                    else if (value is UnityEditor.Animations.AnimatorState)
+                    {
+                        copy = new UnityEditor.Animations.AnimatorState();
+                        EditorUtility.CopySerialized(value, copy);
+                    }
+                    else copy = Object.Instantiate(value);
+                }
                 catch (Exception error)
                 {
                     throw new InvalidOperationException(value.name + ": 未保存のアバター素材を一時コピーに分離できません。素材をプロジェクト内のアセットとして保存してから書き出してください。", error);

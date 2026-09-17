@@ -102,12 +102,22 @@ namespace UnityEngine
         public Transform GetBoneTransform(HumanBodyBones bone) => bones.TryGetValue(bone, out var value) ? value : null;
     }
 }
+namespace UnityEditor.Animations
+{
+    public class AnimatorStateMachine : UnityEngine.Object { }
+    public class AnimatorState : UnityEngine.Object { }
+}
 namespace UnityEditor
 {
     using Object = UnityEngine.Object;
     public class MonoScript : Object { }
     public static class EditorUtility
     {
+        public static void CopySerialized(Object source, Object destination)
+        {
+            foreach (var field in Fields(source.GetType())) field.SetValue(destination, field.GetValue(source));
+            destination.persistent = false;
+        }
         public static bool IsPersistent(Object value) => value != null && value.persistent;
         public static Object[] CollectDependencies(Object[] roots)
         {

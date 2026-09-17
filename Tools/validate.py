@@ -261,7 +261,7 @@ assert 'OutlineWidthMultiplyTexture = outlineEnabled ? Texture(source, "_Outline
 assert 'private string author = "";' in window
 assert 'private string avatarName = "";' not in window
 assert 'UniVrmOneClickExporter.Export(targetAvatar, targetName, targetAuthor, warnings, false,' in window
-assert 'PackageVersion(), RequireSupportedLilToon(), false, targetExclusions, bakeOptions, targetGimmicks, targetBlink);' in window
+assert 'PackageVersion(), RequireSupportedLilToon(), false, targetExclusions, bakeOptions, targetGimmicks, targetBlink, targetPoses);' in window
 assert 'var targetOutput = outputPath;' in window
 assert 'var targetExclusions = excludedObjects.ToArray();' in window
 assert 'ExportFailureWindow.Show(exception, omitAndRetry)' in window
