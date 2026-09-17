@@ -198,9 +198,6 @@ namespace VRVlog.LilToonExporter
                 animator.fireEvents = false; animator.applyRootMotion = false; animator.cullingMode = AnimatorCullingMode.AlwaysAnimate;
                 copy.SetActive(true);
                 graph = PlayableGraph.Create("VR Vlog static pose"); graph.SetTimeUpdateMode(DirectorUpdateMode.Manual);
-                var groups = candidate.Layers.GroupBy(l => l.Group).ToArray();
-                var mixer = AnimationLayerMixerPlayable.Create(graph, groups.Length + 1);
-                var output = AnimationPlayableOutput.Create(graph, "Pose", animator); output.SetSourcePlayable(mixer);
                 // Empty humanoid streams evaluate Unity's muscle defaults,
                 // which need not equal the avatar's authored rest (notably
                 // fingers). Supply its actual rest as the bottom layer.
@@ -209,13 +206,22 @@ namespace VRVlog.LilToonExporter
                 {
                     if (layer.Clip == null || !Finite(layer.Time) || layer.Time < 0 || layer.Time > 600 || layer.Time > layer.Clip.length)
                         throw new InvalidOperationException("クリップまたは採用時刻が不正です（0秒〜クリップ末尾、最大600秒）。");
-                    var clean = BodyClip(copy, animator, layer.Clip, layer.SkipMuscles); clips.Add(clean); bodyClips.Add(layer, clean);
+                    if (layer.Weight == 0 || layer.GroupWeight == 0) continue;
+                    var effective = new HashSet<EditorCurveBinding>(EffectiveBodyBindings(copy, layer));
+                    if (effective.Count == 0) continue;
+                    var clean = BodyClip(copy, animator, layer.Clip, layer.SkipMuscles, effective); clips.Add(clean);
+                    if (AnimationUtility.GetCurveBindings(clean).Length != 0) bodyClips.Add(layer, clean);
                 }
+                var activeLayers = candidate.Layers.Where(bodyClips.ContainsKey).ToList();
+                if (activeLayers.Count == 0) throw new InvalidOperationException("有効なマスク・重みで書き出すHumanoidの体・手足・指のカーブがありません。");
                 var hasMuscles = bodyClips.Values.Any(c => AnimationUtility.GetCurveBindings(c).Any(b => b.type == typeof(Animator)));
                 var hasTransforms = bodyClips.Values.Any(c => AnimationUtility.GetCurveBindings(c).Any(b => b.type == typeof(Transform)));
                 if (hasMuscles && hasTransforms) throw new InvalidOperationException("HumanoidカーブとTransformカーブの混合は未対応です。");
-                if (hasMuscles && candidate.Layers.Count(l => l.Weight > 0 && l.GroupWeight > 0) > 1)
+                if (hasMuscles && activeLayers.Count > 1)
                     throw new InvalidOperationException("複数Humanoidクリップの筋肉カーブ合成は未対応です。");
+                var groups = activeLayers.GroupBy(l => l.Group).ToArray();
+                var mixer = AnimationLayerMixerPlayable.Create(graph, groups.Length + 1);
+                var output = AnimationPlayableOutput.Create(graph, "Pose", animator); output.SetSourcePlayable(mixer);
                 var restHumanPose = new HumanPose();
                 if (hasMuscles) using (var handler = new HumanPoseHandler(animator.avatar, copy.transform)) handler.GetHumanPose(ref restHumanPose);
                 var baseline = hasMuscles ? RestClip(animator, copy) : TransformRestClip(animator, copy);
@@ -227,8 +233,8 @@ namespace VRVlog.LilToonExporter
                     return basePlayable;
                 }
                 graph.Connect(Baseline(), 0, mixer, 0); mixer.SetInputWeight(0, 1);
-                // Input zero stays empty. Each real layer has its authored weight,
-                // including a single fractional layer (Unity special-cases input 0).
+                // Real layers sit above the rest input so even a single layer
+                // retains its authored fractional weight.
                 var any = false;
                 for (var groupIndex = 0; groupIndex < groups.Length; groupIndex++)
                 {
@@ -252,18 +258,18 @@ namespace VRVlog.LilToonExporter
                     }
                 }
                 if (!any) throw new InvalidOperationException("有効なマスク・重みで書き出すHumanoidの体・手足・指のカーブがありません。");
-                if (hasTransforms) EvaluateTransforms(copy, animator, candidate.Layers);
+                if (hasTransforms) EvaluateTransforms(copy, animator, activeLayers);
                 else
                 {
                     graph.Play(); graph.Evaluate(0);
-                    ApplyHumanoidRoot(animator, copy, restHumanPose, candidate.Layers);
+                    ApplyHumanoidRoot(animator, copy, restHumanPose, activeLayers);
                 }
                 // A clip playable can populate unbound humanoid channels with
                 // defaults. Retain the exact authored locals outside its body
                 // parts, and outside every effective mask, before capturing.
                 foreach (var b in bones)
-                    if (!candidate.Layers.Any(l => WritesBone(l, b.name, b.bone, copy))) b.bone.localRotation = locals[b.name];
-                if (!candidate.Layers.Any(l => WritesHipsPosition(l, AnimationUtility.CalculateTransformPath(hips, copy.transform)))) hips.position = hipPosition;
+                    if (!activeLayers.Any(l => WritesBone(l, b.name, b.bone, copy))) b.bone.localRotation = locals[b.name];
+                if (!activeLayers.Any(l => WritesHipsPosition(l, AnimationUtility.CalculateTransformPath(hips, copy.transform)))) hips.position = hipPosition;
                 var data = new HumanoidPoseData { Id = candidate.Id, Name = candidate.Name, Category = candidate.Category,
                     Source = candidate.Source, SampleTime = candidate.Layers.Count == 1 ? candidate.Layers[0].Time : 0,
                     SampledMotion = candidate.SampledMotion };
@@ -290,7 +296,7 @@ namespace VRVlog.LilToonExporter
             }
         }
 
-        internal static AnimationClip BodyClip(GameObject root, Animator animator, AnimationClip source, bool skipMuscles = false)
+        internal static AnimationClip BodyClip(GameObject root, Animator animator, AnimationClip source, bool skipMuscles = false, ISet<EditorCurveBinding> effective = null)
         {
             var result = Object.Instantiate(source); result.name = source.name;
             // All events and non-pose curves are removed from this owned clip.
@@ -300,6 +306,10 @@ namespace VRVlog.LilToonExporter
             foreach (var binding in AnimationUtility.GetCurveBindings(result))
             {
                 var p = binding.propertyName;
+                var bodyBinding = binding.type == typeof(Transform) && paths.Contains(binding.path) ||
+                    binding.type == typeof(Animator) && binding.path == "" && IsBodyMuscle(p);
+                if (effective != null && bodyBinding && !effective.Contains(binding))
+                { AnimationUtility.SetEditorCurve(result, binding, null); continue; }
                 if (binding.type == typeof(Transform) && binding.path == "" || binding.type == typeof(Animator) && (p.StartsWith("MotionT.") || p.StartsWith("MotionQ.")))
                 {
                     var identity = p.EndsWith("Rotation.w") || p == "MotionQ.w" || p.StartsWith("m_LocalScale.") ? 1f : 0f;

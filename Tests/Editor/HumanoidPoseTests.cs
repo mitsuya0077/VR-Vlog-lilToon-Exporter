@@ -139,6 +139,53 @@ namespace VRVlog.LilToonExporter.Tests
             }
             finally { Object.DestroyImmediate(clip); }
         }
+        [TestCase(false, false)]
+        [TestCase(false, true)]
+        [TestCase(true, false)]
+        [TestCase(true, true)]
+        public void MaskedBindingKindsDoNotForceMixedSampling(bool maskMuscle, bool outer)
+        {
+            using var f = new AttachmentConnectionTests.Fixture(); var clip = new AnimationClip(); var mask = new AvatarMask();
+            try
+            {
+                var leg = f.Source.GetComponent<Animator>().GetBoneTransform(HumanBodyBones.RightUpperLeg);
+                var path = AnimationUtility.CalculateTransformPath(leg, f.Source.transform);
+                var muscle = EditorCurveBinding.FloatCurve("", typeof(Animator), "Left Arm Down-Up");
+                var transform = EditorCurveBinding.FloatCurve(path, typeof(Transform), "localEulerAnglesRaw.x");
+                AnimationUtility.SetEditorCurve(clip, maskMuscle ? transform : muscle, AnimationCurve.Constant(0, 1, maskMuscle ? 30 : .5f));
+                var candidate = new PoseCandidate { Id = "masked-kind", Name = "Masked", Source = "test" }; candidate.Layers.Add(new PoseLayer { Clip = clip });
+                var expected = PoseSampling.Sample(f.Source, candidate);
+                AnimationUtility.SetEditorCurve(clip, maskMuscle ? muscle : transform, AnimationCurve.Constant(0, 1, maskMuscle ? .5f : 30));
+                mask.AddTransformPath(f.Source.transform, true);
+                if (maskMuscle) mask.SetHumanoidBodyPartActive(AvatarMaskBodyPart.LeftArm, false);
+                else for (var i = 0; i < mask.transformCount; i++) if (mask.GetTransformPath(i) == path) mask.SetTransformActive(i, false);
+                if (outer) candidate.Layers[0].OuterMask = mask; else candidate.Layers[0].Mask = mask;
+                var actual = PoseSampling.Sample(f.Source, candidate);
+                foreach (var bone in actual.Bones) Assert.That(bone.Rotation, Is.EqualTo(expected.Bones.Single(b => b.Name == bone.Name).Rotation).Within(.0001), bone.Name);
+                Assert.That(AnimationUtility.GetCurveBindings(clip).Length, Is.EqualTo(2), "Masking must not edit the source clip.");
+            }
+            finally { Object.DestroyImmediate(clip); Object.DestroyImmediate(mask); }
+        }
+        [TestCase("mask")]
+        [TestCase("layerWeight")]
+        [TestCase("groupWeight")]
+        public void NoncontributingLayersDoNotForceHumanoidComposition(string disabledBy)
+        {
+            using var f = new AttachmentConnectionTests.Fixture(); var first = new AnimationClip(); var second = new AnimationClip(); var mask = new AvatarMask();
+            try
+            {
+                AnimationUtility.SetEditorCurve(first, EditorCurveBinding.FloatCurve("", typeof(Animator), "Left Arm Down-Up"), AnimationCurve.Constant(0, 1, .5f));
+                AnimationUtility.SetEditorCurve(second, EditorCurveBinding.FloatCurve("", typeof(Animator), "Right Arm Down-Up"), AnimationCurve.Constant(0, 1, -.5f));
+                var candidate = new PoseCandidate { Id = "inactive-layer", Name = "Active only", Source = "test" }; candidate.Layers.Add(new PoseLayer { Clip = first });
+                var expected = PoseSampling.Sample(f.Source, candidate);
+                for (var i = 0; i < (int)AvatarMaskBodyPart.LastBodyPart; i++) mask.SetHumanoidBodyPartActive((AvatarMaskBodyPart)i, false);
+                candidate.Layers.Add(new PoseLayer { Clip = second, Group = "Unused", Mask = disabledBy == "mask" ? mask : null,
+                    Weight = disabledBy == "layerWeight" ? 0 : 1, GroupWeight = disabledBy == "groupWeight" ? 0 : 1 });
+                var actual = PoseSampling.Sample(f.Source, candidate);
+                foreach (var bone in actual.Bones) Assert.That(bone.Rotation, Is.EqualTo(expected.Bones.Single(b => b.Name == bone.Name).Rotation).Within(.0001), bone.Name);
+            }
+            finally { Object.DestroyImmediate(first); Object.DestroyImmediate(second); Object.DestroyImmediate(mask); }
+        }
         [Test]
         public void RootRotationUsesRootMaskIndependentlyOfBodyMask()
         {
