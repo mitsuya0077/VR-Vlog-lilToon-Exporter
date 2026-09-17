@@ -74,7 +74,7 @@ namespace VRVlog.LilToonExporter
                             foreach (var b in behaviours)
                                 if (b == null || !Tracking(b) && b.GetType().Name != "VRCPlayableLayerControl")
                                     throw new InvalidOperationException("外部操作・パラメーター変更を伴うBehaviourは未対応です: " + (b == null ? "missing" : b.GetType().Name));
-                            var state = Resolve(layer.stateMachine, entry.Parameters, menu.ExternalParameters);
+                            var state = Resolve(layer.stateMachine, entry.Parameters, menu.ExternalParameters, parameters: controller.parameters);
                             if (state == null) continue;
                             if (Behaviours(layer.stateMachine).Any(b => !Tracking(b)))
                                 throw new InvalidOperationException("StateMachine Behaviourによる重み変更は未対応です。");
@@ -87,7 +87,7 @@ namespace VRVlog.LilToonExporter
                                 // If removing the matched menu edges still
                                 // converges to the same pose, the menu did not
                                 // select that pose (e.g. an unconditional path).
-                                try { selectedByMenu = Resolve(layer.stateMachine, entry.Parameters, menu.ExternalParameters, true) != state; }
+                                try { selectedByMenu = Resolve(layer.stateMachine, entry.Parameters, menu.ExternalParameters, true, controller.parameters) != state; }
                                 catch (InvalidOperationException) { selectedByMenu = true; }
                             }
                             foreach (var b in state.behaviours.Where(b => !Tracking(b)))
@@ -151,9 +151,10 @@ namespace VRVlog.LilToonExporter
             return result;
         }
 
-        internal static AnimatorState Resolve(AnimatorStateMachine machine, IDictionary<string, float> selected, ISet<string> external = null, bool omitMatchedMenuEdges = false)
+        internal static AnimatorState Resolve(AnimatorStateMachine machine, IDictionary<string, float> selected, ISet<string> external = null, bool omitMatchedMenuEdges = false, AnimatorControllerParameter[] parameters = null)
         {
             var states = States(machine).ToArray();
+            var definitions = parameters?.ToLookup(p => p.name, StringComparer.Ordinal);
             var parents = new Dictionary<AnimatorState, List<AnimatorStateMachine>>();
             void Index(AnimatorStateMachine current, List<AnimatorStateMachine> ancestors)
             {
@@ -179,8 +180,26 @@ namespace VRVlog.LilToonExporter
                     // Check *all* conditions before evaluating: a currently false
                     // condition cannot hide an external or historical dependency.
                     foreach (var c in transition.conditions)
+                    {
                         if (!selected.ContainsKey(c.parameter) || external?.Contains(c.parameter) == true)
                             throw new InvalidOperationException("他のメニュー・外部入力・操作履歴に依存します: " + c.parameter);
+                        if (definitions != null)
+                        {
+                            var matches = definitions[c.parameter].ToArray();
+                            if (matches.Length != 1) throw new InvalidOperationException("Animatorパラメーターが未定義または重複しています: " + c.parameter);
+                            var type = matches[0].type;
+                            var boolean = c.mode == AnimatorConditionMode.If || c.mode == AnimatorConditionMode.IfNot;
+                            var comparison = c.mode == AnimatorConditionMode.Greater || c.mode == AnimatorConditionMode.Less;
+                            var equality = c.mode == AnimatorConditionMode.Equals || c.mode == AnimatorConditionMode.NotEqual;
+                            var valid = type == AnimatorControllerParameterType.Bool && boolean ||
+                                type == AnimatorControllerParameterType.Float && comparison ||
+                                type == AnimatorControllerParameterType.Int && (comparison || equality);
+                            var value = selected[c.parameter];
+                            if (!valid || !PoseSampling.Finite(value) || !PoseSampling.Finite(c.threshold) ||
+                                type == AnimatorControllerParameterType.Int && (value != Math.Floor(value) || (double)value < int.MinValue || (double)value > int.MaxValue || c.threshold != Math.Floor(c.threshold)))
+                                throw new InvalidOperationException("Animatorパラメーターの型・条件・値を確定できません（Triggerも未対応）: " + c.parameter);
+                        }
+                    }
                     if (!transition.conditions.All(c => Condition(c, selected[c.parameter]))) continue;
                     if (omitMatchedMenuEdges && transition.conditions.Any(c => selected.ContainsKey(c.parameter))) continue;
                     if (transition.hasExitTime || transition.duration != 0 || transition.offset != 0 || transition.isExit || transition.destinationState == null)

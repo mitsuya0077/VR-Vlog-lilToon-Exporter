@@ -241,6 +241,35 @@ namespace VRVlog.LilToonExporter.Tests
             }
             finally { Object.DestroyImmediate(machine); Object.DestroyImmediate(clip); }
         }
+        [TestCase("Int", "Equals", true)]
+        [TestCase("Bool", "If", true)]
+        [TestCase("Float", "Greater", true)]
+        [TestCase("Missing", "Equals", false)]
+        [TestCase("Renamed", "Equals", false)]
+        [TestCase("Duplicate", "Equals", false)]
+        [TestCase("Bool", "Equals", false)]
+        [TestCase("Float", "Equals", false)]
+        [TestCase("Int", "If", false)]
+        [TestCase("Trigger", "If", false)]
+        [TestCase("Int", "Greater", false, 1.5f)]
+        public void MenuGraphChecksRealControllerParameterDefinitions(string type, string condition, bool supported, float value = 1)
+        {
+            var controller = new AnimatorController(); var machine = new AnimatorStateMachine();
+            try
+            {
+                machine.AddState("Idle"); var pose = machine.AddState("Pose");
+                var edge = machine.AddAnyStateTransition(pose); edge.hasExitTime = false; edge.duration = 0; edge.canTransitionToSelf = false;
+                var mode = (AnimatorConditionMode)Enum.Parse(typeof(AnimatorConditionMode), condition);
+                edge.AddCondition(mode, mode == AnimatorConditionMode.Equals ? 1 : 0, "Pose");
+                if (type != "Missing") controller.AddParameter(type == "Renamed" ? "OldPose" : "Pose",
+                    type == "Renamed" || type == "Duplicate" ? AnimatorControllerParameterType.Int : (AnimatorControllerParameterType)Enum.Parse(typeof(AnimatorControllerParameterType), type));
+                if (type == "Duplicate") controller.parameters = controller.parameters.Concat(controller.parameters).ToArray();
+                var selected = new Dictionary<string, float> { ["Pose"] = value };
+                if (supported) Assert.That(PoseMenuResolver.Resolve(machine, selected, parameters: controller.parameters), Is.SameAs(pose));
+                else Assert.That(Assert.Throws<InvalidOperationException>(() => PoseMenuResolver.Resolve(machine, selected, parameters: controller.parameters)).Message, Does.Contain("パラメーター"));
+            }
+            finally { Object.DestroyImmediate(controller); Object.DestroyImmediate(machine); }
+        }
         [Test]
         public void MenuGraphAppliesSoloFilteringBeforeConditionsAndMute()
         {
