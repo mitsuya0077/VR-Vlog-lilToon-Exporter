@@ -53,7 +53,7 @@ namespace VRVlog.LilToonExporter
                         throw new InvalidOperationException("カスタムPlayable Layerが無効です。");
                     var weights = new Dictionary<string, float> { ["Base"] = 1, ["Additive"] = 1, ["Gesture"] = 1, ["Action"] = 0, ["FX"] = 1,
                         ["Sitting"] = 0, ["TPose"] = 0, ["IKPose"] = 0 };
-                    var resolved = new List<(string type, AnimatorControllerLayer layer, AnimatorState state, AnimationClip clip, int index, bool skipMuscles, AvatarMask outer, bool selected)>();
+                    var resolved = new List<(string type, AnimatorControllerLayer layer, AnimatorState state, AnimationClip clip, int index, bool skipMuscles, AvatarMask outer, bool selected, bool retainsHistory)>();
                     var controlledWeights = new Dictionary<string, float>();
                     var selectedWeightTargets = new HashSet<string>();
                     var animatedTracking = new List<(string type, float weight)>();
@@ -123,7 +123,12 @@ namespace VRVlog.LilToonExporter
                                 controlledWeights[target] = weights[target] = weight;
                                 if (selectedByMenu) selectedWeightTargets.Add(target);
                             }
-                            if (hasBody || writesDefaults) resolved.Add((type, layer, state, Clip(state), i, skipMuscles, outer, selectedByMenu));
+                            IEnumerable<EditorCurveBinding> Bindings(AnimatorState s) => PoseSampling.EffectiveBodyBindings(avatar,
+                                new PoseLayer { Clip = Clip(s), Mask = layer.avatarMask, OuterMask = outer, SkipMuscles = skipMuscles });
+                            var terminalBindings = new HashSet<EditorCurveBinding>(Bindings(state));
+                            var retainsHistory = all.Where(s => s != state).Any(s => s.mirror || s.mirrorParameterActive || s.iKOnFeet ||
+                                s.motion != null && (Clip(s) == null || Bindings(s).Any(b => !terminalBindings.Contains(b))));
+                            if (hasBody || writesDefaults) resolved.Add((type, layer, state, Clip(state), i, skipMuscles, outer, selectedByMenu, retainsHistory));
                         }
                     }
                     // Standard body controllers depend on built-in inputs. Do
@@ -150,6 +155,8 @@ namespace VRVlog.LilToonExporter
                         if (playableWeight == 0) continue;
                         if (item.state.writeDefaultValues && resolved.Count > 1)
                             throw new InvalidOperationException("複数レイヤーのWrite Defaultsによる暗黙の姿勢合成は未対応です。");
+                        if (!item.state.writeDefaultValues && item.retainsHistory)
+                            throw new InvalidOperationException("Write Defaultsが無効で以前の状態の未上書きカーブが残るため、姿勢を確定できません。");
                         if (item.state.motion == null) continue;
                         if (item.clip == null) throw new InvalidOperationException("BlendTreeによる合成は未対応です。");
                         if (!HasBody(item.clip, item.skipMuscles, bodyPaths)) continue;

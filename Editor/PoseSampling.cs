@@ -81,6 +81,37 @@ namespace VRVlog.LilToonExporter
                 return bone != null && WritesBone(layer, name, bone, root);
             }) || hips != null && WritesHipsPosition(layer, AnimationUtility.CalculateTransformPath(hips, root.transform));
         }
+        internal static IEnumerable<EditorCurveBinding> EffectiveBodyBindings(GameObject root, PoseLayer layer)
+        {
+            var animator = root.GetComponent<Animator>();
+            if (layer.Clip == null || animator == null || !animator.isHuman) yield break;
+            var bones = HumanoidPoseData.BoneNames.Select(n => (name: n, human: HumanBone(n), bone: animator.GetBoneTransform(HumanBone(n)))).Where(b => b.bone != null).ToArray();
+            var paths = bones.ToDictionary(b => AnimationUtility.CalculateTransformPath(b.bone, root.transform), b => b.name);
+            foreach (var binding in AnimationUtility.GetCurveBindings(layer.Clip))
+            {
+                var muscle = binding.type == typeof(Animator);
+                AvatarMaskBodyPart part;
+                if (muscle)
+                {
+                    if (layer.SkipMuscles || binding.path != "" || !IsBodyMuscle(binding.propertyName)) continue;
+                    if (binding.propertyName.StartsWith("RootT.") || binding.propertyName.StartsWith("RootQ.")) part = AvatarMaskBodyPart.Root;
+                    else
+                    {
+                        var index = Array.FindIndex(HumanTrait.MuscleName, n => MuscleProperty(n) == binding.propertyName || n == binding.propertyName);
+                        var name = index < 0 ? null : bones.FirstOrDefault(b => b.human == (HumanBodyBones)HumanTrait.BoneFromMuscle(index)).name;
+                        if (name == null) continue;
+                        part = Part(name);
+                    }
+                }
+                else
+                {
+                    if (binding.type != typeof(Transform) || !paths.TryGetValue(binding.path, out var name) ||
+                        !(binding.propertyName.StartsWith("m_LocalRotation.") || binding.propertyName.StartsWith("localEulerAngles") || binding.propertyName.StartsWith("m_LocalPosition.") || binding.propertyName.StartsWith("m_LocalScale."))) continue;
+                    part = Part(name);
+                }
+                if (MaskAllows(layer.Mask, part, binding.path, muscle) && MaskAllows(layer.OuterMask, part, binding.path, muscle)) yield return binding;
+            }
+        }
         internal static string Hash(string text)
         { using var sha = SHA256.Create(); return BitConverter.ToString(sha.ComputeHash(Encoding.UTF8.GetBytes(text))).Replace("-", "").ToLowerInvariant(); }
 

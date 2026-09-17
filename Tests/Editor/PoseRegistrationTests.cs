@@ -104,7 +104,7 @@ namespace VRVlog.LilToonExporter.Tests
         [TestCase(false, false, false, "Gesture", false, 1f, false, 0, false, false, 1, TestName = "EmptyWriteDefaultsStateDoesNotExposeLowerPose")]
         [TestCase(false, false, false, "Gesture", false, 1f, false, 0, false, false, 2, TestName = "NonBodyWriteDefaultsStateDoesNotExposeLowerPose")]
         [TestCase(false, false, false, "Gesture", false, 1f, false, 0, false, false, 3, TestName = "EmptyWriteDefaultsLayerRespectsControllerBodyBindings")]
-        public void SubmenuAndMaGeneratedGestureMenuResolveOnlySelectedStaticPose(bool modularAvatar, bool defaultLocomotion, bool overrideClip, string layerType = "Gesture", bool crossLayerWeight = false, float controlWeight = 1f, bool unrelatedSolo = false, int unconditionalFallback = 0, bool propOnly = false, bool maskedSelection = false, int upperDefaults = 0, string trackingPart = null, string trackingLocation = "selected", string expressionCase = null)
+        public void SubmenuAndMaGeneratedGestureMenuResolveOnlySelectedStaticPose(bool modularAvatar, bool defaultLocomotion, bool overrideClip, string layerType = "Gesture", bool crossLayerWeight = false, float controlWeight = 1f, bool unrelatedSolo = false, int unconditionalFallback = 0, bool propOnly = false, bool maskedSelection = false, int upperDefaults = 0, string trackingPart = null, string trackingLocation = "selected", string expressionCase = null, string historyCase = null)
         {
             using var f = new AttachmentConnectionTests.Fixture(); var descriptor = Descriptor(f.Source);
             var menuType = Find("VRC.SDK3.Avatars.ScriptableObjects.VRCExpressionsMenu");
@@ -118,6 +118,13 @@ namespace VRVlog.LilToonExporter.Tests
             for (var i = 0; i < parameterArray.Length; i++) parameterArray.SetValue(parameterRow, i);
             parameterField.SetValue(parameters, parameterArray); Set(descriptor, "expressionParameters", parameters);
             var clip = propOnly ? new AnimationClip { name = "Prop" } : HumanoidPoseTests.Clip(f.Source); var unrelated = HumanoidPoseTests.Clip(f.Source, -80);
+            if (historyCase != null && historyCase != "Mirror" && historyCase != "IK")
+            {
+                var arm = f.Source.GetComponent<Animator>().GetBoneTransform(HumanBodyBones.RightUpperArm);
+                var binding = EditorCurveBinding.FloatCurve(AnimationUtility.CalculateTransformPath(arm, f.Source.transform), typeof(Transform), "localEulerAnglesRaw.z");
+                AnimationUtility.SetEditorCurve(unrelated, binding, AnimationCurve.Constant(0, 1, 45));
+                if (historyCase == "Covered") AnimationUtility.SetEditorCurve(clip, binding, AnimationCurve.Constant(0, 1, 0));
+            }
             if (propOnly)
             {
                 new GameObject("Prop").transform.SetParent(f.Source.transform, false);
@@ -130,7 +137,7 @@ namespace VRVlog.LilToonExporter.Tests
             try
             {
                 controller.AddParameter("Pose", expressionCase == "TypeMismatch" ? AnimatorControllerParameterType.Int : (AnimatorControllerParameterType)Enum.Parse(typeof(AnimatorControllerParameterType), expressionType));
-                var state = machine.AddState("Selected"); state.writeDefaultValues = false; state.motion = clip;
+                var state = machine.AddState("Selected"); state.writeDefaultValues = historyCase == "Defaults"; state.motion = clip;
                 if (trackingPart != "Absent") AnimateBody(state);
                 if (layerType == "Action" && !crossLayerWeight)
                 {
@@ -141,6 +148,7 @@ namespace VRVlog.LilToonExporter.Tests
                 {
                     var idle = machine.AddState("Idle"); idle.writeDefaultValues = false;
                     var other = machine.AddState("Unselected"); other.writeDefaultValues = false; other.motion = unrelated;
+                    other.mirror = historyCase == "Mirror"; other.iKOnFeet = historyCase == "IK";
                     var t = machine.AddAnyStateTransition(state); t.canTransitionToSelf = false; t.hasExitTime = false; t.duration = 0;
                     t.AddCondition(expressionType == "Bool" ? AnimatorConditionMode.If : expressionType == "Float" ? AnimatorConditionMode.Greater : AnimatorConditionMode.Equals, expressionType == "Int" ? unconditionalFallback == 1 ? 2 : 1 : 0, "Pose");
                     if (unconditionalFallback > 0)
@@ -153,10 +161,11 @@ namespace VRVlog.LilToonExporter.Tests
                     }
                 }
                 AvatarMask sourceMask = null;
-                if (maskedSelection)
+                if (maskedSelection || historyCase == "Masked")
                 {
                     sourceMask = new AvatarMask(); owned.Add(sourceMask); sourceMask.AddTransformPath(f.Source.transform, true);
-                    for (var i = 0; i < sourceMask.transformCount; i++) sourceMask.SetTransformActive(i, false);
+                    var rightArm = AnimationUtility.CalculateTransformPath(f.Source.GetComponent<Animator>().GetBoneTransform(HumanBodyBones.RightUpperArm), f.Source.transform);
+                    for (var i = 0; i < sourceMask.transformCount; i++) sourceMask.SetTransformActive(i, !maskedSelection && sourceMask.GetTransformPath(i) != rightArm);
                 }
                 controller.layers = new[] { new AnimatorControllerLayer { name = "Static pose", defaultWeight = 1, stateMachine = machine, avatarMask = sourceMask } };
                 if (upperDefaults > 0)
@@ -266,6 +275,7 @@ namespace VRVlog.LilToonExporter.Tests
                 var result = PoseMenuResolver.Read(clone);
                 Assert.That(result.Count, Is.EqualTo(1));
                 Assert.That(EditorJsonUtility.ToJson(controller), Is.EqualTo(before)); Assert.That(EditorJsonUtility.ToJson(menu), Is.EqualTo(beforeMenu));
+                if (historyCase == "Unbound" || historyCase == "Mirror" || historyCase == "IK") { Assert.That(result[0].Error, Does.Contain("Write Defaults")); return; }
                 if (expressionCase != null && expressionCase != "Bool" && expressionCase != "Float")
                 { Assert.That(result[0].Error, Does.Contain("Expression Parameters")); return; }
                 if (trackingPart != null && trackingPart != "Animation" && trackingPart != "trackingHead" && trackingPart != "trackingEyes" && trackingPart != "trackingMouth")
@@ -315,5 +325,15 @@ namespace VRVlog.LilToonExporter.Tests
         [TestCase("Float")]
         public void MenuInputsRequireMatchingExpressionDeclarations(string scenario) =>
             SubmenuAndMaGeneratedGestureMenuResolveOnlySelectedStaticPose(false, false, false, expressionCase: scenario);
+
+        [TestCase("Unbound")]
+        [TestCase("Defaults")]
+        [TestCase("Covered")]
+        [TestCase("Override")]
+        [TestCase("Masked")]
+        [TestCase("Mirror")]
+        [TestCase("IK")]
+        public void MenuPoseDoesNotRetainUnwrittenPredecessorBones(string scenario) =>
+            SubmenuAndMaGeneratedGestureMenuResolveOnlySelectedStaticPose(false, false, scenario == "Override", historyCase: scenario);
     }
 }
