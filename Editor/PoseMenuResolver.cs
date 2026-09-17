@@ -23,6 +23,8 @@ namespace VRVlog.LilToonExporter
             if (descriptor == null) return result;
             var bodyPaths = PoseSampling.BodyPaths(avatar);
             var menu = VrChatExpressionMenu.Read(avatar);
+            var expressionDefinitions = Items(Member(Member(descriptor, "expressionParameters"), "parameters"))
+                .ToLookup(p => Member(p, "name") as string ?? "", StringComparer.Ordinal);
             menu.ExternalParameters.UnionWith(VrChatParameterDriver.BuiltIn);
             var avatarLayers = Items(Member(descriptor, "baseAnimationLayers")).Concat(Items(Member(descriptor, "specialAnimationLayers"))).ToArray();
             var layers = avatarLayers.Where(l => !(Member(l, "isDefault") is bool d && d) && Member(l, "animatorController") is RuntimeAnimatorController).ToArray();
@@ -35,6 +37,18 @@ namespace VRVlog.LilToonExporter
                 try
                 {
                     if (row.Error != null) throw new InvalidOperationException(row.Error);
+                    foreach (var pair in entry.Parameters)
+                    {
+                        var definitions = expressionDefinitions[pair.Key].ToArray();
+                        if (!menu.ExpressionParameters.Contains(pair.Key) || definitions.Length != 1 || menu.ExternalParameters.Contains(pair.Key))
+                            throw new InvalidOperationException("Expression Parametersが未定義・重複または外部入力に依存します: " + pair.Key);
+                        var type = Member(definitions[0], "valueType")?.ToString();
+                        var value = pair.Value;
+                        if (!PoseSampling.Finite(value) || !(type == "Bool" && value == 1 ||
+                            type == "Int" && value >= 0 && value <= 255 && value == Math.Floor(value) ||
+                            type == "Float" && value >= -1 && value <= 1))
+                            throw new InvalidOperationException("Expression Parametersの型・操作値を確定できません: " + pair.Key);
+                    }
                     if (Member(descriptor, "customizeAnimationLayers") is bool custom && !custom)
                         throw new InvalidOperationException("カスタムPlayable Layerが無効です。");
                     var weights = new Dictionary<string, float> { ["Base"] = 1, ["Additive"] = 1, ["Gesture"] = 1, ["Action"] = 0, ["FX"] = 1,
@@ -49,6 +63,9 @@ namespace VRVlog.LilToonExporter
                         var type = Member(source, "type")?.ToString() ?? "";
                         var runtime = (RuntimeAnimatorController)Member(source, "animatorController");
                         var controller = ExpressionDependencies.Controller(runtime); var replacements = ExpressionDependencies.Overrides(runtime);
+                        foreach (var parameter in controller.parameters.Where(p => entry.Parameters.ContainsKey(p.name)))
+                            if (parameter.type.ToString() != Member(expressionDefinitions[parameter.name].Single(), "valueType")?.ToString())
+                                throw new InvalidOperationException("Expression ParametersとAnimatorパラメーターの型が一致しません: " + parameter.name);
                         var outer = Member(source, "mask") as AvatarMask;
                         var skipMuscles = type == "FX" && controller.layers.Length > 0 && controller.layers[0].avatarMask == null;
                         AnimationClip Clip(AnimatorState state) => state.motion is AnimationClip clip && replacements.TryGetValue(clip, out var replacement) ? replacement : state.motion as AnimationClip;

@@ -104,7 +104,7 @@ namespace VRVlog.LilToonExporter.Tests
         [TestCase(false, false, false, "Gesture", false, 1f, false, 0, false, false, 1, TestName = "EmptyWriteDefaultsStateDoesNotExposeLowerPose")]
         [TestCase(false, false, false, "Gesture", false, 1f, false, 0, false, false, 2, TestName = "NonBodyWriteDefaultsStateDoesNotExposeLowerPose")]
         [TestCase(false, false, false, "Gesture", false, 1f, false, 0, false, false, 3, TestName = "EmptyWriteDefaultsLayerRespectsControllerBodyBindings")]
-        public void SubmenuAndMaGeneratedGestureMenuResolveOnlySelectedStaticPose(bool modularAvatar, bool defaultLocomotion, bool overrideClip, string layerType = "Gesture", bool crossLayerWeight = false, float controlWeight = 1f, bool unrelatedSolo = false, int unconditionalFallback = 0, bool propOnly = false, bool maskedSelection = false, int upperDefaults = 0, string trackingPart = null, string trackingLocation = "selected")
+        public void SubmenuAndMaGeneratedGestureMenuResolveOnlySelectedStaticPose(bool modularAvatar, bool defaultLocomotion, bool overrideClip, string layerType = "Gesture", bool crossLayerWeight = false, float controlWeight = 1f, bool unrelatedSolo = false, int unconditionalFallback = 0, bool propOnly = false, bool maskedSelection = false, int upperDefaults = 0, string trackingPart = null, string trackingLocation = "selected", string expressionCase = null)
         {
             using var f = new AttachmentConnectionTests.Fixture(); var descriptor = Descriptor(f.Source);
             var menuType = Find("VRC.SDK3.Avatars.ScriptableObjects.VRCExpressionsMenu");
@@ -112,8 +112,11 @@ namespace VRVlog.LilToonExporter.Tests
             var controller = new AnimatorController(); var machine = new AnimatorStateMachine();
             var parameters = ScriptableObject.CreateInstance(Find("VRC.SDK3.Avatars.ScriptableObjects.VRCExpressionParameters"));
             var parameterField = parameters.GetType().GetField("parameters"); var parameterType = parameterField.FieldType.GetElementType();
-            var parameterArray = Array.CreateInstance(parameterType, 1); var parameterRow = Activator.CreateInstance(parameterType);
-            Set(parameterRow, "name", "Pose"); Set(parameterRow, "valueType", "Int"); parameterArray.SetValue(parameterRow, 0); parameterField.SetValue(parameters, parameterArray); Set(descriptor, "expressionParameters", parameters);
+            var parameterArray = Array.CreateInstance(parameterType, expressionCase == "Missing" ? 0 : expressionCase == "Duplicate" ? 2 : 1); var parameterRow = Activator.CreateInstance(parameterType);
+            var expressionType = expressionCase == "Bool" || expressionCase == "BoolZero" || expressionCase == "TypeMismatch" ? "Bool" : expressionCase == "Float" || expressionCase == "FloatRange" ? "Float" : "Int";
+            Set(parameterRow, "name", expressionCase == "Renamed" ? "OldPose" : "Pose"); Set(parameterRow, "valueType", expressionType);
+            for (var i = 0; i < parameterArray.Length; i++) parameterArray.SetValue(parameterRow, i);
+            parameterField.SetValue(parameters, parameterArray); Set(descriptor, "expressionParameters", parameters);
             var clip = propOnly ? new AnimationClip { name = "Prop" } : HumanoidPoseTests.Clip(f.Source); var unrelated = HumanoidPoseTests.Clip(f.Source, -80);
             if (propOnly)
             {
@@ -126,7 +129,7 @@ namespace VRVlog.LilToonExporter.Tests
             GameObject clone = null;
             try
             {
-                controller.AddParameter("Pose", AnimatorControllerParameterType.Int);
+                controller.AddParameter("Pose", expressionCase == "TypeMismatch" ? AnimatorControllerParameterType.Int : (AnimatorControllerParameterType)Enum.Parse(typeof(AnimatorControllerParameterType), expressionType));
                 var state = machine.AddState("Selected"); state.writeDefaultValues = false; state.motion = clip;
                 if (trackingPart != "Absent") AnimateBody(state);
                 if (layerType == "Action" && !crossLayerWeight)
@@ -138,7 +141,8 @@ namespace VRVlog.LilToonExporter.Tests
                 {
                     var idle = machine.AddState("Idle"); idle.writeDefaultValues = false;
                     var other = machine.AddState("Unselected"); other.writeDefaultValues = false; other.motion = unrelated;
-                    var t = machine.AddAnyStateTransition(state); t.canTransitionToSelf = false; t.hasExitTime = false; t.duration = 0; t.AddCondition(AnimatorConditionMode.Equals, unconditionalFallback == 1 ? 2 : 1, "Pose");
+                    var t = machine.AddAnyStateTransition(state); t.canTransitionToSelf = false; t.hasExitTime = false; t.duration = 0;
+                    t.AddCondition(expressionType == "Bool" ? AnimatorConditionMode.If : expressionType == "Float" ? AnimatorConditionMode.Greater : AnimatorConditionMode.Equals, expressionType == "Int" ? unconditionalFallback == 1 ? 2 : 1 : 0, "Pose");
                     if (unconditionalFallback > 0)
                     {
                         var fallback = machine.AddAnyStateTransition(state); fallback.canTransitionToSelf = false; fallback.hasExitTime = false; fallback.duration = 0;
@@ -170,7 +174,8 @@ namespace VRVlog.LilToonExporter.Tests
                 RuntimeAnimatorController effective = controller;
                 if (overrideClip) { var replacement = new AnimatorOverrideController(controller); replacement[clip] = unrelated; owned.Add(replacement); effective = replacement; }
                 var folder = Add((IList)PoseMenuResolver.Member(menu, "controls")); Set(folder, "name", "カテゴリー"); Set(folder, "type", "SubMenu"); Set(folder, "subMenu", sub);
-                var toggle = Add((IList)PoseMenuResolver.Member(sub, "controls")); Set(toggle, "name", "メニュー名"); Set(toggle, "type", "Toggle"); Set(toggle, "value", 1f);
+                var toggle = Add((IList)PoseMenuResolver.Member(sub, "controls")); Set(toggle, "name", "メニュー名"); Set(toggle, "type", "Toggle");
+                Set(toggle, "value", expressionCase == "BoolZero" ? 0f : expressionCase == "FloatRange" ? 2f : expressionCase == "FractionalInt" ? 1.5f : 1f);
                 var parameter = Activator.CreateInstance(toggle.GetType().GetField("parameter").FieldType); Set(parameter, "name", "Pose"); Set(toggle, "parameter", parameter);
                 // Supported fixtures use explicitly neutral other layers;
                 // unresolved SDK defaults remain an external-input dependency.
@@ -261,6 +266,8 @@ namespace VRVlog.LilToonExporter.Tests
                 var result = PoseMenuResolver.Read(clone);
                 Assert.That(result.Count, Is.EqualTo(1));
                 Assert.That(EditorJsonUtility.ToJson(controller), Is.EqualTo(before)); Assert.That(EditorJsonUtility.ToJson(menu), Is.EqualTo(beforeMenu));
+                if (expressionCase != null && expressionCase != "Bool" && expressionCase != "Float")
+                { Assert.That(result[0].Error, Does.Contain("Expression Parameters")); return; }
                 if (trackingPart != null && trackingPart != "Animation" && trackingPart != "trackingHead" && trackingPart != "trackingEyes" && trackingPart != "trackingMouth")
                 { Assert.That(result[0].Error, Does.Contain("Tracking Control")); return; }
                 if (defaultLocomotion) { Assert.That(result[0].Error, Does.Contain("外部入力")); return; }
@@ -296,5 +303,17 @@ namespace VRVlog.LilToonExporter.Tests
         [TestCase("trackingLeftHand", "emptyLayer")]
         public void MenuTrackingControlsRespectBodyAndHistory(string part, string location = "selected") =>
             SubmenuAndMaGeneratedGestureMenuResolveOnlySelectedStaticPose(false, false, false, trackingPart: part, trackingLocation: location);
+
+        [TestCase("Missing")]
+        [TestCase("Renamed")]
+        [TestCase("Duplicate")]
+        [TestCase("TypeMismatch")]
+        [TestCase("FractionalInt")]
+        [TestCase("BoolZero")]
+        [TestCase("FloatRange")]
+        [TestCase("Bool")]
+        [TestCase("Float")]
+        public void MenuInputsRequireMatchingExpressionDeclarations(string scenario) =>
+            SubmenuAndMaGeneratedGestureMenuResolveOnlySelectedStaticPose(false, false, false, expressionCase: scenario);
     }
 }
