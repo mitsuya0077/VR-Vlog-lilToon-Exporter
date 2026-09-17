@@ -46,14 +46,16 @@ namespace VRVlog.LilToonExporter.Tests
             for (var i = 0; i < types.Length; i++) { var layer = Activator.CreateInstance(element); Set(layer, "type", types[i]); Set(layer, "isDefault", true); array.SetValue(layer, i); }
             field.SetValue(descriptor, array);
         }
-        [Test]
-        public void AplSnapshotKeepsSourceNamesCategoriesExclusionsAndRejectsBeforeAnimation()
+        [TestCase(false)]
+        [TestCase(true)]
+        public void AplSnapshotKeepsSourceNamesCategoriesExclusionsAndRejectsBeforeAnimation(bool discardedMotion)
         {
             var type = Find(PoseExportSession.AplType);
             if (type == null) Assert.Ignore("Install APL runtime for the real serialized registration test.");
             using var f = new AttachmentConnectionTests.Fixture(); Descriptor(f.Source);
             var child = new GameObject("Library"); child.transform.SetParent(f.Source.transform, false);
             var component = child.AddComponent(type); var clip = HumanoidPoseTests.Clip(f.Source);
+            if (discardedMotion) AnimationUtility.SetEditorCurve(clip, EditorCurveBinding.FloatCurve("Prop", typeof(Transform), "localEulerAnglesRaw.z"), AnimationCurve.Linear(0, 0, 1, 90));
             try
             {
                 var data = Activator.CreateInstance(type.GetField("data").FieldType); Set(component, "data", data);
@@ -106,7 +108,7 @@ namespace VRVlog.LilToonExporter.Tests
         [TestCase(false, false, false, "Gesture", false, 1f, false, 0, false, false, 1, TestName = "EmptyWriteDefaultsStateDoesNotExposeLowerPose")]
         [TestCase(false, false, false, "Gesture", false, 1f, false, 0, false, false, 2, TestName = "NonBodyWriteDefaultsStateDoesNotExposeLowerPose")]
         [TestCase(false, false, false, "Gesture", false, 1f, false, 0, false, false, 3, TestName = "EmptyWriteDefaultsLayerRespectsControllerBodyBindings")]
-        public void SubmenuAndMaGeneratedGestureMenuResolveOnlySelectedStaticPose(bool modularAvatar, bool defaultLocomotion, bool overrideClip, string layerType = "Gesture", bool crossLayerWeight = false, float controlWeight = 1f, bool unrelatedSolo = false, int unconditionalFallback = 0, bool propOnly = false, bool maskedSelection = false, int upperDefaults = 0, string trackingPart = null, string trackingLocation = "selected", string expressionCase = null, string historyCase = null, string weightBaseline = null)
+        public void SubmenuAndMaGeneratedGestureMenuResolveOnlySelectedStaticPose(bool modularAvatar, bool defaultLocomotion, bool overrideClip, string layerType = "Gesture", bool crossLayerWeight = false, float controlWeight = 1f, bool unrelatedSolo = false, int unconditionalFallback = 0, bool propOnly = false, bool maskedSelection = false, int upperDefaults = 0, string trackingPart = null, string trackingLocation = "selected", string expressionCase = null, string historyCase = null, string weightBaseline = null, string buttonRelease = null, bool discardedMotion = false)
         {
             using var f = new AttachmentConnectionTests.Fixture(); var descriptor = Descriptor(f.Source);
             var menuType = Find("VRC.SDK3.Avatars.ScriptableObjects.VRCExpressionsMenu");
@@ -120,6 +122,7 @@ namespace VRVlog.LilToonExporter.Tests
             for (var i = 0; i < parameterArray.Length; i++) parameterArray.SetValue(parameterRow, i);
             parameterField.SetValue(parameters, parameterArray); Set(descriptor, "expressionParameters", parameters);
             var clip = propOnly ? new AnimationClip { name = "Prop" } : HumanoidPoseTests.Clip(f.Source); var unrelated = HumanoidPoseTests.Clip(f.Source, -80);
+            if (discardedMotion) AnimationUtility.SetEditorCurve(clip, EditorCurveBinding.FloatCurve("Prop", typeof(Transform), "localEulerAnglesRaw.z"), AnimationCurve.Linear(0, 0, 1, 90));
             if (historyCase != null && historyCase != "Mirror" && historyCase != "IK")
             {
                 var arm = f.Source.GetComponent<Animator>().GetBoneTransform(HumanBodyBones.RightUpperArm);
@@ -151,6 +154,11 @@ namespace VRVlog.LilToonExporter.Tests
                     var idle = machine.AddState("Idle"); idle.writeDefaultValues = false;
                     var other = machine.AddState("Unselected"); other.writeDefaultValues = false; other.motion = unrelated;
                     other.mirror = historyCase == "Mirror"; other.iKOnFeet = historyCase == "IK";
+                    if (buttonRelease == "Reset")
+                    {
+                        var reset = machine.AddAnyStateTransition(idle); reset.canTransitionToSelf = false; reset.hasExitTime = false; reset.duration = 0;
+                        reset.AddCondition(AnimatorConditionMode.Equals, 0, "Pose");
+                    }
                     var t = machine.AddAnyStateTransition(state); t.canTransitionToSelf = false; t.hasExitTime = false; t.duration = 0;
                     t.AddCondition(expressionType == "Bool" ? AnimatorConditionMode.If : expressionType == "Float" ? AnimatorConditionMode.Greater : AnimatorConditionMode.Equals, expressionType == "Int" ? unconditionalFallback == 1 ? 2 : 1 : 0, "Pose");
                     if (unconditionalFallback > 0)
@@ -185,7 +193,7 @@ namespace VRVlog.LilToonExporter.Tests
                 RuntimeAnimatorController effective = controller;
                 if (overrideClip) { var replacement = new AnimatorOverrideController(controller); replacement[clip] = unrelated; owned.Add(replacement); effective = replacement; }
                 var folder = Add((IList)PoseMenuResolver.Member(menu, "controls")); Set(folder, "name", "カテゴリー"); Set(folder, "type", "SubMenu"); Set(folder, "subMenu", sub);
-                var toggle = Add((IList)PoseMenuResolver.Member(sub, "controls")); Set(toggle, "name", "メニュー名"); Set(toggle, "type", "Toggle");
+                var toggle = Add((IList)PoseMenuResolver.Member(sub, "controls")); Set(toggle, "name", "メニュー名"); Set(toggle, "type", buttonRelease == null ? "Toggle" : "Button");
                 Set(toggle, "value", expressionCase == "BoolZero" ? 0f : expressionCase == "FloatRange" ? 2f : expressionCase == "FractionalInt" ? 1.5f : 1f);
                 var parameter = Activator.CreateInstance(toggle.GetType().GetField("parameter").FieldType); Set(parameter, "name", "Pose"); Set(toggle, "parameter", parameter);
                 // Supported fixtures use explicitly neutral other layers;
@@ -293,6 +301,7 @@ namespace VRVlog.LilToonExporter.Tests
                 var result = PoseMenuResolver.Read(clone);
                 Assert.That(result.Count, Is.EqualTo(1));
                 Assert.That(EditorJsonUtility.ToJson(controller), Is.EqualTo(before)); Assert.That(EditorJsonUtility.ToJson(menu), Is.EqualTo(beforeMenu));
+                if (buttonRelease == "Reset") { Assert.That(result[0].Error, Does.Contain("Button")); return; }
                 if (historyCase == "Unbound" || historyCase == "Mirror" || historyCase == "IK") { Assert.That(result[0].Error, Does.Contain("Write Defaults")); return; }
                 if (trackingLocation == "sibling") { Assert.That(result[0].Error, Does.Contain("Tracking Control")); return; }
                 if (weightBaseline != null || crossLayerWeight && controlWeight == (layerType == "Action" ? 0 : 1))
@@ -306,6 +315,7 @@ namespace VRVlog.LilToonExporter.Tests
                 if (unrelatedSolo || unconditionalFallback > 0 || propOnly || maskedSelection) { Assert.That(result[0].Error, Does.Contain("確定"), "A suppressed or irrelevant parameter edge cannot relate this menu to an unconditional pose."); return; }
                 Assert.That(result[0].Error, Is.Null, result[0].Error);
                 Assert.That(result[0].Name, Is.EqualTo("メニュー名")); Assert.That(result[0].Category, Is.EqualTo("カテゴリー"));
+                if (buttonRelease != null) Assert.That(result[0].Note, Does.Contain("Button解除後"));
                 Assert.That(result[0].Layers.Count, Is.EqualTo(1));
                 if (overrideClip) Assert.That(result[0].Layers[0].Clip, Is.SameAs(unrelated));
                 var sample = PoseSampling.Sample(clone, result[0]);
@@ -364,5 +374,14 @@ namespace VRVlog.LilToonExporter.Tests
         [TestCase("After")]
         public void MenuWeightControlDoesNotDuplicateAnUnconditionalControl(string order) =>
             SubmenuAndMaGeneratedGestureMenuResolveOnlySelectedStaticPose(false, false, false, "Action", true, weightBaseline: order);
+
+        [TestCase("Latched")]
+        [TestCase("Reset")]
+        public void ButtonPoseMustRemainAfterParameterReset(string scenario) =>
+            SubmenuAndMaGeneratedGestureMenuResolveOnlySelectedStaticPose(false, false, false, buttonRelease: scenario);
+
+        [Test]
+        public void DiscardedMenuAnimationDoesNotRejectStaticBody() =>
+            SubmenuAndMaGeneratedGestureMenuResolveOnlySelectedStaticPose(false, false, false, discardedMotion: true);
     }
 }

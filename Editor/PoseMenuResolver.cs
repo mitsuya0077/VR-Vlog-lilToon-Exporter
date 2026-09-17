@@ -33,7 +33,8 @@ namespace VRVlog.LilToonExporter
                 var split = entry.Name.LastIndexOf(" / ", StringComparison.Ordinal);
                 var row = new PoseCandidate { Name = split < 0 ? entry.Name : entry.Name.Substring(split + 3),
                     Category = split < 0 ? "VRChat" : entry.Name.Substring(0, split), Source = "VRChat menu",
-                    Conditions = JsonDom.Serialize(entry.Parameters.ToDictionary(p => p.Key, p => (object)p.Value)), Error = entry.Error };
+                    Conditions = JsonDom.Serialize(new Dictionary<string, object> { ["parameters"] = entry.Parameters.ToDictionary(p => p.Key, p => (object)p.Value),
+                        ["controlType"] = entry.ControlType, ["controlParameter"] = entry.ControlParameter }), Error = entry.Error };
                 try
                 {
                     if (row.Error != null) throw new InvalidOperationException(row.Error);
@@ -98,6 +99,13 @@ namespace VRVlog.LilToonExporter
                                     throw new InvalidOperationException("外部操作・パラメーター変更を伴うBehaviourは未対応です: " + (b == null ? "missing" : b.GetType().Name));
                             var state = Resolve(layer.stateMachine, entry.Parameters, menu.ExternalParameters, parameters: controller.parameters);
                             if (state == null) continue;
+                            if (entry.ControlType == "Button")
+                            {
+                                var released = new Dictionary<string, float>(entry.Parameters) { [entry.ControlParameter] = 0 };
+                                if (Resolve(layer.stateMachine, released, menu.ExternalParameters, parameters: controller.parameters, startingState: state) != state)
+                                    throw new InvalidOperationException("Button解除後にAnimator状態が変わるため、静止姿勢の持続を確定できません。");
+                                row.Note = "Button解除後も同じ静止状態が維持される登録です。";
+                            }
                             if (state.behaviours.Concat(AncestorBehaviours(layer.stateMachine, state)).Any(TrackingControl))
                                 animatedTracking.Add((type, i == 0 ? 1 : layer.defaultWeight));
                             if (Behaviours(layer.stateMachine).Any(b => !Tracking(b)))
@@ -171,7 +179,7 @@ namespace VRVlog.LilToonExporter
                             throw new InvalidOperationException("加算レイヤーの姿勢は未対応です。");
                         if (item.state.mirror || item.state.mirrorParameterActive || item.state.timeParameterActive || item.state.speedParameterActive || item.state.cycleOffsetParameterActive || item.state.iKOnFeet)
                             throw new InvalidOperationException("ミラー・時刻パラメーター・IKに依存する状態は未対応です。");
-                        if (PoseSampling.Moving(item.clip)) throw new InvalidOperationException("動くメニュークリップです。手動追加で採用時刻を指定できます。");
+                        if (PoseSampling.Moving(avatar, poseLayer)) throw new InvalidOperationException("体の動くメニュークリップです。手動追加で採用時刻を指定できます。");
                         if (AnimationUtility.GetAnimationEvents(item.clip).Length != 0)
                             throw new InvalidOperationException("Animation Eventを伴うメニューです。");
                         poseLayer.ClipIdentity = PoseSampling.GeneratedClipIdentity(item.clip);
@@ -188,7 +196,7 @@ namespace VRVlog.LilToonExporter
             return result;
         }
 
-        internal static AnimatorState Resolve(AnimatorStateMachine machine, IDictionary<string, float> selected, ISet<string> external = null, bool omitMatchedMenuEdges = false, AnimatorControllerParameter[] parameters = null)
+        internal static AnimatorState Resolve(AnimatorStateMachine machine, IDictionary<string, float> selected, ISet<string> external = null, bool omitMatchedMenuEdges = false, AnimatorControllerParameter[] parameters = null, AnimatorState startingState = null)
         {
             var states = States(machine).ToArray();
             var definitions = parameters?.ToLookup(p => p.name, StringComparer.Ordinal);
@@ -249,7 +257,7 @@ namespace VRVlog.LilToonExporter
             }
             // Every possible previous state must converge to the same terminal.
             AnimatorState final = null;
-            foreach (var start in states)
+            foreach (var start in startingState == null ? states : new[] { startingState })
             {
                 var current = start; var visited = new HashSet<AnimatorState>();
                 while (edges.TryGetValue(current, out var next) && next != null)

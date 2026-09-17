@@ -20,6 +20,7 @@ namespace VRVlog.LilToonExporter
         internal sealed class Entry
         {
             internal string Id, Name, Error;
+            internal string ControlType, ControlParameter;
             internal double Duration = 0;
             internal bool Loop = false;
             internal readonly List<AnimatedMorph> Animation = new List<AnimatedMorph>();
@@ -113,7 +114,8 @@ namespace VRVlog.LilToonExporter
                     if (!string.IsNullOrEmpty(parameter)) values[parameter] = Number(Member(control, "value"));
                     var type = Member(control, "type")?.ToString();
                     if (type == "SubMenu") { Walk(Member(control, "subMenu"), name, id, values, stack, result, depth + 1); continue; }
-                    var entry = new Entry { Id = id + "\n" + name + "\n" + JsonDom.Serialize(values.ToDictionary(p => p.Key, p => (object)p.Value)), Name = name };
+                    var entry = new Entry { Id = id + "\n" + name + "\n" + JsonDom.Serialize(values.ToDictionary(p => p.Key, p => (object)p.Value)), Name = name,
+                        ControlType = type, ControlParameter = parameter };
                     foreach (var pair in values) entry.Parameters.Add(pair.Key, pair.Value);
                     if (type != "Button" && type != "Toggle") entry.Error = "連続調整（Puppet）は一つの固定表情に変換できません。";
                     else if (string.IsNullOrEmpty(parameter)) entry.Error = "操作対象のパラメーターがありません。";

@@ -115,11 +115,12 @@ namespace VRVlog.LilToonExporter
         internal static string Hash(string text)
         { using var sha = SHA256.Create(); return BitConverter.ToString(sha.ComputeHash(Encoding.UTF8.GetBytes(text))).Replace("-", "").ToLowerInvariant(); }
 
-        internal static bool Moving(AnimationClip clip)
+        internal static bool Moving(GameObject root, PoseLayer layer)
         {
-            foreach (var binding in AnimationUtility.GetCurveBindings(clip))
+            if (layer.Weight == 0 || layer.GroupWeight == 0) return false;
+            foreach (var binding in EffectiveBodyBindings(root, layer))
             {
-                var keys = AnimationUtility.GetEditorCurve(clip, binding).keys;
+                var keys = AnimationUtility.GetEditorCurve(layer.Clip, binding).keys;
                 if (keys.Length < 2) continue;
                 if (keys.Any(k => k.value != keys[0].value)) return true;
                 for (var i = 1; i < keys.Length; i++)

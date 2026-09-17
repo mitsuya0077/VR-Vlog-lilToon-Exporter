@@ -227,6 +227,39 @@ namespace VRVlog.LilToonExporter.Tests
             }
             finally { Object.DestroyImmediate(machine); }
         }
+        [TestCase("prop")]
+        [TestCase("head")]
+        [TestCase("blendshape")]
+        [TestCase("material")]
+        [TestCase("masked")]
+        [TestCase("body")]
+        public void MotionDetectionUsesEffectiveBodyCurves(string kind)
+        {
+            using var f = new AttachmentConnectionTests.Fixture(); var clip = Clip(f.Source); AvatarMask mask = null;
+            try
+            {
+                var binding = EditorCurveBinding.FloatCurve("Prop", typeof(Transform), "localEulerAnglesRaw.z");
+                if (kind == "head") binding = EditorCurveBinding.FloatCurve("", typeof(Animator), "Head Nod Down-Up");
+                if (kind == "blendshape" || kind == "material") binding = EditorCurveBinding.FloatCurve("Body", typeof(SkinnedMeshRenderer), kind == "blendshape" ? "blendShape.Smile" : "material._Cutoff");
+                if (kind == "body" || kind == "masked")
+                {
+                    var arm = f.Source.GetComponent<Animator>().GetBoneTransform(HumanBodyBones.RightUpperArm);
+                    var path = AnimationUtility.CalculateTransformPath(arm, f.Source.transform);
+                    binding = EditorCurveBinding.FloatCurve(path, typeof(Transform), "localEulerAnglesRaw.z");
+                    if (kind == "masked")
+                    {
+                        mask = new AvatarMask(); mask.AddTransformPath(f.Source.transform, true);
+                        for (var i = 0; i < mask.transformCount; i++) if (mask.GetTransformPath(i) == path) mask.SetTransformActive(i, false);
+                    }
+                }
+                AnimationUtility.SetEditorCurve(clip, binding, AnimationCurve.Linear(0, 0, 1, 30));
+                var layer = new PoseLayer { Clip = clip, Mask = mask };
+                Assert.That(PoseSampling.Moving(f.Source, layer), Is.EqualTo(kind == "body"));
+                var candidate = new PoseCandidate { Id = "moving-filter", Name = "Static body", Source = "test" }; candidate.Layers.Add(layer);
+                Assert.That(Math.Abs(PoseSampling.Sample(f.Source, candidate).Bones.Single(b => b.Name == "leftUpperArm").Rotation[2]), Is.GreaterThan(.2));
+            }
+            finally { Object.DestroyImmediate(clip); if (mask != null) Object.DestroyImmediate(mask); }
+        }
         [Test]
         public void MenuGraphRejectsAnimatedIntermediateStates()
         {

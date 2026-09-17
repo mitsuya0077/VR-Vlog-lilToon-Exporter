@@ -40,7 +40,7 @@ namespace VRVlog.LilToonExporter
                         if (PoseMenuResolver.Member(pose, "beforeAnimationClip") is AnimationClip || PoseMenuResolver.Member(pose, "afterAnimationClip") is AnimationClip)
                             row.Error = "APLの開始／終了アニメーションを伴う登録は未対応です。";
                         else if (clip == null) row.Error = "APLの元クリップがありません。";
-                        else if (PoseSampling.Moving(clip)) row.Error = "APLの動くクリップです。手動追加で採用時刻を指定できます。";
+                        else if (PoseSampling.Moving(source, row.Layers[0])) row.Error = "APLの体の動くクリップです。手動追加で採用時刻を指定できます。";
                         else if (PoseMenuResolver.Member(data, "enableLocomotionAnimator") is bool active && !active)
                             row.Error = "APLのHumanoidポーズ出力が無効です。";
                         row.Id = PoseSampling.Identity(row); Entries.Add(row);
@@ -49,8 +49,9 @@ namespace VRVlog.LilToonExporter
             foreach (var manual in this.options.Manual)
             {
                 var row = new PoseCandidate { Name = string.IsNullOrWhiteSpace(manual.Name) ? manual.Clip?.name ?? "未設定" : manual.Name,
-                    Category = manual.Category ?? "", Source = "手動", SampledMotion = manual.Clip != null && PoseSampling.Moving(manual.Clip) };
+                    Category = manual.Category ?? "", Source = "手動" };
                 row.Layers.Add(new PoseLayer { Clip = manual.Clip, Time = manual.Time });
+                row.SampledMotion = manual.Clip != null && PoseSampling.Moving(source, row.Layers[0]);
                 row.Note = row.SampledMotion ? "動くクリップの " + manual.Time + " 秒を静止姿勢として採用（再生しません）。" : "";
                 row.Id = PoseSampling.Identity(row); Entries.Add(row);
             }
