@@ -80,8 +80,13 @@ namespace VRVlog.LilToonExporter
                             var enabled = !options.Excluded.Contains(row.Id);
                             var next = EditorGUILayout.Toggle(enabled && row.Error == null, GUILayout.Width(20));
                             if (next != enabled && row.Error == null) { if (next) options.Excluded.Remove(row.Id); else options.Excluded.Add(row.Id); }
-                            var name = EditorGUILayout.TextField(row.Name);
-                            if (name != row.Name) { options.Names[row.Id] = row.Name = name; }
+                        }
+                        // Metadata errors must remain repairable, including
+                        // after rebuilding with an invalid name override.
+                        var name = EditorGUILayout.TextField(row.Name);
+                        if (name != row.Name) { options.Names[row.Id] = row.Name = name; }
+                        using (new EditorGUI.DisabledScope(row.Error != null))
+                        {
                             if (GUILayout.Button("プレビュー", GUILayout.Width(90))) { selected = i; ApplyPreview(row); }
                         }
                         EditorGUILayout.EndHorizontal();

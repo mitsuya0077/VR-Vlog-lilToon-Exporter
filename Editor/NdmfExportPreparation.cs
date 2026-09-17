@@ -311,12 +311,17 @@ namespace VRVlog.LilToonExporter
                 try
                 {
                     // Unity's native Instantiate remapper asserts on an
-                    // AnimatorStateMachine's strong state/transition pointers.
+                    // Animator graph's strong state/behaviour pointers.
                     // Copy serialized fields, then redirect every reference in
                     // the same owned replacement map used below.
                     if (value is UnityEditor.Animations.AnimatorStateMachine)
                     {
                         copy = new UnityEditor.Animations.AnimatorStateMachine();
+                        EditorUtility.CopySerialized(value, copy);
+                    }
+                    else if (value is UnityEditor.Animations.AnimatorState)
+                    {
+                        copy = new UnityEditor.Animations.AnimatorState();
                         EditorUtility.CopySerialized(value, copy);
                     }
                     else copy = Object.Instantiate(value);

@@ -105,6 +105,7 @@ namespace UnityEngine
 namespace UnityEditor.Animations
 {
     public class AnimatorStateMachine : UnityEngine.Object { }
+    public class AnimatorState : UnityEngine.Object { }
 }
 namespace UnityEditor
 {

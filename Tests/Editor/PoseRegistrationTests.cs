@@ -21,6 +21,15 @@ namespace VRVlog.LilToonExporter.Tests
         }
         static object Add(IList list)
         { var value = Activator.CreateInstance(list.GetType().GetGenericArguments()[0]); list.Add(value); return value; }
+        static StateMachineBehaviour AnimateBody(AnimatorState state)
+        {
+            var tracking = state.AddStateMachineBehaviour(Find("VRC.SDK3.Avatars.Components.VRCAnimatorTrackingControl"));
+            SetBodyAnimation(tracking); return tracking;
+        }
+        static void SetBodyAnimation(StateMachineBehaviour tracking)
+        {
+            foreach (var part in new[] { "trackingLeftHand", "trackingRightHand", "trackingHip", "trackingLeftFoot", "trackingRightFoot", "trackingLeftFingers", "trackingRightFingers" }) Set(tracking, part, "Animation");
+        }
         static Component Descriptor(GameObject root)
         {
             var type = Find("VRC.SDK3.Avatars.Components.VRCAvatarDescriptor");
@@ -119,6 +128,7 @@ namespace VRVlog.LilToonExporter.Tests
             {
                 controller.AddParameter("Pose", AnimatorControllerParameterType.Int);
                 var state = machine.AddState("Selected"); state.writeDefaultValues = false; state.motion = clip;
+                if (trackingPart != "Absent") AnimateBody(state);
                 if (layerType == "Action" && !crossLayerWeight)
                 {
                     var control = state.AddStateMachineBehaviour(Find("VRC.SDK3.Avatars.Components.VRCPlayableLayerControl"));
@@ -200,6 +210,7 @@ namespace VRVlog.LilToonExporter.Tests
                         fx.AddParameter("Pose", AnimatorControllerParameterType.Int);
                         var idle = fxMachine.AddState("Idle"); idle.writeDefaultValues = false;
                         var enable = fxMachine.AddState("Enable Action"); enable.writeDefaultValues = false;
+                        if (trackingPart != "Absent") AnimateBody(enable);
                         var control = enable.AddStateMachineBehaviour(Find("VRC.SDK3.Avatars.Components.VRCPlayableLayerControl"));
                         Set(control, "layer", layerType); Set(control, "goalWeight", controlWeight); Set(control, "blendDuration", 0f);
                         var t = fxMachine.AddAnyStateTransition(enable); t.canTransitionToSelf = false; t.hasExitTime = false; t.duration = 0; t.AddCondition(AnimatorConditionMode.Equals, 1, "Pose");
@@ -214,7 +225,7 @@ namespace VRVlog.LilToonExporter.Tests
                         var baseLayer = array.GetValue(0); Set(baseLayer, "isDefault", false); Set(baseLayer, "animatorController", lower); array.SetValue(baseLayer, 0); field.SetValue(descriptor, array);
                     }
                 }
-                if (trackingPart != null)
+                if (trackingPart != null && trackingPart != "Absent")
                 {
                     var trackingType = Find("VRC.SDK3.Avatars.Components.VRCAnimatorTrackingControl");
                     StateMachineBehaviour tracking;
@@ -227,11 +238,9 @@ namespace VRVlog.LilToonExporter.Tests
                         controller.layers = controller.layers.Concat(new[] { new AnimatorControllerLayer { name = "Tracking", stateMachine = emptyMachine, defaultWeight = 1 } }).ToArray();
                     }
                     else tracking = state.AddStateMachineBehaviour(trackingType);
-                    if (trackingPart == "Animation")
-                    {
-                        foreach (var part in new[] { "trackingLeftHand", "trackingRightHand", "trackingHip", "trackingLeftFoot", "trackingRightFoot", "trackingLeftFingers", "trackingRightFingers" }) Set(tracking, part, "Animation");
-                    }
-                    else Set(tracking, trackingPart, "Tracking");
+                    SetBodyAnimation(tracking);
+                    if (trackingPart == "NoChange") Set(tracking, "trackingLeftHand", "NoChange");
+                    else if (trackingPart != "Animation") Set(tracking, trackingPart, "Tracking");
                 }
                 var before = EditorJsonUtility.ToJson(controller); var beforeMenu = EditorJsonUtility.ToJson(menu);
                 var assets = new Object[] { controller, menu, sub, parameters, effective }.Concat(owned).Distinct().ToArray();
@@ -280,6 +289,8 @@ namespace VRVlog.LilToonExporter.Tests
         [TestCase("trackingEyes")]
         [TestCase("trackingMouth")]
         [TestCase("Animation")]
+        [TestCase("NoChange")]
+        [TestCase("Absent")]
         [TestCase("trackingLeftHand", "history")]
         [TestCase("trackingLeftHand", "machine")]
         [TestCase("trackingLeftHand", "emptyLayer")]

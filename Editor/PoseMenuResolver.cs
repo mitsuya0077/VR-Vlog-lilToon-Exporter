@@ -12,6 +12,8 @@ namespace VRVlog.LilToonExporter
     // a few sampled frames. Anything outside this bounded subset is reported.
     internal static class PoseMenuResolver
     {
+        static readonly string[] BodyTrackingParts = { "trackingLeftHand", "trackingRightHand", "trackingHip", "trackingLeftFoot", "trackingRightFoot", "trackingLeftFingers", "trackingRightFingers" };
+        static bool TrackingControl(StateMachineBehaviour b) => b != null && b.GetType().Name == "VRCAnimatorTrackingControl";
         internal static object Member(object value, string name) => VrChatExpressionMenu.Member(value, name);
         internal static IEnumerable<object> Items(object value) => value is IEnumerable e ? e.Cast<object>() : Enumerable.Empty<object>();
         internal static List<PoseCandidate> Read(GameObject avatar)
@@ -40,6 +42,7 @@ namespace VRVlog.LilToonExporter
                     var resolved = new List<(string type, AnimatorControllerLayer layer, AnimatorState state, AnimationClip clip, int index, bool skipMuscles, AvatarMask outer, bool selected)>();
                     var controlledWeights = new Dictionary<string, float>();
                     var selectedWeightTargets = new HashSet<string>();
+                    var animatedTracking = new List<(string type, float weight)>();
                     var selectedAffectsBody = false;
                     foreach (var source in layers)
                     {
@@ -60,14 +63,14 @@ namespace VRVlog.LilToonExporter
                             // affect clips in other (even bodyless) layers.
                             // Do not replace externally tracked limbs with a
                             // snapshot of the animation they would override.
-                            foreach (var b in behaviours.Where(b => b != null && b.GetType().Name == "VRCAnimatorTrackingControl"))
-                                foreach (var part in new[] { "trackingLeftHand", "trackingRightHand", "trackingHip", "trackingLeftFoot", "trackingRightFoot", "trackingLeftFingers", "trackingRightFingers" })
+                            foreach (var b in behaviours.Where(TrackingControl))
+                                foreach (var part in BodyTrackingParts)
                                 {
                                     var mode = Member(b, part)?.ToString();
-                                    if (mode != "NoChange" && mode != "Animation")
-                                        throw new InvalidOperationException("体・手足・指のTracking Controlが外部入力（追跡）に依存します: " + part);
+                                    if (mode != "Animation")
+                                        throw new InvalidOperationException("体・手足・指のTracking Controlが外部入力・履歴に依存します（Animation指定が必要）: " + part);
                                 }
-                            var controls = behaviours.Any(b => b == null || !Tracking(b));
+                            var controls = behaviours.Any(b => b == null || !Tracking(b) || TrackingControl(b));
                             var writesDefaults = controllerHasBody && all.Any(s => s.writeDefaultValues);
                             if (!hasBody && !controls && !writesDefaults) continue;
                             if (layer.syncedLayerIndex >= 0) throw new InvalidOperationException("同期Animatorレイヤーは未対応です。");
@@ -76,6 +79,7 @@ namespace VRVlog.LilToonExporter
                                     throw new InvalidOperationException("外部操作・パラメーター変更を伴うBehaviourは未対応です: " + (b == null ? "missing" : b.GetType().Name));
                             var state = Resolve(layer.stateMachine, entry.Parameters, menu.ExternalParameters, parameters: controller.parameters);
                             if (state == null) continue;
+                            if (state.behaviours.Any(TrackingControl)) animatedTracking.Add((type, i == 0 ? 1 : layer.defaultWeight));
                             if (Behaviours(layer.stateMachine).Any(b => !Tracking(b)))
                                 throw new InvalidOperationException("StateMachine Behaviourによる重み変更は未対応です。");
                             if (all.Where(s => s != state).Any(s => s.behaviours.Any(b => !Tracking(b))))
@@ -143,6 +147,8 @@ namespace VRVlog.LilToonExporter
                         row.Layers.Add(poseLayer);
                     }
                     if (!selectedAffectsBody || row.Layers.Count == 0) throw new InvalidOperationException("この操作から適用するHumanoid静止姿勢を確定できません。");
+                    if (!animatedTracking.Any(t => t.weight > 0 && weights.TryGetValue(t.type, out var w) && w > 0))
+                        throw new InvalidOperationException("有効な終端状態に体のAnimation指定がなく、Tracking Controlの外部入力・履歴を確定できません。");
                 }
                 catch (Exception e) when (e is InvalidOperationException || e is ArgumentException || e is FormatException) { row.Error = e.Message; }
                 row.Id = PoseSampling.Identity(row);
