@@ -56,6 +56,17 @@ namespace VRVlog.LilToonExporter
                             var all = States(layer.stateMachine).ToArray();
                             var hasBody = all.Any(s => HasBody(Clip(s), skipMuscles, bodyPaths)) || all.Any(s => s.motion is BlendTree);
                             var behaviours = all.SelectMany(s => s.behaviours).Concat(Behaviours(layer.stateMachine)).ToArray();
+                            // Tracking controls persist across states and can
+                            // affect clips in other (even bodyless) layers.
+                            // Do not replace externally tracked limbs with a
+                            // snapshot of the animation they would override.
+                            foreach (var b in behaviours.Where(b => b != null && b.GetType().Name == "VRCAnimatorTrackingControl"))
+                                foreach (var part in new[] { "trackingLeftHand", "trackingRightHand", "trackingHip", "trackingLeftFoot", "trackingRightFoot", "trackingLeftFingers", "trackingRightFingers" })
+                                {
+                                    var mode = Member(b, part)?.ToString();
+                                    if (mode != "NoChange" && mode != "Animation")
+                                        throw new InvalidOperationException("体・手足・指のTracking Controlが外部入力（追跡）に依存します: " + part);
+                                }
                             var controls = behaviours.Any(b => b == null || !Tracking(b));
                             var writesDefaults = controllerHasBody && all.Any(s => s.writeDefaultValues);
                             if (!hasBody && !controls && !writesDefaults) continue;

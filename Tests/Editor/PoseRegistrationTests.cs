@@ -95,7 +95,7 @@ namespace VRVlog.LilToonExporter.Tests
         [TestCase(false, false, false, "Gesture", false, 1f, false, 0, false, false, 1, TestName = "EmptyWriteDefaultsStateDoesNotExposeLowerPose")]
         [TestCase(false, false, false, "Gesture", false, 1f, false, 0, false, false, 2, TestName = "NonBodyWriteDefaultsStateDoesNotExposeLowerPose")]
         [TestCase(false, false, false, "Gesture", false, 1f, false, 0, false, false, 3, TestName = "EmptyWriteDefaultsLayerRespectsControllerBodyBindings")]
-        public void SubmenuAndMaGeneratedGestureMenuResolveOnlySelectedStaticPose(bool modularAvatar, bool defaultLocomotion, bool overrideClip, string layerType = "Gesture", bool crossLayerWeight = false, float controlWeight = 1f, bool unrelatedSolo = false, int unconditionalFallback = 0, bool propOnly = false, bool maskedSelection = false, int upperDefaults = 0)
+        public void SubmenuAndMaGeneratedGestureMenuResolveOnlySelectedStaticPose(bool modularAvatar, bool defaultLocomotion, bool overrideClip, string layerType = "Gesture", bool crossLayerWeight = false, float controlWeight = 1f, bool unrelatedSolo = false, int unconditionalFallback = 0, bool propOnly = false, bool maskedSelection = false, int upperDefaults = 0, string trackingPart = null, string trackingLocation = "selected")
         {
             using var f = new AttachmentConnectionTests.Fixture(); var descriptor = Descriptor(f.Source);
             var menuType = Find("VRC.SDK3.Avatars.ScriptableObjects.VRCExpressionsMenu");
@@ -214,6 +214,25 @@ namespace VRVlog.LilToonExporter.Tests
                         var baseLayer = array.GetValue(0); Set(baseLayer, "isDefault", false); Set(baseLayer, "animatorController", lower); array.SetValue(baseLayer, 0); field.SetValue(descriptor, array);
                     }
                 }
+                if (trackingPart != null)
+                {
+                    var trackingType = Find("VRC.SDK3.Avatars.Components.VRCAnimatorTrackingControl");
+                    StateMachineBehaviour tracking;
+                    if (trackingLocation == "machine") tracking = machine.AddStateMachineBehaviour(trackingType);
+                    else if (trackingLocation == "history") tracking = machine.states.Single(s => s.state.name == "Idle").state.AddStateMachineBehaviour(trackingType);
+                    else if (trackingLocation == "emptyLayer")
+                    {
+                        var emptyMachine = new AnimatorStateMachine(); var empty = emptyMachine.AddState("Bodyless tracking"); empty.writeDefaultValues = false;
+                        tracking = empty.AddStateMachineBehaviour(trackingType);
+                        controller.layers = controller.layers.Concat(new[] { new AnimatorControllerLayer { name = "Tracking", stateMachine = emptyMachine, defaultWeight = 1 } }).ToArray();
+                    }
+                    else tracking = state.AddStateMachineBehaviour(trackingType);
+                    if (trackingPart == "Animation")
+                    {
+                        foreach (var part in new[] { "trackingLeftHand", "trackingRightHand", "trackingHip", "trackingLeftFoot", "trackingRightFoot", "trackingLeftFingers", "trackingRightFingers" }) Set(tracking, part, "Animation");
+                    }
+                    else Set(tracking, trackingPart, "Tracking");
+                }
                 var before = EditorJsonUtility.ToJson(controller); var beforeMenu = EditorJsonUtility.ToJson(menu);
                 var assets = new Object[] { controller, menu, sub, parameters, effective }.Concat(owned).Distinct().ToArray();
                 var counter = 0;
@@ -232,6 +251,9 @@ namespace VRVlog.LilToonExporter.Tests
                 using var preparation = NdmfExportPreparation.Prepare(f.Source, clone);
                 var result = PoseMenuResolver.Read(clone);
                 Assert.That(result.Count, Is.EqualTo(1));
+                Assert.That(EditorJsonUtility.ToJson(controller), Is.EqualTo(before)); Assert.That(EditorJsonUtility.ToJson(menu), Is.EqualTo(beforeMenu));
+                if (trackingPart != null && trackingPart != "Animation" && trackingPart != "trackingHead" && trackingPart != "trackingEyes" && trackingPart != "trackingMouth")
+                { Assert.That(result[0].Error, Does.Contain("Tracking Control")); return; }
                 if (defaultLocomotion) { Assert.That(result[0].Error, Does.Contain("外部入力")); return; }
                 if (upperDefaults > 0) { Assert.That(result[0].Error, Does.Contain("Write Defaults")); return; }
                 if (unrelatedSolo || unconditionalFallback > 0 || propOnly || maskedSelection) { Assert.That(result[0].Error, Does.Contain("確定"), "A suppressed or irrelevant parameter edge cannot relate this menu to an unconditional pose."); return; }
@@ -246,5 +268,22 @@ namespace VRVlog.LilToonExporter.Tests
             finally
             { if (clone != null) Object.DestroyImmediate(clone); AssetDatabase.DeleteAsset(folderPath); foreach (var item in owned.Concat(new Object[] { menu, sub, parameters, controller, machine, clip, unrelated })) if (item != null && !EditorUtility.IsPersistent(item)) Object.DestroyImmediate(item); }
         }
+
+        [TestCase("trackingLeftHand")]
+        [TestCase("trackingRightHand")]
+        [TestCase("trackingHip")]
+        [TestCase("trackingLeftFoot")]
+        [TestCase("trackingRightFoot")]
+        [TestCase("trackingLeftFingers")]
+        [TestCase("trackingRightFingers")]
+        [TestCase("trackingHead")]
+        [TestCase("trackingEyes")]
+        [TestCase("trackingMouth")]
+        [TestCase("Animation")]
+        [TestCase("trackingLeftHand", "history")]
+        [TestCase("trackingLeftHand", "machine")]
+        [TestCase("trackingLeftHand", "emptyLayer")]
+        public void MenuTrackingControlsRespectBodyAndHistory(string part, string location = "selected") =>
+            SubmenuAndMaGeneratedGestureMenuResolveOnlySelectedStaticPose(false, false, false, trackingPart: part, trackingLocation: location);
     }
 }
