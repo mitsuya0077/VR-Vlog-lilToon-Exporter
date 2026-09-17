@@ -53,9 +53,11 @@ namespace VRVlog.LilToonExporter
                         throw new InvalidOperationException("カスタムPlayable Layerが無効です。");
                     var weights = new Dictionary<string, float> { ["Base"] = 1, ["Additive"] = 1, ["Gesture"] = 1, ["Action"] = 0, ["FX"] = 1,
                         ["Sitting"] = 0, ["TPose"] = 0, ["IKPose"] = 0 };
+                    var initialWeights = new Dictionary<string, float>(weights);
                     var resolved = new List<(string type, AnimatorControllerLayer layer, AnimatorState state, AnimationClip clip, int index, bool skipMuscles, AvatarMask outer, bool selected, bool retainsHistory)>();
                     var controlledWeights = new Dictionary<string, float>();
                     var selectedWeightTargets = new HashSet<string>();
+                    var unconditionalWeightTargets = new HashSet<string>();
                     var animatedTracking = new List<(string type, float weight)>();
                     var selectedAffectsBody = false;
                     foreach (var source in layers)
@@ -96,7 +98,8 @@ namespace VRVlog.LilToonExporter
                                     throw new InvalidOperationException("外部操作・パラメーター変更を伴うBehaviourは未対応です: " + (b == null ? "missing" : b.GetType().Name));
                             var state = Resolve(layer.stateMachine, entry.Parameters, menu.ExternalParameters, parameters: controller.parameters);
                             if (state == null) continue;
-                            if (state.behaviours.Any(TrackingControl)) animatedTracking.Add((type, i == 0 ? 1 : layer.defaultWeight));
+                            if (state.behaviours.Concat(AncestorBehaviours(layer.stateMachine, state)).Any(TrackingControl))
+                                animatedTracking.Add((type, i == 0 ? 1 : layer.defaultWeight));
                             if (Behaviours(layer.stateMachine).Any(b => !Tracking(b)))
                                 throw new InvalidOperationException("StateMachine Behaviourによる重み変更は未対応です。");
                             if (all.Where(s => s != state).Any(s => s.behaviours.Any(b => !Tracking(b))))
@@ -121,7 +124,8 @@ namespace VRVlog.LilToonExporter
                                 if (controlledWeights.TryGetValue(target, out var previous) && previous != weight)
                                     throw new InvalidOperationException("複数レイヤーから重みが変更されるため順序を確定できません。");
                                 controlledWeights[target] = weights[target] = weight;
-                                if (selectedByMenu) selectedWeightTargets.Add(target);
+                                if (selectedByMenu && weight != initialWeights[target]) selectedWeightTargets.Add(target);
+                                if (!selectedByMenu) unconditionalWeightTargets.Add(target);
                             }
                             IEnumerable<EditorCurveBinding> Bindings(AnimatorState s) => PoseSampling.EffectiveBodyBindings(avatar,
                                 new PoseLayer { Clip = Clip(s), Mask = layer.avatarMask, OuterMask = outer, SkipMuscles = skipMuscles });
@@ -131,6 +135,9 @@ namespace VRVlog.LilToonExporter
                             if (hasBody || writesDefaults) resolved.Add((type, layer, state, Clip(state), i, skipMuscles, outer, selectedByMenu, retainsHistory));
                         }
                     }
+                    // A weight already set by an unconditional terminal does
+                    // not become menu-driven; do not depend on iteration order.
+                    selectedWeightTargets.ExceptWith(unconditionalWeightTargets);
                     // Standard body controllers depend on built-in inputs. Do
                     // not silently replace their contribution with rest bones.
                     // A selected immediate control may explicitly disable them.
@@ -296,6 +303,8 @@ namespace VRVlog.LilToonExporter
         }
         static IEnumerable<AnimatorState> States(AnimatorStateMachine m) => Machines(m).SelectMany(s => s.states.Select(c => c.state));
         static IEnumerable<StateMachineBehaviour> Behaviours(AnimatorStateMachine m) => Machines(m).SelectMany(s => s.behaviours);
+        static IEnumerable<StateMachineBehaviour> AncestorBehaviours(AnimatorStateMachine root, AnimatorState state) =>
+            Machines(root).Where(m => States(m).Contains(state)).SelectMany(m => m.behaviours);
         static IEnumerable<AnimatorStateTransition> Transitions(AnimatorStateMachine m) => Machines(m).SelectMany(s => ActiveTransitions(s.anyStateTransitions)).Concat(States(m).SelectMany(s => ActiveTransitions(s.transitions)));
     }
 }

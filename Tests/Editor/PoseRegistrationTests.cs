@@ -96,6 +96,8 @@ namespace VRVlog.LilToonExporter.Tests
         [TestCase(false, false, false, "Action")]
         [TestCase(false, false, false, "Action", true)]
         [TestCase(false, false, false, "Gesture", true, 0f)]
+        [TestCase(false, false, false, "Gesture", true, 1f)]
+        [TestCase(false, false, false, "Action", true, 0f)]
         [TestCase(false, false, false, "Gesture", false, 1f, true)]
         [TestCase(false, false, false, "Gesture", false, 1f, false, 1)]
         [TestCase(false, false, false, "Gesture", false, 1f, false, 2)]
@@ -104,7 +106,7 @@ namespace VRVlog.LilToonExporter.Tests
         [TestCase(false, false, false, "Gesture", false, 1f, false, 0, false, false, 1, TestName = "EmptyWriteDefaultsStateDoesNotExposeLowerPose")]
         [TestCase(false, false, false, "Gesture", false, 1f, false, 0, false, false, 2, TestName = "NonBodyWriteDefaultsStateDoesNotExposeLowerPose")]
         [TestCase(false, false, false, "Gesture", false, 1f, false, 0, false, false, 3, TestName = "EmptyWriteDefaultsLayerRespectsControllerBodyBindings")]
-        public void SubmenuAndMaGeneratedGestureMenuResolveOnlySelectedStaticPose(bool modularAvatar, bool defaultLocomotion, bool overrideClip, string layerType = "Gesture", bool crossLayerWeight = false, float controlWeight = 1f, bool unrelatedSolo = false, int unconditionalFallback = 0, bool propOnly = false, bool maskedSelection = false, int upperDefaults = 0, string trackingPart = null, string trackingLocation = "selected", string expressionCase = null, string historyCase = null)
+        public void SubmenuAndMaGeneratedGestureMenuResolveOnlySelectedStaticPose(bool modularAvatar, bool defaultLocomotion, bool overrideClip, string layerType = "Gesture", bool crossLayerWeight = false, float controlWeight = 1f, bool unrelatedSolo = false, int unconditionalFallback = 0, bool propOnly = false, bool maskedSelection = false, int upperDefaults = 0, string trackingPart = null, string trackingLocation = "selected", string expressionCase = null, string historyCase = null, string weightBaseline = null)
         {
             using var f = new AttachmentConnectionTests.Fixture(); var descriptor = Descriptor(f.Source);
             var menuType = Find("VRC.SDK3.Avatars.ScriptableObjects.VRCExpressionsMenu");
@@ -138,7 +140,7 @@ namespace VRVlog.LilToonExporter.Tests
             {
                 controller.AddParameter("Pose", expressionCase == "TypeMismatch" ? AnimatorControllerParameterType.Int : (AnimatorControllerParameterType)Enum.Parse(typeof(AnimatorControllerParameterType), expressionType));
                 var state = machine.AddState("Selected"); state.writeDefaultValues = historyCase == "Defaults"; state.motion = clip;
-                if (trackingPart != "Absent") AnimateBody(state);
+                if (trackingPart != "Absent" && !(trackingPart == "Animation" && trackingLocation != "selected")) AnimateBody(state);
                 if (layerType == "Action" && !crossLayerWeight)
                 {
                     var control = state.AddStateMachineBehaviour(Find("VRC.SDK3.Avatars.Components.VRCPlayableLayerControl"));
@@ -229,6 +231,14 @@ namespace VRVlog.LilToonExporter.Tests
                         Set(control, "layer", layerType); Set(control, "goalWeight", controlWeight); Set(control, "blendDuration", 0f);
                         var t = fxMachine.AddAnyStateTransition(enable); t.canTransitionToSelf = false; t.hasExitTime = false; t.duration = 0; t.AddCondition(AnimatorConditionMode.Equals, 1, "Pose");
                         fx.layers = new[] { new AnimatorControllerLayer { name = "Enable body", defaultWeight = 1, stateMachine = fxMachine } };
+                        if (weightBaseline != null)
+                        {
+                            var alwaysMachine = new AnimatorStateMachine(); var always = alwaysMachine.AddState("Already enabled"); always.writeDefaultValues = false;
+                            var baseline = always.AddStateMachineBehaviour(Find("VRC.SDK3.Avatars.Components.VRCPlayableLayerControl"));
+                            Set(baseline, "layer", layerType); Set(baseline, "goalWeight", controlWeight); Set(baseline, "blendDuration", 0f);
+                            var alwaysLayer = new AnimatorControllerLayer { name = "Unconditional weight", defaultWeight = 1, stateMachine = alwaysMachine };
+                            fx.layers = weightBaseline == "Before" ? new[] { alwaysLayer, fx.layers[0] } : new[] { fx.layers[0], alwaysLayer };
+                        }
                         var fxLayer = array.GetValue(4); Set(fxLayer, "isDefault", false); Set(fxLayer, "animatorController", fx); array.SetValue(fxLayer, 4); field.SetValue(descriptor, array);
                     }
                     if (crossLayerWeight && controlWeight == 0 || propOnly || maskedSelection)
@@ -244,6 +254,14 @@ namespace VRVlog.LilToonExporter.Tests
                     var trackingType = Find("VRC.SDK3.Avatars.Components.VRCAnimatorTrackingControl");
                     StateMachineBehaviour tracking;
                     if (trackingLocation == "machine") tracking = machine.AddStateMachineBehaviour(trackingType);
+                    else if (trackingLocation == "nested")
+                    {
+                        var nested = machine.AddStateMachine("Container");
+                        machine.states = machine.states.Where(s => s.state != state).ToArray();
+                        nested.states = new[] { new ChildAnimatorState { state = state } }; nested.defaultState = state;
+                        tracking = nested.AddStateMachineBehaviour(trackingType);
+                    }
+                    else if (trackingLocation == "sibling") tracking = machine.AddStateMachine("Unrelated").AddStateMachineBehaviour(trackingType);
                     else if (trackingLocation == "history") tracking = machine.states.Single(s => s.state.name == "Idle").state.AddStateMachineBehaviour(trackingType);
                     else if (trackingLocation == "emptyLayer")
                     {
@@ -276,6 +294,9 @@ namespace VRVlog.LilToonExporter.Tests
                 Assert.That(result.Count, Is.EqualTo(1));
                 Assert.That(EditorJsonUtility.ToJson(controller), Is.EqualTo(before)); Assert.That(EditorJsonUtility.ToJson(menu), Is.EqualTo(beforeMenu));
                 if (historyCase == "Unbound" || historyCase == "Mirror" || historyCase == "IK") { Assert.That(result[0].Error, Does.Contain("Write Defaults")); return; }
+                if (trackingLocation == "sibling") { Assert.That(result[0].Error, Does.Contain("Tracking Control")); return; }
+                if (weightBaseline != null || crossLayerWeight && controlWeight == (layerType == "Action" ? 0 : 1))
+                { Assert.That(result[0].Error, Does.Contain("確定")); return; }
                 if (expressionCase != null && expressionCase != "Bool" && expressionCase != "Float")
                 { Assert.That(result[0].Error, Does.Contain("Expression Parameters")); return; }
                 if (trackingPart != null && trackingPart != "Animation" && trackingPart != "trackingHead" && trackingPart != "trackingEyes" && trackingPart != "trackingMouth")
@@ -306,6 +327,9 @@ namespace VRVlog.LilToonExporter.Tests
         [TestCase("trackingEyes")]
         [TestCase("trackingMouth")]
         [TestCase("Animation")]
+        [TestCase("Animation", "machine")]
+        [TestCase("Animation", "nested")]
+        [TestCase("Animation", "sibling")]
         [TestCase("NoChange")]
         [TestCase("Absent")]
         [TestCase("trackingLeftHand", "history")]
@@ -335,5 +359,10 @@ namespace VRVlog.LilToonExporter.Tests
         [TestCase("IK")]
         public void MenuPoseDoesNotRetainUnwrittenPredecessorBones(string scenario) =>
             SubmenuAndMaGeneratedGestureMenuResolveOnlySelectedStaticPose(false, false, scenario == "Override", historyCase: scenario);
+
+        [TestCase("Before")]
+        [TestCase("After")]
+        public void MenuWeightControlDoesNotDuplicateAnUnconditionalControl(string order) =>
+            SubmenuAndMaGeneratedGestureMenuResolveOnlySelectedStaticPose(false, false, false, "Action", true, weightBaseline: order);
     }
 }

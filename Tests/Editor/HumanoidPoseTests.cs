@@ -190,6 +190,7 @@ namespace VRVlog.LilToonExporter.Tests
             {
                 var before = f.Source.GetComponentsInChildren<Transform>().Select(t => t.localToWorldMatrix).ToArray();
                 var json = EditorJsonUtility.ToJson(clip);
+                var curves = AnimationUtility.GetCurveBindings(clip).ToDictionary(b => b, b => AnimationUtility.GetEditorCurve(clip, b).keys);
                 var a = new PoseCandidate { Name = "A", Category = "", Source = "手動" }; a.Layers.Add(new PoseLayer { Clip = clip }); a.Id = PoseSampling.Identity(a);
                 var sampled = PoseSampling.Sample(f.Source, a);
                 var rotation = sampled.Bones.Single(b => b.Name == "leftUpperArm").Rotation;
@@ -200,6 +201,8 @@ namespace VRVlog.LilToonExporter.Tests
                 a.Layers[0].Weight = 1;
                 Assert.That(f.Source.GetComponentsInChildren<Transform>().Select(t => t.localToWorldMatrix), Is.EqualTo(before));
                 Assert.That(EditorJsonUtility.ToJson(clip), Is.EqualTo(json));
+                Assert.That(AnimationUtility.GetCurveBindings(clip), Is.EquivalentTo(curves.Keys));
+                foreach (var curve in curves) Assert.That(AnimationUtility.GetEditorCurve(clip, curve.Key).keys, Is.EqualTo(curve.Value));
                 a.Layers[0].Time = .5f; Assert.That(PoseSampling.Identity(a), Is.Not.EqualTo(a.Id));
                 a.Layers[0].Time = 0; a.Conditions = "menu=1"; Assert.That(PoseSampling.Identity(a), Is.Not.EqualTo(a.Id));
             }
