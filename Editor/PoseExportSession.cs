@@ -88,6 +88,13 @@ namespace VRVlog.LilToonExporter
 
         internal void CollectPrepared(GameObject copy, ICollection<string> warnings = null)
         {
+            foreach (var row in CollectPreparedIncrementally(copy, warnings)) { }
+        }
+
+        // Export keeps the synchronous path; the review window yields between
+        // candidates while sharing exactly the same validation/deduplication.
+        internal IEnumerable<PoseCandidate> CollectPreparedIncrementally(GameObject copy, ICollection<string> warnings = null)
+        {
             prepared = copy;
             Entries.AddRange(PoseMenuResolver.Read(copy));
             var seen = new Dictionary<string, PoseCandidate>();
@@ -102,6 +109,7 @@ namespace VRVlog.LilToonExporter
                     catch (Exception error) { row.Error = error.Message; }
                 if (row.Error != null) warnings?.Add("ポーズ未対応: " + row.Name + " — " + row.Error);
                 else if (!string.IsNullOrEmpty(row.Note)) warnings?.Add("ポーズ: " + row.Name + " — " + row.Note);
+                yield return row;
             }
             // Refresh merged provenance after deduplication.
             foreach (var row in Entries.Where(e => e.Data != null)) row.Data.Source = row.Source;
