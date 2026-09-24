@@ -238,7 +238,7 @@ assert '--target "${GITHUB_SHA}"' in release_workflow
 assert 'os.environ["UNIVRM_VERSION"] == compat["uniVrm"]["releaseVersion"]' in release_workflow
 assert 'tag v${VERSION} already exists' in release_workflow
 assert 'git ls-remote --exit-code --tags origin' in release_workflow
-assert "gh workflow run build-listing.yml --ref main" in release_workflow
+assert 'gh workflow run build-listing.yml --repo "$GITHUB_REPOSITORY" --ref main' in release_workflow
 assert '"com.vrmc.vrmshaders" not in gltf.get("dependencies", {})' in release_workflow
 assert (root / "ThirdPartyNotices/UniVRM.md").is_file()
 assert (root / "LICENSE").is_file()

@@ -16,6 +16,8 @@ jobs:
     timeout-minutes: 2
     steps:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
+        with:
+          persist-credentials: false
       - run: python3 Tools/check-upstream-dependencies.py --output upstream-report.json
       - name: Summarize candidates
         run: |
