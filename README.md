@@ -52,6 +52,7 @@ https://mitsuya0077.github.io/VR-Vlog-lilToon-Exporter/index.json
 
 ## 対応範囲と制限
 
+- 追跡設定コンポーネントを付けたアバターでは、ARKit標準名52項目をVRM 1.0のカスタム表情へ書き出せます。設定がないアバターのVRMには追加しません。Kipfel用の設定とPrefabは別配布の顔トラッキングアドオンから導入してください。
 - lilToonの見た目、対応する顔・体形の調整、VRChat・FaceEmoの表情、Modular Avatarで設定した髪・衣装を引き継ぎます。
 - 導入済みVRChat SDKのPhysBoneを、髪・衣装のVRM SpringBoneへ変換します。力・減衰・重力は近似です。書き出し結果に件数と未対応項目を表示します。[揺れ物変換の詳細](Compatibility/PhysBone.md)
 - すべてのシェーダー効果・表情・VRChatの動作を再現するものではありません。外部連携や独自改造シェーダー、任意のギミック全般の変換は対象外です。
