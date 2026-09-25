@@ -24,6 +24,7 @@ namespace VRVlog.LilToonExporter
             if (string.IsNullOrWhiteSpace(author)) throw new InvalidOperationException("作者名を入力してください。");
 
             EnsureUniVrmVersion();
+            var trackingProfile = source.GetComponentInChildren<VrmTrackingMarker>(true)?.profile;
             var manualObjects = (excludedObjects ?? Array.Empty<GameObject>()).ToArray();
             gimmickOptions = new ExportGimmickOptions
             {
@@ -106,6 +107,7 @@ namespace VRVlog.LilToonExporter
                     });
                 exported = ExportSkinRoots.Repair(exported, warnings);
                 exported = blink.Apply(VrmExpressionBindings.AddMissing(VrmMenuExpressions.Add(exported, expressions), warnings, inferBlink: false));
+                if (trackingProfile != null) exported = VrmTrackingExpressions.Add(exported, trackingProfile);
                 if (exporterVersion != null)
                 {
                     // The dedicated snapshot predates fallback baking. Its binary

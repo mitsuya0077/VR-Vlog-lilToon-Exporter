@@ -7,7 +7,7 @@ from pathlib import Path, PurePosixPath
 
 ROOT = Path(__file__).resolve().parents[1]
 ROOT_FILES = {"package.json", "LICENSE", "CHANGELOG.md", "Documentation~/README.md"}
-EDITOR_SUFFIXES = {".cs", ".asmdef", ".meta", ".shader"}
+PACKAGE_SUFFIXES = {".cs", ".asmdef", ".meta", ".shader"}
 
 
 def tracked_files(root):
@@ -19,8 +19,8 @@ def included(name):
     path = PurePosixPath(name)
     if path.is_absolute() or ".." in path.parts:
         return False
-    return (name in ROOT_FILES
-            or (path.parts[0] == "Editor" and path.suffix in EDITOR_SUFFIXES)
+    return (name in ROOT_FILES or name == "Runtime.meta"
+            or (path.parts[0] in {"Editor", "Runtime"} and path.suffix in PACKAGE_SUFFIXES)
             or (path.parts[0] == "ThirdPartyNotices" and path.suffix in {".md", ".txt"}))
 
 

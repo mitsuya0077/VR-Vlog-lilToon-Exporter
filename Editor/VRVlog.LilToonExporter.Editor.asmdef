@@ -9,6 +9,7 @@
     "VRM10.MToon10",
     "VrmLib",
     "Unity.Collections",
+    "VRVlog.LilToonExporter.Runtime",
     "VRVlog.LilToonExporter.Compatibility"
   ],
   "includePlatforms": [
