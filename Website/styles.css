@@ -122,6 +122,16 @@ h2{font-size:2rem}.step-description{margin-top:1.25rem;font-size:1.125rem}.menu-
 @media(max-width:400px){
 .wrap{width:calc(100% - 2rem)}.wordmark{width:92px}.nav{gap:.65rem;font-size:.8125rem}.header{gap:.5rem}h1{font-size:2rem}.footer{flex-direction:column;gap:.5rem}
 }
+@media(max-width:760px){
+html:not([lang="ja"]) .hero{grid-template-columns:minmax(0,1fr)}
+html:not([lang="ja"]) .hero-copy{width:100%;min-width:0}
+html:not([lang="ja"]) .hero-description{overflow-wrap:anywhere}
+}
+@media(max-width:520px){
+html:not([lang="ja"]) .header{flex-wrap:wrap;justify-content:center;padding-block:.5rem}
+html:not([lang="ja"]) .nav{width:100%;justify-content:space-between;gap:.25rem}
+html:not([lang="ja"]) h1{font-size:clamp(1.65rem,7vw,2rem);overflow-wrap:anywhere}
+}
 @media(forced-colors:active){
 .primary,.settings-row.selected{border:2px solid ButtonText}h1 span,.step-number{color:CanvasText}
 }

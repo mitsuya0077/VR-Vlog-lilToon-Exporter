@@ -68,7 +68,7 @@ namespace VRVlog.LilToonExporter
 
         public static void Open()
         {
-            var window = GetWindow<LilToonExporterWindow>(true, "VR Vlog VRM書き出し");
+            var window = GetWindow<LilToonExporterWindow>(true, ExporterLocalization.T("VR Vlog VRM書き出し"));
             window.minSize = new Vector2(430f, 430f);
         }
 
@@ -94,9 +94,9 @@ namespace VRVlog.LilToonExporter
         private void DrawWindow()
         {
             EnsureStyles();
-            EditorGUILayout.LabelField("アバターと作者名を指定して、VRMを書き出します。", EditorStyles.wordWrappedLabel);
+            EditorGUILayout.LabelField(ExporterLocalization.T("アバターと作者名を指定して、VRMを書き出します。"), EditorStyles.wordWrappedLabel);
             EditorGUILayout.Space(18f);
-            DrawRequiredLabel("アバター", "Hierarchyにあるアバターの一番上のオブジェクトを指定します。");
+            DrawRequiredLabel(ExporterLocalization.T("アバター"), ExporterLocalization.T("Hierarchyにあるアバターの一番上のオブジェクトを指定します。"));
             var selectedAvatar = (GameObject)EditorGUILayout.ObjectField(
                 avatar,
                 typeof(GameObject),
@@ -113,28 +113,28 @@ namespace VRVlog.LilToonExporter
                 InvalidateAvatarScan();
             }
             avatar = selectedAvatar;
-            EditorGUILayout.LabelField("Hierarchyからアバターを指定", hintStyle);
+            EditorGUILayout.LabelField(ExporterLocalization.T("Hierarchyからアバターを指定"), hintStyle);
 
             EditorGUILayout.Space(14f);
-            DrawRequiredLabel("作者名", "VRMファイルに記録される作者名です。");
+            DrawRequiredLabel(ExporterLocalization.T("作者名"), ExporterLocalization.T("VRMファイルに記録される作者名です。"));
             var authorRect = EditorGUILayout.GetControlRect(false, 24f);
             GUI.SetNextControlName(AuthorControlName);
             author = EditorGUI.TextField(authorRect, author);
             if (string.IsNullOrEmpty(author) && GUI.GetNameOfFocusedControl() != AuthorControlName)
-                GUI.Label(authorRect, "作者名を入力", placeholderStyle);
+                GUI.Label(authorRect, ExporterLocalization.T("作者名を入力"), placeholderStyle);
 
             EditorGUILayout.Space(12f);
             using (new EditorGUILayout.HorizontalScope())
             {
                 GUILayout.FlexibleSpace();
                 using (new EditorGUI.DisabledScope(avatar == null))
-                    if (GUILayout.Button("ポーズを確認・調整", GUILayout.Width(160f), GUILayout.Height(26f)))
+                    if (GUILayout.Button(ExporterLocalization.T("ポーズを確認・調整"), GUILayout.Width(160f), GUILayout.Height(26f)))
                         PoseReviewWindow.Show(avatar, poseOptions, excludedObjects.ToArray(),
                             new ExportGimmickOptions { AutoExclude = autoExcludeGimmicks, IncludedObjects = includedGimmicks.ToArray() });
             }
 
             DrawSeparator();
-            showAppearanceOptions = EditorGUILayout.Foldout(showAppearanceOptions, "書き出し設定", true);
+            showAppearanceOptions = EditorGUILayout.Foldout(showAppearanceOptions, ExporterLocalization.T("書き出し設定"), true);
             if (showAppearanceOptions)
             {
                 EditorGUILayout.Space(6f);
@@ -142,34 +142,34 @@ namespace VRVlog.LilToonExporter
                 EditorGUILayout.Space(6f);
                 DrawGimmicks();
                 EditorGUILayout.Space(4f);
-                EditorGUILayout.LabelField("書き出さないオブジェクト（ペット・ギミックなど）");
-                EditorGUILayout.HelpBox("除外したい子オブジェクトを指定します。ワンクリック書き出しに適用され、Unityの元アバターは変更しません。", MessageType.None);
+                EditorGUILayout.LabelField(ExporterLocalization.T("書き出さないオブジェクト（ペット・ギミックなど）"));
+                EditorGUILayout.HelpBox(ExporterLocalization.T("除外したい子オブジェクトを指定します。ワンクリック書き出しに適用され、Unityの元アバターは変更しません。"), MessageType.None);
                 EditorGUI.BeginChangeCheck();
                 for (var index = 0; index < excludedObjects.Count; index++)
                 {
                     EditorGUILayout.BeginHorizontal();
                     excludedObjects[index] = (GameObject)EditorGUILayout.ObjectField(excludedObjects[index], typeof(GameObject), true);
-                    if (GUILayout.Button("削除", GUILayout.Width(48))) { excludedObjects.RemoveAt(index); index--; InvalidateAvatarScan(); }
+                    if (GUILayout.Button(ExporterLocalization.T("削除"), GUILayout.Width(48))) { excludedObjects.RemoveAt(index); index--; InvalidateAvatarScan(); }
                     EditorGUILayout.EndHorizontal();
                 }
                 if (EditorGUI.EndChangeCheck()) InvalidateAvatarScan();
-                if (GUILayout.Button("除外するオブジェクトを追加")) { excludedObjects.Add(null); InvalidateAvatarScan(); }
+                if (GUILayout.Button(ExporterLocalization.T("除外するオブジェクトを追加"))) { excludedObjects.Add(null); InvalidateAvatarScan(); }
             }
 
             EditorGUILayout.Space(14f);
             var canExport = avatar != null && !string.IsNullOrWhiteSpace(author);
             using (new EditorGUI.DisabledScope(!canExport))
-                if (GUILayout.Button("保存先を選んでVRMを書き出す", GUILayout.Height(40f))) ExportOneClick();
+                if (GUILayout.Button(ExporterLocalization.T("保存先を選んでVRMを書き出す"), GUILayout.Height(40f))) ExportOneClick();
 
             EditorGUILayout.Space(6f);
-            EditorGUILayout.LabelField(canExport ? "" : "アバターと作者名を入力してください", centeredHintStyle);
+            EditorGUILayout.LabelField(canExport ? "" : ExporterLocalization.T("アバターと作者名を入力してください"), centeredHintStyle);
 
             DrawSeparator();
-            showEnvironment = EditorGUILayout.Foldout(showEnvironment, "動作環境", true);
+            showEnvironment = EditorGUILayout.Foldout(showEnvironment, ExporterLocalization.T("動作環境"), true);
             if (showEnvironment)
             {
                 EditorGUILayout.Space(4f);
-                EditorGUILayout.LabelField("lilToon", InstalledLilToonStatus());
+                EditorGUILayout.LabelField("lilToon", ExporterLocalization.T(InstalledLilToonStatus()));
                 EditorGUILayout.LabelField("UniVRM", Compatibility.DependencyPolicy.UniVrmVersions);
             }
         }
@@ -203,7 +203,7 @@ namespace VRVlog.LilToonExporter
             using (new EditorGUILayout.HorizontalScope())
             {
                 GUILayout.Label(new GUIContent(label, tooltip), EditorStyles.boldLabel, GUILayout.ExpandWidth(false));
-                GUILayout.Label("必須", requiredLabelStyle, GUILayout.ExpandWidth(false));
+                GUILayout.Label(ExporterLocalization.T("必須"), requiredLabelStyle, GUILayout.ExpandWidth(false));
                 GUILayout.FlexibleSpace();
             }
             EditorGUILayout.Space(3f);
@@ -235,14 +235,14 @@ namespace VRVlog.LilToonExporter
             var resolved = blinkStatus.Resolved;
             var error = blinkStatus.Error;
             EditorGUILayout.BeginHorizontal();
-            EditorGUILayout.LabelField("瞬き", resolved?.Description ?? "設定が必要です");
-            if (GUILayout.Button(showBlink ? "調整を閉じる" : "確認・調整", GUILayout.Width(100))) showBlink = !showBlink;
+            EditorGUILayout.LabelField(ExporterLocalization.T("瞬き"), ExporterLocalization.T(resolved?.Description) ?? ExporterLocalization.T("設定が必要です"));
+            if (GUILayout.Button(showBlink ? ExporterLocalization.T("調整を閉じる") : ExporterLocalization.T("確認・調整"), GUILayout.Width(100))) showBlink = !showBlink;
             EditorGUILayout.EndHorizontal();
             if (!showBlink && error == null) return;
             using (new EditorGUILayout.VerticalScope(EditorStyles.helpBox))
             {
-                var mode = (BlinkExportMode)EditorGUILayout.Popup("設定", (int)blinkOptions.Mode,
-                    new[] { "自動", "手動", "瞬きなし" });
+                var mode = (BlinkExportMode)EditorGUILayout.Popup(ExporterLocalization.T("設定"), (int)blinkOptions.Mode,
+                    new[] { ExporterLocalization.T("自動"), ExporterLocalization.T("手動"), ExporterLocalization.T("瞬きなし") });
                 if (mode != blinkOptions.Mode)
                 {
                     if (mode == BlinkExportMode.Manual && blinkOptions.Both.Count == 0 && blinkOptions.Left.Count == 0 && blinkOptions.Right.Count == 0)
@@ -262,16 +262,16 @@ namespace VRVlog.LilToonExporter
                 }
                 if (blinkOptions.Mode == BlinkExportMode.Manual)
                 {
-                    DrawBlinkBindings("両目", blinkOptions.Both);
+                    DrawBlinkBindings(ExporterLocalization.T("両目"), blinkOptions.Both);
                     var individual = blinkOptions.Left.Count > 0 || blinkOptions.Right.Count > 0;
-                    var next = EditorGUILayout.ToggleLeft("左右を個別に設定", individual);
+                    var next = EditorGUILayout.ToggleLeft(ExporterLocalization.T("左右を個別に設定"), individual);
                     if (next && !individual) { blinkOptions.Left.Add(new BlinkShapeBinding()); blinkOptions.Right.Add(new BlinkShapeBinding()); blinkStatus.Invalidate(); }
                     if (!next && individual) { blinkOptions.Left.Clear(); blinkOptions.Right.Clear(); blinkStatus.Invalidate(); }
-                    if (next) { DrawBlinkBindings("左目", blinkOptions.Left); DrawBlinkBindings("右目", blinkOptions.Right); }
+                    if (next) { DrawBlinkBindings(ExporterLocalization.T("左目"), blinkOptions.Left); DrawBlinkBindings(ExporterLocalization.T("右目"), blinkOptions.Right); }
                 }
-                if (error != null) EditorGUILayout.HelpBox(error, MessageType.Warning);
+                if (error != null) EditorGUILayout.HelpBox(ExporterLocalization.T(error), MessageType.Warning);
                 using (new EditorGUI.DisabledScope(error != null))
-                    if (GUILayout.Button("開閉をプレビュー"))
+                    if (GUILayout.Button(ExporterLocalization.T("開閉をプレビュー")))
                         try
                         {
                             BlinkPreviewWindow.Show(avatar, blinkOptions.Copy(), excludedObjects.ToArray(),
@@ -290,31 +290,31 @@ namespace VRVlog.LilToonExporter
                 var binding = bindings[i];
                 using (new EditorGUILayout.HorizontalScope())
                 {
-                    var renderer = (SkinnedMeshRenderer)EditorGUILayout.ObjectField("メッシュ", binding.Renderer, typeof(SkinnedMeshRenderer), true);
+                    var renderer = (SkinnedMeshRenderer)EditorGUILayout.ObjectField(ExporterLocalization.T("メッシュ"), binding.Renderer, typeof(SkinnedMeshRenderer), true);
                     if (renderer != binding.Renderer) { binding.Renderer = renderer; binding.Shape = ""; }
-                    if (GUILayout.Button("削除", GUILayout.Width(48))) { bindings.RemoveAt(i--); blinkStatus.Invalidate(); continue; }
+                    if (GUILayout.Button(ExporterLocalization.T("削除"), GUILayout.Width(48))) { bindings.RemoveAt(i--); blinkStatus.Invalidate(); continue; }
                 }
                 var mesh = binding.Renderer != null ? binding.Renderer.sharedMesh : null;
                 if (mesh == null) continue;
                 var names = Enumerable.Range(0, mesh.blendShapeCount).Select(mesh.GetBlendShapeName).ToArray();
                 var selected = Array.IndexOf(names, binding.Shape);
-                var choices = new[] { string.IsNullOrEmpty(binding.Shape) ? "変形を選択" : "見つかりません: " + binding.Shape }.Concat(names).ToArray();
-                var next = EditorGUILayout.Popup("閉眼用の変形", selected + 1, choices);
+                var choices = new[] { string.IsNullOrEmpty(binding.Shape) ? ExporterLocalization.T("変形を選択") : ExporterLocalization.T("見つかりません: ") + binding.Shape }.Concat(names).ToArray();
+                var next = EditorGUILayout.Popup(ExporterLocalization.T("閉眼用の変形"), selected + 1, choices);
                 if (next > 0) binding.Shape = names[next - 1];
-                binding.Weight = EditorGUILayout.Slider("適用量 (%)", binding.Weight, 0, 100);
+                binding.Weight = EditorGUILayout.Slider(ExporterLocalization.T("適用量 (%)"), binding.Weight, 0, 100);
             }
             if (EditorGUI.EndChangeCheck()) blinkStatus.Invalidate();
-            if (GUILayout.Button(label + "の変形を追加")) { bindings.Add(new BlinkShapeBinding()); blinkStatus.Invalidate(); }
+            if (GUILayout.Button(label + ExporterLocalization.T("の変形を追加"))) { bindings.Add(new BlinkShapeBinding()); blinkStatus.Invalidate(); }
         }
 
         private void DrawGimmicks()
         {
             EditorGUI.BeginChangeCheck();
-            autoExcludeGimmicks = EditorGUILayout.Toggle("補助ギミックを自動除外", autoExcludeGimmicks);
+            autoExcludeGimmicks = EditorGUILayout.Toggle(ExporterLocalization.T("補助ギミックを自動除外"), autoExcludeGimmicks);
             if (EditorGUI.EndChangeCheck()) InvalidateAvatarScan();
-            EditorGUILayout.HelpBox("ワンクリック書き出しで、確認できた補助ギミックを省略します。衣装や表情は保持し、Unityの元アバターは変更しません。判定は書き出すたびに更新します。", MessageType.None);
+            EditorGUILayout.HelpBox(ExporterLocalization.T("ワンクリック書き出しで、確認できた補助ギミックを省略します。衣装や表情は保持し、Unityの元アバターは変更しません。判定は書き出すたびに更新します。"), MessageType.None);
             if (avatar == null) return;
-            if (GUILayout.Button("検出一覧を更新")) InvalidateAvatarScan();
+            if (GUILayout.Button(ExporterLocalization.T("検出一覧を更新"))) InvalidateAvatarScan();
             if (Event.current.type == EventType.Layout && EditorApplication.timeSinceStartup >= nextGimmickScan)
             {
                 bool Manual(Transform t) => excludedObjects.Any(go => go != null && go != avatar &&
@@ -328,7 +328,7 @@ namespace VRVlog.LilToonExporter
                 if (finding.Target == null || roots.Any(root => root != finding && finding.Target.transform.IsChildOf(root.Target.transform))) continue;
                 EditorGUILayout.BeginVertical(EditorStyles.helpBox);
                 EditorGUILayout.ObjectField(finding.Target, typeof(GameObject), true);
-                EditorGUILayout.LabelField(finding.Reason, EditorStyles.wordWrappedLabel);
+                EditorGUILayout.LabelField(ExporterLocalization.T(finding.Reason), EditorStyles.wordWrappedLabel);
                 if (finding.Unit == GimmickExclusionUnit.Review)
                 {
                     if (GUILayout.Button("手動の除外一覧に追加") && !excludedObjects.Contains(finding.Target))
@@ -343,7 +343,7 @@ namespace VRVlog.LilToonExporter
                     using (new EditorGUI.DisabledScope(!autoExcludeGimmicks || inherited))
                     {
                         var keep = includedGimmicks.Contains(finding.Target);
-                        var selected = EditorGUILayout.ToggleLeft(inherited ? "親の指定により含める" : "この対象は含める", keep || inherited);
+                        var selected = EditorGUILayout.ToggleLeft(inherited ? ExporterLocalization.T("親の指定により含める") : ExporterLocalization.T("この対象は含める"), keep || inherited);
                         if (!inherited && selected != keep)
                         {
                             if (selected) includedGimmicks.Add(finding.Target);
@@ -361,8 +361,8 @@ namespace VRVlog.LilToonExporter
                 var go = includedGimmicks[i];
                 if (go == null) { includedGimmicks.RemoveAt(i); blinkStatus.Invalidate(); continue; }
                 EditorGUILayout.BeginHorizontal();
-                EditorGUILayout.LabelField("含める指定: " + go.name);
-                if (GUILayout.Button("解除", GUILayout.Width(48))) { includedGimmicks.RemoveAt(i); blinkStatus.Invalidate(); }
+                EditorGUILayout.LabelField(ExporterLocalization.T("含める指定: ") + go.name);
+                if (GUILayout.Button(ExporterLocalization.T("解除"), GUILayout.Width(48))) { includedGimmicks.RemoveAt(i); blinkStatus.Invalidate(); }
                 EditorGUILayout.EndHorizontal();
             }
         }
@@ -378,7 +378,7 @@ namespace VRVlog.LilToonExporter
                 Repaint();
                 return;
             }
-            outputPath = EditorUtility.SaveFilePanel("VRMの保存先", "", DefaultFileName(), "vrm");
+            outputPath = EditorUtility.SaveFilePanel(ExporterLocalization.T("VRMの保存先"), "", DefaultFileName(), "vrm");
             if (string.IsNullOrEmpty(outputPath)) return;
             // A nonmodal failure window may remain open while the user changes
             // this window. Retry exactly the avatar, destination and options
@@ -397,7 +397,7 @@ namespace VRVlog.LilToonExporter
                 var warnings = new List<string>();
                 ExportAtomically(() =>
                 {
-                    if (targetAvatar == null) throw new InvalidOperationException("この書き出しで選んだアバターが見つかりません。アバターを指定し直してください。");
+                    if (targetAvatar == null) throw new InvalidOperationException(ExporterLocalization.T("この書き出しで選んだアバターが見つかりません。アバターを指定し直してください。"));
                     return UniVrmOneClickExporter.Export(targetAvatar, targetName, targetAuthor, warnings, false,
                         PackageVersion(), RequireSupportedLilToon(), false, targetExclusions, bakeOptions, targetGimmicks, targetBlink, targetPoses);
                 }, warnings, targetOutput, failure =>
@@ -435,11 +435,11 @@ namespace VRVlog.LilToonExporter
             try
             {
                 if (!string.Equals(Path.GetExtension(destination), ".vrm", StringComparison.OrdinalIgnoreCase))
-                    throw new InvalidOperationException("保存先の拡張子は .vrm にしてください。保存先を選び直して書き出してください。");
-                if (File.Exists(destination) && !EditorUtility.DisplayDialog("ファイルを上書きしますか？", destination, "上書き", "キャンセル")) return;
+                    throw new InvalidOperationException(ExporterLocalization.T("保存先の拡張子は .vrm にしてください。保存先を選び直して書き出してください。"));
+                if (File.Exists(destination) && !EditorUtility.DisplayDialog(ExporterLocalization.T("ファイルを上書きしますか？"), destination, ExporterLocalization.T("上書き"), ExporterLocalization.T("キャンセル"))) return;
                 var bytes = create();
                 var directory = Path.GetDirectoryName(Path.GetFullPath(destination));
-                if (string.IsNullOrEmpty(directory)) throw new InvalidOperationException("保存先フォルダーが正しくありません。");
+                if (string.IsNullOrEmpty(directory)) throw new InvalidOperationException(ExporterLocalization.T("保存先フォルダーが正しくありません。"));
                 Directory.CreateDirectory(directory);
                 var temporary = Path.Combine(directory, "." + Path.GetFileName(destination) + "." + Guid.NewGuid().ToString("N") + ".tmp");
                 try
@@ -452,14 +452,14 @@ namespace VRVlog.LilToonExporter
                 EditorUtility.RevealInFinder(destination);
                 // Keep the native modal short even for avatars with hundreds of
                 // omitted items. Diagnostics remain in one expandable Console entry.
-                if (warnings != null && warnings.Count > 0) Debug.Log("VR Vlog 書き出し詳細\n・" + string.Join("\n・", warnings));
+                if (warnings != null && warnings.Count > 0) Debug.Log(ExporterLocalization.T("VR Vlog 書き出し詳細\n・") + string.Join("\n・", warnings));
                 var expressionCount = VrmMenuExpressions.CountRegistered(bytes);
-                var completion = $"VRMを書き出しました（{bytes.Length:N0}バイト）。\nVRChat表情: {expressionCount}件。";
+                var completion = string.Format(ExporterLocalization.T("VRMを書き出しました（{0:N0}バイト）。\nVRChat表情: {1}件。"), bytes.Length, expressionCount);
                 var springSummary = warnings?.FirstOrDefault(message => message.StartsWith("PhysBone変換:", StringComparison.Ordinal));
                 if (springSummary != null) completion += "\n" + springSummary;
                 var changes = ExportAppearanceReport.Changes(warnings);
-                if (changes.Length == 0) EditorUtility.DisplayDialog("書き出し完了", completion, "閉じる");
-                else if (!EditorUtility.DisplayDialog("書き出し完了", completion + "\n\n見た目の変更: " + changes.Length + "件\n" + ExportAppearanceReport.Summary(changes), "閉じる", "詳細を見る"))
+                if (changes.Length == 0) EditorUtility.DisplayDialog(ExporterLocalization.T("書き出し完了"), completion, ExporterLocalization.T("閉じる"));
+                else if (!EditorUtility.DisplayDialog(ExporterLocalization.T("書き出し完了"), completion + ExporterLocalization.T("\n\n見た目の変更: ") + changes.Length + ExporterLocalization.T("件\n") + ExportAppearanceReport.Summary(changes), ExporterLocalization.T("閉じる"), ExporterLocalization.T("詳細を見る")))
                     ExportAppearanceReportWindow.Open(warnings);
             }
             catch (OperationCanceledException) { }
@@ -479,14 +479,16 @@ namespace VRVlog.LilToonExporter
         private static string InstalledLilToonStatus()
         {
             var package = FindLilToonPackage();
-            return package == null ? "未インストール（VCC／ALCOMで追加してください）" : package.version;
+            return package == null ? ExporterLocalization.T("未インストール（VCC／ALCOMで追加してください）") : package.version;
         }
 
         private static string RequireSupportedLilToon()
         {
             var package = FindLilToonPackage();
             if (package == null || !string.Equals(package.version, SupportedLilToonVersion, StringComparison.Ordinal))
-                throw new InvalidOperationException($"lilToon {SupportedLilToonVersion} が必要です。現在のバージョン：{package?.version ?? "不明"}");
+                throw new InvalidOperationException(string.Format(
+                    ExporterLocalization.T("lilToon {0} が必要です。現在のバージョン：{1}"),
+                    SupportedLilToonVersion, package?.version ?? ExporterLocalization.T("不明")));
             return package.version;
         }
 

@@ -17,7 +17,7 @@ namespace VRVlog.LilToonExporter
         {
             var items = changes.ToArray();
             return string.Join("\n", items.Take(3).Select(item => "・" + (item.Length <= 110 ? item : item.Substring(0, 107) + "…"))) +
-                (items.Length > 3 ? "\nほか " + (items.Length - 3) + " 件。詳細から確認できます。" : "");
+                (items.Length > 3 ? ExporterLocalization.T("\nほか ") + (items.Length - 3) + ExporterLocalization.T(" 件。詳細から確認できます。") : "");
         }
     }
 
@@ -28,7 +28,7 @@ namespace VRVlog.LilToonExporter
         internal static void Open(IEnumerable<string> messages)
         {
             var window = CreateInstance<ExportAppearanceReportWindow>();
-            window.titleContent = new GUIContent("VR Vlog 書き出し詳細");
+            window.titleContent = new GUIContent(ExporterLocalization.T("VR Vlog 書き出し詳細"));
             window.minSize = new Vector2(460, 300);
             window.details = string.Join("\n\n", messages);
             window.ShowUtility();
@@ -40,7 +40,7 @@ namespace VRVlog.LilToonExporter
                 scroll = view.scrollPosition;
                 EditorGUILayout.LabelField(details ?? "", EditorStyles.wordWrappedLabel);
             }
-            if (GUILayout.Button("詳細をコピー")) EditorGUIUtility.systemCopyBuffer = details;
+            if (GUILayout.Button(ExporterLocalization.T("詳細をコピー"))) EditorGUIUtility.systemCopyBuffer = details;
         }
     }
 }

@@ -7,6 +7,7 @@ using UnityEditor;
 using UnityEditor.Compilation;
 using UnityEngine;
 using PackageInfo = UnityEditor.PackageManager.PackageInfo;
+using static VRVlog.LilToonExporter.ExporterLocalization;
 
 namespace VRVlog.LilToonExporter.Compatibility
 {
@@ -131,7 +132,7 @@ namespace VRVlog.LilToonExporter.Compatibility
         }
 
         [MenuItem("VR Vlog/動作環境を確認")]
-        public static void OpenDiagnostics() => EditorWindow.GetWindow<DependencyDiagnosticsWindow>(true, "VR Vlog 動作環境");
+        public static void OpenDiagnostics() => EditorWindow.GetWindow<DependencyDiagnosticsWindow>(true, T("VR Vlog 動作環境"));
     }
 
     public sealed class DependencyDiagnosticsWindow : EditorWindow
@@ -150,17 +151,17 @@ namespace VRVlog.LilToonExporter.Compatibility
             foreach (var name in new[] { "com.vrvlog.liltoon-vrm-exporter", "jp.lilxyzw.liltoon", "com.vrmc.vrm", "com.vrmc.gltf", "nadena.dev.modular-avatar", "nadena.dev.ndmf" })
                 EditorGUILayout.LabelField(name, DependencyPolicy.Display(DependencyDiagnostics.Version(packages, name)));
             var error = DependencyDiagnostics.StartupError(packages);
-            EditorGUILayout.HelpBox(error == null ? "書き出しに必要なパッケージが揃っています。アバター固有の連携は書き出し時にも確認します。" : error,
+            EditorGUILayout.HelpBox(error == null ? T("書き出しに必要なパッケージが揃っています。アバター固有の連携は書き出し時にも確認します。") : T(error),
                 error == null || DependencyDiagnostics.IsBusy ? MessageType.Info : MessageType.Warning);
             using (new EditorGUI.DisabledScope(DependencyDiagnostics.IsBusy))
-                if (GUILayout.Button("再読み込み"))
+                if (GUILayout.Button(T("再読み込み")))
                 {
                     DependencyDiagnostics.ReloadBackend();
                     packages = DependencyDiagnostics.Installed();
                 }
             using (new EditorGUI.DisabledScope(error != null))
-                if (GUILayout.Button("書き出し画面を開く")) DependencyDiagnostics.Open();
-            if (GUILayout.Button("診断情報をコピー")) EditorGUIUtility.systemCopyBuffer = DependencyDiagnostics.CreateReport();
+                if (GUILayout.Button(T("書き出し画面を開く"))) DependencyDiagnostics.Open();
+            if (GUILayout.Button(T("診断情報をコピー"))) EditorGUIUtility.systemCopyBuffer = DependencyDiagnostics.CreateReport();
         }
     }
 }

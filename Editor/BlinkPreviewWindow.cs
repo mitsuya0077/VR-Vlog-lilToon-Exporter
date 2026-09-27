@@ -24,7 +24,7 @@ namespace VRVlog.LilToonExporter
             IEnumerable<GameObject> excluded, ExportGimmickOptions gimmickOptions)
         {
             var window = CreateInstance<BlinkPreviewWindow>();
-            window.titleContent = new GUIContent("瞬きを確認");
+            window.titleContent = new GUIContent(ExporterLocalization.T("瞬きを確認"));
             window.minSize = new Vector2(360, 460);
             try
             {
@@ -62,7 +62,7 @@ namespace VRVlog.LilToonExporter
             preview = new PreviewRenderUtility();
             preview.AddSingleGO(copy);
             var renderers = ExportRendererSelection.Enumerate(copy).ToArray();
-            if (renderers.Length == 0) throw new InvalidOperationException("プレビューするメッシュがありません。");
+            if (renderers.Length == 0) throw new InvalidOperationException(ExporterLocalization.T("プレビューするメッシュがありません。"));
             var bounds = renderers[0].bounds;
             foreach (var renderer in renderers.Skip(1)) bounds.Encapsulate(renderer.bounds);
             var animator = copy.GetComponent<Animator>();
@@ -84,15 +84,15 @@ namespace VRVlog.LilToonExporter
         void OnGUI()
         {
             if (preview == null || copy == null) return;
-            EditorGUILayout.LabelField(blink.Description, EditorStyles.boldLabel);
-            EditorGUILayout.LabelField("開いた状態と閉じた状態を比較できます。", EditorStyles.wordWrappedLabel);
+            EditorGUILayout.LabelField(ExporterLocalization.T(blink.Description), EditorStyles.boldLabel);
+            EditorGUILayout.LabelField(ExporterLocalization.T("開いた状態と閉じた状態を比較できます。"), EditorStyles.wordWrappedLabel);
             if (blink.Slots[1].Count > 0 && blink.Slots[2].Count > 0)
-                side = GUILayout.Toolbar(side, new[] { "両目", "左目", "右目" });
+                side = GUILayout.Toolbar(side, new[] { ExporterLocalization.T("両目"), ExporterLocalization.T("左目"), ExporterLocalization.T("右目") });
             EditorGUILayout.BeginHorizontal();
-            if (GUILayout.Button("開く")) closure = 0;
-            if (GUILayout.Button("閉じる")) closure = 1;
+            if (GUILayout.Button(ExporterLocalization.T("開く"))) closure = 0;
+            if (GUILayout.Button(ExporterLocalization.T("閉じる"))) closure = 1;
             EditorGUILayout.EndHorizontal();
-            closure = EditorGUILayout.Slider("閉じる量", closure, 0, 1);
+            closure = EditorGUILayout.Slider(ExporterLocalization.T("閉じる量"), closure, 0, 1);
             ApplyPose();
             var rect = GUILayoutUtility.GetRect(100, 100, GUILayout.ExpandHeight(true), GUILayout.ExpandWidth(true));
             if (Event.current.type == EventType.Repaint)
@@ -103,7 +103,7 @@ namespace VRVlog.LilToonExporter
                 preview.Render();
                 GUI.DrawTexture(rect, preview.EndPreview(), ScaleMode.ScaleToFit, false);
             }
-            if (GUILayout.Button("閉じる", GUILayout.Height(26))) Close();
+            if (GUILayout.Button(ExporterLocalization.T("閉じる"), GUILayout.Height(26))) Close();
         }
 
         void ApplyPose()

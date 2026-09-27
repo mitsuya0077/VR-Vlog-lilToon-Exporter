@@ -32,7 +32,7 @@ namespace VRVlog.LilToonExporter
         {
             var window = CreateInstance<PoseReviewWindow>(); window.source = avatar; window.options = options;
             window.excluded = excluded; window.gimmicks = gimmicks;
-            window.titleContent = new GUIContent("ポーズを確認・調整"); window.minSize = new Vector2(620, 600);
+            window.titleContent = new GUIContent(ExporterLocalization.T("ポーズを確認・調整")); window.minSize = new Vector2(620, 600);
             window.RequestRebuild(); window.ShowUtility();
         }
         void OnEnable() => EditorApplication.update += AdvanceRebuild;
@@ -95,19 +95,19 @@ namespace VRVlog.LilToonExporter
         void OnGUI()
         {
             if (options == null) return;
-            EditorGUILayout.HelpBox("対応した静止ポーズは自動で含まれます。首・顔・視線はアプリの追跡を使います。", MessageType.Info);
+            EditorGUILayout.HelpBox(ExporterLocalization.T("対応した静止ポーズは自動で含まれます。首・顔・視線はアプリの追跡を使います。"), MessageType.Info);
             using (new EditorGUI.DisabledScope(IsBusy))
-                if (GUILayout.Button("登録情報を再取得")) RequestRebuild();
-            if (error != null) EditorGUILayout.HelpBox(error, MessageType.Warning);
+                if (GUILayout.Button(ExporterLocalization.T("登録情報を再取得"))) RequestRebuild();
+            if (error != null) EditorGUILayout.HelpBox(ExporterLocalization.T(error), MessageType.Warning);
             if (IsBusy)
-                EditorGUILayout.HelpBox("ポーズを確認中… " + processed + " / " + (session?.Entries.Count ?? 0), MessageType.Info);
+                EditorGUILayout.HelpBox(ExporterLocalization.T("ポーズを確認中… ") + processed + " / " + (session?.Entries.Count ?? 0), MessageType.Info);
             else if (session != null)
-                EditorGUILayout.HelpBox("同梱するポーズ: " + session.SelectedCount + " / 128" +
-                    (session.SelectedCount > 128 ? " — 不要な項目を除外してください。" : ""), session.SelectedCount > 128 ? MessageType.Warning : MessageType.None);
+                EditorGUILayout.HelpBox(ExporterLocalization.T("同梱するポーズ: ") + session.SelectedCount + " / 128" +
+                    (session.SelectedCount > 128 ? ExporterLocalization.T(" — 不要な項目を除外してください。") : ""), session.SelectedCount > 128 ? MessageType.Warning : MessageType.None);
 
             var drop = GUILayoutUtility.GetRect(100, 34, GUILayout.ExpandWidth(true));
             if (Event.current.type == EventType.Repaint) dropRect = drop;
-            GUI.Box(drop, "複数の .anim をここへドロップして手動追加（既定0秒）");
+            GUI.Box(drop, ExporterLocalization.T("複数の .anim をここへドロップして手動追加（既定0秒）"));
             var current = Event.current;
             if (drop.Contains(current.mousePosition) && (current.type == EventType.DragUpdated || current.type == EventType.DragPerform))
             {
@@ -148,27 +148,27 @@ namespace VRVlog.LilToonExporter
                             var name = EditorGUILayout.TextField(row.Name);
                             if (name != row.Name) options.Names[row.Id] = row.Name = name;
                             using (new EditorGUI.DisabledScope(row.Error != null || row.Data == null))
-                                if (GUILayout.Button("プレビュー", GUILayout.Width(90))) ApplyPreview(row);
+                                if (GUILayout.Button(ExporterLocalization.T("プレビュー"), GUILayout.Width(90))) ApplyPreview(row);
                             EditorGUILayout.EndHorizontal();
                             EditorGUILayout.LabelField(row.Source + " / " + row.Category, EditorStyles.miniLabel);
-                            if (row.Error != null) EditorGUILayout.HelpBox(row.Error, MessageType.Warning);
-                            else if (row.Note.Length != 0) EditorGUILayout.HelpBox(row.Note, MessageType.Info);
+                    if (row.Error != null) EditorGUILayout.HelpBox(ExporterLocalization.T(row.Error), MessageType.Warning);
+                    else if (row.Note.Length != 0) EditorGUILayout.HelpBox(ExporterLocalization.T(row.Note), MessageType.Info);
                         }
                     }
-                if (options.Manual.Count > 0) EditorGUILayout.LabelField("手動追加したポーズ", EditorStyles.boldLabel);
+                if (options.Manual.Count > 0) EditorGUILayout.LabelField(ExporterLocalization.T("手動追加したポーズ"), EditorStyles.boldLabel);
                 var remove = -1;
                 for (var i = 0; i < options.Manual.Count; i++)
                 {
                     var row = options.Manual[i];
                     EditorGUILayout.BeginHorizontal();
                     row.Clip = (AnimationClip)EditorGUILayout.ObjectField(row.Clip, typeof(AnimationClip), false);
-                    EditorGUILayout.LabelField("採用秒", GUILayout.Width(45));
+                    EditorGUILayout.LabelField(ExporterLocalization.T("採用秒"), GUILayout.Width(45));
                     row.Time = EditorGUILayout.FloatField(row.Time, GUILayout.Width(65));
-                    if (GUILayout.Button("削除", GUILayout.Width(45))) remove = i;
+                    if (GUILayout.Button(ExporterLocalization.T("削除"), GUILayout.Width(45))) remove = i;
                     EditorGUILayout.EndHorizontal();
                 }
                 EditorGUILayout.EndScrollView();
-                if (options.Manual.Count > 0 && GUILayout.Button("手動ポーズの変更をプレビューに反映")) RequestRebuild();
+                if (options.Manual.Count > 0 && GUILayout.Button(ExporterLocalization.T("手動ポーズの変更をプレビューに反映"))) RequestRebuild();
                 if (remove >= 0)
                 {
                     options.Manual.RemoveAt(remove);
@@ -177,7 +177,7 @@ namespace VRVlog.LilToonExporter
                 }
             }
             if (preview == null) return;
-            using (new EditorGUI.DisabledScope(IsBusy)) yaw = EditorGUILayout.Slider("向き", yaw, -180, 180);
+            using (new EditorGUI.DisabledScope(IsBusy)) yaw = EditorGUILayout.Slider(ExporterLocalization.T("向き"), yaw, -180, 180);
             var rect = GUILayoutUtility.GetRect(100, 120, GUILayout.ExpandHeight(true), GUILayout.ExpandWidth(true));
             if (Event.current.type != EventType.Repaint) return;
             previewRect = rect;
