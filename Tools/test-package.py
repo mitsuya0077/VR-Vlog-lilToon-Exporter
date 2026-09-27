@@ -24,7 +24,7 @@ class PackageTests(unittest.TestCase):
         self.addCleanup(self.temp.cleanup)
         self.root = Path(self.temp.name)
         self.git("init", "--quiet")
-        for name in package.ROOT_FILES | {"Editor/Example.cs", "Editor/Example.cs.meta", "Editor/Test.asmdef", "Editor/Example.shader", "Runtime.meta", "Runtime/Tracking.cs", "Runtime/Tracking.cs.meta", "Runtime/Tracking.asmdef", "ThirdPartyNotices/Example.md"}:
+        for name in package.ROOT_FILES | package.LOCALE_FILES | {"Editor/Example.cs", "Editor/Example.cs.meta", "Editor/Test.asmdef", "Editor/Example.shader", "Runtime.meta", "Runtime/Tracking.cs", "Runtime/Tracking.cs.meta", "Runtime/Tracking.asmdef", "ThirdPartyNotices/Example.md"}:
             self.write(name, name)
         self.git("add", ".")
 
@@ -37,7 +37,7 @@ class PackageTests(unittest.TestCase):
         path.write_text(text, encoding="utf-8")
 
     def test_excludes_tracked_development_and_untracked_inputs(self):
-        excluded = ["work/report.md", ".env", ".github/workflows/example.yml", "Tools/debug.py", "Tests/Editor/Test.cs", "Docs/ReleaseVerification.md", "Editor/private.vrm", "Editor/error.log", "Editor/private.cs.disabled"]
+        excluded = ["work/report.md", ".env", ".github/workflows/example.yml", "Tools/debug.py", "Tests/Editor/Test.cs", "Docs/ReleaseVerification.md", "Editor/private.vrm", "Editor/error.log", "Editor/private.cs.disabled", "Editor/Locales/private.json"]
         for name in excluded:
             self.write(name, "private example")
         self.git("add", ".")
@@ -45,6 +45,7 @@ class PackageTests(unittest.TestCase):
         archive = self.root / "package.zip"
         names = package.build(self.root, archive)
         self.assertTrue(package.ROOT_FILES <= set(names))
+        self.assertTrue(package.LOCALE_FILES <= set(names))
         self.assertIn("Editor/Example.cs.meta", names)
         self.assertIn("Editor/Example.shader", names)
         self.assertIn("Runtime.meta", names)
@@ -57,12 +58,19 @@ class PackageTests(unittest.TestCase):
         with zipfile.ZipFile(archive) as built:
             self.assertEqual(names, built.namelist())
             self.assertEqual(built.read("Editor/Example.cs"), b"Editor/Example.cs")
+            for locale in package.LOCALE_ASSETS:
+                self.assertEqual(built.read(locale), locale.encode("utf-8"))
         second = self.root / "second.zip"
         package.build(self.root, second)
         self.assertEqual(archive.read_bytes(), second.read_bytes())
 
     def test_missing_required_file_fails(self):
         self.git("rm", "--cached", "LICENSE")
+        with self.assertRaisesRegex(ValueError, "Required package files"):
+            package.build(self.root, self.root / "invalid.zip")
+
+    def test_missing_locale_asset_fails(self):
+        self.git("rm", "--cached", "Editor/Locales/ExporterLocale_ko.json")
         with self.assertRaisesRegex(ValueError, "Required package files"):
             package.build(self.root, self.root / "invalid.zip")
 
