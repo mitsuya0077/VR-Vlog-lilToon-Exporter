@@ -8,6 +8,11 @@ from pathlib import Path, PurePosixPath
 ROOT = Path(__file__).resolve().parents[1]
 ROOT_FILES = {"package.json", "LICENSE", "CHANGELOG.md", "Documentation~/README.md"}
 PACKAGE_SUFFIXES = {".cs", ".asmdef", ".meta", ".shader"}
+LOCALE_ASSETS = {
+    f"Editor/Locales/ExporterLocale_{locale}.json"
+    for locale in ("en", "ko", "zh-Hans", "zh-Hant")
+}
+LOCALE_FILES = LOCALE_ASSETS | {name + ".meta" for name in LOCALE_ASSETS}
 
 
 def tracked_files(root):
@@ -19,7 +24,7 @@ def included(name):
     path = PurePosixPath(name)
     if path.is_absolute() or ".." in path.parts:
         return False
-    return (name in ROOT_FILES or name == "Runtime.meta"
+    return (name in ROOT_FILES or name in LOCALE_FILES or name == "Runtime.meta"
             or (path.parts[0] in {"Editor", "Runtime"} and path.suffix in PACKAGE_SUFFIXES)
             or (path.parts[0] == "ThirdPartyNotices" and path.suffix in {".md", ".txt"}))
 
@@ -27,7 +32,7 @@ def included(name):
 def build(root, output):
     root = root.resolve()
     names = [name for name in tracked_files(root) if included(name)]
-    missing = ROOT_FILES - set(names)
+    missing = (ROOT_FILES | LOCALE_FILES) - set(names)
     if missing:
         raise ValueError("Required package files are not tracked: " + ", ".join(sorted(missing)))
     contents = {}
