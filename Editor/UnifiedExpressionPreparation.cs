@@ -33,12 +33,13 @@ namespace VRVlog.LilToonExporter
                 // Final export preserves each nonempty authored channel rather
                 // than synthesizing another raw endpoint for that same name.
                 reserved.Add(canonical);
-                if ((clip.MorphTargetBindings?.Length ?? 0) == 0) globalCoverage.Add(canonical);
+                var hasScopedMorph = false;
                 foreach (var binding in clip.MorphTargetBindings ?? Array.Empty<MorphTargetBinding>())
                 {
                     var target = string.IsNullOrEmpty(binding.RelativePath) ? clone.transform : clone.transform.Find(binding.RelativePath);
                     var skin = target == null ? null : target.GetComponent<SkinnedMeshRenderer>();
                     if (skin == null || !meshes.TryGetValue(skin, out var names)) continue;
+                    hasScopedMorph = true;
                     if (!coverage.TryGetValue(skin, out var covered)) coverage.Add(skin, covered = new HashSet<string>(StringComparer.Ordinal));
                     // A known renderer reserves declared coverage even for an
                     // invalid index/weight, matching final GLB selection.
@@ -47,6 +48,8 @@ namespace VRVlog.LilToonExporter
                     if (!authoredShapes.TryGetValue(skin, out var shapes)) authoredShapes.Add(skin, shapes = new HashSet<string>(StringComparer.Ordinal));
                     shapes.Add(names[binding.Index]);
                 }
+                if (!hasScopedMorph && (clip.MaterialColorBindings?.Length ?? 0) + (clip.MaterialUVBindings?.Length ?? 0) > 0)
+                    globalCoverage.Add(canonical);
             }
             var selected = meshes.ToDictionary(pair => pair.Key, pair => VrmUnifiedExpressions.Resolve(pair.Value, avatarSupportsUnified: true,
                 authoredCoverage: globalCoverage.Concat(coverage.TryGetValue(pair.Key, out var covered) ? covered : Enumerable.Empty<string>()),

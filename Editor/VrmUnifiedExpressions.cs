@@ -104,7 +104,7 @@ namespace VRVlog.LilToonExporter
                 if (retainedCount > 0) reserved.Add(pair.Key);
             }
             var authoredCoverage = AuthoredMorphCoverage(custom, retainedKeys, nodes, meshes);
-            var globalCoverage = AuthoredNonMorphCoverage(custom, retainedKeys);
+            var globalCoverage = AuthoredNonMorphCoverage(custom, retainedKeys, nodes, meshes);
             var bindings = new Dictionary<string, List<object>>(StringComparer.Ordinal);
             var meshCandidates = new Dictionary<int, Dictionary<string, int>>();
             var selectedNames = new HashSet<string>(StringComparer.Ordinal);
@@ -173,36 +173,45 @@ namespace VRVlog.LilToonExporter
                 UnifiedExpressionRegistry.TryCanonicalize(key, out var canonical);
                 foreach (var item in Array(custom[key] as Dictionary<string, object>, "morphTargetBinds") ?? new List<object>())
                 {
-                    try
-                    {
-                        if (!(item is Dictionary<string, object> bind) || !bind.TryGetValue("node", out var rawNode)) continue;
-                        var nodeIndex = Index(rawNode, nodes.Count, "node");
-                        var node = nodes[nodeIndex] as Dictionary<string, object>;
-                        if (node == null || !node.TryGetValue("mesh", out var rawMesh)) continue;
-                        Index(rawMesh, meshes.Count, "mesh");
-                        // A known renderer node reserves declared coverage
-                        // even when index/weight is malformed. Another node
-                        // sharing its mesh remains independently selectable.
-                        if (!result.TryGetValue(nodeIndex, out var coverage)) result.Add(nodeIndex, coverage = new HashSet<string>(StringComparer.Ordinal));
-                        coverage.Add(canonical);
-                    }
-                    catch (InvalidOperationException) { /* PreserveAuthored already diagnoses malformed references. */ }
+                    if (!TryMorphNode(item, nodes, meshes, out var nodeIndex)) continue;
+                    // A known renderer node reserves declared coverage
+                    // even when index/weight is malformed. Another node
+                    // sharing its mesh remains independently selectable.
+                    if (!result.TryGetValue(nodeIndex, out var coverage)) result.Add(nodeIndex, coverage = new HashSet<string>(StringComparer.Ordinal));
+                    coverage.Add(canonical);
                 }
             }
             return result;
         }
 
-        private static HashSet<string> AuthoredNonMorphCoverage(Dictionary<string, object> custom, IEnumerable<string> retainedKeys)
+        private static bool TryMorphNode(object item, List<object> nodes, List<object> meshes, out int nodeIndex)
+        {
+            nodeIndex = -1;
+            try
+            {
+                if (!(item is Dictionary<string, object> bind) || !bind.TryGetValue("node", out var rawNode)) return false;
+                nodeIndex = Index(rawNode, nodes.Count, "node");
+                var node = nodes[nodeIndex] as Dictionary<string, object>;
+                if (node == null || !node.TryGetValue("mesh", out var rawMesh)) return false;
+                Index(rawMesh, meshes.Count, "mesh");
+                return true;
+            }
+            catch (InvalidOperationException) { return false; } // Authored validation already reports malformed references.
+        }
+
+        private static HashSet<string> AuthoredNonMorphCoverage(Dictionary<string, object> custom, IEnumerable<string> retainedKeys,
+            List<object> nodes, List<object> meshes)
         {
             var result = new HashSet<string>(StringComparer.Ordinal);
             foreach (var key in retainedKeys)
             {
                 var expression = custom[key] as Dictionary<string, object>;
-                if (expression == null || HasDeclaredBindings(expression, "morphTargetBinds") ||
-                    !(HasDeclaredBindings(expression, "materialColorBinds") || HasDeclaredBindings(expression, "textureTransformBinds"))) continue;
-                // Material-only routes have no geometric scope. Their authored
-                // anatomical choice wins on every mesh, including unusable
-                // declarations that PreserveAuthored diagnoses and retains.
+                if (expression == null || !(HasDeclaredBindings(expression, "materialColorBinds") || HasDeclaredBindings(expression, "textureTransformBinds"))) continue;
+                var morphs = Array(expression, "morphTargetBinds");
+                if (morphs?.Any(item => TryMorphNode(item, nodes, meshes, out _)) == true) continue;
+                // Material routes without any resolvable morph-node scope
+                // reserve anatomy globally, even when a malformed nonempty
+                // morph array is also retained. Known nodes remain scoped.
                 UnifiedExpressionRegistry.TryCanonicalize(key, out var canonical);
                 result.Add(canonical);
             }

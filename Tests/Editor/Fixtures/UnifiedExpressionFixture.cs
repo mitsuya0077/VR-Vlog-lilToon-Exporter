@@ -222,6 +222,37 @@ namespace VRVlog.LilToonExporter.Tests
             check(mixedBinds.Count == 1 && (long)((Dictionary<string, object>)mixedBinds[0])["node"] == 2L,
                 "Mixed morph/material routes retain anatomical coverage only on their declared morph mesh.");
 
+            foreach (var materialKind in new[] { "materialColorBinds", "textureTransformBinds" })
+            {
+                var morphDeclarations = new[] {
+                    Arr(Obj("index", 1L, "weight", .4)),
+                    Arr(Obj("node", 999L, "index", 1L, "weight", .4)),
+                    Arr(Obj("node", 0L, "index", 1L, "weight", .4)),
+                    Arr(Obj("node", 1L, "index", 1L, "weight", .4)),
+                    Arr(Obj("node", 1L, "index", 999L, "weight", .4)),
+                    Arr(Obj("index", 1L, "weight", .4), Obj("node", 1L, "index", 1L, "weight", .4))
+                };
+                for (var index = 0; index < morphDeclarations.Length; index++)
+                {
+                    var material = materialKind == "materialColorBinds" ? Obj("material", 0L, "type", "color", "targetValue", Arr(.1, .2, .3, 1.0)) :
+                        Obj("material", 0L, "scale", Arr(1.0, 1.0), "offset", Arr(.2, .3));
+                    var declaration = Obj("morphTargetBinds", morphDeclarations[index], materialKind, Arr(material));
+                    materialVrm["expressions"] = Obj("custom", Obj("UE/LipFunnelUpperLeft", declaration));
+                    var sourceBytes = Encode(materialOnly);
+                    var scopeDiagnostics = new List<string>();
+                    var scopedBytes = VrmUnifiedExpressions.Add(sourceBytes, scopeDiagnostics);
+                    var scopedRoutes = Custom(GlbDocument.Read(scopedBytes).Json);
+                    var hasScope = index >= 3;
+                    var aggregate = scopedRoutes.TryGetValue("UE/LipFunnel", out var aggregateValue) ?
+                        (List<object>)((Dictionary<string, object>)aggregateValue)["morphTargetBinds"] : null;
+                    check(scopedRoutes.ContainsKey("UE/LipFunnelUpperLeft") &&
+                        (hasScope ? aggregate?.Count == 1 && (long)((Dictionary<string, object>)aggregate[0])["node"] == 2L :
+                            aggregate == null && !scopedRoutes.ContainsKey("UE/JawOpen") && scopedBytes.SequenceEqual(sourceBytes)) &&
+                        scopeDiagnostics.Any(message => message.Contains("既存")) == (index != 3),
+                        materialKind + " plus morph declaration " + index + " reserves globally only when no morph has resolvable node scope, preserving diagnosed metadata.");
+                }
+            }
+
             var invalid = Fixture("MouthClosed");
             ((Dictionary<string, object>)((List<object>)invalid["nodes"])[1])["mesh"] = 999L;
             var rejected = false;
