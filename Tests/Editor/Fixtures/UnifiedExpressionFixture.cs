@@ -245,6 +245,10 @@ namespace VRVlog.LilToonExporter.Tests
             check(blink[1] == 1 && blink[2] < 0, "A UE partial closure wins over a legacy partial before cross-mesh pairing.");
             blink = BlinkShapeNames.Resolve(new[] { "Blink_L", "Blink_R", "UE/EyeClosedLeft" }, allowPartial: true);
             check(blink[1] == 0 && blink[2] == 1, "A complete legacy closure pair retains its existing priority.");
+            check(!BlinkShapeNames.CompatiblePartials("Blink_L", "eye_blink_1_R"), "UE evidence cannot make different legacy partial families compatible.");
+            check(BlinkShapeNames.CompatiblePartials("blink_l", "BLINK_R"), "A matching legacy family can join left and right renderers.");
+            check(BlinkShapeNames.CompatiblePartials("face.eye_closed_left", "UE/EyeClosedRight"), "Canonical UE-eye sides remain compatible across normalized renderer names.");
+            check(!BlinkShapeNames.CompatiblePartials("UE/EyeClosedLeft", "Blink_R"), "A UE partial cannot pair with an unrelated legacy partial.");
             var required = VrmUnifiedExpressions.Resolve(new[] { "LipFunnel", "LipFunnelUpperLeft" }, avatarSupportsUnified: true,
                 authoredCoverage: new[] { "LipFunnelUpperLeft" }, reservedAuthoredNames: new HashSet<string>(new[] { "LipFunnelUpperLeft" }, StringComparer.Ordinal));
             check(required.Count == 0, "Preparation does not require unused raw aggregate/split endpoints when an authored route reserves that mesh and channel.");

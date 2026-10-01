@@ -81,6 +81,7 @@ namespace VRVlog.LilToonExporter
                         VrmUnifiedExpressions.HasEvidence(rendererNames.Values.SelectMany(names => names).Concat(
                             expressions?.CustomClips?.Where(clip => clip != null).Select(clip => clip.name) ?? Enumerable.Empty<string>()));
                     var completePairs = true;
+                    var partialFamilies = new Dictionary<int, List<BlinkShapeBinding>[]>();
                     foreach (var pair in rendererNames)
                     {
                         var renderer = pair.Key;
@@ -90,11 +91,31 @@ namespace VRVlog.LilToonExporter
                             throw new InvalidOperationException("閉眼用の名前が重複しています。「確認・調整」で設定してください。");
                         if (resolved[0] < 0 && resolved[1] == BlinkShapeNames.PartialPair)
                             throw new InvalidOperationException("閉眼用の左右がそろっていません: " + renderer.name + "。「確認・調整」で設定してください。");
-                        if (resolved[0] >= 0 && resolved[1] < 0) completePairs = false;
+                        var completePair = resolved[1] >= 0 && resolved[2] >= 0;
+                        if (resolved[0] >= 0 && !completePair) completePairs = false;
                         for (var slot = 0; slot < resolved.Length; slot++)
-                            if (resolved[slot] >= 0)
-                                result.Slots[slot].Add(new BlinkShapeBinding { Renderer = renderer, Shape = names[resolved[slot]] });
+                        {
+                            if (resolved[slot] < 0) continue;
+                            var binding = new BlinkShapeBinding { Renderer = renderer, Shape = names[resolved[slot]] };
+                            if (slot == 0 || completePair) result.Slots[slot].Add(binding);
+                            else
+                            {
+                                var family = BlinkShapeNames.PartialFamily(binding.Shape, slot == 1);
+                                if (family < 0) continue;
+                                if (!partialFamilies.TryGetValue(family, out var sides))
+                                    partialFamilies.Add(family, sides = new[] { new List<BlinkShapeBinding>(), new List<BlinkShapeBinding>() });
+                                sides[slot - 1].Add(binding);
+                            }
+                        }
                     }
+                    // UE evidence allows incomplete renderer candidates, but
+                    // cannot make unrelated legacy closure families compatible.
+                    foreach (var sides in partialFamilies.Values)
+                        if (sides[0].Count > 0 && sides[1].Count > 0)
+                        {
+                            result.Slots[1].AddRange(sides[0]);
+                            result.Slots[2].AddRange(sides[1]);
+                        }
                     // Resolve bilateral closure across the avatar: UE models
                     // may put their left and right eyes on different renderers.
                     if (result.Slots[1].Count > 0 && result.Slots[2].Count > 0)

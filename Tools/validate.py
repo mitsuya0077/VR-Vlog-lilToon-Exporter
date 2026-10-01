@@ -288,7 +288,21 @@ assert (root / "Tests/Editor/VRVlog.LilToonExporter.Editor.Tests.asmdef").is_fil
 test_assembly = json.loads((root / "Tests/Editor/VRVlog.LilToonExporter.Editor.Tests.asmdef").read_text(encoding="utf-8"))
 assert {"VRM10", "UniGLTF", "VrmLib"}.issubset(test_assembly["references"])
 
-print("Exporter implementation, package, and schema checks passed.")
+# User-facing UE failures must remain actionable in every shipped locale.
+unified_failure_sources = (
+    "Modular Avatar / NDMF の処理で Unified Expressions の追跡用変形が失われました。メッシュや BlendShape を変更する追加ツールの設定を確認してください。",
+    "Unified Expressions の書き出しに必要な VRM 情報がありません。",
+    "Unified Expressions の出力 mesh に primitive がありません: ",
+    "Unified Expressions の morph target 参照が不正です: ",
+) + tuple("Invalid Unified Expressions " + index + " index." for index in ("node", "mesh", "morph", "material"))
+for locale in ("en", "ko", "zh-Hans", "zh-Hant"):
+    entries = json.loads((root / ("Editor/Locales/ExporterLocale_" + locale + ".json")).read_text(encoding="utf-8"))["entries"]
+    translations = {entry["source"]: entry["translated"] for entry in entries}
+    assert len(translations) == len(entries), locale + ": duplicate locale source"
+    for source in unified_failure_sources:
+        assert translations.get(source) and translations[source] != source, locale + ": missing UE failure translation"
+
+print("Exporter implementation, package, schema, and UE locale checks passed.")
 
 # A name inventory alone must not hide an unclassified rendering property.
 catalogue = json.loads((root / "Schema/LilToon234Catalogue.json").read_text(encoding="utf-8"))

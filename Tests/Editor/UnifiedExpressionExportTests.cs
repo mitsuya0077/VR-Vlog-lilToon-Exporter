@@ -397,6 +397,83 @@ namespace VRVlog.LilToonExporter.Tests
             finally { Object.DestroyImmediate(trimmed); Object.DestroyImmediate(clip); Object.DestroyImmediate(vrm); }
         }
 
+        [TestCase(false, false)]
+        [TestCase(false, true)]
+        [TestCase(true, false)]
+        [TestCase(true, true)]
+        public async Task UeEvidencePairsOnlyCompatibleLegacySidesAcrossRenderers(bool compatible, bool fullLilToon)
+        {
+            using var fixture = new AttachmentConnectionTests.Fixture();
+            var rightMesh = Object.Instantiate(fixture.Mesh);
+            Vrm10Instance imported = null;
+            try
+            {
+                fixture.Mesh.AddBlendShapeFrame("MouthClosed", 100, new Vector3[fixture.Mesh.vertexCount], null, null);
+                fixture.Mesh.AddBlendShapeFrame("Blink_L", 100, Enumerable.Repeat(Vector3.up * .02f, fixture.Mesh.vertexCount).ToArray(), null, null);
+                var rightName = compatible ? "Blink_R" : "eye_blink_1_R";
+                rightMesh.AddBlendShapeFrame(rightName, 100, Enumerable.Repeat(Vector3.up * .03f, rightMesh.vertexCount).ToArray(), null, null);
+                var skins = fixture.Source.GetComponentsInChildren<SkinnedMeshRenderer>();
+                skins[1].sharedMesh = rightMesh;
+                foreach (var skin in skins) skin.sharedMaterial.shader = Shader.Find("lilToon");
+                var bytes = UniVrmOneClickExporter.Export(fixture.Source, "UE legacy family regression", "Tests",
+                    exporterVersion: fullLilToon ? "0.11.5" : null, lilToonVersion: fullLilToon ? "2.3.4" : null);
+                var glb = GlbDocument.Read(bytes);
+                var metadata = (Dictionary<string, object>)((Dictionary<string, object>)glb.Json["extensions"])["VRMC_vrm"];
+                var presets = (Dictionary<string, object>)((Dictionary<string, object>)metadata["expressions"])["preset"];
+                foreach (var name in BlinkShapeNames.Presets) Assert.That(presets.ContainsKey(name), Is.EqualTo(compatible));
+                imported = await Vrm10.LoadBytesAsync(bytes, canLoadVrm0X: false, awaitCaller: new ImmediateCaller());
+                Assert.That(imported.Vrm.Expression.CustomClips.Any(clip => clip.name == "UE/MouthClosed"), Is.True);
+                Assert.That(imported.Vrm.Expression.Blink.MorphTargetBindings.Length, Is.EqualTo(compatible ? 2 : 0));
+                Assert.That(imported.Vrm.Expression.BlinkLeft.MorphTargetBindings.Length, Is.EqualTo(compatible ? 1 : 0));
+                Assert.That(imported.Vrm.Expression.BlinkRight.MorphTargetBindings.Length, Is.EqualTo(compatible ? 1 : 0));
+                if (compatible)
+                {
+                    imported.Runtime.Expression.SetWeight(ExpressionKey.Blink, 1f);
+                    imported.Runtime.Process();
+                    foreach (var binding in imported.Vrm.Expression.Blink.MorphTargetBindings)
+                    {
+                        var skin = imported.transform.Find(binding.RelativePath).GetComponent<SkinnedMeshRenderer>();
+                        Assert.That(skin.GetBlendShapeWeight(binding.Index), Is.EqualTo(100).Within(.001));
+                        var delta = new Vector3[skin.sharedMesh.vertexCount];
+                        skin.sharedMesh.GetBlendShapeFrameVertices(binding.Index, 0, delta, null, null);
+                        Assert.That(delta[0].y, Is.EqualTo(binding.RelativePath == "Front" ? .02f : .03f).Within(.0001));
+                    }
+                }
+                Assert.That(skins[0].sharedMesh, Is.SameAs(fixture.Mesh)); Assert.That(skins[1].sharedMesh, Is.SameAs(rightMesh));
+            }
+            finally { if (imported != null) Object.DestroyImmediate(imported.gameObject); Object.DestroyImmediate(rightMesh); }
+        }
+
+        [TestCase("en")]
+        [TestCase("ko")]
+        [TestCase("zh-Hans")]
+        [TestCase("zh-Hant")]
+        public void UnifiedExpressionFailuresHaveLocalizedActionsAndPreserveTargetNames(string locale)
+        {
+            var type = AppDomain.CurrentDomain.GetAssemblies().Select(assembly => assembly.GetType("VRVlog.LilToonExporter.ExporterLocalization")).First(value => value != null);
+            var flags = System.Reflection.BindingFlags.Static | System.Reflection.BindingFlags.NonPublic;
+            var localeField = type.GetField("_locale", flags); var messagesField = type.GetField("_messages", flags);
+            var previousLocale = localeField.GetValue(null); var previousMessages = messagesField.GetValue(null);
+            try
+            {
+                localeField.SetValue(null, locale); messagesField.SetValue(null, null);
+                string T(string source) => (string)type.GetMethod("T").Invoke(null, new object[] { source });
+                const string lost = "Modular Avatar / NDMF の処理で Unified Expressions の追跡用変形が失われました。メッシュや BlendShape を変更する追加ツールの設定を確認してください。";
+                Assert.That(T(lost), Is.Not.EqualTo(lost));
+                const string missing = "Unified Expressions の書き出しに必要な VRM 情報がありません。";
+                Assert.That(T(missing), Is.Not.EqualTo(missing));
+                foreach (var prefix in new[] { "Unified Expressions の出力 mesh に primitive がありません: ", "Unified Expressions の morph target 参照が不正です: " })
+                {
+                    var source = prefix + "UE/EyeClosedLeft";
+                    Assert.That(T(source), Is.Not.EqualTo(source));
+                    Assert.That(T(source), Does.EndWith("UE/EyeClosedLeft"));
+                }
+                foreach (var index in new[] { "node", "mesh", "morph", "material" })
+                    Assert.That(T("Invalid Unified Expressions " + index + " index."), Is.Not.EqualTo("Invalid Unified Expressions " + index + " index."));
+            }
+            finally { localeField.SetValue(null, previousLocale); messagesField.SetValue(null, previousMessages); }
+        }
+
         [TestCase(false)]
         [TestCase(true)]
         public async Task SplitPartialBlinkUsesTheSameUeClosureInStandardAndDetailedPlayback(bool fullLilToon)

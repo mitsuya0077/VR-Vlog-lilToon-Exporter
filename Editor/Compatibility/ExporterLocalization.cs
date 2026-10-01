@@ -21,6 +21,11 @@ namespace VRVlog.LilToonExporter
             public Entry[] entries;
         }
 
+        static readonly string[] UnifiedErrorPrefixes = {
+            "Unified Expressions の出力 mesh に primitive がありません: ",
+            "Unified Expressions の morph target 参照が不正です: "
+        };
+
         static string _locale;
         static Dictionary<string, string> _messages;
 
@@ -46,7 +51,11 @@ namespace VRVlog.LilToonExporter
         {
             if (string.IsNullOrEmpty(source) || Locale == "ja") return source;
             if (_messages == null) LoadMessages();
-            return _messages.TryGetValue(source, out var translated) ? translated : source;
+            if (_messages.TryGetValue(source, out var translated)) return translated;
+            foreach (var prefix in UnifiedErrorPrefixes)
+                if (source.StartsWith(prefix, StringComparison.Ordinal) && _messages.TryGetValue(prefix, out translated))
+                    return translated + source.Substring(prefix.Length);
+            return source;
         }
 
         static void LoadMessages()

@@ -15,6 +15,18 @@ namespace VRVlog.LilToonExporter
             ("eye_blink_1_L", "eye_blink_1_R"), ("eye_blink_2_L", "eye_blink_2_R")
         };
 
+        internal static int PartialFamily(string shape, bool left)
+        {
+            for (var index = 0; index < Pairs.Length; index++)
+                if (string.Equals(shape, left ? Pairs[index].Left : Pairs[index].Right, StringComparison.OrdinalIgnoreCase)) return index;
+            if (VRVlog.FaceTracking.UnifiedExpressionRegistry.TryCanonicalize(shape, out var canonical) &&
+                canonical == (left ? "EyeClosedLeft" : "EyeClosedRight")) return Pairs.Length;
+            return -1;
+        }
+
+        internal static bool CompatiblePartials(string left, string right) =>
+            PartialFamily(left, true) >= 0 && PartialFamily(left, true) == PartialFamily(right, false);
+
         internal static int Unique(IReadOnlyList<string> names, string name)
         {
             var result = -1;
