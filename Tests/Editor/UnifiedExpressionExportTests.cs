@@ -226,6 +226,96 @@ namespace VRVlog.LilToonExporter.Tests
 
         [TestCase(false)]
         [TestCase(true)]
+        public async Task SharedGlbMeshKeepsAuthoredCoverageScopedToItsRendererNode(bool fullLilToon)
+        {
+            using var fixture = new AttachmentConnectionTests.Fixture();
+            var vrm = ScriptableObject.CreateInstance<VRM10Object>();
+            var clip = ScriptableObject.CreateInstance<VRM10Expression>();
+            Vrm10Instance imported = null;
+            try
+            {
+                fixture.Mesh.AddBlendShapeFrame("LipFunnel", 100, Enumerable.Repeat(Vector3.right * .03f, fixture.Mesh.vertexCount).ToArray(), null, null);
+                fixture.Mesh.AddBlendShapeFrame("LipFunnelUpperLeft", 100, Enumerable.Repeat(Vector3.up * .04f, fixture.Mesh.vertexCount).ToArray(), null, null);
+                fixture.Mesh.AddBlendShapeFrame("LipFunnelUpperRight", 100, Enumerable.Repeat(Vector3.forward * .02f, fixture.Mesh.vertexCount).ToArray(), null, null);
+                foreach (var skin in fixture.Source.GetComponentsInChildren<SkinnedMeshRenderer>()) skin.sharedMaterial.shader = Shader.Find("lilToon");
+                clip.name = "UE/LipFunnelUpperLeft";
+                clip.MorphTargetBindings = new[] { new MorphTargetBinding("Front", 2, .4f) };
+                vrm.Expression.CustomClips.Add(clip);
+                fixture.Source.AddComponent<Vrm10Instance>().Vrm = vrm;
+                var bytes = UniVrmOneClickExporter.Export(fixture.Source, "Shared mesh UE coverage", "Tests",
+                    exporterVersion: fullLilToon ? "0.11.5" : null, lilToonVersion: fullLilToon ? "2.3.4" : null);
+                var glb = GlbDocument.Read(bytes);
+                var nodes = ((List<object>)glb.Json["nodes"]).Cast<Dictionary<string, object>>().ToArray();
+                var frontIndex = Array.FindIndex(nodes, node => node.TryGetValue("name", out var name) && (string)name == "Front" && node.ContainsKey("mesh"));
+                var backIndex = Array.FindIndex(nodes, node => node.TryGetValue("name", out var name) && (string)name == "Back" && node.ContainsKey("mesh"));
+                Assert.That(frontIndex, Is.GreaterThanOrEqualTo(0)); Assert.That(backIndex, Is.GreaterThanOrEqualTo(0));
+                nodes[backIndex]["mesh"] = nodes[frontIndex]["mesh"];
+                var metadata = (Dictionary<string, object>)((Dictionary<string, object>)glb.Json["extensions"])["VRMC_vrm"];
+                var custom = (Dictionary<string, object>)((Dictionary<string, object>)metadata["expressions"])["custom"];
+                foreach (var key in custom.Keys.Where(key => key.StartsWith("UE/", StringComparison.Ordinal) && key != clip.name).ToArray()) custom.Remove(key);
+                bytes = VrmUnifiedExpressions.Add(glb.Write());
+                var output = GlbDocument.Read(bytes).Json;
+                var outputNodes = (List<object>)output["nodes"];
+                Assert.That(((Dictionary<string, object>)outputNodes[frontIndex])["mesh"], Is.EqualTo(((Dictionary<string, object>)outputNodes[backIndex])["mesh"]));
+                var outputCustom = (Dictionary<string, object>)((Dictionary<string, object>)((Dictionary<string, object>)((Dictionary<string, object>)output["extensions"])["VRMC_vrm"])["expressions"])["custom"];
+                var rawBinds = (List<object>)((Dictionary<string, object>)outputCustom["UE/LipFunnel"])["morphTargetBinds"];
+                Assert.That(rawBinds.Count, Is.EqualTo(1));
+                Assert.That(((Dictionary<string, object>)rawBinds[0])["node"], Is.EqualTo((long)backIndex));
+                imported = await Vrm10.LoadBytesAsync(bytes, canLoadVrm0X: false, awaitCaller: new ImmediateCaller());
+                var authored = imported.Vrm.Expression.CustomClips.Single(value => value.name == clip.name);
+                var aggregate = imported.Vrm.Expression.CustomClips.Single(value => value.name == "UE/LipFunnel");
+                var split = imported.Vrm.Expression.CustomClips.Single(value => value.name == "UE/LipFunnelUpperRight");
+                Assert.That(authored.MorphTargetBindings.Single().RelativePath, Is.EqualTo("Front"));
+                Assert.That(aggregate.MorphTargetBindings.Single().RelativePath, Is.EqualTo("Back"));
+                Assert.That(split.MorphTargetBindings.Single().RelativePath, Is.EqualTo("Front"));
+                imported.Runtime.Expression.SetWeight(ExpressionKey.CreateCustom(authored.name), 1f);
+                imported.Runtime.Expression.SetWeight(ExpressionKey.CreateCustom(aggregate.name), .5f);
+                imported.Runtime.Expression.SetWeight(ExpressionKey.CreateCustom(split.name), .3f);
+                imported.Runtime.Process();
+                var front = imported.transform.Find("Front").GetComponent<SkinnedMeshRenderer>();
+                var back = imported.transform.Find("Back").GetComponent<SkinnedMeshRenderer>();
+                Assert.That(front.GetBlendShapeWeight(front.sharedMesh.GetBlendShapeIndex("LipFunnel")), Is.Zero);
+                Assert.That(front.GetBlendShapeWeight(front.sharedMesh.GetBlendShapeIndex("LipFunnelUpperLeft")), Is.EqualTo(40).Within(.001));
+                Assert.That(front.GetBlendShapeWeight(front.sharedMesh.GetBlendShapeIndex("LipFunnelUpperRight")), Is.EqualTo(30).Within(.001));
+                Assert.That(back.GetBlendShapeWeight(back.sharedMesh.GetBlendShapeIndex("LipFunnel")), Is.EqualTo(50).Within(.001));
+                Assert.That(back.GetBlendShapeWeight(back.sharedMesh.GetBlendShapeIndex("LipFunnelUpperLeft")), Is.Zero);
+                Assert.That(back.GetBlendShapeWeight(back.sharedMesh.GetBlendShapeIndex("LipFunnelUpperRight")), Is.Zero);
+                Assert.That(clip.MorphTargetBindings.Single().RelativePath, Is.EqualTo("Front"));
+            }
+            finally
+            {
+                if (imported != null) Object.DestroyImmediate(imported.gameObject);
+                Object.DestroyImmediate(clip); Object.DestroyImmediate(vrm);
+            }
+        }
+
+        [Test]
+        public void PreparationSharedMeshCoverageIsScopedPerRenderer()
+        {
+            using var fixture = new AttachmentConnectionTests.Fixture();
+            var vrm = ScriptableObject.CreateInstance<VRM10Object>();
+            var clip = ScriptableObject.CreateInstance<VRM10Expression>();
+            var trimmed = Object.Instantiate(fixture.Mesh);
+            try
+            {
+                fixture.Mesh.AddBlendShapeFrame("LipFunnel", 100, new Vector3[fixture.Mesh.vertexCount], null, null);
+                fixture.Mesh.AddBlendShapeFrame("LipFunnelUpperLeft", 100, new Vector3[fixture.Mesh.vertexCount], null, null);
+                clip.name = "UE/LipFunnelUpperLeft";
+                clip.MorphTargetBindings = new[] { new MorphTargetBinding("Front", 2, .4f) };
+                vrm.Expression.CustomClips.Add(clip);
+                fixture.Copy.AddComponent<Vrm10Instance>().Vrm = vrm;
+                var guard = new UnifiedExpressionPreparation(fixture.Copy);
+                trimmed.AddBlendShapeFrame("LipFunnelUpperLeft", 100, new Vector3[trimmed.vertexCount], null, null);
+                fixture.Copy.transform.Find("Front").GetComponent<SkinnedMeshRenderer>().sharedMesh = trimmed;
+                Assert.DoesNotThrow(() => guard.Verify(), "Only the authored renderer may omit the unused aggregate.");
+                fixture.Copy.transform.Find("Back").GetComponent<SkinnedMeshRenderer>().sharedMesh = trimmed;
+                Assert.Throws<InvalidOperationException>(() => guard.Verify(), "The uncovered renderer still requires its raw aggregate despite initially sharing the same mesh.");
+            }
+            finally { Object.DestroyImmediate(trimmed); Object.DestroyImmediate(clip); Object.DestroyImmediate(vrm); }
+        }
+
+        [TestCase(false)]
+        [TestCase(true)]
         public async Task ExplicitRawAliasWinsOverCanonicalInExportedBindings(bool fullLilToon)
         {
             using var fixture = new AttachmentConnectionTests.Fixture();

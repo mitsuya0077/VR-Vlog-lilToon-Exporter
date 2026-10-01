@@ -118,6 +118,23 @@ namespace VRVlog.LilToonExporter.Tests
             check(uncoveredBinds.Count == 1 && (long)((Dictionary<string, object>)uncoveredBinds[0])["node"] == 2L && coveredDiagnostics.Any(message => message.Contains("既存")),
                 "Malformed authored indices still reserve their known mesh and produce diagnostics, preventing a conflicting raw bypass.");
 
+            var sharedNodes = Fixture("LipFunnel", "LipFunnelUpperLeft", "LipFunnelUpperRight");
+            ((List<object>)sharedNodes["nodes"]).Add(Obj("mesh", 0L));
+            var sharedVrm = (Dictionary<string, object>)((Dictionary<string, object>)sharedNodes["extensions"])["VRMC_vrm"];
+            foreach (var weight in new[] { .4, 0.0, -1.0 })
+            {
+                var scopedRoute = Obj("morphTargetBinds", Arr(Obj("node", 1L, "index", 1L, "weight", weight)), "isBinary", false);
+                sharedVrm["expressions"] = Obj("custom", Obj("UE/LipFunnelUpperLeft", scopedRoute));
+                var scopedCustom = Custom(GlbDocument.Read(VrmUnifiedExpressions.Add(Encode(sharedNodes))).Json);
+                var aggregateBinds = (List<object>)((Dictionary<string, object>)scopedCustom["UE/LipFunnel"])["morphTargetBinds"];
+                check(aggregateBinds.Count == 1 && (long)((Dictionary<string, object>)aggregateBinds[0])["node"] == 2L,
+                    "Authored coverage with weight " + weight + " reserves only node A while shared-mesh node B retains raw aggregate.");
+            }
+            var sharedCustom = Custom(GlbDocument.Read(VrmUnifiedExpressions.Add(Encode(sharedNodes))).Json);
+            var remainingSplit = (List<object>)((Dictionary<string, object>)sharedCustom["UE/LipFunnelUpperRight"])["morphTargetBinds"];
+            check(remainingSplit.Count == 1 && (long)((Dictionary<string, object>)remainingSplit[0])["node"] == 1L,
+                "Per-node filtering precedes representation selection, so the disjoint split remains available on the authored node.");
+
             var authored = Fixture("MouthClosed", "JawOpen");
             var vrm = (Dictionary<string, object>)((Dictionary<string, object>)authored["extensions"])["VRMC_vrm"];
             var own = Obj("morphTargetBinds", Arr(Obj("node", 1L, "index", 0L, "weight", .35)), "isBinary", false, "overrideBlink", "block");

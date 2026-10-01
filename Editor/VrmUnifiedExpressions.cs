@@ -11,7 +11,11 @@ namespace VRVlog.LilToonExporter
     {
         internal static Dictionary<string, int> Resolve(IReadOnlyList<string> names,
             ICollection<string> warnings = null, string label = "mesh", bool avatarSupportsUnified = false,
-            IEnumerable<string> authoredCoverage = null, ISet<string> reservedAuthoredNames = null)
+            IEnumerable<string> authoredCoverage = null, ISet<string> reservedAuthoredNames = null) =>
+            SelectResolved(ResolveRaw(names, warnings, label, avatarSupportsUnified, reservedAuthoredNames), authoredCoverage);
+
+        private static Dictionary<string, int> ResolveRaw(IReadOnlyList<string> names, ICollection<string> warnings,
+            string label, bool avatarSupportsUnified, ISet<string> reservedAuthoredNames)
         {
             var matches = new Dictionary<string, List<int>>(StringComparer.Ordinal);
             var eligible = avatarSupportsUnified;
@@ -36,6 +40,12 @@ namespace VRVlog.LilToonExporter
                 }
                 resolved.Add(pair.Key, candidates[0]);
             }
+            return resolved;
+        }
+
+        private static Dictionary<string, int> SelectResolved(Dictionary<string, int> raw, IEnumerable<string> authoredCoverage)
+        {
+            var resolved = new Dictionary<string, int>(raw, StringComparer.Ordinal);
             // Authored routes reserve their anatomical coverage before raw
             // aggregate/split selection, even when their weight is zero.
             if (authoredCoverage != null)
@@ -90,22 +100,28 @@ namespace VRVlog.LilToonExporter
             var reserved = new HashSet<string>(authoredKeys.Where(pair => pair.Value.Any(retainedKeys.Contains)).Select(pair => pair.Key), StringComparer.Ordinal);
             var bindings = new Dictionary<string, List<object>>(StringComparer.Ordinal);
             var meshCandidates = new Dictionary<int, Dictionary<string, int>>();
+            var selectedNames = new HashSet<string>(StringComparer.Ordinal);
             for (var nodeIndex = 0; nodeIndex < nodes.Count; nodeIndex++)
             {
                 if (!(nodes[nodeIndex] is Dictionary<string, object> node) || !node.TryGetValue("mesh", out var rawMesh)) continue;
                 var meshIndex = Index(rawMesh, meshes.Count, "mesh");
                 var mesh = meshes[meshIndex] as Dictionary<string, object>;
-                if (!meshCandidates.TryGetValue(meshIndex, out var candidates))
+                var names = Array(Object(mesh, "extras"), "targetNames");
+                if (!meshCandidates.TryGetValue(meshIndex, out var rawCandidates))
                 {
-                    var names = Array(Object(mesh, "extras"), "targetNames");
-                    candidates = names == null ? new Dictionary<string, int>() :
-                        Resolve(names.Select(name => name as string).ToArray(), warnings, "mesh " + meshIndex, supportsUnified,
-                            globalCoverage.Concat(authoredCoverage.TryGetValue(meshIndex, out var coverage) ? coverage : Enumerable.Empty<string>()), reserved);
-                    meshCandidates.Add(meshIndex, candidates);
+                    rawCandidates = names == null ? new Dictionary<string, int>() :
+                        ResolveRaw(names.Select(name => name as string).ToArray(), warnings, "mesh " + meshIndex, supportsUnified, reserved);
+                    meshCandidates.Add(meshIndex, rawCandidates);
                 }
+                // A glTF mesh may be instanced by several renderer nodes.
+                // Aliases are reusable; authored scope and aggregate/split
+                // choice belong to each node rather than the shared asset.
+                var candidates = SelectResolved(rawCandidates, globalCoverage.Concat(
+                    authoredCoverage.TryGetValue(nodeIndex, out var coverage) ? coverage : Enumerable.Empty<string>()));
                 foreach (var pair in candidates)
                 {
                     RequireTarget(mesh, pair.Value, pair.Key);
+                    selectedNames.Add((string)names[pair.Value]);
                     if (!bindings.TryGetValue(pair.Key, out var binds)) bindings.Add(pair.Key, binds = new List<object>());
                     binds.Add(new Dictionary<string, object> {
                         ["node"] = (long)nodeIndex, ["index"] = (long)pair.Value, ["weight"] = 1.0
@@ -115,8 +131,7 @@ namespace VRVlog.LilToonExporter
             // Retained disabled/invalid declarations reserve their coverage,
             // but cannot enable shared ARKit names after the usable UE routes
             // have all been excluded by that authored choice.
-            if (!HasEvidence(usableKeys.Concat(meshCandidates.SelectMany(pair => pair.Value.Values.Select(index =>
-                (string)Array(Object(meshes[pair.Key] as Dictionary<string, object>, "extras"), "targetNames")[index]))))) return bytes;
+            if (!HasEvidence(usableKeys.Concat(selectedNames))) return bytes;
             if (bindings.Count == 0) return bytes;
             if (expressions == null) vrm["expressions"] = expressions = new Dictionary<string, object>();
             if (custom == null) expressions["custom"] = custom = new Dictionary<string, object>();
@@ -157,13 +172,14 @@ namespace VRVlog.LilToonExporter
                     try
                     {
                         if (!(item is Dictionary<string, object> bind) || !bind.TryGetValue("node", out var rawNode)) continue;
-                        var node = nodes[Index(rawNode, nodes.Count, "node")] as Dictionary<string, object>;
+                        var nodeIndex = Index(rawNode, nodes.Count, "node");
+                        var node = nodes[nodeIndex] as Dictionary<string, object>;
                         if (node == null || !node.TryGetValue("mesh", out var rawMesh)) continue;
-                        var meshIndex = Index(rawMesh, meshes.Count, "mesh");
-                        // A known mesh reserves declared coverage even when
-                        // index/weight is malformed. Validation diagnoses it;
-                        // an overlapping raw route must not bypass that choice.
-                        if (!result.TryGetValue(meshIndex, out var coverage)) result.Add(meshIndex, coverage = new HashSet<string>(StringComparer.Ordinal));
+                        Index(rawMesh, meshes.Count, "mesh");
+                        // A known renderer node reserves declared coverage
+                        // even when index/weight is malformed. Another node
+                        // sharing its mesh remains independently selectable.
+                        if (!result.TryGetValue(nodeIndex, out var coverage)) result.Add(nodeIndex, coverage = new HashSet<string>(StringComparer.Ordinal));
                         coverage.Add(canonical);
                     }
                     catch (InvalidOperationException) { /* PreserveAuthored already diagnoses malformed references. */ }
