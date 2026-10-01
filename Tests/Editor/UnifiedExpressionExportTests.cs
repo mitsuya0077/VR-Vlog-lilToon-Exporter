@@ -1362,16 +1362,17 @@ namespace VRVlog.LilToonExporter.Tests
         [TestCase("reorder")]
         [TestCase("replacement")]
         [TestCase("shared")]
+        [TestCase("introduced")]
         public void DuplicateMaterialNamesKeepTheOriginallySelectedRendererSlot(string change)
         {
             using var fixture = new AttachmentConnectionTests.Fixture();
             var vrm = ScriptableObject.CreateInstance<VRM10Object>(); var clip = ScriptableObject.CreateInstance<VRM10Expression>();
             var first = new Material(Shader.Find("VRM10/MToon10")) { name = "Repeated UE Material" };
-            var second = new Material(first) { name = first.name }; Material replacement = null;
+            var second = new Material(first) { name = first.name }; Material replacement = null; GameObject introduced = null;
             try
             {
                 first.SetColor("_Color", Color.white); second.SetColor("_Color", Color.blue);
-                fixture.Skins[0].sharedMaterial = first; fixture.Skins[1].sharedMaterial = change == "shared" ? first : second;
+                fixture.Skins[0].sharedMaterial = first; fixture.Skins[1].sharedMaterial = change == "shared" || change == "introduced" ? first : second;
                 clip.name = "UE/MouthClosed"; clip.MaterialColorBindings = new[] { new MaterialColorBinding {
                     MaterialName = first.name, BindType = MaterialColorType.color, TargetValue = Color.red } };
                 vrm.Expression.CustomClips.Add(clip); fixture.Copy.AddComponent<Vrm10Instance>().Vrm = vrm;
@@ -1381,15 +1382,22 @@ namespace VRVlog.LilToonExporter.Tests
                 {
                     replacement = new Material(first) { name = first.name }; fixture.Skins[0].sharedMaterial = replacement;
                 }
+                else if (change == "introduced")
+                {
+                    introduced = new GameObject("NDMF introduced material renderer"); introduced.transform.SetParent(fixture.Copy.transform, false);
+                    var renderer = introduced.AddComponent<SkinnedMeshRenderer>(); renderer.sharedMesh = fixture.Mesh; renderer.sharedMaterial = second;
+                    introduced.transform.SetSiblingIndex(0);
+                }
                 else fixture.Skins[1].transform.SetSiblingIndex(0);
                 Assert.That(UnifiedExpressionPreparation.HasUsableEvidence(fixture.Copy), Is.True, "Both competing material endpoints still move.");
-                if (change == "reorder") Assert.Throws<InvalidOperationException>(() => guard.Verify(), "A different first same-name material cannot silently replace the selected authored target.");
+                if (change == "reorder" || change == "introduced") Assert.Throws<InvalidOperationException>(() => guard.Verify(), "A different first same-name material cannot silently replace the selected authored target.");
                 else Assert.DoesNotThrow(() => guard.Verify(), "Owned same-slot material copies and the same shared instance retain their authored target.");
                 Assert.That(first.GetColor("_Color"), Is.EqualTo(Color.white)); Assert.That(second.GetColor("_Color"), Is.EqualTo(Color.blue));
                 Assert.That(clip.MaterialColorBindings.Single().MaterialName, Is.EqualTo(first.name));
             }
             finally
             {
+                if (introduced != null) Object.DestroyImmediate(introduced);
                 if (replacement != null) Object.DestroyImmediate(replacement);
                 Object.DestroyImmediate(first); Object.DestroyImmediate(second); Object.DestroyImmediate(clip); Object.DestroyImmediate(vrm);
             }
