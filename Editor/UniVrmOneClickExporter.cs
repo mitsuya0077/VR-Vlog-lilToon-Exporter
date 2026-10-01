@@ -44,7 +44,7 @@ namespace VRVlog.LilToonExporter
             // cached source of expression weights after the user edits a clip.
             var menu = VrChatExpressionSampler.Analyze(source, exclusions.ContainsPath);
             exclusions.FilterExpressions(menu, warnings);
-            var sourceBlink = BlinkExportSession.Resolve(source, blinkOptions, exclusions.Contains);
+            var sourceBlink = BlinkExportSession.Resolve(source, blinkOptions, exclusions.Contains, suppressSharedTextureEmission, suppressHdrTextureEmission);
             using var poses = new PoseExportSession(source, poseOptions, exclusions.Contains);
             var clone = UnityEngine.Object.Instantiate(source);
             clone.name = source.name;
@@ -70,7 +70,7 @@ namespace VRVlog.LilToonExporter
                 // they participate in the same bindpose preservation as the skin.
                 if (requiresPreparation)
                     SkinnedMeshFallbackWeights.Preserve(clone, temporaryMeshes, warnings, fixedRootJoints);
-                var unifiedPreparation = trackingProfile == null ? new UnifiedExpressionPreparation(clone) : null;
+                var unifiedPreparation = trackingProfile == null ? new UnifiedExpressionPreparation(clone, suppressSharedTextureEmission: suppressSharedTextureEmission, suppressHdrTextureEmission: suppressHdrTextureEmission) : null;
                 using var preparation = NdmfExportPreparation.Prepare(source, clone, warnings);
                 gimmicks.Apply(expressionBindings, menu, warnings);
                 unifiedPreparation?.Verify(blink.RequiresUnifiedEvidence);

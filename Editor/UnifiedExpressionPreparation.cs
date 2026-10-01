@@ -26,17 +26,22 @@ namespace VRVlog.LilToonExporter
         private readonly Dictionary<SkinnedMeshRenderer, Dictionary<string, string>> selectedRawRoutes = new Dictionary<SkinnedMeshRenderer, Dictionary<string, string>>();
         private readonly GameObject avatar;
         private readonly Func<Transform, bool> excluded;
+        private readonly bool suppressSharedTextureEmission, suppressHdrTextureEmission;
         internal const string LostTracking = "Modular Avatar / NDMF の処理で Unified Expressions の追跡用変形が失われました。メッシュや BlendShape を変更する追加ツールの設定を確認してください。";
 
         internal bool SupportsUnified { get; private set; }
 
-        internal static bool HasUsableEvidence(GameObject source, Func<Transform, bool> excluded = null) =>
-            new UnifiedExpressionPreparation(source, excluded).SupportsUnified;
+        internal static bool HasUsableEvidence(GameObject source, Func<Transform, bool> excluded = null,
+            bool suppressSharedTextureEmission = false, bool suppressHdrTextureEmission = false) =>
+            new UnifiedExpressionPreparation(source, excluded, suppressSharedTextureEmission, suppressHdrTextureEmission).SupportsUnified;
 
-        internal UnifiedExpressionPreparation(GameObject clone, Func<Transform, bool> excluded = null)
+        internal UnifiedExpressionPreparation(GameObject clone, Func<Transform, bool> excluded = null,
+            bool suppressSharedTextureEmission = false, bool suppressHdrTextureEmission = false)
         {
             avatar = clone;
             this.excluded = excluded;
+            this.suppressSharedTextureEmission = suppressSharedTextureEmission;
+            this.suppressHdrTextureEmission = suppressHdrTextureEmission;
             var renderers = ExportRendererSelection.Enumerate(clone)
                 .Where(renderer => excluded?.Invoke(renderer.transform) != true).ToArray();
             var meshes = renderers.OfType<SkinnedMeshRenderer>()
@@ -111,7 +116,7 @@ namespace VRVlog.LilToonExporter
                 }, StringComparer.Ordinal).SelectMany(group => {
                     var priority = group.Min(clip => VrmUnifiedExpressions.RawPriority(clip.name, group.Key));
                     var preferred = group.Where(clip => VrmUnifiedExpressions.RawPriority(clip.name, group.Key) == priority).ToArray();
-                    return preferred.Length == 1 && IsUsable(preferred[0], clone, materialMap, meshes, excluded, omittedMaterials)
+                    return preferred.Length == 1 && IsUsable(preferred[0], clone, materialMap, meshes, excluded, omittedMaterials, suppressSharedTextureEmission, suppressHdrTextureEmission)
                         ? preferred : Array.Empty<VRM10Expression>();
                 }).ToArray();
             usableAuthoredNames.UnionWith(usableClips.Select(clip => clip.name));
@@ -134,7 +139,7 @@ namespace VRVlog.LilToonExporter
                 foreach (var clip in usableClips)
                 {
                     UnifiedExpressionRegistry.TryCanonicalize(clip.name, out var canonical);
-                    foreach (var route in MaterialRoutes(clip, materialMap, omittedMaterials))
+                    foreach (var route in MaterialRoutes(clip, materialMap, omittedMaterials, suppressSharedTextureEmission, suppressHdrTextureEmission))
                         effectiveMaterialRoutes.Add((canonical, route.Material, route.Kind));
                     foreach (var binding in EffectiveMorphs(clip, clone, excluded))
                     {
@@ -165,7 +170,8 @@ namespace VRVlog.LilToonExporter
         }
 
         private static bool IsUsable(VRM10Expression clip, GameObject clone, IDictionary<string, Material> materials,
-            IDictionary<SkinnedMeshRenderer, string[]> meshes, Func<Transform, bool> excluded, ISet<string> omittedMaterials)
+            IDictionary<SkinnedMeshRenderer, string[]> meshes, Func<Transform, bool> excluded, ISet<string> omittedMaterials,
+            bool suppressSharedTextureEmission, bool suppressHdrTextureEmission)
         {
             var positiveMorph = false;
             var targets = new HashSet<(SkinnedMeshRenderer, int)>();
@@ -190,11 +196,11 @@ namespace VRVlog.LilToonExporter
             foreach (var binding in RetainedUV(clip, omittedMaterials))
                 if (!materials.ContainsKey(binding.MaterialName) || !Finite(binding.Scaling.x) || !Finite(binding.Scaling.y) ||
                     !Finite(binding.Offset.x) || !Finite(binding.Offset.y)) return false;
-            return positiveMorph || MaterialRoutes(clip, materials, omittedMaterials).Any();
+            return positiveMorph || MaterialRoutes(clip, materials, omittedMaterials, suppressSharedTextureEmission, suppressHdrTextureEmission).Any();
         }
 
         private static IEnumerable<(string Material, string Kind)> MaterialRoutes(VRM10Expression clip,
-            IDictionary<string, Material> materials, ISet<string> omittedMaterials)
+            IDictionary<string, Material> materials, ISet<string> omittedMaterials, bool suppressSharedTextureEmission, bool suppressHdrTextureEmission)
         {
             // UniVRM sums all target-minus-base contributions for a property.
             // Opposing authored endpoints can therefore cancel completely.
@@ -204,7 +210,8 @@ namespace VRVlog.LilToonExporter
                 var property = ColorProperty(group.Key.BindType);
                 if (property == null || !LilToonMaterialReader.IsLilToon(material) && !material.HasProperty(property)) continue;
                 Vector4 baseline = LilToonMaterialReader.IsLilToon(material)
-                    ? (Vector4)UniVrmOneClickExporter.FallbackColor(material, group.Key.BindType) : material.GetVector(property);
+                    ? (Vector4)(group.Key.BindType == MaterialColorType.emissionColor && suppressHdrTextureEmission && LilToonEmissionPolicy.HasHdrTextureEmission(material)
+                        ? Color.black : UniVrmOneClickExporter.FallbackColor(material, group.Key.BindType, suppressSharedTextureEmission)) : material.GetVector(property);
                 // Three-component glTF factors import with alpha one.
                 if (group.Key.BindType != MaterialColorType.color) baseline.w = 1;
                 var delta = Vector4.zero;
@@ -278,7 +285,7 @@ namespace VRVlog.LilToonExporter
             if (SupportsUnified || requireUsableEvidence)
             {
                 if (avatar == null || !avatar.activeInHierarchy) throw new InvalidOperationException(LostTracking);
-                var current = new UnifiedExpressionPreparation(avatar, excluded);
+                var current = new UnifiedExpressionPreparation(avatar, excluded, suppressSharedTextureEmission, suppressHdrTextureEmission);
                 if (!current.SupportsUnified || usableAuthoredNames.Any(name => !current.usableAuthoredNames.Contains(name)) ||
                     effectiveAuthoredRoutes.Any(route => !current.effectiveAuthoredRoutes.Contains(route)) ||
                     effectiveMaterialRoutes.Any(route => !current.effectiveMaterialRoutes.Contains(route)) ||

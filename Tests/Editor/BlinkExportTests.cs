@@ -121,6 +121,78 @@ namespace VRVlog.LilToonExporter.Tests
             Assert.That(result.Slots[2].Single().Renderer, Is.SameAs(right));
         }
 
+        [TestCase(true, false)][TestCase(false, false)][TestCase(true, true)][TestCase(false, true)]
+        public void ACompleteUnifiedPairIncludesCompatibleOneSidedEyelashes(bool left, bool normalized)
+        {
+            var face = Skin("UE/EyeClosedLeft", "UE/EyeClosedRight");
+            var shape = normalized ? (left ? "face.eye_closed_left" : "face.eye_closed_right") : (left ? "UE/EyeClosedLeft" : "UE/EyeClosedRight");
+            var eyelashes = Skin(shape);
+            var result = BlinkExportSession.Resolve(root);
+            Assert.That(result.Slots[0].Count, Is.EqualTo(3));
+            Assert.That(result.Slots[left ? 1 : 2].Count, Is.EqualTo(2));
+            Assert.That(result.Slots[left ? 2 : 1].Count, Is.EqualTo(1));
+            Assert.That(result.Slots[0].Count(binding => binding.Renderer == eyelashes && binding.Shape == shape), Is.EqualTo(1));
+            Assert.That(result.Slots[left ? 1 : 2].Any(binding => binding.Renderer == eyelashes), Is.True);
+            Assert.That(result.Slots[left ? 2 : 1].Single().Renderer, Is.SameAs(face));
+            Assert.That(face.sharedMesh.blendShapeCount, Is.EqualTo(2));
+            Assert.That(eyelashes.sharedMesh.blendShapeCount, Is.EqualTo(1));
+        }
+
+        [Test] public void ACompleteUnifiedPairDoesNotAdoptAnUnrelatedLegacyPartial()
+        {
+            var face = Skin("UE/EyeClosedLeft", "UE/EyeClosedRight");
+            var eyelashes = Skin("Blink_L");
+            var result = BlinkExportSession.Resolve(root);
+            Assert.That(result.Slots[0].Count, Is.EqualTo(2));
+            Assert.That(result.Slots.All(slot => slot.All(binding => binding.Renderer == face)), Is.True);
+            Assert.That(eyelashes.sharedMesh.blendShapeCount, Is.EqualTo(1));
+        }
+
+        [TestCase(false, false)][TestCase(true, false)][TestCase(false, true)][TestCase(true, true)]
+        public void InertUnifiedClosureIsNotSelectedAlongsideUsableExplicitJaw(bool bilateral, bool endpointRest)
+        {
+            var names = bilateral ? new[] { "UE/JawOpen", "UE/EyeClosed" } : new[] { "UE/JawOpen", "UE/EyeClosedLeft", "UE/EyeClosedRight" };
+            var skin = Skin(names);
+            if (endpointRest)
+                for (var index = 1; index < names.Length; index++) skin.SetBlendShapeWeight(index, 100f);
+            else
+            {
+                skin.sharedMesh.ClearBlendShapes();
+                for (var index = 0; index < names.Length; index++)
+                    skin.sharedMesh.AddBlendShapeFrame(names[index], 100f, new[] { index == 0 ? Vector3.up * .2f : Vector3.zero, Vector3.zero, Vector3.zero }, new Vector3[3], new Vector3[3]);
+            }
+            var result = BlinkExportSession.Resolve(root);
+            Assert.That(result.Slots.All(slot => slot.Count == 0), Is.True);
+            Assert.That(result.HasBilateralPreset, Is.False);
+            Assert.That(result.RequiresUnifiedEvidence, Is.True);
+            Assert.That(skin.sharedMesh.blendShapeCount, Is.EqualTo(names.Length));
+            for (var index = 1; index < names.Length; index++) Assert.That(skin.GetBlendShapeWeight(index), Is.EqualTo(endpointRest ? 100f : 0f));
+        }
+
+        [TestCase(false)][TestCase(true)]
+        public void InertUnifiedClosureCannotWaiveMissingBlinkForSharedJaw(bool endpointRest)
+        {
+            var skin = Skin("JawOpen", "EyeClosedLeft", "EyeClosedRight");
+            if (endpointRest) { skin.SetBlendShapeWeight(1, 100f); skin.SetBlendShapeWeight(2, 100f); }
+            else
+            {
+                skin.sharedMesh.ClearBlendShapes();
+                skin.sharedMesh.AddBlendShapeFrame("JawOpen", 100f, new[] { Vector3.up * .2f, Vector3.zero, Vector3.zero }, new Vector3[3], new Vector3[3]);
+                foreach (var name in new[] { "EyeClosedLeft", "EyeClosedRight" }) skin.sharedMesh.AddBlendShapeFrame(name, 100f, new Vector3[3], new Vector3[3], new Vector3[3]);
+            }
+            Assert.Throws<InvalidOperationException>(() => BlinkExportSession.Resolve(root));
+        }
+
+        [Test] public void InertPreferredUnifiedAliasCannotSelectTheMovingLowerAlias()
+        {
+            var skin = Skin("UE/JawOpen", "UE/EyeClosedLeft", "EyeClosedLeft", "UE/EyeClosedRight");
+            skin.SetBlendShapeWeight(1, 100f);
+            var result = BlinkExportSession.Resolve(root);
+            Assert.That(result.Slots.All(slot => slot.Count == 0), Is.True);
+            Assert.That(skin.GetBlendShapeWeight(1), Is.EqualTo(100f));
+            Assert.That(skin.GetBlendShapeWeight(2), Is.Zero);
+        }
+
         [Test] public void ExplicitTrackingMarkerKeepsPartialBlinkValidation()
         {
             Skin("EyeClosedLeft");

@@ -39,7 +39,7 @@ namespace VRVlog.LilToonExporter
             return result;
         }
 
-        internal static int[] Resolve(IReadOnlyList<string> names, bool allowPartial = false)
+        internal static int[] Resolve(IReadOnlyList<string> names, bool allowPartial = false, Func<int, bool> unifiedUsable = null)
         {
             var result = new[] { -1, -1, -1 };
             foreach (var name in Both)
@@ -74,6 +74,11 @@ namespace VRVlog.LilToonExporter
                 // Use the same bounded normalization and collision rules as
                 // UE export, including prefixed names and the bilateral form.
                 var unified = VrmUnifiedExpressions.Resolve(names);
+                // Resolve aliases first: an inert preferred route must not
+                // select a lower-priority alias that detailed tracking omits.
+                if (unifiedUsable != null)
+                    foreach (var canonical in new[] { "EyeClosed", "EyeClosedLeft", "EyeClosedRight" })
+                        if (unified.TryGetValue(canonical, out var index) && !unifiedUsable(index)) unified.Remove(canonical);
                 if (result[0] < 0 && unified.TryGetValue("EyeClosed", out var both)) result[0] = both;
                 var hasLeft = unified.TryGetValue("EyeClosedLeft", out var left);
                 var hasRight = unified.TryGetValue("EyeClosedRight", out var right);

@@ -1098,6 +1098,83 @@ namespace VRVlog.LilToonExporter.Tests
             finally { if (imported != null) Object.DestroyImmediate(imported.gameObject); Object.DestroyImmediate(baked); }
         }
 
+        [TestCase(0f, false, false)]
+        [TestCase(0f, false, true)]
+        [TestCase(0f, true, false)]
+        [TestCase(0f, true, true)]
+        [TestCase(25f, false, false)]
+        [TestCase(25f, false, true)]
+        [TestCase(25f, true, false)]
+        [TestCase(25f, true, true)]
+        [TestCase(100f, false, false)]
+        [TestCase(100f, false, true)]
+        [TestCase(100f, true, false)]
+        [TestCase(100f, true, true)]
+        public async Task NegativeIntermediateFramesKeepTheirPositiveExportedEndpoint(float rest, bool authored, bool fullLilToon)
+        {
+            using var fixture = new AttachmentConnectionTests.Fixture();
+            var vrm = ScriptableObject.CreateInstance<VRM10Object>(); var clip = ScriptableObject.CreateInstance<VRM10Expression>();
+            var baked = new Mesh(); Vrm10Instance imported = null;
+            try
+            {
+                fixture.Mesh.AddBlendShapeFrame("MouthClosed", -50, Enumerable.Repeat(Vector3.down * .02f, fixture.Mesh.vertexCount).ToArray(), null, null);
+                fixture.Mesh.AddBlendShapeFrame("MouthClosed", 100, Enumerable.Repeat(Vector3.up * .04f, fixture.Mesh.vertexCount).ToArray(), null, null);
+                Assert.That(fixture.Mesh.GetBlendShapeFrameCount(1), Is.EqualTo(2), "Actual Unity accepts the negative intermediate frame.");
+                Assert.That(fixture.Mesh.GetBlendShapeFrameWeight(1, 0), Is.EqualTo(-50));
+                var sourceSkins = fixture.Source.GetComponentsInChildren<SkinnedMeshRenderer>();
+                // Verify the native interpolation independently of our evaluator.
+                sourceSkins[0].SetBlendShapeWeight(0, 0);
+                foreach (var weight in new[] { 0f, 50f, 100f })
+                {
+                    sourceSkins[0].SetBlendShapeWeight(1, weight); sourceSkins[0].BakeMesh(baked);
+                    Assert.That(Vector3.Distance(baked.vertices[0], fixture.Mesh.vertices[0] + Vector3.up * (.04f * weight / 100)), Is.LessThan(.000001f));
+                }
+                sourceSkins[0].SetBlendShapeWeight(0, 35);
+                foreach (var skin in sourceSkins) { skin.SetBlendShapeWeight(1, rest); skin.sharedMaterial.shader = Shader.Find("lilToon"); }
+                clip.name = "UE/MouthClosed";
+                if (authored)
+                {
+                    clip.MorphTargetBindings = new[] { new MorphTargetBinding("Front", 1, .6f), new MorphTargetBinding("Back", 1, .6f) };
+                    vrm.Expression.CustomClips.Add(clip); fixture.Source.AddComponent<Vrm10Instance>().Vrm = vrm;
+                }
+                var usable = rest < 100;
+                Assert.That(UnifiedExpressionPreparation.HasUsableEvidence(fixture.Source), Is.EqualTo(usable));
+                if (!usable)
+                {
+                    var error = Assert.Throws<InvalidOperationException>(() => UniVrmOneClickExporter.Export(fixture.Source, "Negative curve fully resting safeguard", "Tests",
+                        exporterVersion: fullLilToon ? "0.11.5" : null, lilToonVersion: fullLilToon ? "2.3.4" : null));
+                    Assert.That(error.Message, Does.Contain("閉眼"));
+                }
+                var bytes = UniVrmOneClickExporter.Export(fixture.Source, "Negative intermediate UE curve", "Tests",
+                    exporterVersion: fullLilToon ? "0.11.5" : null, lilToonVersion: fullLilToon ? "2.3.4" : null,
+                    blinkOptions: usable ? null : new BlinkExportOptions { Mode = BlinkExportMode.None });
+                imported = await Vrm10.LoadBytesAsync(bytes, canLoadVrm0X: false, awaitCaller: new ImmediateCaller());
+                var route = imported.Vrm.Expression.CustomClips.Single(value => value.name == clip.name);
+                var baseline = new Dictionary<string, Vector3>();
+                foreach (var input in new[] { 0f, .5f, 1f })
+                {
+                    imported.Runtime.Expression.SetWeight(ExpressionKey.CreateCustom(route.name), input); imported.Runtime.Process();
+                    foreach (var binding in route.MorphTargetBindings)
+                    {
+                        var skin = imported.transform.Find(binding.RelativePath).GetComponent<SkinnedMeshRenderer>();
+                        Assert.That(skin.GetBlendShapeWeight(binding.Index), Is.EqualTo(input * (authored ? 60 : 100)).Within(.001));
+                        Assert.That(skin.sharedMesh.GetBlendShapeFrameCount(binding.Index), Is.EqualTo(1));
+                        Assert.That(skin.sharedMesh.GetBlendShapeFrameWeight(binding.Index, 0), Is.EqualTo(100));
+                        var delta = new Vector3[skin.sharedMesh.vertexCount]; skin.sharedMesh.GetBlendShapeFrameVertices(binding.Index, 0, delta, null, null);
+                        Assert.That(delta[0].y, Is.EqualTo(.04f * (1 - rest / 100)).Within(.000001));
+                        skin.BakeMesh(baked); if (input == 0) baseline.Add(binding.RelativePath, baked.vertices[0]);
+                        Assert.That(Vector3.Distance(baseline[binding.RelativePath], baked.vertices[0]),
+                            Is.EqualTo(.04f * (1 - rest / 100) * input * (authored ? .6f : 1)).Within(.00001));
+                    }
+                }
+                Assert.That(fixture.Mesh.GetBlendShapeFrameCount(1), Is.EqualTo(2));
+                Assert.That(fixture.Mesh.GetBlendShapeFrameWeight(1, 0), Is.EqualTo(-50));
+                Assert.That(fixture.Mesh.GetBlendShapeFrameWeight(1, 1), Is.EqualTo(100));
+                Assert.That(sourceSkins.All(skin => skin.sharedMesh == fixture.Mesh && skin.GetBlendShapeWeight(0) == 35 && skin.GetBlendShapeWeight(1) == rest), Is.True);
+            }
+            finally { if (imported != null) Object.DestroyImmediate(imported.gameObject); Object.DestroyImmediate(baked); Object.DestroyImmediate(clip); Object.DestroyImmediate(vrm); }
+        }
+
         private static void AddTrackingDelta(Mesh mesh, string name, float amount = .02f) =>
             mesh.AddBlendShapeFrame(name, 100, Enumerable.Repeat(Vector3.up * amount, mesh.vertexCount).ToArray(), null, null);
 
@@ -1449,6 +1526,68 @@ namespace VRVlog.LilToonExporter.Tests
             {
                 if (imported != null) Object.DestroyImmediate(imported.gameObject);
                 Object.DestroyImmediate(material); Object.DestroyImmediate(clip); Object.DestroyImmediate(vrm);
+            }
+        }
+
+        [TestCase("shared", false, false)]
+        [TestCase("shared", false, true)]
+        [TestCase("shared", true, false)]
+        [TestCase("shared", true, true)]
+        [TestCase("hdr", false, false)]
+        [TestCase("hdr", false, true)]
+        [TestCase("hdr", true, false)]
+        [TestCase("hdr", true, true)]
+        public async Task EmissionEvidenceUsesTheActualSuppressionOptions(string kind, bool suppressed, bool fullLilToon)
+        {
+            using var fixture = new AttachmentConnectionTests.Fixture();
+            var vrm = ScriptableObject.CreateInstance<VRM10Object>(); var clip = ScriptableObject.CreateInstance<VRM10Expression>();
+            Vrm10Instance imported = null;
+            var main = new Texture2D(2, 2); main.SetPixels(Enumerable.Repeat(Color.white, 4).ToArray()); main.Apply();
+            var emission = new Texture2D(2, 2); emission.SetPixels(Enumerable.Repeat(Color.white, 4).ToArray()); emission.Apply();
+            try
+            {
+                AddTrackingDelta(fixture.Mesh, "JawOpen");
+                var material = fixture.Source.GetComponentsInChildren<SkinnedMeshRenderer>()[0].sharedMaterial;
+                material.shader = Shader.Find("lilToon"); material.SetTexture("_MainTex", main);
+                material.SetTexture("_EmissionMap", kind == "shared" ? main : emission);
+                material.SetFloat("_UseEmission", 1); material.SetFloat("_EmissionBlend", 1);
+                var originalColor = kind == "shared" ? new Color(.5f, .2f, .1f, 1) : new Color(2, 1, .5f, 1);
+                material.SetColor("_EmissionColor", originalColor);
+                Vector4 target = UniVrmOneClickExporter.FallbackColor(material, MaterialColorType.emissionColor); target.w = 1;
+                var sharedSuppressed = kind == "shared" && suppressed; var hdrSuppressed = kind == "hdr" && suppressed;
+                clip.name = "UE/MouthClosed"; clip.MaterialColorBindings = new[] { new MaterialColorBinding {
+                    MaterialName = material.name, BindType = MaterialColorType.emissionColor, TargetValue = target } };
+                vrm.Expression.CustomClips.Add(clip); fixture.Source.AddComponent<Vrm10Instance>().Vrm = vrm;
+                Assert.That(UnifiedExpressionPreparation.HasUsableEvidence(fixture.Source,
+                    suppressSharedTextureEmission: sharedSuppressed, suppressHdrTextureEmission: hdrSuppressed), Is.EqualTo(suppressed));
+                if (!suppressed) Assert.Throws<InvalidOperationException>(() => UniVrmOneClickExporter.Export(fixture.Source, "Unsuppressed inert emission safeguard", "Tests",
+                    suppressSharedTextureEmission: sharedSuppressed, suppressHdrTextureEmission: hdrSuppressed,
+                    exporterVersion: fullLilToon ? "0.11.5" : null, lilToonVersion: fullLilToon ? "2.3.4" : null));
+                var bytes = UniVrmOneClickExporter.Export(fixture.Source, "Emission suppression endpoint", "Tests",
+                    suppressSharedTextureEmission: sharedSuppressed, suppressHdrTextureEmission: hdrSuppressed,
+                    exporterVersion: fullLilToon ? "0.11.5" : null, lilToonVersion: fullLilToon ? "2.3.4" : null,
+                    blinkOptions: suppressed ? null : new BlinkExportOptions { Mode = BlinkExportMode.None });
+                Assert.That(VrmUnifiedExpressions.HasUsableEvidence(bytes), Is.EqualTo(suppressed));
+                imported = await Vrm10.LoadBytesAsync(bytes, canLoadVrm0X: false, awaitCaller: new ImmediateCaller());
+                var retained = imported.Vrm.Expression.CustomClips.Single(value => value.name == clip.name);
+                Assert.That(Vector4.Distance(retained.MaterialColorBindings.Single().TargetValue, target), Is.LessThan(.00001f));
+                Assert.That(imported.Vrm.Expression.CustomClips.Any(value => value.name == "UE/JawOpen"), Is.EqualTo(suppressed));
+                var proxy = imported.GetComponentsInChildren<Renderer>().SelectMany(renderer => renderer.sharedMaterials).First(value => value.name == material.name);
+                var baseline = suppressed ? new Vector4(0, 0, 0, 1) : target;
+                Assert.That(Vector4.Distance(proxy.GetVector("_EmissionColor"), baseline), Is.LessThan(.00001f));
+                foreach (var coefficient in new[] { 0f, .5f, 1f })
+                {
+                    imported.Runtime.Expression.SetWeight(ExpressionKey.CreateCustom(clip.name), coefficient); imported.Runtime.Process();
+                    Assert.That(Vector4.Distance(proxy.GetVector("_EmissionColor"), baseline + (target - baseline) * coefficient), Is.LessThan(.00001f));
+                }
+                Assert.That(material.GetColor("_EmissionColor"), Is.EqualTo(originalColor)); Assert.That(material.GetFloat("_UseEmission"), Is.EqualTo(1));
+                Assert.That(material.GetTexture("_MainTex"), Is.SameAs(main)); Assert.That(material.GetTexture("_EmissionMap"), Is.SameAs(kind == "shared" ? main : emission));
+                Assert.That(clip.MaterialColorBindings.Single().TargetValue, Is.EqualTo(target));
+            }
+            finally
+            {
+                if (imported != null) Object.DestroyImmediate(imported.gameObject);
+                Object.DestroyImmediate(main); Object.DestroyImmediate(emission); Object.DestroyImmediate(clip); Object.DestroyImmediate(vrm);
             }
         }
 

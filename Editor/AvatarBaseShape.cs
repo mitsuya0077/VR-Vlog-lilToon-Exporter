@@ -79,7 +79,8 @@ namespace VRVlog.LilToonExporter
             for (var frame = 0; frame < frames; frame++)
             {
                 var frameWeight = mesh.GetBlendShapeFrameWeight(shape, frame);
-                if (!Finite(frameWeight) || frameWeight < 0f || frameWeight == 0f && frame != 0) return false;
+                if (!Finite(frameWeight) || frame > 0 && frameWeight <= mesh.GetBlendShapeFrameWeight(shape, frame - 1) ||
+                    frameWeight == 0f && frame != 0) return false;
                 mesh.GetBlendShapeFrameVertices(shape, frame, endpoint.Vertices, endpoint.Normals, endpoint.Tangents);
                 for (var vertex = 0; vertex < mesh.vertexCount; vertex++)
                 {
@@ -87,7 +88,7 @@ namespace VRVlog.LilToonExporter
                     if (frameWeight == 0f && (Nonzero(endpoint.Vertices[vertex]) || Nonzero(endpoint.Normals[vertex]) || Nonzero(endpoint.Tangents[vertex]))) return false;
                 }
             }
-            if (mesh.GetBlendShapeFrameWeight(shape, frames - 1) == 0f) return false;
+            if (mesh.GetBlendShapeFrameWeight(shape, frames - 1) <= 0f) return false;
             var rest = Evaluate(mesh, shape, weight);
             var meaningful = false;
             for (var vertex = 0; vertex < mesh.vertexCount; vertex++)
