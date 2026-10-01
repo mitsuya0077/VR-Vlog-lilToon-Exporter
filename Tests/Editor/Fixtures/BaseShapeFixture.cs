@@ -124,7 +124,7 @@ namespace VRVlog.LilToonExporter.Tests
                     check(AvatarBaseShape.HasUsableRawEndpoint(source,0,rest)==(rest<100f),"A pure leading0 frame preserves raw residual qualification at rest"+rest+".");
                     check(AvatarBaseShape.HasUsableMorphEndpoint(source,0,rest)==(rest<100f),"A pure leading0 frame preserves authored residual qualification at rest"+rest+".");
                     AvatarBaseShape.Rebase(source,target,new[]{rest});
-                    var vertices=new Vector3[3];target.GetBlendShapeFrameVertices(0,0,vertices,null,null);
+                    var vertices=new Vector3[3];target.GetBlendShapeFrameVertices(0,0,vertices,new Vector3[3],new Vector3[3]);
                     check(Near(target.vertices[0].x,1f+4f*rest/100f) && Near(vertices[0].x,4f*(1f-rest/100f)) && Near(target.vertices[0].x+vertices[0].x,5f),
                         "Rebase evaluates a leading purezero as the implicit origin, preserves authored rest and reaches the original endpoint.");
                 }
