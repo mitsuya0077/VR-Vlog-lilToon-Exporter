@@ -26,6 +26,7 @@ namespace VRVlog.LilToonExporter.Tests
         internal static void Run(Action<bool, string> check)
         {
             AuthoredEvidenceControlsSharedJaw(check);
+            AuthoredMaterialResidualEvidence(check);
             var ordinary = Encode(Fixture("JawOpen", "EyeWideLeft", "TongueOut"));
             check(VrmUnifiedExpressions.Add(ordinary).SequenceEqual(ordinary), "ARKit shared names alone cannot establish UE support.");
             var unknown = Encode(Fixture("previewMouthClosed", "corrective_EyeClosedLeft_fix"));
@@ -284,6 +285,77 @@ namespace VRVlog.LilToonExporter.Tests
             var required = VrmUnifiedExpressions.Resolve(new[] { "LipFunnel", "LipFunnelUpperLeft" }, avatarSupportsUnified: true,
                 authoredCoverage: new[] { "LipFunnelUpperLeft" }, reservedAuthoredNames: new HashSet<string>(new[] { "LipFunnelUpperLeft" }, StringComparer.Ordinal));
             check(required.Count == 0, "Preparation does not require unused raw aggregate/split endpoints when an authored route reserves that mesh and channel.");
+        }
+
+        private static void AuthoredMaterialResidualEvidence(Action<bool, string> check)
+        {
+            foreach(var kind in new[]{"color","uv"})
+            foreach(var moving in new[]{false,true})
+            foreach(var movingMorph in new[]{false,true})
+            {
+                var root=Fixture("JawOpen");root["materials"]=Arr(Obj());
+                var route=kind=="color"?
+                    Obj("materialColorBinds",Arr(Obj("material",0L,"type","color","targetValue",moving?Arr(.2,.3,.4,1.0):Arr(1.0,1.0,1.0,1.0)))):
+                    Obj("textureTransformBinds",Arr(Obj("material",0L,"scale",Arr(1.0,1.0),"offset",moving?Arr(.2,.3):Arr(0.0,0.0))));
+                if(movingMorph)route["morphTargetBinds"]=Arr(Obj("node",1L,"index",0L,"weight",.4));
+                var vrm=(Dictionary<string,object>)((Dictionary<string,object>)root["extensions"])["VRMC_vrm"];
+                vrm["expressions"]=Obj("custom",Obj("UE/MouthClosed",route));
+                var input=Encode(root);var output=VrmUnifiedExpressions.Add(input);var custom=Custom(GlbDocument.Read(output).Json);
+                check(custom.ContainsKey("UE/JawOpen")== (moving||movingMorph),"Only a residual "+kind+" or moving morph route establishes shared JawOpen; identity material alone stays inert.");
+                check(JsonDom.Serialize(custom["UE/MouthClosed"])==JsonDom.Serialize(route),"Residual qualification preserves the authored "+kind+" target and mixed morph metadata verbatim.");
+                if(!moving&&!movingMorph)check(output.SequenceEqual(input),"An identity "+kind+" author route cannot modify a shared-name-only export.");
+            }
+            foreach(var kind in new[]{"color","uv"})
+            {
+                var root=Fixture("LipFunnel","JawOpen");root["materials"]=Arr(Obj());
+                var inert=kind=="color"?
+                    Obj("materialColorBinds",Arr(Obj("material",0L,"type","color","targetValue",Arr(1.0,1.0,1.0,1.0)))):
+                    Obj("textureTransformBinds",Arr(Obj("material",0L,"scale",Arr(1.0,1.0),"offset",Arr(0.0,0.0))));
+                var vrm=(Dictionary<string,object>)((Dictionary<string,object>)root["extensions"])["VRMC_vrm"];
+                vrm["expressions"]=Obj("custom",Obj("UE/LipFunnelUpperLeft",inert));
+                var input=Encode(root);var output=VrmUnifiedExpressions.Add(input);var custom=Custom(GlbDocument.Read(output).Json);
+                check(!custom.ContainsKey("UE/LipFunnel")&&!custom.ContainsKey("UE/JawOpen")&&output.SequenceEqual(input),"An inert nonempty "+kind+" split author still reserves global anatomy and cannot lend identity to shared JawOpen.");
+
+                root=Fixture("JawOpen");root["materials"]=Arr(Obj());
+                var moving=kind=="color"?
+                    Obj("materialColorBinds",Arr(Obj("material",0L,"type","color","targetValue",Arr(.2,.3,.4,1.0)))):
+                    Obj("textureTransformBinds",Arr(Obj("material",0L,"scale",Arr(1.0,1.0),"offset",Arr(.2,.3))));
+                vrm=(Dictionary<string,object>)((Dictionary<string,object>)root["extensions"])["VRMC_vrm"];
+                vrm["expressions"]=Obj("custom",Obj("UE/MouthClosed",inert,"mouth_closed",moving));
+                input=Encode(root);output=VrmUnifiedExpressions.Add(input);custom=Custom(GlbDocument.Read(output).Json);
+                check(!custom.ContainsKey("UE/JawOpen")&&output.SequenceEqual(input),"An inert explicit "+kind+" route retains author priority; a moving lower alias cannot establish tracking through it.");
+            }
+            foreach(var type in new[]{"color","emissionColor","shadeColor","matcapColor","rimColor","outlineColor"})
+            foreach(var moving in new[]{false,true})
+            {
+                var root=Fixture("JawOpen");var material=Obj();
+                if(type=="color")material["pbrMetallicRoughness"]=Obj("baseColorFactor",Arr(.21404114,.21404114,.21404114,.4));
+                else if(type=="emissionColor")
+                {
+                    material["emissiveFactor"]=Arr(.1,.1,.1);material["extensions"]=Obj("KHR_materials_emissive_strength",Obj("emissiveStrength",2.0));
+                }
+                else
+                {
+                    var property=type=="shadeColor"?"shadeColorFactor":type=="matcapColor"?"matcapFactor":type=="rimColor"?"parametricRimColorFactor":"outlineColorFactor";
+                    material["extensions"]=Obj("VRMC_materials_mtoon",Obj("specVersion","1.0",property,Arr(.21404114,.21404114,.21404114)));
+                }
+                root["materials"]=Arr(material);var baseline=type=="emissionColor"?.2:.5;var alpha=type=="color"?.4:1.0;
+                var route=Obj("materialColorBinds",Arr(Obj("material",0L,"type",type,"targetValue",Arr(moving?baseline+.1:baseline,baseline,baseline,alpha))));
+                var vrm=(Dictionary<string,object>)((Dictionary<string,object>)root["extensions"])["VRMC_vrm"];vrm["expressions"]=Obj("custom",Obj("UE/MouthClosed",route));
+                var input=Encode(root);var output=VrmUnifiedExpressions.Add(input);var custom=Custom(GlbDocument.Read(output).Json);
+                check(custom.ContainsKey("UE/JawOpen")==moving,"Final glTF "+type+" compares its pinned imported baseline, including linear/sRGB conversion or emissive strength.");
+                check(moving?JsonDom.Serialize(custom["UE/MouthClosed"])==JsonDom.Serialize(route):output.SequenceEqual(input),"A "+type+" baseline match stays inert and retained; a moving target remains unchanged while establishing tracking.");
+            }
+            foreach(var moving in new[]{false,true})
+            {
+                var root=Fixture("JawOpen");root["materials"]=Arr(Obj("pbrMetallicRoughness",Obj("baseColorTexture",Obj("index",0L,
+                    "extensions",Obj("KHR_texture_transform",Obj("scale",Arr(2.0,3.0),"offset",Arr(.2,-2.4)))))));
+                var route=Obj("textureTransformBinds",Arr(Obj("material",0L,"scale",Arr(2.0,3.0),"offset",Arr(moving?.3:.2,-2.4))));
+                var vrm=(Dictionary<string,object>)((Dictionary<string,object>)root["extensions"])["VRMC_vrm"];vrm["expressions"]=Obj("custom",Obj("UE/MouthClosed",route));
+                var input=Encode(root);var output=VrmUnifiedExpressions.Add(input);var custom=Custom(GlbDocument.Read(output).Json);
+                check(custom.ContainsKey("UE/JawOpen")==moving,"Nonidentity baseColorTexture KHR transform uses the same pinned vertical flip as authored UV bindings.");
+                check(moving?JsonDom.Serialize(custom["UE/MouthClosed"])==JsonDom.Serialize(route):output.SequenceEqual(input),"A matching nonidentity UV transform is preserved inert, while an actual offset residual establishes tracking.");
+            }
         }
 
         private static void AuthoredEvidenceControlsSharedJaw(Action<bool, string> check)

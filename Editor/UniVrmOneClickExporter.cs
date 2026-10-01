@@ -3,6 +3,7 @@ using System.Collections.Generic;
 using System.Linq;
 using UniGLTF;
 using UniVRM10;
+using UniGLTF.Extensions.VRMC_vrm;
 using UnityEngine;
 using VRM10.MToon10;
 using PackageManagerPackageInfo = UnityEditor.PackageManager.PackageInfo;
@@ -94,6 +95,7 @@ namespace VRVlog.LilToonExporter
                         string.Join(", ", attachments.Parts.ConvertAll(part => part.Root.name)));
                 var springs = PhysBoneSpringExport.Convert(source, clone, warnings);
                 ReplaceLilToonMaterials(clone, temporaryMaterials, temporaryTextures, fallbackWarnings, suppressSharedTextureEmission);
+                unifiedPreparation?.Verify(blink.RequiresUnifiedEvidence);
                 MakeRendererMeshesUnique(clone, temporaryMeshes);
                 var exported = Vrm10AppearanceExporter.Export(
                     new GltfExportSettings { ExportVertexColor = true },
@@ -118,6 +120,8 @@ namespace VRVlog.LilToonExporter
                     exported = fullSnapshot.Inject(exported, exporterVersion, lilToonVersion);
                     foreach(var warning in fallbackWarnings)warnings?.Add("標準VRM表示の近似: "+warning);
                 }
+                if (blink.RequiresUnifiedEvidence && !VrmUnifiedExpressions.HasUsableEvidence(exported))
+                    throw new InvalidOperationException(UnifiedExpressionPreparation.LostTracking);
                 PhysBoneSpringExport.VerifyOutput(exported, springs);
                 return poses.Inject(exported);
             }
@@ -249,11 +253,9 @@ namespace VRVlog.LilToonExporter
                 // glTF/MToon cannot express front-face culling. Double-sided is
                 // the safe portable approximation for lilToon's front/off modes.
                 DoubleSidedMode = Float(source, "_Cull", 2f) == 2f ? MToon10DoubleSidedMode.Off : MToon10DoubleSidedMode.On,
-                BaseColorFactorSrgb = Color(source, "_Color", UnityEngine.Color.white),
+                BaseColorFactorSrgb = FallbackColor(source, MaterialColorType.color, suppressSharedTextureEmission),
                 BaseColorTexture = Texture(source, "_MainTex"),
-                ShadeColorFactorSrgb = shadowEnabled ? MobileMaterialMath.ShadeColor(
-                    Color(source, "_Color", UnityEngine.Color.white), Color(source, "_ShadowColor", UnityEngine.Color.gray),
-                    Float(source, "_ShadowStrength", 1f)) : Color(source, "_Color", UnityEngine.Color.white),
+                ShadeColorFactorSrgb = FallbackColor(source, MaterialColorType.shadeColor, suppressSharedTextureEmission),
                 ShadingShiftFactor = shadowEnabled ? MobileMaterialMath.ShadowShift(Float(source, "_ShadowBorder", 0.5f), Float(source, "_ShadowBlur", 0.1f)) : 0f,
                 ShadingToonyFactor = shadowEnabled ? MobileMaterialMath.ShadowToony(Float(source, "_ShadowBorder", 0.5f), Float(source, "_ShadowBlur", 0.1f)) : 0f,
                 // An unset MToon shade texture is white, not the base image.
@@ -262,15 +264,13 @@ namespace VRVlog.LilToonExporter
                     : Texture(source, "_MainTex"),
                 NormalTexture = normalEnabled ? Texture(source, "_BumpMap") : null,
                 NormalTextureScale = normalEnabled ? Float(source, "_BumpScale", 1f) : 0f,
-                EmissiveFactorLinear = emissionEnabled ? Color(source, "_EmissionColor", UnityEngine.Color.black).linear * Mathf.Clamp01(Float(source, "_EmissionBlend", 1f)) : UnityEngine.Color.black,
+                EmissiveFactorLinear = FallbackColor(source, MaterialColorType.emissionColor, suppressSharedTextureEmission),
                 EmissiveTexture = emissionEnabled ? Texture(source, "_EmissionMap") : null,
-                MatcapColorFactorSrgb = matcapEnabled ? MobileMaterialMath.MatcapColor(Color(source, "_MatCapColor", UnityEngine.Color.white), Float(source, "_MatCapBlend", 1f)) : UnityEngine.Color.black,
+                MatcapColorFactorSrgb = FallbackColor(source, MaterialColorType.matcapColor, suppressSharedTextureEmission),
                 MatcapTexture = matcapEnabled ? Texture(source, "_MatCapTex") : null,
                 // MToon has no directional backlight. When lilToon rim light is
                 // unused, its parametric rim is the closest portable fallback.
-                ParametricRimColorFactorSrgb = rimEnabled
-                    ? MobileMaterialMath.MatcapColor(Color(source, "_RimColor", UnityEngine.Color.black), 1f)
-                    : backlightEnabled ? Color(source, "_BacklightColor", UnityEngine.Color.black) : UnityEngine.Color.black,
+                ParametricRimColorFactorSrgb = FallbackColor(source, MaterialColorType.rimColor, suppressSharedTextureEmission),
                 ParametricRimFresnelPowerFactor = Mathf.Max(0f, rimEnabled
                     ? MobileMaterialMath.RimPower(Float(source, "_RimBorder", 0.5f), Float(source, "_RimFresnelPower", 1f))
                     : backlightEnabled ? Float(source, "_BacklightDirectivity", 5f) : 1f),
@@ -286,7 +286,7 @@ namespace VRVlog.LilToonExporter
                 // lilToon's _OutlineTex colors the outline; MToon's texture is
                 // a green-channel width mask, so they are not interchangeable.
                 OutlineWidthMultiplyTexture = outlineEnabled ? OutlineMaskTexture.Create(Texture(source, "_OutlineWidthMask"), textures, outlineMasks) : null,
-                OutlineColorFactorSrgb = Color(source, "_OutlineColor", UnityEngine.Color.black),
+                OutlineColorFactorSrgb = FallbackColor(source, MaterialColorType.outlineColor, suppressSharedTextureEmission),
                 OutlineLightingMixFactor = Mathf.Clamp01(Float(source, "_OutlineEnableLighting", 0f)),
             };
             if (source.HasProperty("_MainTex"))
@@ -298,6 +298,29 @@ namespace VRVlog.LilToonExporter
             }
             context.Validate();
             return material;
+        }
+
+        // This is shared by the actual fallback and UE endpoint validation;
+        // the latter must compare against this proxy rather than guessed lilToon
+        // property names or the serialized linear glTF color values.
+        internal static Color FallbackColor(Material source, MaterialColorType type, bool suppressSharedTextureEmission = false)
+        {
+            switch (type)
+            {
+                case MaterialColorType.color: return Color(source, "_Color", UnityEngine.Color.white);
+                case MaterialColorType.shadeColor: return source.HasProperty("_UseShadow") && source.GetFloat("_UseShadow") > .5f
+                    ? MobileMaterialMath.ShadeColor(Color(source, "_Color", UnityEngine.Color.white), Color(source, "_ShadowColor", UnityEngine.Color.gray), Float(source, "_ShadowStrength", 1f))
+                    : Color(source, "_Color", UnityEngine.Color.white);
+                case MaterialColorType.emissionColor: return EnabledOrTexture(source, "_UseEmission", "_EmissionMap") && !LilToonEmissionPolicy.IsSuppressed(source, suppressSharedTextureEmission)
+                    ? Color(source, "_EmissionColor", UnityEngine.Color.black).linear * Mathf.Clamp01(Float(source, "_EmissionBlend", 1f)) : UnityEngine.Color.black;
+                case MaterialColorType.matcapColor: return source.HasProperty("_UseMatCap") && source.GetFloat("_UseMatCap") > .5f
+                    ? MobileMaterialMath.MatcapColor(Color(source, "_MatCapColor", UnityEngine.Color.white), Float(source, "_MatCapBlend", 1f)) : UnityEngine.Color.black;
+                case MaterialColorType.rimColor: return source.HasProperty("_UseRim") && source.GetFloat("_UseRim") > .5f
+                    ? MobileMaterialMath.MatcapColor(Color(source, "_RimColor", UnityEngine.Color.black), 1f)
+                    : source.HasProperty("_UseBacklight") && source.GetFloat("_UseBacklight") > .5f ? Color(source, "_BacklightColor", UnityEngine.Color.black) : UnityEngine.Color.black;
+                case MaterialColorType.outlineColor: return Color(source, "_OutlineColor", UnityEngine.Color.black);
+                default: throw new ArgumentOutOfRangeException(nameof(type));
+            }
         }
 
         private static MToon10AlphaMode AlphaMode(Material material)

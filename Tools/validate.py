@@ -245,12 +245,12 @@ assert (root / "LICENSE").is_file()
 assert "instance.Vrm.Meta.CopyTo" not in one_click
 assert "Never copy contact information" in one_click
 assert "NormalTextureScale = normalEnabled ?" in one_click
-assert "EmissiveFactorLinear = emissionEnabled ?" in one_click
-assert "MatcapColorFactorSrgb = matcapEnabled ?" in one_click
-assert "ParametricRimColorFactorSrgb = rimEnabled" in one_click
-assert 'backlightEnabled ? Color(source, "_BacklightColor"' in one_click
+assert "EmissiveFactorLinear = FallbackColor(source, MaterialColorType.emissionColor," in one_click
+assert "MatcapColorFactorSrgb = FallbackColor(source, MaterialColorType.matcapColor," in one_click
+assert "ParametricRimColorFactorSrgb = FallbackColor(source, MaterialColorType.rimColor," in one_click
+assert 'source.GetFloat("_UseBacklight") > .5f ? Color(source, "_BacklightColor"' in one_click
 assert 'backlightEnabled ? Float(source, "_BacklightDirectivity"' in one_click
-assert "ShadeColorFactorSrgb = shadowEnabled ?" in one_click
+assert "ShadeColorFactorSrgb = FallbackColor(source, MaterialColorType.shadeColor," in one_click
 assert "ShadeColorTexture = shadowEnabled" in one_click
 for gated_texture in ("NormalTexture", "EmissiveTexture", "MatcapTexture", "RimMultiplyTexture"):
     assert f"{gated_texture} =" in one_click and "? Texture(source," in one_click

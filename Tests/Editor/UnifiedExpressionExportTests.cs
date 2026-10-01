@@ -1257,6 +1257,167 @@ namespace VRVlog.LilToonExporter.Tests
             }
         }
 
+        [TestCase("color", false, false)]
+        [TestCase("color", false, true)]
+        [TestCase("color", true, false)]
+        [TestCase("color", true, true)]
+        [TestCase("emissionColor", false, false)]
+        [TestCase("emissionColor", false, true)]
+        [TestCase("emissionColor", true, false)]
+        [TestCase("emissionColor", true, true)]
+        [TestCase("shadeColor", false, false)]
+        [TestCase("shadeColor", false, true)]
+        [TestCase("shadeColor", true, false)]
+        [TestCase("shadeColor", true, true)]
+        [TestCase("matcapColor", false, false)]
+        [TestCase("matcapColor", false, true)]
+        [TestCase("matcapColor", true, false)]
+        [TestCase("matcapColor", true, true)]
+        [TestCase("rimColor", false, false)]
+        [TestCase("rimColor", false, true)]
+        [TestCase("rimColor", true, false)]
+        [TestCase("rimColor", true, true)]
+        [TestCase("outlineColor", false, false)]
+        [TestCase("outlineColor", false, true)]
+        [TestCase("outlineColor", true, false)]
+        [TestCase("outlineColor", true, true)]
+        [TestCase("uv", false, false)]
+        [TestCase("uv", false, true)]
+        [TestCase("uv", true, false)]
+        [TestCase("uv", true, true)]
+        public async Task MaterialEndpointEvidenceMatchesActualImportedProxy(string kind, bool moving, bool fullLilToon)
+        {
+            using var fixture = new AttachmentConnectionTests.Fixture();
+            var vrm = ScriptableObject.CreateInstance<VRM10Object>();
+            var clip = ScriptableObject.CreateInstance<VRM10Expression>();
+            Vrm10Instance imported = null;
+            var texture = new Texture2D(2, 2); texture.SetPixels(Enumerable.Repeat(Color.white, 4).ToArray()); texture.Apply();
+            try
+            {
+                AddTrackingDelta(fixture.Mesh, "JawOpen");
+                var sourceMaterial = fixture.Source.GetComponentsInChildren<SkinnedMeshRenderer>()[0].sharedMaterial;
+                sourceMaterial.shader = Shader.Find("lilToon");
+                sourceMaterial.SetColor("_Color", new Color(.5f, .3f, .2f, .6f));
+                sourceMaterial.SetTexture("_MainTex", texture);
+                sourceMaterial.SetTextureScale("_MainTex", new Vector2(2, 3)); sourceMaterial.SetTextureOffset("_MainTex", new Vector2(.2f, .4f));
+                sourceMaterial.SetFloat("_UseEmission", 1); sourceMaterial.SetFloat("_EmissionBlend", .5f);
+                sourceMaterial.SetColor("_EmissionColor", new Color(.5f, .3f, .2f, 1));
+                sourceMaterial.SetFloat("_UseMatCap", 1); sourceMaterial.SetFloat("_MatCapBlend", .4f);
+                sourceMaterial.SetColor("_MatCapColor", new Color(.6f, .3f, .2f, 1));
+                sourceMaterial.SetFloat("_UseRim", 1); sourceMaterial.SetColor("_RimColor", new Color(.2f, .3f, .4f, 1));
+                sourceMaterial.SetColor("_OutlineColor", new Color(.2f, .5f, .3f, 1));
+                clip.name = "UE/MouthClosed";
+                Vector4 target;
+                string property = null;
+                if (kind == "uv")
+                {
+                    var scale = sourceMaterial.mainTextureScale; var offset = sourceMaterial.mainTextureOffset;
+                    target = new Vector4(scale.x, scale.y, offset.x + (moving ? .3f : 0), offset.y);
+                    clip.MaterialUVBindings = new[] { new MaterialUVBinding { MaterialName = sourceMaterial.name,
+                        Scaling = new Vector2(target.x, target.y), Offset = new Vector2(target.z, target.w) } };
+                }
+                else
+                {
+                    var type = (MaterialColorType)Enum.Parse(typeof(MaterialColorType), kind);
+                    target = UniVrmOneClickExporter.FallbackColor(sourceMaterial, type);
+                    if (type != MaterialColorType.color) target.w = 1;
+                    if (moving) target.x += .1f;
+                    clip.MaterialColorBindings = new[] { new MaterialColorBinding { MaterialName = sourceMaterial.name, BindType = type, TargetValue = target } };
+                    property = UnifiedExpressionPreparation.ColorProperty(type);
+                }
+                var originalColor = sourceMaterial.GetColor("_Color"); var originalScale = sourceMaterial.mainTextureScale; var originalOffset = sourceMaterial.mainTextureOffset;
+                vrm.Expression.CustomClips.Add(clip); fixture.Source.AddComponent<Vrm10Instance>().Vrm = vrm;
+                Assert.That(UnifiedExpressionPreparation.HasUsableEvidence(fixture.Source), Is.EqualTo(moving));
+                if (!moving) Assert.Throws<InvalidOperationException>(() => UniVrmOneClickExporter.Export(fixture.Source, "Inert material safeguard", "Tests",
+                    exporterVersion: fullLilToon ? "0.11.5" : null, lilToonVersion: fullLilToon ? "2.3.4" : null));
+                var bytes = UniVrmOneClickExporter.Export(fixture.Source, "Material endpoint proxy", "Tests",
+                    exporterVersion: fullLilToon ? "0.11.5" : null, lilToonVersion: fullLilToon ? "2.3.4" : null,
+                    blinkOptions: moving ? null : new BlinkExportOptions { Mode = BlinkExportMode.None });
+                Assert.That(VrmUnifiedExpressions.HasUsableEvidence(bytes), Is.EqualTo(moving));
+                imported = await Vrm10.LoadBytesAsync(bytes, canLoadVrm0X: false, awaitCaller: new ImmediateCaller());
+                var retained = imported.Vrm.Expression.CustomClips.Single(value => value.name == clip.name);
+                Assert.That(retained.MaterialColorBindings.Length + retained.MaterialUVBindings.Length, Is.EqualTo(1));
+                Assert.That(imported.Vrm.Expression.CustomClips.Any(value => value.name == "UE/JawOpen"), Is.EqualTo(moving));
+                var material = imported.GetComponentsInChildren<Renderer>().SelectMany(renderer => renderer.sharedMaterials).First(value => value.name == sourceMaterial.name);
+                var baseline = kind == "uv" ? new Vector4(material.mainTextureScale.x, material.mainTextureScale.y, material.mainTextureOffset.x, material.mainTextureOffset.y) : material.GetVector(property);
+                foreach (var coefficient in new[] { 0f, .5f, 1f })
+                {
+                    imported.Runtime.Expression.SetWeight(ExpressionKey.CreateCustom(clip.name), coefficient); imported.Runtime.Process();
+                    var actual = kind == "uv" ? new Vector4(material.mainTextureScale.x, material.mainTextureScale.y, material.mainTextureOffset.x, material.mainTextureOffset.y) : material.GetVector(property);
+                    Assert.That(Vector4.Distance(actual, baseline + (target - baseline) * coefficient), Is.LessThan(.00005f), "Actual pinned material merger endpoint");
+                }
+                Assert.That(sourceMaterial.GetColor("_Color"), Is.EqualTo(originalColor));
+                Assert.That(sourceMaterial.mainTextureScale, Is.EqualTo(originalScale)); Assert.That(sourceMaterial.mainTextureOffset, Is.EqualTo(originalOffset));
+                Assert.That(sourceMaterial.GetTexture("_MainTex"), Is.SameAs(texture));
+                if (kind == "uv") Assert.That(clip.MaterialUVBindings.Single().ScalingOffset, Is.EqualTo(target));
+                else Assert.That(clip.MaterialColorBindings.Single().TargetValue, Is.EqualTo(target));
+            }
+            finally
+            {
+                if (imported != null) Object.DestroyImmediate(imported.gameObject);
+                Object.DestroyImmediate(texture); Object.DestroyImmediate(clip); Object.DestroyImmediate(vrm);
+            }
+        }
+
+        [TestCase("color")]
+        [TestCase("uv")]
+        [TestCase("cancellation")]
+        public void PreparationRejectsLossOfPreviouslyMovingMaterialEndpoint(string kind)
+        {
+            using var fixture = new AttachmentConnectionTests.Fixture();
+            var vrm = ScriptableObject.CreateInstance<VRM10Object>(); var clip = ScriptableObject.CreateInstance<VRM10Expression>();
+            try
+            {
+                AddTrackingDelta(fixture.Mesh, "EyeClosedLeft");
+                clip.name = "UE/MouthClosed";
+                var material = fixture.Skins[0].sharedMaterial;
+                if (kind == "uv") clip.MaterialUVBindings = new[] { new MaterialUVBinding { MaterialName = material.name, Scaling = Vector2.one, Offset = Vector2.up } };
+                else clip.MaterialColorBindings = new[] { new MaterialColorBinding { MaterialName = material.name, BindType = MaterialColorType.color, TargetValue = Color.red } };
+                vrm.Expression.CustomClips.Add(clip); fixture.Copy.AddComponent<Vrm10Instance>().Vrm = vrm;
+                var guard = new UnifiedExpressionPreparation(fixture.Copy);
+                if (kind == "uv") material.mainTextureOffset = Vector2.up;
+                else if (kind == "color") material.SetColor("_Color", Color.red);
+                else clip.MaterialColorBindings = new[] {
+                    new MaterialColorBinding { MaterialName = material.name, BindType = MaterialColorType.color, TargetValue = Color.red },
+                    new MaterialColorBinding { MaterialName = material.name, BindType = MaterialColorType.color, TargetValue = new Vector4(1,2,2,1) } };
+                Assert.That(UnifiedExpressionPreparation.HasUsableEvidence(fixture.Copy), Is.True, "Other moving UE survives the material loss.");
+                Assert.Throws<InvalidOperationException>(() => guard.Verify());
+            }
+            finally { Object.DestroyImmediate(clip); Object.DestroyImmediate(vrm); }
+        }
+
+        [TestCase(false, false)]
+        [TestCase(true, false)]
+        [TestCase(false, true)]
+        [TestCase(true, true)]
+        public void FallbackBakingCannotReplaceMovingMaterialEvidenceWithAnInertBase(bool fullLilToon, bool otherUnifiedSurvives = false)
+        {
+            using var fixture = new AttachmentConnectionTests.Fixture();
+            var vrm = ScriptableObject.CreateInstance<VRM10Object>(); var clip = ScriptableObject.CreateInstance<VRM10Expression>();
+            try
+            {
+                AddTrackingDelta(fixture.Mesh, "JawOpen");
+                if (otherUnifiedSurvives) AddTrackingDelta(fixture.Mesh, "EyeClosedLeft");
+                var material = fixture.Source.GetComponentsInChildren<SkinnedMeshRenderer>()[0].sharedMaterial;
+                material.shader = Shader.Find("lilToon"); material.SetColor("_Color", Color.red);
+                // Color adjustment invokes the existing actual layer baker,
+                // which writes the tint into pixels and makes _Color white.
+                material.SetVector("_MainTexHSVG", new Vector4(.1f, 1, 1, 1));
+                Assert.That(LilToonMainTextureBaker.NeedsBake(material), Is.True);
+                clip.name = "UE/MouthClosed"; clip.MaterialColorBindings = new[] { new MaterialColorBinding {
+                    MaterialName = material.name, BindType = MaterialColorType.color, TargetValue = Color.white } };
+                vrm.Expression.CustomClips.Add(clip); fixture.Source.AddComponent<Vrm10Instance>().Vrm = vrm;
+                Assert.That(UnifiedExpressionPreparation.HasUsableEvidence(fixture.Source), Is.True);
+                var error = Assert.Throws<InvalidOperationException>(() => UniVrmOneClickExporter.Export(fixture.Source, "Baked material safeguard", "Tests",
+                    exporterVersion: fullLilToon ? "0.11.5" : null, lilToonVersion: fullLilToon ? "2.3.4" : null));
+                Assert.That(error.Message, Is.EqualTo(UnifiedExpressionPreparation.LostTracking));
+                Assert.That(material.GetColor("_Color"), Is.EqualTo(Color.red));
+                Assert.That(material.GetVector("_MainTexHSVG").x, Is.EqualTo(.1f));
+                Assert.That(clip.MaterialColorBindings.Single().TargetValue, Is.EqualTo((Vector4)Color.white));
+            }
+            finally { Object.DestroyImmediate(clip); Object.DestroyImmediate(vrm); }
+        }
+
         [TestCase("color", true)]
         [TestCase("color", false)]
         [TestCase("uv", true)]

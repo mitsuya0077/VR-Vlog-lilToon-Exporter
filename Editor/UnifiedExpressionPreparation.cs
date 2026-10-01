@@ -4,6 +4,7 @@ using System.Linq;
 using UniGLTF.Extensions.VRMC_vrm;
 using UniVRM10;
 using UnityEngine;
+using VRM10.MToon10;
 using VRVlog.FaceTracking;
 
 namespace VRVlog.LilToonExporter
@@ -18,10 +19,11 @@ namespace VRVlog.LilToonExporter
         private readonly HashSet<string> usableAuthoredNames = new HashSet<string>(StringComparer.Ordinal);
         private readonly HashSet<(string Canonical, SkinnedMeshRenderer Renderer, string Shape, float Weight)> effectiveAuthoredRoutes =
             new HashSet<(string, SkinnedMeshRenderer, string, float)>();
+        private readonly HashSet<(string Canonical, string Material, string Kind)> effectiveMaterialRoutes = new HashSet<(string, string, string)>();
         private readonly Dictionary<SkinnedMeshRenderer, Dictionary<string, string>> selectedRawRoutes = new Dictionary<SkinnedMeshRenderer, Dictionary<string, string>>();
         private readonly GameObject avatar;
         private readonly Func<Transform, bool> excluded;
-        private const string LostTracking = "Modular Avatar / NDMF の処理で Unified Expressions の追跡用変形が失われました。メッシュや BlendShape を変更する追加ツールの設定を確認してください。";
+        internal const string LostTracking = "Modular Avatar / NDMF の処理で Unified Expressions の追跡用変形が失われました。メッシュや BlendShape を変更する追加ツールの設定を確認してください。";
 
         internal bool SupportsUnified { get; private set; }
 
@@ -37,8 +39,9 @@ namespace VRVlog.LilToonExporter
             var meshes = renderers.OfType<SkinnedMeshRenderer>()
                 .Where(skin => skin.sharedMesh != null).ToDictionary(skin => skin, skin =>
                     Enumerable.Range(0, skin.sharedMesh.blendShapeCount).Select(skin.sharedMesh.GetBlendShapeName).ToArray());
-            var materials = new HashSet<string>(renderers.SelectMany(renderer => renderer.sharedMaterials)
-                .Where(material => material != null).Select(material => material.name), StringComparer.Ordinal);
+            var materialMap = renderers.SelectMany(renderer => renderer.sharedMaterials).Where(material => material != null)
+                .GroupBy(material => material.name, StringComparer.Ordinal).ToDictionary(group => group.Key, group => group.First(), StringComparer.Ordinal);
+            var materials = new HashSet<string>(materialMap.Keys, StringComparer.Ordinal);
             var omittedMaterials = new HashSet<string>(clone.GetComponentsInChildren<Renderer>(true)
                 .Where(renderer => excluded?.Invoke(renderer.transform) == true).SelectMany(renderer => renderer.sharedMaterials)
                 .Where(material => material != null).Select(material => material.name), StringComparer.Ordinal);
@@ -89,7 +92,7 @@ namespace VRVlog.LilToonExporter
                 }, StringComparer.Ordinal).SelectMany(group => {
                     var priority = group.Min(clip => VrmUnifiedExpressions.RawPriority(clip.name, group.Key));
                     var preferred = group.Where(clip => VrmUnifiedExpressions.RawPriority(clip.name, group.Key) == priority).ToArray();
-                    return preferred.Length == 1 && IsUsable(preferred[0], clone, materials, meshes, excluded, omittedMaterials)
+                    return preferred.Length == 1 && IsUsable(preferred[0], clone, materialMap, meshes, excluded, omittedMaterials)
                         ? preferred : Array.Empty<VRM10Expression>();
                 }).ToArray();
             usableAuthoredNames.UnionWith(usableClips.Select(clip => clip.name));
@@ -112,6 +115,8 @@ namespace VRVlog.LilToonExporter
                 foreach (var clip in usableClips)
                 {
                     UnifiedExpressionRegistry.TryCanonicalize(clip.name, out var canonical);
+                    foreach (var route in MaterialRoutes(clip, materialMap, omittedMaterials))
+                        effectiveMaterialRoutes.Add((canonical, route.Material, route.Kind));
                     foreach (var binding in EffectiveMorphs(clip, clone, excluded))
                     {
                         var target = Target(clone, binding.RelativePath);
@@ -140,7 +145,7 @@ namespace VRVlog.LilToonExporter
             }
         }
 
-        private static bool IsUsable(VRM10Expression clip, GameObject clone, ISet<string> materials,
+        private static bool IsUsable(VRM10Expression clip, GameObject clone, IDictionary<string, Material> materials,
             IDictionary<SkinnedMeshRenderer, string[]> meshes, Func<Transform, bool> excluded, ISet<string> omittedMaterials)
         {
             var positiveMorph = false;
@@ -155,19 +160,65 @@ namespace VRVlog.LilToonExporter
                 var mesh = skin.sharedMesh;
                 if (mesh == null || binding.Index < 0 || binding.Index >= mesh.blendShapeCount ||
                     !Finite(binding.Weight) || binding.Weight < 0 || binding.Weight > 1) return false;
-                                // VRM1 keeps the first binding to each renderer/index. Later
+                // VRM1 keeps the first binding to each renderer/index. Later
                 // duplicates remain validated and preserved but cannot enable
                 // a route whose first surviving binding deliberately disables it.
                 positiveMorph |= targets.Add((skin, binding.Index)) && binding.Weight > 0 && AvatarBaseShape.HasUsableMorphEndpoint(skin, binding.Index);
             }
             foreach (var binding in RetainedColors(clip, omittedMaterials))
-                if (!materials.Contains(binding.MaterialName) || !Enum.IsDefined(typeof(MaterialColorType), binding.BindType) ||
+                if (!materials.ContainsKey(binding.MaterialName) || !Enum.IsDefined(typeof(MaterialColorType), binding.BindType) ||
                     !Finite(binding.TargetValue.x) || !Finite(binding.TargetValue.y) || !Finite(binding.TargetValue.z) || !Finite(binding.TargetValue.w)) return false;
             foreach (var binding in RetainedUV(clip, omittedMaterials))
-                if (!materials.Contains(binding.MaterialName) || !Finite(binding.Scaling.x) || !Finite(binding.Scaling.y) ||
+                if (!materials.ContainsKey(binding.MaterialName) || !Finite(binding.Scaling.x) || !Finite(binding.Scaling.y) ||
                     !Finite(binding.Offset.x) || !Finite(binding.Offset.y)) return false;
-            return positiveMorph || RetainedColors(clip, omittedMaterials).Any() || RetainedUV(clip, omittedMaterials).Any();
+            return positiveMorph || MaterialRoutes(clip, materials, omittedMaterials).Any();
         }
+
+        private static IEnumerable<(string Material, string Kind)> MaterialRoutes(VRM10Expression clip,
+            IDictionary<string, Material> materials, ISet<string> omittedMaterials)
+        {
+            // UniVRM sums all target-minus-base contributions for a property.
+            // Opposing authored endpoints can therefore cancel completely.
+            foreach (var group in RetainedColors(clip, omittedMaterials).GroupBy(binding => (binding.MaterialName, binding.BindType)))
+            {
+                if (!materials.TryGetValue(group.Key.MaterialName, out var material)) continue;
+                var property = ColorProperty(group.Key.BindType);
+                if (property == null || !LilToonMaterialReader.IsLilToon(material) && !material.HasProperty(property)) continue;
+                Vector4 baseline = LilToonMaterialReader.IsLilToon(material)
+                    ? (Vector4)UniVrmOneClickExporter.FallbackColor(material, group.Key.BindType) : material.GetVector(property);
+                // Three-component glTF factors import with alpha one.
+                if (group.Key.BindType != MaterialColorType.color) baseline.w = 1;
+                var delta = Vector4.zero;
+                foreach (var binding in group) delta += binding.TargetValue - baseline;
+                if (Moving(delta)) yield return (group.Key.MaterialName, group.Key.BindType.ToString());
+            }
+            foreach (var group in RetainedUV(clip, omittedMaterials).GroupBy(binding => binding.MaterialName, StringComparer.Ordinal))
+            {
+                if (!materials.TryGetValue(group.Key, out var material) || !material.HasProperty("_MainTex")) continue;
+                var scale = material.mainTextureScale; var offset = material.mainTextureOffset;
+                var baseline = new Vector4(scale.x, scale.y, offset.x, offset.y);
+                var delta = Vector4.zero;
+                foreach (var binding in group) delta += binding.ScalingOffset - baseline;
+                if (Moving(delta)) yield return (group.Key, "uv");
+            }
+        }
+
+        internal static string ColorProperty(MaterialColorType type)
+        {
+            switch (type)
+            {
+                case MaterialColorType.color: return MToon10Prop.BaseColorFactor.ToUnityShaderLabName();
+                case MaterialColorType.emissionColor: return MToon10Prop.EmissiveFactor.ToUnityShaderLabName();
+                case MaterialColorType.shadeColor: return MToon10Prop.ShadeColorFactor.ToUnityShaderLabName();
+                case MaterialColorType.matcapColor: return MToon10Prop.MatcapColorFactor.ToUnityShaderLabName();
+                case MaterialColorType.rimColor: return MToon10Prop.ParametricRimColorFactor.ToUnityShaderLabName();
+                case MaterialColorType.outlineColor: return MToon10Prop.OutlineColorFactor.ToUnityShaderLabName();
+                default: return null;
+            }
+        }
+
+        private static bool Moving(Vector4 delta) => Finite(delta.x) && Finite(delta.y) && Finite(delta.z) && Finite(delta.w) &&
+            (Mathf.Abs(delta.x) > .00001f || Mathf.Abs(delta.y) > .00001f || Mathf.Abs(delta.z) > .00001f || Mathf.Abs(delta.w) > .00001f);
 
         private static bool Finite(float value) => !float.IsNaN(value) && !float.IsInfinity(value);
 
@@ -210,7 +261,8 @@ namespace VRVlog.LilToonExporter
                 if (avatar == null || !avatar.activeInHierarchy) throw new InvalidOperationException(LostTracking);
                 var current = new UnifiedExpressionPreparation(avatar, excluded);
                 if (!current.SupportsUnified || usableAuthoredNames.Any(name => !current.usableAuthoredNames.Contains(name)) ||
-                    effectiveAuthoredRoutes.Any(route => !current.effectiveAuthoredRoutes.Contains(route)))
+                    effectiveAuthoredRoutes.Any(route => !current.effectiveAuthoredRoutes.Contains(route)) ||
+                    effectiveMaterialRoutes.Any(route => !current.effectiveMaterialRoutes.Contains(route)))
                     throw new InvalidOperationException(LostTracking);
                 foreach (var pair in effectiveRaw)
                     foreach (var name in pair.Value)

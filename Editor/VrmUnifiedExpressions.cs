@@ -102,6 +102,13 @@ namespace VRVlog.LilToonExporter
                 if (retainedCount > 1)
                     Warn(warnings, "Unified Expressions の手動設定名が重複するため自動設定を省略しました: " + pair.Key);
                 if (retainedCount > 0) reserved.Add(pair.Key);
+                var retained = pair.Value.Where(retainedKeys.Contains).ToArray();
+                if (retained.Length > 0)
+                {
+                    var priority = retained.Min(key => RawPriority(key, pair.Key));
+                    var preferred = retained.Where(key => RawPriority(key, pair.Key) == priority).ToArray();
+                    foreach (var key in pair.Value.Where(key => preferred.Length != 1 || key != preferred[0])) usableKeys.Remove(key);
+                }
             }
             var authoredCoverage = AuthoredMorphCoverage(custom, retainedKeys, nodes, meshes);
             var globalCoverage = AuthoredNonMorphCoverage(custom, retainedKeys, nodes, meshes);
@@ -257,7 +264,7 @@ namespace VRVlog.LilToonExporter
                     RequireVector(bind, "scale", 2);
                     RequireVector(bind, "offset", 2);
                 }
-                usable = colors.Count + textures.Count > 0 || morphs.Any(item => Number(((Dictionary<string, object>)item)["weight"]) > 0);
+                usable = HasMovingMaterialEndpoint(colors, textures, materials) || morphs.Any(item => Number(((Dictionary<string, object>)item)["weight"]) > 0);
                 return true;
             }
             catch (InvalidOperationException error)
@@ -265,6 +272,100 @@ namespace VRVlog.LilToonExporter
                 Warn(warnings, "既存の Unified Expressions 設定を保持し、自動設定を省略しました: " + key + " (" + error.Message + ")");
                 return true;
             }
+        }
+
+        internal static bool HasUsableEvidence(byte[] bytes)
+        {
+            var glb = GlbDocument.Read(bytes);
+            var custom = Object(Object(Object(Object(glb.Json, "extensions"), "VRMC_vrm"), "expressions"), "custom");
+            if (custom == null) return false;
+            var nodes = Array(glb.Json, "nodes"); var meshes = Array(glb.Json, "meshes"); var materials = Array(glb.Json, "materials");
+            var usable = new List<string>();
+            foreach (var group in custom.Keys.Where(key => UnifiedExpressionRegistry.TryCanonicalize(key, out _))
+                .GroupBy(key => { UnifiedExpressionRegistry.TryCanonicalize(key, out var canonical); return canonical; }, StringComparer.Ordinal))
+            {
+                var retained = group.Where(key => PreserveAuthored(custom[key], nodes, meshes, materials, key, null, out _)).ToArray();
+                if (retained.Length == 0) continue;
+                var priority = retained.Min(key => RawPriority(key, group.Key));
+                var preferred = retained.Where(key => RawPriority(key, group.Key) == priority).ToArray();
+                if (preferred.Length == 1 && PreserveAuthored(custom[preferred[0]], nodes, meshes, materials, preferred[0], null, out var effective) && effective)
+                    usable.Add(preferred[0]);
+            }
+            return HasEvidence(usable);
+        }
+
+        private static bool HasMovingMaterialEndpoint(List<object> colors, List<object> textures, List<object> materials)
+        {
+            foreach (var group in colors.OfType<Dictionary<string, object>>().GroupBy(bind => (Index(bind["material"], materials.Count, "material"), (string)bind["type"])))
+            {
+                var material = materials[group.Key.Item1] as Dictionary<string, object>;
+                if (!TryColorBase(material, group.Key.Item2, out var baseline)) continue;
+                var delta = new double[4];
+                foreach (var bind in group)
+                    for (var i = 0; i < 4; i++) delta[i] += Number(Array(bind, "targetValue")[i]) - baseline[i];
+                if (Moving(delta)) return true;
+            }
+            foreach (var group in textures.OfType<Dictionary<string, object>>().GroupBy(bind => Index(bind["material"], materials.Count, "material")))
+            {
+                var material = materials[group.Key] as Dictionary<string, object>;
+                var transform = Object(Object(Object(Object(material, "pbrMetallicRoughness"), "baseColorTexture"), "extensions"), "KHR_texture_transform");
+                var baseScale = Vector(transform, "scale", new[] { 1.0, 1.0 });
+                var baseOffset = Vector(transform, "offset", new[] { 0.0, 0.0 });
+                var delta = new double[4];
+                foreach (var bind in group)
+                {
+                    var scale = Vector(bind, "scale", null); var offset = Vector(bind, "offset", null);
+                    // Both serialized endpoints use glTF UV coordinates. The
+                    // importer's vertical flip includes scale in offset.y.
+                    delta[0] += scale[0] - baseScale[0]; delta[1] += scale[1] - baseScale[1];
+                    delta[2] += offset[0] - baseOffset[0];
+                    delta[3] += (1 - offset[1] - scale[1]) - (1 - baseOffset[1] - baseScale[1]);
+                }
+                if (Moving(delta)) return true;
+            }
+            return false;
+        }
+
+        private static bool TryColorBase(Dictionary<string, object> material, string type, out double[] baseline)
+        {
+            var extensions = Object(material, "extensions"); var mtoon = Object(extensions, "VRMC_materials_mtoon");
+            baseline = null;
+            switch (type)
+            {
+                case "color": baseline = Vector(Object(material, "pbrMetallicRoughness"), "baseColorFactor", new[] { 1.0, 1.0, 1.0, 1.0 }); break;
+                case "emissionColor":
+                    // UniUnlit has no emission property; Standard/MToon do.
+                    if (mtoon == null && Object(extensions, "KHR_materials_unlit") != null) return false;
+                    baseline = Vector(material, "emissiveFactor", new[] { 0.0, 0.0, 0.0 }).Concat(new[] { 1.0 }).ToArray();
+                    var strength = Object(extensions, "KHR_materials_emissive_strength");
+                    var multiplier = strength != null && strength.TryGetValue("emissiveStrength", out var value) ? Number(value) : 1.0;
+                    for (var i = 0; i < 3; i++) baseline[i] *= multiplier;
+                    return true;
+                default:
+                    if (mtoon == null) return false;
+                    var property = type == "shadeColor" ? "shadeColorFactor" : type == "matcapColor" ? "matcapFactor" :
+                        type == "rimColor" ? "parametricRimColorFactor" : "outlineColorFactor";
+                    var fallback = type == "shadeColor" ? new[] { 1.0, 1.0, 1.0 } : new[] { 0.0, 0.0, 0.0 };
+                    baseline = Vector(mtoon, property, fallback).Concat(new[] { 1.0 }).ToArray(); break;
+            }
+            // The pinned importer converts factor RGB to the MToon shader's
+            // sRGB vectors. Authored VRM targetValue vectors are unchanged.
+            for (var i = 0; i < 3; i++) baseline[i] = LinearToSrgb(baseline[i]);
+            return true;
+        }
+
+        private static double[] Vector(Dictionary<string, object> parent, string key, double[] fallback)
+        {
+            var values = Array(parent, key);
+            return values == null ? fallback : values.Select(Number).ToArray();
+        }
+
+        private static double LinearToSrgb(double value) => value <= .0031308 ? value * 12.92 : value < 1
+            ? 1.055 * Math.Pow(value, 1.0 / 2.4) - .055 : Math.Pow(value, 1.0 / 2.2);
+        private static bool Moving(IEnumerable<double> delta)
+        {
+            var values = delta.ToArray();
+            return values.All(value => !double.IsNaN(value) && !double.IsInfinity(value)) && values.Any(value => Math.Abs(value) > .00001);
         }
 
         private static List<object> DeclaredBindings(Dictionary<string, object> expression, string key)
