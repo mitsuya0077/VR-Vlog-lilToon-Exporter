@@ -156,6 +156,39 @@ namespace VRVlog.LilToonExporter.Tests
             authoredCustom = Custom(GlbDocument.Read(VrmUnifiedExpressions.Add(Encode(authored), diagnostics)).Json);
             check(authoredCustom.ContainsKey("ue/mouth_closed") && !authoredCustom.ContainsKey("UE/MouthClosed") && !diagnostics.Any(message => message.Contains("既存")), "Authored texture transforms also take precedence over raw morphs.");
 
+            var materialOnly = Fixture("LipFunnel", "LipFunnelUpperLeft", "JawOpen");
+            ((List<object>)materialOnly["nodes"]).Add(Obj("mesh", 1L));
+            ((List<object>)materialOnly["meshes"]).Add(((List<object>)Fixture("LipFunnel", "JawOpen")["meshes"])[0]);
+            materialOnly["materials"] = Arr(Obj());
+            var materialVrm = (Dictionary<string, object>)((Dictionary<string, object>)materialOnly["extensions"])["VRMC_vrm"];
+            var declarations = new[] {
+                Obj("materialColorBinds", Arr(Obj("material", 0L, "type", "color", "targetValue", Arr(.1, .2, .3, 1.0)))),
+                Obj("textureTransformBinds", Arr(Obj("material", 0L, "scale", Arr(1.0, 1.0), "offset", Arr(.2, .3)))),
+                Obj("materialColorBinds", Arr(Obj("material", 999L, "type", "color", "targetValue", Arr(.1, .2, .3, 1.0)))),
+                Obj("textureTransformBinds", Arr(Obj("material", 999L, "scale", Arr(1.0, 1.0), "offset", Arr(.2, .3)))),
+                Obj("materialColorBinds", "malformed"),
+                Obj("textureTransformBinds", Arr(Obj("material", 0L, "scale", Arr(1.0), "offset", Arr(.2, .3))))
+            };
+            for (var i = 0; i < declarations.Length; i++)
+            {
+                var declaration = declarations[i];
+                materialVrm["expressions"] = Obj("custom", Obj("UE/LipFunnelUpperLeft", declaration));
+                var materialDiagnostics = new List<string>();
+                var routes = Custom(GlbDocument.Read(VrmUnifiedExpressions.Add(Encode(materialOnly), materialDiagnostics)).Json);
+                check(routes.ContainsKey("UE/LipFunnelUpperLeft") && !routes.ContainsKey("UE/LipFunnel") &&
+                    routes.ContainsKey("UE/JawOpen") == (i < 2) && materialDiagnostics.Any(message => message.Contains("既存")) == (i >= 2),
+                    "Material/UV-only declaration " + i + " reserves conflicts globally; only usable authored UE enables shared JawOpen.");
+            }
+            materialVrm["expressions"] = Obj("custom", Obj("UE/LipFunnelUpperLeft", Obj("materialColorBinds", Arr(), "textureTransformBinds", Arr())));
+            var emptyMaterialRoutes = Custom(GlbDocument.Read(VrmUnifiedExpressions.Add(Encode(materialOnly))).Json);
+            check(emptyMaterialRoutes.ContainsKey("UE/LipFunnel") && emptyMaterialRoutes.ContainsKey("UE/JawOpen"), "Empty material/UV arrays leave raw UE aggregate available.");
+            declarations[0]["morphTargetBinds"] = Arr(Obj("node", 1L, "index", 1L, "weight", .4));
+            materialVrm["expressions"] = Obj("custom", Obj("UE/LipFunnelUpperLeft", declarations[0]));
+            var mixedRoutes = Custom(GlbDocument.Read(VrmUnifiedExpressions.Add(Encode(materialOnly))).Json);
+            var mixedBinds = (List<object>)((Dictionary<string, object>)mixedRoutes["UE/LipFunnel"])["morphTargetBinds"];
+            check(mixedBinds.Count == 1 && (long)((Dictionary<string, object>)mixedBinds[0])["node"] == 2L,
+                "Mixed morph/material routes retain anatomical coverage only on their declared morph mesh.");
+
             var invalid = Fixture("MouthClosed");
             ((Dictionary<string, object>)((List<object>)invalid["nodes"])[1])["mesh"] = 999L;
             var rejected = false;

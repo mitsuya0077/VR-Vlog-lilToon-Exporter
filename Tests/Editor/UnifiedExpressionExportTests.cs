@@ -341,6 +341,90 @@ namespace VRVlog.LilToonExporter.Tests
             }
         }
 
+        [TestCase("color", false)]
+        [TestCase("color", true)]
+        [TestCase("uv", false)]
+        [TestCase("uv", true)]
+        public async Task MaterialOnlyAuthoredCoverageSurvivesRoundtripWithoutRawAggregate(string kind, bool fullLilToon)
+        {
+            using var fixture = new AttachmentConnectionTests.Fixture();
+            var vrm = ScriptableObject.CreateInstance<VRM10Object>();
+            var clip = ScriptableObject.CreateInstance<VRM10Expression>();
+            Vrm10Instance imported = null;
+            try
+            {
+                fixture.Mesh.AddBlendShapeFrame("LipFunnel", 100, Enumerable.Repeat(Vector3.right * .03f, fixture.Mesh.vertexCount).ToArray(), null, null);
+                fixture.Mesh.AddBlendShapeFrame("JawOpen", 100, Enumerable.Repeat(Vector3.up * .02f, fixture.Mesh.vertexCount).ToArray(), null, null);
+                var skins = fixture.Source.GetComponentsInChildren<SkinnedMeshRenderer>();
+                foreach (var skin in skins) skin.sharedMaterial.shader = Shader.Find("lilToon");
+                clip.name = "UE/LipFunnelUpperLeft";
+                if (kind == "color") clip.MaterialColorBindings = new[] { new MaterialColorBinding {
+                    MaterialName = skins[0].sharedMaterial.name, BindType = MaterialColorType.color, TargetValue = new Color(.1f, .2f, .3f, 1f) } };
+                else clip.MaterialUVBindings = new[] { new MaterialUVBinding {
+                    MaterialName = skins[0].sharedMaterial.name, Scaling = new Vector2(.7f, .8f), Offset = new Vector2(.2f, .3f) } };
+                vrm.Expression.CustomClips.Add(clip);
+                fixture.Source.AddComponent<Vrm10Instance>().Vrm = vrm;
+                var bytes = UniVrmOneClickExporter.Export(fixture.Source, "Material-only UE coverage", "Tests",
+                    exporterVersion: fullLilToon ? "0.11.5" : null, lilToonVersion: fullLilToon ? "2.3.4" : null);
+                imported = await Vrm10.LoadBytesAsync(bytes, canLoadVrm0X: false, awaitCaller: new ImmediateCaller());
+                var retained = imported.Vrm.Expression.CustomClips.Single(value => value.name == clip.name);
+                Assert.That(retained.MorphTargetBindings.Length, Is.Zero);
+                Assert.That(retained.MaterialColorBindings.Length, Is.EqualTo(kind == "color" ? 1 : 0));
+                Assert.That(retained.MaterialUVBindings.Length, Is.EqualTo(kind == "uv" ? 1 : 0));
+                Assert.That(imported.Vrm.Expression.CustomClips.Any(value => value.name == "UE/LipFunnel"), Is.False,
+                    "Material-only authored anatomy has no mesh scope and blocks raw aggregate on both meshes.");
+                var jaw = imported.Vrm.Expression.CustomClips.Single(value => value.name == "UE/JawOpen");
+                Assert.That(jaw.MorphTargetBindings.Length, Is.EqualTo(2));
+                imported.Runtime.Expression.SetWeight(ExpressionKey.CreateCustom(clip.name), .5f);
+                imported.Runtime.Expression.SetWeight(ExpressionKey.CreateCustom(jaw.name), .4f);
+                imported.Runtime.Process();
+                foreach (var skin in imported.GetComponentsInChildren<SkinnedMeshRenderer>())
+                {
+                    Assert.That(skin.GetBlendShapeWeight(skin.sharedMesh.GetBlendShapeIndex("LipFunnel")), Is.Zero);
+                    Assert.That(skin.GetBlendShapeWeight(skin.sharedMesh.GetBlendShapeIndex("JawOpen")), Is.EqualTo(40).Within(.001));
+                }
+                Assert.That((clip.MaterialColorBindings?.Length ?? 0) + (clip.MaterialUVBindings?.Length ?? 0), Is.EqualTo(1));
+            }
+            finally
+            {
+                if (imported != null) Object.DestroyImmediate(imported.gameObject);
+                Object.DestroyImmediate(clip); Object.DestroyImmediate(vrm);
+            }
+        }
+
+        [TestCase("color", true)]
+        [TestCase("color", false)]
+        [TestCase("uv", true)]
+        [TestCase("uv", false)]
+        public void MaterialOnlyPreparationDoesNotRequireSuppressedMorphs(string kind, bool usable)
+        {
+            using var fixture = new AttachmentConnectionTests.Fixture();
+            var vrm = ScriptableObject.CreateInstance<VRM10Object>();
+            var clip = ScriptableObject.CreateInstance<VRM10Expression>();
+            var trimmed = Object.Instantiate(fixture.Mesh);
+            try
+            {
+                fixture.Mesh.AddBlendShapeFrame("LipFunnel", 100, new Vector3[fixture.Mesh.vertexCount], null, null);
+                fixture.Mesh.AddBlendShapeFrame("JawOpen", 100, new Vector3[fixture.Mesh.vertexCount], null, null);
+                clip.name = "UE/LipFunnelUpperLeft";
+                var materialName = usable ? fixture.Skins[0].sharedMaterial.name : "missing material";
+                if (kind == "color") clip.MaterialColorBindings = new[] { new MaterialColorBinding {
+                    MaterialName = materialName, BindType = MaterialColorType.color, TargetValue = Color.red } };
+                else clip.MaterialUVBindings = new[] { new MaterialUVBinding {
+                    MaterialName = materialName, Scaling = Vector2.one, Offset = Vector2.up } };
+                vrm.Expression.CustomClips.Add(clip);
+                fixture.Copy.AddComponent<Vrm10Instance>().Vrm = vrm;
+                var guard = new UnifiedExpressionPreparation(fixture.Copy);
+                trimmed.AddBlendShapeFrame("JawOpen", 100, new Vector3[trimmed.vertexCount], null, null);
+                fixture.Skins[0].sharedMesh = trimmed;
+                Assert.DoesNotThrow(() => guard.Verify(), "The material-only route suppresses the unused aggregate globally.");
+                trimmed.ClearBlendShapes();
+                if (usable) Assert.Throws<InvalidOperationException>(() => guard.Verify(), "Usable authored UE still enables and protects the shared raw jaw.");
+                else Assert.DoesNotThrow(() => guard.Verify(), "An unusable retained material route cannot alone establish tracking for shared raw jaw.");
+            }
+            finally { Object.DestroyImmediate(trimmed); Object.DestroyImmediate(clip); Object.DestroyImmediate(vrm); }
+        }
+
         [TestCase(false)]
         [TestCase(true)]
         public async Task GeneratedJawMenuRemainsBinaryAlongsideContinuousUnifiedJaw(bool fullLilToon)

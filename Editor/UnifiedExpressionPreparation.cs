@@ -24,6 +24,7 @@ namespace VRVlog.LilToonExporter
             if (!supportsUnified) return;
             var reserved = new HashSet<string>(StringComparer.Ordinal);
             var coverage = new Dictionary<SkinnedMeshRenderer, HashSet<string>>();
+            var globalCoverage = new HashSet<string>(StringComparer.Ordinal);
             var authoredShapes = new Dictionary<SkinnedMeshRenderer, HashSet<string>>();
             foreach (var clip in clips)
             {
@@ -31,6 +32,7 @@ namespace VRVlog.LilToonExporter
                 // Final export preserves each nonempty authored channel rather
                 // than synthesizing another raw endpoint for that same name.
                 reserved.Add(canonical);
+                if ((clip.MorphTargetBindings?.Length ?? 0) == 0) globalCoverage.Add(canonical);
                 foreach (var binding in clip.MorphTargetBindings ?? Array.Empty<MorphTargetBinding>())
                 {
                     var target = string.IsNullOrEmpty(binding.RelativePath) ? clone.transform : clone.transform.Find(binding.RelativePath);
@@ -45,15 +47,42 @@ namespace VRVlog.LilToonExporter
                     shapes.Add(names[binding.Index]);
                 }
             }
+            var selected = meshes.ToDictionary(pair => pair.Key, pair => VrmUnifiedExpressions.Resolve(pair.Value, avatarSupportsUnified: true,
+                authoredCoverage: globalCoverage.Concat(coverage.TryGetValue(pair.Key, out var covered) ? covered : Enumerable.Empty<string>()),
+                reservedAuthoredNames: reserved));
+            var materials = new HashSet<string>(ExportRendererSelection.Enumerate(clone).SelectMany(renderer => renderer.sharedMaterials)
+                .Where(material => material != null).Select(material => material.name), StringComparer.Ordinal);
+            if (!VrmUnifiedExpressions.HasEvidence(clips.Where(clip => IsUsable(clip, clone, materials)).Select(clip => clip.name)
+                .Concat(selected.SelectMany(pair => pair.Value.Values.Select(index => meshes[pair.Key][index]))))) return;
             foreach (var pair in meshes)
             {
-                var candidates = VrmUnifiedExpressions.Resolve(pair.Value, avatarSupportsUnified: true,
-                    authoredCoverage: coverage.TryGetValue(pair.Key, out var covered) ? covered : null, reservedAuthoredNames: reserved);
-                var shapes = new HashSet<string>(candidates.Values.Select(index => pair.Value[index]), StringComparer.Ordinal);
+                var shapes = new HashSet<string>(selected[pair.Key].Values.Select(index => pair.Value[index]), StringComparer.Ordinal);
                 if (authoredShapes.TryGetValue(pair.Key, out var authored)) shapes.UnionWith(authored);
                 if (shapes.Count > 0) required.Add(pair.Key, shapes.ToArray());
             }
         }
+
+        private static bool IsUsable(VRM10Expression clip, GameObject clone, ISet<string> materials)
+        {
+            var positiveMorph = false;
+            foreach (var binding in clip.MorphTargetBindings ?? Array.Empty<MorphTargetBinding>())
+            {
+                var target = string.IsNullOrEmpty(binding.RelativePath) ? clone.transform : clone.transform.Find(binding.RelativePath);
+                var mesh = target == null ? null : target.GetComponent<SkinnedMeshRenderer>()?.sharedMesh;
+                if (mesh == null || binding.Index < 0 || binding.Index >= mesh.blendShapeCount ||
+                    !Finite(binding.Weight) || binding.Weight < 0 || binding.Weight > 1) return false;
+                positiveMorph |= binding.Weight > 0;
+            }
+            foreach (var binding in clip.MaterialColorBindings ?? Array.Empty<MaterialColorBinding>())
+                if (!materials.Contains(binding.MaterialName) || !Enum.IsDefined(typeof(MaterialColorType), binding.BindType) ||
+                    !Finite(binding.TargetValue.r) || !Finite(binding.TargetValue.g) || !Finite(binding.TargetValue.b) || !Finite(binding.TargetValue.a)) return false;
+            foreach (var binding in clip.MaterialUVBindings ?? Array.Empty<MaterialUVBinding>())
+                if (!materials.Contains(binding.MaterialName) || !Finite(binding.Scaling.x) || !Finite(binding.Scaling.y) ||
+                    !Finite(binding.Offset.x) || !Finite(binding.Offset.y)) return false;
+            return positiveMorph || (clip.MaterialColorBindings?.Length ?? 0) + (clip.MaterialUVBindings?.Length ?? 0) > 0;
+        }
+
+        private static bool Finite(float value) => !float.IsNaN(value) && !float.IsInfinity(value);
 
         private static bool HasBindings(VRM10Expression clip) =>
             (clip.MorphTargetBindings?.Length ?? 0) + (clip.MaterialColorBindings?.Length ?? 0) + (clip.MaterialUVBindings?.Length ?? 0) > 0;

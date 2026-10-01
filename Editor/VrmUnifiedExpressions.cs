@@ -76,14 +76,18 @@ namespace VRVlog.LilToonExporter
             if (!supportsUnified) return bytes;
             var authoredKeys = new Dictionary<string, List<string>>(StringComparer.Ordinal);
             var retainedKeys = new HashSet<string>(StringComparer.Ordinal);
+            var usableKeys = new HashSet<string>(StringComparer.Ordinal);
             foreach (var key in custom?.Keys ?? Enumerable.Empty<string>())
             {
                 if (!UnifiedExpressionRegistry.TryCanonicalize(key, out var canonical)) continue;
                 if (!authoredKeys.TryGetValue(canonical, out var keys)) authoredKeys.Add(canonical, keys = new List<string>());
                 keys.Add(key);
-                if (PreserveAuthored(custom[key], nodes, meshes, Array(glb.Json, "materials"), key, warnings)) retainedKeys.Add(key);
+                if (PreserveAuthored(custom[key], nodes, meshes, Array(glb.Json, "materials"), key, warnings, out var usable)) retainedKeys.Add(key);
+                if (usable) usableKeys.Add(key);
             }
             var authoredCoverage = AuthoredMorphCoverage(custom, retainedKeys, nodes, meshes);
+            var globalCoverage = AuthoredNonMorphCoverage(custom, retainedKeys);
+            var reserved = new HashSet<string>(authoredKeys.Where(pair => pair.Value.Any(retainedKeys.Contains)).Select(pair => pair.Key), StringComparer.Ordinal);
             var bindings = new Dictionary<string, List<object>>(StringComparer.Ordinal);
             var meshCandidates = new Dictionary<int, Dictionary<string, int>>();
             for (var nodeIndex = 0; nodeIndex < nodes.Count; nodeIndex++)
@@ -96,7 +100,7 @@ namespace VRVlog.LilToonExporter
                     var names = Array(Object(mesh, "extras"), "targetNames");
                     candidates = names == null ? new Dictionary<string, int>() :
                         Resolve(names.Select(name => name as string).ToArray(), warnings, "mesh " + meshIndex, supportsUnified,
-                            authoredCoverage.TryGetValue(meshIndex, out var coverage) ? coverage : null);
+                            globalCoverage.Concat(authoredCoverage.TryGetValue(meshIndex, out var coverage) ? coverage : Enumerable.Empty<string>()), reserved);
                     meshCandidates.Add(meshIndex, candidates);
                 }
                 foreach (var pair in candidates)
@@ -108,6 +112,11 @@ namespace VRVlog.LilToonExporter
                     });
                 }
             }
+            // Retained disabled/invalid declarations reserve their coverage,
+            // but cannot enable shared ARKit names after the usable UE routes
+            // have all been excluded by that authored choice.
+            if (!HasEvidence(usableKeys.Concat(meshCandidates.SelectMany(pair => pair.Value.Values.Select(index =>
+                (string)Array(Object(meshes[pair.Key] as Dictionary<string, object>, "extras"), "targetNames")[index]))))) return bytes;
             if (bindings.Count == 0) return bytes;
             if (expressions == null) vrm["expressions"] = expressions = new Dictionary<string, object>();
             if (custom == null) expressions["custom"] = custom = new Dictionary<string, object>();
@@ -163,9 +172,30 @@ namespace VRVlog.LilToonExporter
             return result;
         }
 
-        private static bool PreserveAuthored(object value, List<object> nodes, List<object> meshes,
-            List<object> materials, string key, ICollection<string> warnings)
+        private static HashSet<string> AuthoredNonMorphCoverage(Dictionary<string, object> custom, IEnumerable<string> retainedKeys)
         {
+            var result = new HashSet<string>(StringComparer.Ordinal);
+            foreach (var key in retainedKeys)
+            {
+                var expression = custom[key] as Dictionary<string, object>;
+                if (expression == null || HasDeclaredBindings(expression, "morphTargetBinds") ||
+                    !(HasDeclaredBindings(expression, "materialColorBinds") || HasDeclaredBindings(expression, "textureTransformBinds"))) continue;
+                // Material-only routes have no geometric scope. Their authored
+                // anatomical choice wins on every mesh, including unusable
+                // declarations that PreserveAuthored diagnoses and retains.
+                UnifiedExpressionRegistry.TryCanonicalize(key, out var canonical);
+                result.Add(canonical);
+            }
+            return result;
+        }
+
+        private static bool HasDeclaredBindings(Dictionary<string, object> expression, string key) =>
+            expression.TryGetValue(key, out var raw) && (!(raw is List<object> bindings) || bindings.Count > 0);
+
+        private static bool PreserveAuthored(object value, List<object> nodes, List<object> meshes,
+            List<object> materials, string key, ICollection<string> warnings, out bool usable)
+        {
+            usable = false;
             try
             {
                 if (!(value is Dictionary<string, object> expression)) throw new InvalidOperationException("expression が不正です");
@@ -198,6 +228,7 @@ namespace VRVlog.LilToonExporter
                     RequireVector(bind, "scale", 2);
                     RequireVector(bind, "offset", 2);
                 }
+                usable = colors.Count + textures.Count > 0 || morphs.Any(item => Number(((Dictionary<string, object>)item)["weight"]) > 0);
                 return true;
             }
             catch (InvalidOperationException error)
