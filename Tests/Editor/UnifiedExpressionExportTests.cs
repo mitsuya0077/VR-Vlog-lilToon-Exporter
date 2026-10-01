@@ -271,5 +271,74 @@ namespace VRVlog.LilToonExporter.Tests
             }
             finally { Object.DestroyImmediate(mouth); Object.DestroyImmediate(empty); }
         }
+
+        [TestCase(.4f, 2)]
+        [TestCase(0f, 2)]
+        [TestCase(float.NaN, 2)]
+        [TestCase(.4f, 999)]
+        public void PreparationAllowsUnusedAggregateRemovalAndProtectsAuthoredEndpoint(float weight, int index)
+        {
+            using var fixture = new AttachmentConnectionTests.Fixture();
+            var vrm = ScriptableObject.CreateInstance<VRM10Object>();
+            var clip = ScriptableObject.CreateInstance<VRM10Expression>();
+            var trimmed = Object.Instantiate(fixture.Mesh);
+            try
+            {
+                fixture.Mesh.AddBlendShapeFrame("LipFunnel", 100, new Vector3[fixture.Mesh.vertexCount], null, null);
+                fixture.Mesh.AddBlendShapeFrame("LipFunnelUpperLeft", 100, new Vector3[fixture.Mesh.vertexCount], null, null);
+                clip.name = "UE/LipFunnelUpperLeft";
+                clip.MorphTargetBindings = new[] { new MorphTargetBinding("Front", index, weight) };
+                vrm.Expression.CustomClips.Add(clip);
+                fixture.Copy.AddComponent<Vrm10Instance>().Vrm = vrm;
+                var guard = new UnifiedExpressionPreparation(fixture.Copy);
+                trimmed.AddBlendShapeFrame("LipFunnelUpperLeft", 100, new Vector3[trimmed.vertexCount], null, null);
+                var front = fixture.Copy.transform.Find("Front").GetComponent<SkinnedMeshRenderer>();
+                front.sharedMesh = trimmed;
+                if (index == 2) clip.MorphTargetBindings = new[] { new MorphTargetBinding("Front", 1, weight) };
+                Assert.DoesNotThrow(() => guard.Verify(), "The unused aggregate may be removed while the authored split route remains.");
+                trimmed.ClearBlendShapes();
+                if (index == 2)
+                    Assert.Throws<InvalidOperationException>(() => guard.Verify(), "A genuinely authored endpoint remains protected even for zero/invalid weights.");
+                else Assert.DoesNotThrow(() => guard.Verify(), "An invalid authored index reserves coverage without inventing a raw route to preserve.");
+                Assert.That(fixture.Mesh.GetBlendShapeIndex("LipFunnel"), Is.EqualTo(1));
+                Assert.That(fixture.Mesh.GetBlendShapeIndex("LipFunnelUpperLeft"), Is.EqualTo(2));
+            }
+            finally { Object.DestroyImmediate(trimmed); Object.DestroyImmediate(clip); Object.DestroyImmediate(vrm); }
+        }
+
+        [TestCase(false)]
+        [TestCase(true)]
+        public async Task SplitPartialBlinkUsesTheSameUeClosureInStandardAndDetailedPlayback(bool fullLilToon)
+        {
+            using var fixture = new AttachmentConnectionTests.Fixture();
+            var rightMesh = Object.Instantiate(fixture.Mesh);
+            Vrm10Instance imported = null;
+            try
+            {
+                fixture.Mesh.AddBlendShapeFrame("Blink_L", 100, Enumerable.Repeat(Vector3.right * .01f, fixture.Mesh.vertexCount).ToArray(), null, null);
+                fixture.Mesh.AddBlendShapeFrame("UE/EyeClosedLeft", 100, Enumerable.Repeat(Vector3.up * .02f, fixture.Mesh.vertexCount).ToArray(), null, null);
+                rightMesh.AddBlendShapeFrame("UE/EyeClosedRight", 100, Enumerable.Repeat(Vector3.up * .02f, rightMesh.vertexCount).ToArray(), null, null);
+                var skins = fixture.Source.GetComponentsInChildren<SkinnedMeshRenderer>(); skins[1].sharedMesh = rightMesh;
+                foreach (var skin in skins) skin.sharedMaterial.shader = Shader.Find("lilToon");
+                var bytes = UniVrmOneClickExporter.Export(fixture.Source, "Partial UE blink agreement", "Tests",
+                    exporterVersion: fullLilToon ? "0.11.5" : null, lilToonVersion: fullLilToon ? "2.3.4" : null);
+                imported = await Vrm10.LoadBytesAsync(bytes, canLoadVrm0X: false, awaitCaller: new ImmediateCaller());
+                var binding = imported.Vrm.Expression.BlinkLeft.MorphTargetBindings.Single();
+                var front = imported.transform.Find(binding.RelativePath).GetComponent<SkinnedMeshRenderer>();
+                var delta = new Vector3[front.sharedMesh.vertexCount];
+                front.sharedMesh.GetBlendShapeFrameVertices(binding.Index, 0, delta, null, null);
+                Assert.That(delta[0].x, Is.Zero.Within(.0001));
+                Assert.That(delta[0].y, Is.EqualTo(.02f).Within(.0001), "Standard blink closes the same authored UE shape as detailed tracking.");
+                imported.Runtime.Expression.SetWeight(ExpressionKey.CreateCustom("UE/EyeClosedLeft"), .5f);
+                imported.Runtime.Process();
+                Assert.That(front.GetBlendShapeWeight(front.sharedMesh.GetBlendShapeIndex("UE/EyeClosedLeft")), Is.EqualTo(50).Within(.001));
+                Assert.That(front.GetBlendShapeWeight(front.sharedMesh.GetBlendShapeIndex("Blink_L")), Is.Zero);
+            }
+            finally
+            {
+                if (imported != null) Object.DestroyImmediate(imported.gameObject);
+                Object.DestroyImmediate(rightMesh);
+            }
+        }
     }
 }

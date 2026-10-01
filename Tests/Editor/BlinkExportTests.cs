@@ -138,6 +138,16 @@ namespace VRVlog.LilToonExporter.Tests
             Assert.That(result.Slots[0].Count, Is.EqualTo(2));
         }
 
+        [Test] public void PartialUnifiedBlinkWinsOverLegacyPartialBeforeCrossRendererPairing()
+        {
+            var left = Skin("Blink_L", "UE/EyeClosedLeft"); var right = Skin("UE/EyeClosedRight");
+            var result = BlinkExportSession.Resolve(root);
+            Assert.That(result.Slots[1].Single().Shape, Is.EqualTo("UE/EyeClosedLeft"));
+            Assert.That(result.Slots[1].Single().Renderer, Is.SameAs(left));
+            Assert.That(result.Slots[2].Single().Renderer, Is.SameAs(right));
+            Assert.That(result.Slots[0].Select(binding => binding.Shape), Is.EquivalentTo(new[] { "UE/EyeClosedLeft", "UE/EyeClosedRight" }));
+        }
+
         [Test] public void DuplicateSemanticNamesAreNotGuessed()
         {
             Skin("Blink", "BLINK");

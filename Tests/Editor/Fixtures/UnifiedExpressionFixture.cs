@@ -159,6 +159,13 @@ namespace VRVlog.LilToonExporter.Tests
             check(BlinkShapeNames.Resolve(new[] { "EyeClosedLeft" }, allowPartial: true)[1] == 0 && BlinkShapeNames.Resolve(new[] { "EyeClosedLeft" }, allowPartial: true)[2] < 0, "Partial UE closure retains its available side for avatar-wide pairing.");
             blink = BlinkShapeNames.Resolve(new[] { "Blink_L", "EyeClosedLeft", "EyeClosedRight" }, allowPartial: true);
             check(blink[1] == 1 && blink[2] == 2, "A complete UE eyelid pair wins before accepting an earlier incomplete legacy alias.");
+            blink = BlinkShapeNames.Resolve(new[] { "Blink_L", "UE/EyeClosedLeft" }, allowPartial: true);
+            check(blink[1] == 1 && blink[2] < 0, "A UE partial closure wins over a legacy partial before cross-mesh pairing.");
+            blink = BlinkShapeNames.Resolve(new[] { "Blink_L", "Blink_R", "UE/EyeClosedLeft" }, allowPartial: true);
+            check(blink[1] == 0 && blink[2] == 1, "A complete legacy closure pair retains its existing priority.");
+            var required = VrmUnifiedExpressions.Resolve(new[] { "LipFunnel", "LipFunnelUpperLeft" }, avatarSupportsUnified: true,
+                authoredCoverage: new[] { "LipFunnelUpperLeft" }, reservedAuthoredNames: new HashSet<string>(new[] { "LipFunnelUpperLeft" }, StringComparer.Ordinal));
+            check(required.Count == 0, "Preparation does not require unused raw aggregate/split endpoints when an authored route reserves that mesh and channel.");
         }
     }
 }

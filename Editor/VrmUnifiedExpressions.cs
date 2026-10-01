@@ -11,7 +11,7 @@ namespace VRVlog.LilToonExporter
     {
         internal static Dictionary<string, int> Resolve(IReadOnlyList<string> names,
             ICollection<string> warnings = null, string label = "mesh", bool avatarSupportsUnified = false,
-            IEnumerable<string> authoredCoverage = null)
+            IEnumerable<string> authoredCoverage = null, ISet<string> reservedAuthoredNames = null)
         {
             var matches = new Dictionary<string, List<int>>(StringComparer.Ordinal);
             var eligible = avatarSupportsUnified;
@@ -26,6 +26,7 @@ namespace VRVlog.LilToonExporter
             if (!eligible) return resolved;
             foreach (var pair in matches)
             {
+                if (reservedAuthoredNames?.Contains(pair.Key) == true) continue;
                 var priority = pair.Value.Min(index => RawPriority(names[index], pair.Key));
                 var candidates = pair.Value.Where(index => RawPriority(names[index], pair.Key) == priority).ToArray();
                 if (candidates.Length != 1)

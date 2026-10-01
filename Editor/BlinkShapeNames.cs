@@ -69,7 +69,10 @@ namespace VRVlog.LilToonExporter
                 else
                 {
                     partial |= hasLeft || hasRight;
-                    if (allowPartial && partialLeft < 0 && partialRight < 0)
+                    // A usable UE partial must agree with the channel exported
+                    // for detailed tracking before another renderer supplies
+                    // the other eye. Complete legacy pairs still win above.
+                    if (allowPartial && (hasLeft || hasRight))
                     { partialLeft = hasLeft ? left : -1; partialRight = hasRight ? right : -1; }
                 }
             }
