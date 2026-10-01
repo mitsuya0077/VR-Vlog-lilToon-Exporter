@@ -75,7 +75,7 @@ namespace VRVlog.LilToonExporter
             }
             foreach (var binding in clip.MaterialColorBindings ?? Array.Empty<MaterialColorBinding>())
                 if (!materials.Contains(binding.MaterialName) || !Enum.IsDefined(typeof(MaterialColorType), binding.BindType) ||
-                    !Finite(binding.TargetValue.r) || !Finite(binding.TargetValue.g) || !Finite(binding.TargetValue.b) || !Finite(binding.TargetValue.a)) return false;
+                    !Finite(binding.TargetValue.x) || !Finite(binding.TargetValue.y) || !Finite(binding.TargetValue.z) || !Finite(binding.TargetValue.w)) return false;
             foreach (var binding in clip.MaterialUVBindings ?? Array.Empty<MaterialUVBinding>())
                 if (!materials.Contains(binding.MaterialName) || !Finite(binding.Scaling.x) || !Finite(binding.Scaling.y) ||
                     !Finite(binding.Offset.x) || !Finite(binding.Offset.y)) return false;
