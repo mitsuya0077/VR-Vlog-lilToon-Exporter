@@ -25,6 +25,7 @@ namespace VRVlog.LilToonExporter.Tests
         {
             AuthorEndpointChecks(check);
             LeadingNeutralFrameChecks(check);
+            NegativeIntermediateFrameChecks(check);
             EndpointBeyondHundredChecks(check);
             var source = Create();
             var target = Create();
@@ -134,14 +135,41 @@ namespace VRVlog.LilToonExporter.Tests
                 source.ClearBlendShapes();source.AddBlendShapeFrame("Only neutral",0,Delta(0,0,0),null,null);
                 check(!AvatarBaseShape.HasUsableRawEndpoint(source,0,0) && !AvatarBaseShape.HasUsableMorphEndpoint(source,0,0),"A leading zero frame without any positive moving frame cannot establish an endpoint.");
 #if EXPORTER_BEHAVIOR_TESTS
-                foreach(var invalid in new[]{"nonzeroZero","negative","nonfinite"})
+                foreach(var invalid in new[]{"nonzeroZero","unordered","nonfinite"})
                 {
-                    source.ClearBlendShapes();source.AddBlendShapeFrame("Invalid origin",invalid=="negative"?-1f:invalid=="nonfinite"?float.PositiveInfinity:0f,
+                    source.ClearBlendShapes();source.AddBlendShapeFrame("Invalid origin",invalid=="unordered"?200f:invalid=="nonfinite"?float.PositiveInfinity:0f,
                         Delta(invalid=="nonzeroZero"?1f:0f,0,0),null,null);
                     source.AddBlendShapeFrame("Invalid origin",100,Delta(4,0,0),null,null);
                     check(!AvatarBaseShape.HasUsableRawEndpoint(source,0,0) && !AvatarBaseShape.HasUsableMorphEndpoint(source,0,0),"Only a finite purezero leading frame is an implicit origin; malformed"+invalid+" remains excluded.");
                 }
 #endif
+            }
+            finally { UnityEngine.Object.DestroyImmediate(source);UnityEngine.Object.DestroyImmediate(target); }
+        }
+
+        private static void NegativeIntermediateFrameChecks(Action<bool, string> check)
+        {
+            var source=Create();var target=Create();
+            try
+            {
+                source.ClearBlendShapes(); source.AddBlendShapeFrame("Negative intermediate",-50,Delta(-2,0,0),null,null);
+                source.AddBlendShapeFrame("Negative intermediate",100,Delta(4,0,0),null,null);
+                foreach(var rest in new[]{0f,25f,100f})
+                {
+                    check(AvatarBaseShape.HasUsableRawEndpoint(source,0,rest)==(rest<100),"Finite ordered negative intermediates retain raw positive endpoint evidence at rest"+rest+".");
+                    check(AvatarBaseShape.HasUsableMorphEndpoint(source,0,rest)==(rest<100),"Authored endpoint evidence accepts negative intermediate frames at rest"+rest+".");
+                    AvatarBaseShape.Rebase(source,target,new[]{rest});
+                    var vertices=new Vector3[3];target.GetBlendShapeFrameVertices(0,0,vertices,new Vector3[3],new Vector3[3]);
+                    check(Near(target.vertices[0].x,1+4*rest/100) && Near(vertices[0].x,4*(1-rest/100)) && Near(target.vertices[0].x+vertices[0].x,5),
+                        "Rebase preserves the implicit neutral and final positive endpoint across negative intermediate curves.");
+                }
+                check(!AvatarBaseShape.HasUsableRawEndpoint(source,0,-25) && AvatarBaseShape.HasUsableMorphEndpoint(source,0,-25),"The existing negative raw-rest policy stays separate from valid negative authored rest.");
+                AvatarBaseShape.Rebase(source,target,new[]{-25f});
+                var delta=new Vector3[3];target.GetBlendShapeFrameVertices(0,0,delta,new Vector3[3],new Vector3[3]);
+                check(Near(target.vertices[0].x,0) && Near(delta[0].x,5),"Negative authored rest interpolates the native negative frame before normalization.");
+                check(source.GetBlendShapeFrameWeight(0,0)==-50 && source.GetBlendShapeFrameWeight(0,1)==100 && source.vertices[0].x==1,"Negative-curve inspection and rebase preserve source data.");
+                source.ClearBlendShapes();source.AddBlendShapeFrame("Negative-only endpoint",-50,Delta(-2,0,0),null,null);
+                check(!AvatarBaseShape.HasUsableRawEndpoint(source,0,0) && !AvatarBaseShape.HasUsableMorphEndpoint(source,0,0),"A nonpositive final endpoint cannot establish positive tracking range.");
             }
             finally { UnityEngine.Object.DestroyImmediate(source);UnityEngine.Object.DestroyImmediate(target); }
         }
