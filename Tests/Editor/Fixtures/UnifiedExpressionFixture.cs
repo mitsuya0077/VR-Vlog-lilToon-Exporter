@@ -29,6 +29,22 @@ namespace VRVlog.LilToonExporter.Tests
             check(VrmUnifiedExpressions.Add(ordinary).SequenceEqual(ordinary), "ARKit shared names alone cannot establish UE support.");
             var unknown = Encode(Fixture("previewMouthClosed", "corrective_EyeClosedLeft_fix"));
             check(VrmUnifiedExpressions.Add(unknown).SequenceEqual(unknown), "Unknown substrings and corrective names are not tracking channels.");
+            var manualNames = Encode(Fixture("VRChat / EyeClosedLeft", "VRChat / JawOpen"));
+            check(VrmUnifiedExpressions.Add(manualNames).SequenceEqual(manualNames), "Reserved menu namespace names cannot establish raw UE tracking.");
+            var manualRaw = Custom(GlbDocument.Read(VrmUnifiedExpressions.Add(Encode(Fixture("MouthClosed", "VRChat / EyeClosedLeft")))).Json);
+            check(manualRaw.Count == 1 && manualRaw.ContainsKey("UE/MouthClosed"), "A reserved menu name remains excluded even on an established UE avatar.");
+            var menuRoot = Fixture("EyeClosedLeft", "JawOpen", "__VRVlog_Menu_JawOpenFixture");
+            var menuEntry = new VrmMenuExpressions.Expression { Name = "JawOpen" };
+            menuEntry.Targets.Add("__VRVlog_Menu_JawOpenFixture");
+            var menuOutput = VrmUnifiedExpressions.Add(VrmMenuExpressions.Add(Encode(menuRoot), new List<VrmMenuExpressions.Expression> { menuEntry }));
+            var menuCustom = Custom(GlbDocument.Read(menuOutput).Json);
+            var menuRoute = (Dictionary<string, object>)menuCustom["VRChat / JawOpen"];
+            var trackedJaw = (Dictionary<string, object>)menuCustom["UE/JawOpen"];
+            check((bool)menuRoute["isBinary"] && (string)menuRoute["overrideMouth"] == "block" && VrmMenuExpressions.CountRegistered(menuOutput) == 1,
+                "A generated JawOpen menu remains a binary blocking selectable expression.");
+            check(!(bool)trackedJaw["isBinary"] && (string)trackedJaw["overrideMouth"] == "none" &&
+                (long)((Dictionary<string, object>)((List<object>)trackedJaw["morphTargetBinds"])[0])["index"] == 1,
+                "A generated JawOpen menu cannot reserve or replace the continuous raw jaw channel.");
             var partial = Encode(Fixture("MouthClosed", "JawOpen", "unused"));
             var warnings = new List<string>();
             var output = VrmUnifiedExpressions.Add(partial, warnings);

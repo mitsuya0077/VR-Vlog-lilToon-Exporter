@@ -340,5 +340,67 @@ namespace VRVlog.LilToonExporter.Tests
                 Object.DestroyImmediate(rightMesh);
             }
         }
+
+        [TestCase(false)]
+        [TestCase(true)]
+        public async Task GeneratedJawMenuRemainsBinaryAlongsideContinuousUnifiedJaw(bool fullLilToon)
+        {
+            using var fixture = new AttachmentConnectionTests.Fixture();
+            Mesh menuMesh = null;
+            Vrm10Instance imported = null;
+            try
+            {
+                fixture.Mesh.AddBlendShapeFrame("JawOpen", 100, Enumerable.Repeat(Vector3.right * .03f, fixture.Mesh.vertexCount).ToArray(), null, null);
+                fixture.Mesh.AddBlendShapeFrame("EyeClosedLeft", 100, Enumerable.Repeat(Vector3.up * .02f, fixture.Mesh.vertexCount).ToArray(), null, null);
+                fixture.Mesh.AddBlendShapeFrame("EyeClosedRight", 100, Enumerable.Repeat(Vector3.up * .02f, fixture.Mesh.vertexCount).ToArray(), null, null);
+                menuMesh = Object.Instantiate(fixture.Mesh);
+                const string target = "__VRVlog_Menu_JawOpenFixture";
+                menuMesh.AddBlendShapeFrame(target, 100, Enumerable.Repeat(Vector3.forward * .04f, menuMesh.vertexCount).ToArray(), null, null);
+                var skins = fixture.Source.GetComponentsInChildren<SkinnedMeshRenderer>(); skins[0].sharedMesh = menuMesh;
+                foreach (var skin in skins) skin.sharedMaterial.shader = Shader.Find("lilToon");
+                var bytes = UniVrmOneClickExporter.Export(fixture.Source, "Jaw menu namespace", "Tests",
+                    exporterVersion: fullLilToon ? "0.11.5" : null, lilToonVersion: fullLilToon ? "2.3.4" : null);
+                var glb = GlbDocument.Read(bytes);
+                var vrm = (Dictionary<string, object>)((Dictionary<string, object>)glb.Json["extensions"])["VRMC_vrm"];
+                var custom = (Dictionary<string, object>)((Dictionary<string, object>)vrm["expressions"])["custom"];
+                foreach (var key in custom.Keys.Where(key => key.StartsWith("UE/", StringComparison.Ordinal)).ToArray()) custom.Remove(key);
+                // Exercise the production menu registrar before automatic UE
+                // injection, using real exported meshes without optional SDKs.
+                var entry = new VrmMenuExpressions.Expression { Name = "JawOpen" }; entry.Targets.Add(target);
+                bytes = VrmUnifiedExpressions.Add(VrmMenuExpressions.Add(glb.Write(), new List<VrmMenuExpressions.Expression> { entry }));
+                Assert.That(VrmMenuExpressions.CountRegistered(bytes), Is.EqualTo(1));
+                imported = await Vrm10.LoadBytesAsync(bytes, canLoadVrm0X: false, awaitCaller: new ImmediateCaller());
+                var menu = imported.Vrm.Expression.CustomClips.Single(clip => clip.name == "VRChat / JawOpen");
+                var jaw = imported.Vrm.Expression.CustomClips.Single(clip => clip.name == "UE/JawOpen");
+                Assert.That(menu.IsBinary, Is.True);
+                Assert.That(menu.OverrideMouth.ToString(), Is.EqualTo("block"));
+                Assert.That(menu.OverrideBlink.ToString(), Is.EqualTo("block"));
+                Assert.That(menu.OverrideLookAt.ToString(), Is.EqualTo("block"));
+                Assert.That(jaw.IsBinary, Is.False);
+                Assert.That(jaw.OverrideMouth.ToString(), Is.EqualTo("none"));
+                Assert.That(jaw.MorphTargetBindings.Length, Is.EqualTo(2));
+                imported.Runtime.Expression.SetWeight(ExpressionKey.CreateCustom(menu.name), .25f);
+                imported.Runtime.Expression.SetWeight(ExpressionKey.CreateCustom(jaw.name), .3f);
+                imported.Runtime.Process();
+                foreach (var binding in jaw.MorphTargetBindings)
+                {
+                    var skin = imported.transform.Find(binding.RelativePath).GetComponent<SkinnedMeshRenderer>();
+                    Assert.That(skin.sharedMesh.GetBlendShapeName(binding.Index), Is.EqualTo("JawOpen"));
+                    Assert.That(skin.GetBlendShapeWeight(binding.Index), Is.EqualTo(30).Within(.001));
+                }
+                var menuBinding = menu.MorphTargetBindings.Single();
+                var menuSkin = imported.transform.Find(menuBinding.RelativePath).GetComponent<SkinnedMeshRenderer>();
+                Assert.That(menuSkin.GetBlendShapeWeight(menuBinding.Index), Is.Zero);
+                imported.Runtime.Expression.SetWeight(ExpressionKey.CreateCustom(jaw.name), 0f);
+                imported.Runtime.Expression.SetWeight(ExpressionKey.CreateCustom(menu.name), 1f);
+                imported.Runtime.Process();
+                Assert.That(menuSkin.GetBlendShapeWeight(menuBinding.Index), Is.EqualTo(100).Within(.001));
+            }
+            finally
+            {
+                if (imported != null) Object.DestroyImmediate(imported.gameObject);
+                if (menuMesh != null) Object.DestroyImmediate(menuMesh);
+            }
+        }
     }
 }

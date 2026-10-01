@@ -139,6 +139,11 @@ namespace VRVlog.FaceTracking
             canonical = null;
             if (string.IsNullOrWhiteSpace(value)) return false;
             value = value.Trim();
+            // Exporter menu expressions are binary manual selections, even
+            // when their final menu label matches a tracking channel.
+            var menuBoundary = value.IndexOf('/');
+            if (menuBoundary >= 0 && string.Equals(value.Substring(0, menuBoundary).Trim(),
+                "VRChat", StringComparison.OrdinalIgnoreCase)) return false;
             if (NormalizedNames.TryGetValue(Normalize(value), out canonical)) return true;
             var boundary = Math.Max(value.LastIndexOf('.'), Math.Max(value.LastIndexOf('/'), value.LastIndexOf(':')));
             if (boundary < 0 || boundary == value.Length - 1) return false;
