@@ -4,6 +4,7 @@ using System.Linq;
 using System.Threading.Tasks;
 using NUnit.Framework;
 using UniGLTF;
+using UniGLTF.Extensions.VRMC_vrm;
 using UniVRM10;
 using UnityEngine;
 using VRVlog.FaceTracking;
