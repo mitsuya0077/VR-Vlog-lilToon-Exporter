@@ -25,13 +25,15 @@ namespace VRVlog.LilToonExporter.Tests
         {
             AuthorEndpointChecks(check);
             LeadingNeutralFrameChecks(check);
+            EndpointBeyondHundredChecks(check);
             var source = Create();
             var target = Create();
             try
             {
                 check(AvatarBaseShape.HasUsableRawEndpoint(source, 0, 0), "A finite nonzero raw endpoint is usable tracking evidence.");
                 check(AvatarBaseShape.HasUsableRawEndpoint(source, 0, 75), "A partially resting raw endpoint keeps usable residual range.");
-                foreach (var weight in new[] { 100f, 150f, -1f, float.NaN, float.PositiveInfinity })
+                check(AvatarBaseShape.HasUsableRawEndpoint(source, 0, 150), "A finite raw rest beyond the final frame retains a negative residual endpoint.");
+                foreach (var weight in new[] { 100f, -1f, float.NaN, float.PositiveInfinity })
                     check(!AvatarBaseShape.HasUsableRawEndpoint(source, 0, weight), "A fully resting or unsupported raw weight cannot waive blink validation.");
                 check(!AvatarBaseShape.HasUsableRawEndpoint(source, 99, 0), "An invalid raw morph index is not usable evidence.");
                 AvatarBaseShape.Rebase(source, target, new[] { 25f, 50f });
@@ -140,6 +142,27 @@ namespace VRVlog.LilToonExporter.Tests
                     check(!AvatarBaseShape.HasUsableRawEndpoint(source,0,0) && !AvatarBaseShape.HasUsableMorphEndpoint(source,0,0),"Only a finite purezero leading frame is an implicit origin; malformed"+invalid+" remains excluded.");
                 }
 #endif
+            }
+            finally { UnityEngine.Object.DestroyImmediate(source);UnityEngine.Object.DestroyImmediate(target); }
+        }
+
+        private static void EndpointBeyondHundredChecks(Action<bool, string> check)
+        {
+            var source=Create();var target=Create();
+            try
+            {
+                source.ClearBlendShapes();source.AddBlendShapeFrame("Extended endpoint",200,Delta(4,0,0),null,null);
+                foreach(var rest in new[]{0f,100f,150f,200f})
+                {
+                    var hasResidual=rest!=200f;
+                    check(AvatarBaseShape.HasUsableRawEndpoint(source,0,rest)==hasResidual,"Raw capability uses the actual final frame200 residual at rest"+rest+".");
+                    check(AvatarBaseShape.HasUsableMorphEndpoint(source,0,rest)==hasResidual,"Authored and raw routes agree about the final frame200 residual at rest"+rest+".");
+                    AvatarBaseShape.Rebase(source,target,new[]{rest});
+                    var vertices=new Vector3[3];target.GetBlendShapeFrameVertices(0,0,vertices,new Vector3[3],new Vector3[3]);
+                    check(Near(target.vertices[0].x,1f+4f*rest/200f) && Near(vertices[0].x,4f*(1f-rest/200f)) && Near(target.vertices[0].x+vertices[0].x,5f),
+                        "Rebase preserves rest"+rest+" and exports the actual frame200 endpoint without a hardcoded100 limit.");
+                }
+                check(source.GetBlendShapeFrameCount(0)==1 && source.GetBlendShapeFrameWeight(0,0)==200f && source.vertices[0].x==1f,"Extended endpoint qualification and rebase preserve the source mesh and final frame weight.");
             }
             finally { UnityEngine.Object.DestroyImmediate(source);UnityEngine.Object.DestroyImmediate(target); }
         }

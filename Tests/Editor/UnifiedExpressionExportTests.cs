@@ -1045,6 +1045,59 @@ namespace VRVlog.LilToonExporter.Tests
             finally { if (imported != null) Object.DestroyImmediate(imported.gameObject); Object.DestroyImmediate(clip); Object.DestroyImmediate(vrm); }
         }
 
+        [TestCase(0f, false)]
+        [TestCase(0f, true)]
+        [TestCase(100f, false)]
+        [TestCase(100f, true)]
+        [TestCase(150f, false)]
+        [TestCase(150f, true)]
+        [TestCase(200f, false)]
+        [TestCase(200f, true)]
+        public async Task ExtendedRawFramesUseActualRemainingExportRange(float rest, bool fullLilToon)
+        {
+            using var fixture = new AttachmentConnectionTests.Fixture();
+            var baked = new Mesh(); Vrm10Instance imported = null;
+            try
+            {
+                AddTrackingDelta(fixture.Mesh, "MouthClosed");
+                fixture.Mesh.AddBlendShapeFrame("MouthClosed", 200, Enumerable.Repeat(Vector3.up * .04f, fixture.Mesh.vertexCount).ToArray(), null, null);
+                var sourceSkins = fixture.Source.GetComponentsInChildren<SkinnedMeshRenderer>();
+                foreach (var skin in sourceSkins) { skin.SetBlendShapeWeight(1, rest); skin.sharedMaterial.shader = Shader.Find("lilToon"); }
+                var usable = rest < 200;
+                Assert.That(UnifiedExpressionPreparation.HasUsableEvidence(fixture.Source), Is.EqualTo(usable));
+                if (!usable) Assert.Throws<InvalidOperationException>(() => UniVrmOneClickExporter.Export(fixture.Source, "Fully resting extended UE target", "Tests",
+                    exporterVersion: fullLilToon ? "0.11.5" : null, lilToonVersion: fullLilToon ? "2.3.4" : null));
+                var bytes = UniVrmOneClickExporter.Export(fixture.Source, "Extended raw UE frames", "Tests",
+                    exporterVersion: fullLilToon ? "0.11.5" : null, lilToonVersion: fullLilToon ? "2.3.4" : null,
+                    blinkOptions: usable ? null : new BlinkExportOptions { Mode = BlinkExportMode.None });
+                imported = await Vrm10.LoadBytesAsync(bytes, canLoadVrm0X: false, awaitCaller: new ImmediateCaller());
+                var route = imported.Vrm.Expression.CustomClips.Single(clip => clip.name == "UE/MouthClosed");
+                Assert.That(route.MorphTargetBindings.Length, Is.EqualTo(2));
+                var baseline = new Dictionary<string, Vector3>();
+                foreach (var input in new[] { 0f, .5f, 1f })
+                {
+                    imported.Runtime.Expression.SetWeight(ExpressionKey.CreateCustom(route.name), input); imported.Runtime.Process();
+                    foreach (var binding in route.MorphTargetBindings)
+                    {
+                        var skin = imported.transform.Find(binding.RelativePath).GetComponent<SkinnedMeshRenderer>();
+                        Assert.That(skin.GetBlendShapeWeight(binding.Index), Is.EqualTo(input * 100).Within(.001));
+                        Assert.That(skin.sharedMesh.GetBlendShapeFrameCount(binding.Index), Is.EqualTo(1));
+                        Assert.That(skin.sharedMesh.GetBlendShapeFrameWeight(binding.Index, 0), Is.EqualTo(100));
+                        var delta = new Vector3[skin.sharedMesh.vertexCount]; skin.sharedMesh.GetBlendShapeFrameVertices(binding.Index, 0, delta, null, null);
+                        var residual = .04f - .04f * rest / 200;
+                        Assert.That(delta[0].y, Is.EqualTo(residual).Within(.00001));
+                        skin.BakeMesh(baked);
+                        if (input == 0) baseline.Add(binding.RelativePath, baked.vertices[0]);
+                        Assert.That(Vector3.Distance(baseline[binding.RelativePath], baked.vertices[0]), Is.EqualTo(residual * input).Within(.0001));
+                    }
+                }
+                Assert.That(fixture.Mesh.GetBlendShapeFrameCount(1), Is.EqualTo(2));
+                Assert.That(fixture.Mesh.GetBlendShapeFrameWeight(1, 1), Is.EqualTo(200));
+                Assert.That(sourceSkins.All(skin => skin.GetBlendShapeWeight(1) == rest && skin.sharedMesh == fixture.Mesh), Is.True);
+            }
+            finally { if (imported != null) Object.DestroyImmediate(imported.gameObject); Object.DestroyImmediate(baked); }
+        }
+
         private static void AddTrackingDelta(Mesh mesh, string name, float amount = .02f) =>
             mesh.AddBlendShapeFrame(name, 100, Enumerable.Repeat(Vector3.up * amount, mesh.vertexCount).ToArray(), null, null);
 

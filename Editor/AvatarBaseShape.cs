@@ -55,7 +55,9 @@ namespace VRVlog.LilToonExporter
 
         internal static bool HasUsableRawEndpoint(Mesh mesh, int shape, float weight)
         {
-            if (!Finite(weight) || weight < 0f || weight >= 100f) return false;
+            // Source frame endpoints may exceed100. The exported shape is
+            // normalized to100 only after subtracting its actual authored rest.
+            if (!Finite(weight) || weight < 0f) return false;
             return HasUsableMorphEndpoint(mesh, shape, weight);
         }
 
