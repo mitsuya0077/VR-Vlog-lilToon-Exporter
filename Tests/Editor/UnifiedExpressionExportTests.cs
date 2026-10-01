@@ -197,7 +197,13 @@ namespace VRVlog.LilToonExporter.Tests
                     .Select(path => new MorphTargetBinding(path, 2, authoredWeight)).ToArray();
                 vrm.Expression.CustomClips.Add(clip);
                 fixture.Source.AddComponent<Vrm10Instance>().Vrm = vrm;
-                var bytes = UniVrmOneClickExporter.Export(fixture.Source, "Authored UE coverage", "Tests");
+                // A disabled authored route reserves both meshes without
+                // establishing UE support. Verify the automatic safeguard,
+                // then opt out of blink for this authored-preservation probe.
+                var noBlink = authoredWeight == 0 && !otherMeshUncovered;
+                if (noBlink) Assert.Throws<InvalidOperationException>(() => UniVrmOneClickExporter.Export(fixture.Source, "Authored UE coverage", "Tests"));
+                var bytes = UniVrmOneClickExporter.Export(fixture.Source, "Authored UE coverage", "Tests",
+                    blinkOptions: noBlink ? new BlinkExportOptions { Mode = BlinkExportMode.None } : null);
                 imported = await Vrm10.LoadBytesAsync(bytes, canLoadVrm0X: false, awaitCaller: new ImmediateCaller());
                 var retained = imported.Vrm.Expression.CustomClips.Single(value => value.name == clip.name);
                 Assert.That(retained.MorphTargetBindings.All(binding => Math.Abs(binding.Weight - authoredWeight) < .0001), Is.True);
