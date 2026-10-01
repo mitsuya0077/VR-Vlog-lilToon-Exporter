@@ -72,7 +72,7 @@ namespace VRVlog.LilToonExporter
                 var unifiedPreparation = trackingProfile == null ? new UnifiedExpressionPreparation(clone) : null;
                 using var preparation = NdmfExportPreparation.Prepare(source, clone, warnings);
                 gimmicks.Apply(expressionBindings, menu, warnings);
-                unifiedPreparation?.Verify();
+                unifiedPreparation?.Verify(blink.RequiresUnifiedEvidence);
                 poses.CollectPrepared(clone, warnings);
                 expressionBindings.Capture(menu);
                 blink.Bake(clone, temporaryMeshes);

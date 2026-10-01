@@ -13,6 +13,12 @@ namespace VRVlog.LilToonExporter
     internal sealed class UnifiedExpressionPreparation
     {
         private readonly Dictionary<SkinnedMeshRenderer, string[]> required = new Dictionary<SkinnedMeshRenderer, string[]>();
+        private readonly Dictionary<SkinnedMeshRenderer, string[]> effectiveRaw = new Dictionary<SkinnedMeshRenderer, string[]>();
+        private readonly Dictionary<SkinnedMeshRenderer, string[]> effectiveAuthored = new Dictionary<SkinnedMeshRenderer, string[]>();
+        private readonly HashSet<string> usableAuthoredNames = new HashSet<string>(StringComparer.Ordinal);
+        private readonly GameObject avatar;
+        private readonly Func<Transform, bool> excluded;
+        private const string LostTracking = "Modular Avatar / NDMF の処理で Unified Expressions の追跡用変形が失われました。メッシュや BlendShape を変更する追加ツールの設定を確認してください。";
 
         internal bool SupportsUnified { get; private set; }
 
@@ -21,6 +27,8 @@ namespace VRVlog.LilToonExporter
 
         internal UnifiedExpressionPreparation(GameObject clone, Func<Transform, bool> excluded = null)
         {
+            avatar = clone;
+            this.excluded = excluded;
             var renderers = ExportRendererSelection.Enumerate(clone)
                 .Where(renderer => excluded?.Invoke(renderer.transform) != true).ToArray();
             var meshes = renderers.OfType<SkinnedMeshRenderer>()
@@ -63,7 +71,10 @@ namespace VRVlog.LilToonExporter
                 reservedAuthoredNames: reserved));
             var materials = new HashSet<string>(renderers.SelectMany(renderer => renderer.sharedMaterials)
                 .Where(material => material != null).Select(material => material.name), StringComparer.Ordinal);
-            var usableAuthored = clips.Where(clip => IsUsable(clip, clone, materials, meshes)).Select(clip => clip.name).ToArray();
+            var usableClips = clips.Where(clip => UnifiedExpressionRegistry.TryCanonicalize(clip.name, out _) &&
+                IsUsable(clip, clone, materials, meshes)).ToArray();
+            usableAuthoredNames.UnionWith(usableClips.Select(clip => clip.name));
+            var usableAuthored = usableAuthoredNames.ToArray();
             // Blink validation uses the same alias, authored-coverage and
             // representation selection as preparation. A retained empty or
             // disabled route and an inert/fully resting raw shape cannot alone
@@ -71,6 +82,24 @@ namespace VRVlog.LilToonExporter
             SupportsUnified = VrmUnifiedExpressions.HasEvidence(usableAuthored.Concat(selected.SelectMany(pair =>
                 pair.Value.Values.Where(index => AvatarBaseShape.HasUsableRawEndpoint(pair.Key, index))
                     .Select(index => meshes[pair.Key][index]))));
+            if (SupportsUnified)
+            {
+                foreach (var pair in selected)
+                {
+                    var shapes = pair.Value.Values.Where(index => AvatarBaseShape.HasUsableRawEndpoint(pair.Key, index))
+                        .Select(index => meshes[pair.Key][index]).ToArray();
+                    if (shapes.Length > 0) effectiveRaw.Add(pair.Key, shapes);
+                }
+                foreach (var skin in meshes.Keys)
+                {
+                    var shapes = usableClips.SelectMany(clip => clip.MorphTargetBindings ?? Array.Empty<MorphTargetBinding>())
+                        .Where(binding => binding.Weight > 0 &&
+                            (string.IsNullOrEmpty(binding.RelativePath) ? clone.transform : clone.transform.Find(binding.RelativePath)) == skin.transform &&
+                            AvatarBaseShape.HasUsableMorphEndpoint(skin, binding.Index))
+                        .Select(binding => meshes[skin][binding.Index]).Distinct(StringComparer.Ordinal).ToArray();
+                    if (shapes.Length > 0) effectiveAuthored.Add(skin, shapes);
+                }
+            }
             if (!VrmUnifiedExpressions.HasEvidence(usableAuthored
                 .Concat(selected.SelectMany(pair => pair.Value.Values.Select(index => meshes[pair.Key][index]))))) return;
             foreach (var pair in meshes)
@@ -94,7 +123,7 @@ namespace VRVlog.LilToonExporter
                 var mesh = skin.sharedMesh;
                 if (mesh == null || binding.Index < 0 || binding.Index >= mesh.blendShapeCount ||
                     !Finite(binding.Weight) || binding.Weight < 0 || binding.Weight > 1) return false;
-                positiveMorph |= binding.Weight > 0;
+                positiveMorph |= binding.Weight > 0 && AvatarBaseShape.HasUsableMorphEndpoint(skin, binding.Index);
             }
             foreach (var binding in clip.MaterialColorBindings ?? Array.Empty<MaterialColorBinding>())
                 if (!materials.Contains(binding.MaterialName) || !Enum.IsDefined(typeof(MaterialColorType), binding.BindType) ||
@@ -110,14 +139,37 @@ namespace VRVlog.LilToonExporter
         private static bool HasBindings(VRM10Expression clip) =>
             (clip.MorphTargetBindings?.Length ?? 0) + (clip.MaterialColorBindings?.Length ?? 0) + (clip.MaterialUVBindings?.Length ?? 0) > 0;
 
-        internal void Verify()
+        internal void Verify(bool requireUsableEvidence = false)
         {
             foreach (var pair in required)
             {
                 var skin = pair.Key;
                 if (skin == null || !skin.enabled || !skin.gameObject.activeInHierarchy || skin.sharedMesh == null ||
                     pair.Value.Any(name => skin.sharedMesh.GetBlendShapeIndex(name) < 0))
-                    throw new InvalidOperationException("Modular Avatar / NDMF の処理で Unified Expressions の追跡用変形が失われました。メッシュや BlendShape を変更する追加ツールの設定を確認してください。");
+                    throw new InvalidOperationException(LostTracking);
+            }
+            VerifyEffective(effectiveRaw, AvatarBaseShape.HasUsableRawEndpoint);
+            VerifyEffective(effectiveAuthored, AvatarBaseShape.HasUsableMorphEndpoint);
+            // Automatic blink was resolved against the source before appearance
+            // snapshots. Carry its requirement across that earlier stage too.
+            if (SupportsUnified || requireUsableEvidence)
+            {
+                if (avatar == null || !avatar.activeInHierarchy) throw new InvalidOperationException(LostTracking);
+                var current = new UnifiedExpressionPreparation(avatar, excluded);
+                if (!current.SupportsUnified || usableAuthoredNames.Any(name => !current.usableAuthoredNames.Contains(name)))
+                    throw new InvalidOperationException(LostTracking);
+            }
+        }
+
+        private static void VerifyEffective(Dictionary<SkinnedMeshRenderer, string[]> targets,
+            Func<SkinnedMeshRenderer, int, bool> usable)
+        {
+            foreach (var pair in targets)
+            {
+                var skin = pair.Key;
+                if (skin == null || !skin.enabled || !skin.gameObject.activeInHierarchy || skin.sharedMesh == null ||
+                    pair.Value.Any(name => !usable(skin, skin.sharedMesh.GetBlendShapeIndex(name))))
+                    throw new InvalidOperationException(LostTracking);
             }
         }
     }

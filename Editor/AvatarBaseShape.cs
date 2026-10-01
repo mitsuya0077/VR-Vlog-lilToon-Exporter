@@ -55,8 +55,22 @@ namespace VRVlog.LilToonExporter
 
         internal static bool HasUsableRawEndpoint(Mesh mesh, int shape, float weight)
         {
-            if (mesh == null || mesh.vertexCount == 0 || shape < 0 || shape >= mesh.blendShapeCount) return false;
             if (!Finite(weight) || weight < 0f || weight >= 100f) return false;
+            return HasUsableMorphEndpoint(mesh, shape, weight);
+        }
+
+        internal static bool HasUsableMorphEndpoint(SkinnedMeshRenderer skin, int shape)
+        {
+            if (skin == null || skin.sharedMesh == null || shape < 0 || shape >= skin.sharedMesh.blendShapeCount) return false;
+            return HasUsableMorphEndpoint(skin.sharedMesh, shape, skin.GetBlendShapeWeight(shape));
+        }
+
+        // Explicit authored bindings retain the existing rebase semantics for
+        // finite negative or extrapolated rest values. They still need a real
+        // finite exported residual, rather than just a valid target index.
+        internal static bool HasUsableMorphEndpoint(Mesh mesh, int shape, float weight)
+        {
+            if (mesh == null || mesh.vertexCount == 0 || shape < 0 || shape >= mesh.blendShapeCount || !Finite(weight)) return false;
             var frames = mesh.GetBlendShapeFrameCount(shape);
             if (frames == 0) return false;
             var endpoint = new Deltas(mesh.vertexCount);

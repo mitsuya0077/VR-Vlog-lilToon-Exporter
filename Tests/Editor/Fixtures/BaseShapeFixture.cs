@@ -23,6 +23,7 @@ namespace VRVlog.LilToonExporter.Tests
 
         internal static void Run(Action<bool, string> check)
         {
+            AuthorEndpointChecks(check);
             var source = Create();
             var target = Create();
             try
@@ -107,6 +108,53 @@ namespace VRVlog.LilToonExporter.Tests
                 UnityEngine.Object.DestroyImmediate(source);
                 UnityEngine.Object.DestroyImmediate(target);
             }
+        }
+
+        private static void AuthorEndpointChecks(Action<bool, string> check)
+        {
+            var source = Create();
+            try
+            {
+                check(AvatarBaseShape.HasUsableMorphEndpoint(source, 0, 0), "A positive authored morph route needs a finite nonzero residual endpoint.");
+                check(AvatarBaseShape.HasUsableMorphEndpoint(source, 0, 75), "A partially resting authored route preserves its remaining endpoint range.");
+                check(!AvatarBaseShape.HasUsableMorphEndpoint(source, 0, 100), "An authored morph already at its exported endpoint cannot establish tracking support.");
+                check(AvatarBaseShape.HasUsableMorphEndpoint(source, 0, -25), "A finite negative authored rest remains usable when its exported endpoint differs.");
+                check(AvatarBaseShape.HasUsableMorphEndpoint(source, 0, 150), "A finite authored rest beyond the final frame can retain a nonzero residual endpoint.");
+                foreach (var rest in new[] { float.NaN, float.PositiveInfinity, float.NegativeInfinity })
+                    check(!AvatarBaseShape.HasUsableMorphEndpoint(source, 0, rest), "Nonfinite authored rest cannot qualify an endpoint.");
+                check(!AvatarBaseShape.HasUsableMorphEndpoint(source, -1, 0) && !AvatarBaseShape.HasUsableMorphEndpoint(source, 99, 0), "Invalid authored target indices cannot qualify geometry.");
+                source.ClearBlendShapes();
+                source.AddBlendShapeFrame("Inert author", 100, Delta(0, 0, 0), null, null);
+                check(!AvatarBaseShape.HasUsableMorphEndpoint(source, 0, 0), "A named authored zero-delta shape has no usable endpoint.");
+                source.ClearBlendShapes();
+                source.AddBlendShapeFrame("Normal-only author", 100, Delta(0, 0, 0), Delta(1, 0, 0), null);
+                check(AvatarBaseShape.HasUsableMorphEndpoint(source, 0, 0), "Finite authored normal movement qualifies even without positional delta.");
+                source.ClearBlendShapes();
+                source.AddBlendShapeFrame("Tangent-only author", 100, Delta(0, 0, 0), null, Delta(0, 1, 0));
+                check(AvatarBaseShape.HasUsableMorphEndpoint(source, 0, 0), "Finite authored tangent movement qualifies even without positional delta.");
+                source.ClearBlendShapes();
+                source.AddBlendShapeFrame("Rest cancels endpoint", 50, Delta(3, 0, 0), null, null);
+                source.AddBlendShapeFrame("Rest cancels endpoint", 100, Delta(3, 0, 0), null, null);
+                check(!AvatarBaseShape.HasUsableMorphEndpoint(source, 0, 50), "An intermediate rest equal to the final endpoint has no exported residual despite nonzero frames.");
+                check(AvatarBaseShape.HasUsableMorphEndpoint(source, 0, 0), "The same multiframe authored morph can qualify from a different rest.");
+                source.ClearBlendShapes();
+                source.AddBlendShapeFrame("Final cancellation", 50, Delta(2, 0, 0), null, null);
+                source.AddBlendShapeFrame("Final cancellation", 100, Delta(0, 0, 0), null, null);
+                check(!AvatarBaseShape.HasUsableMorphEndpoint(source, 0, 0), "An intermediate moving frame cannot make a zero final/rest residual usable.");
+                check(AvatarBaseShape.HasUsableMorphEndpoint(source, 0, 50), "A zero final frame still moves away from a nonzero authored rest.");
+#if EXPORTER_BEHAVIOR_TESTS
+                foreach (var invalid in new[] { "delta", "normal", "tangent", "frame" })
+                {
+                    source.ClearBlendShapes();
+                    source.AddBlendShapeFrame("Malformed author", invalid == "frame" ? float.NaN : 100,
+                        Delta(invalid == "delta" ? float.NaN : 2, 0, 0),
+                        invalid == "normal" ? Delta(float.PositiveInfinity, 0, 0) : null,
+                        invalid == "tangent" ? Delta(0, float.NegativeInfinity, 0) : null);
+                    check(!AvatarBaseShape.HasUsableMorphEndpoint(source, 0, 0), "Malformed authored " + invalid + " data cannot qualify an endpoint.");
+                }
+#endif
+            }
+            finally { UnityEngine.Object.DestroyImmediate(source); }
         }
     }
 }

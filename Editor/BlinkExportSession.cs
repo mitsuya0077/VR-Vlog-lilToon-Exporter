@@ -20,6 +20,7 @@ namespace VRVlog.LilToonExporter
         internal bool Disabled;
         bool allowMissingAutomaticBlink;
         internal bool HasBilateralPreset => authored[0] || Slots[0].Count > 0;
+        internal bool RequiresUnifiedEvidence => allowMissingAutomaticBlink && !PreserveAuthored && Slots[0].Count == 0 && Slots[1].Count == 0;
         readonly Dictionary<SkinnedMeshRenderer, int> nodes = new Dictionary<SkinnedMeshRenderer, int>();
         readonly bool[] authored = new bool[3];
         readonly List<Object> expressionCopies = new List<Object>();
