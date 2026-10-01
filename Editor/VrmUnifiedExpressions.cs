@@ -63,7 +63,7 @@ namespace VRVlog.LilToonExporter
             UnifiedExpressionRegistry.TryCanonicalize(name, out var canonical) &&
             (UnifiedExpressionRegistry.IsDistinctive(canonical) || UnifiedExpressionRegistry.IsExplicit(name)));
 
-        private static int RawPriority(string name, string canonical) => UnifiedExpressionRegistry.IsExplicit(name) ? 0 :
+        internal static int RawPriority(string name, string canonical) => UnifiedExpressionRegistry.IsExplicit(name) ? 0 :
             string.Equals(name, canonical, StringComparison.OrdinalIgnoreCase) ? 1 : 2;
 
         internal static byte[] Add(byte[] bytes, ICollection<string> warnings = null)

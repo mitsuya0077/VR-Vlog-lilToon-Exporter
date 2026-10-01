@@ -24,6 +24,7 @@ namespace VRVlog.LilToonExporter.Tests
         internal static void Run(Action<bool, string> check)
         {
             AuthorEndpointChecks(check);
+            LeadingNeutralFrameChecks(check);
             var source = Create();
             var target = Create();
             try
@@ -108,6 +109,39 @@ namespace VRVlog.LilToonExporter.Tests
                 UnityEngine.Object.DestroyImmediate(source);
                 UnityEngine.Object.DestroyImmediate(target);
             }
+        }
+
+        private static void LeadingNeutralFrameChecks(Action<bool, string> check)
+        {
+            var source=Create();var target=Create();
+            try
+            {
+                source.ClearBlendShapes();
+                source.AddBlendShapeFrame("Neutral origin",0,Delta(0,0,0),null,null);
+                source.AddBlendShapeFrame("Neutral origin",100,Delta(4,0,0),null,null);
+                foreach(var rest in new[]{0f,25f,100f})
+                {
+                    check(AvatarBaseShape.HasUsableRawEndpoint(source,0,rest)==(rest<100f),"A pure leading0 frame preserves raw residual qualification at rest"+rest+".");
+                    check(AvatarBaseShape.HasUsableMorphEndpoint(source,0,rest)==(rest<100f),"A pure leading0 frame preserves authored residual qualification at rest"+rest+".");
+                    AvatarBaseShape.Rebase(source,target,new[]{rest});
+                    var vertices=new Vector3[3];target.GetBlendShapeFrameVertices(0,0,vertices,null,null);
+                    check(Near(target.vertices[0].x,1f+4f*rest/100f) && Near(vertices[0].x,4f*(1f-rest/100f)) && Near(target.vertices[0].x+vertices[0].x,5f),
+                        "Rebase evaluates a leading purezero as the implicit origin, preserves authored rest and reaches the original endpoint.");
+                }
+                check(source.GetBlendShapeFrameCount(0)==2 && source.GetBlendShapeFrameWeight(0,0)==0f && source.GetBlendShapeFrameWeight(0,1)==100f && source.vertices[0].x==1f,"Neutral-frame qualification and rebase never mutate the source mesh or frame intervals.");
+                source.ClearBlendShapes();source.AddBlendShapeFrame("Only neutral",0,Delta(0,0,0),null,null);
+                check(!AvatarBaseShape.HasUsableRawEndpoint(source,0,0) && !AvatarBaseShape.HasUsableMorphEndpoint(source,0,0),"A leading zero frame without any positive moving frame cannot establish an endpoint.");
+#if EXPORTER_BEHAVIOR_TESTS
+                foreach(var invalid in new[]{"nonzeroZero","negative","nonfinite"})
+                {
+                    source.ClearBlendShapes();source.AddBlendShapeFrame("Invalid origin",invalid=="negative"?-1f:invalid=="nonfinite"?float.PositiveInfinity:0f,
+                        Delta(invalid=="nonzeroZero"?1f:0f,0,0),null,null);
+                    source.AddBlendShapeFrame("Invalid origin",100,Delta(4,0,0),null,null);
+                    check(!AvatarBaseShape.HasUsableRawEndpoint(source,0,0) && !AvatarBaseShape.HasUsableMorphEndpoint(source,0,0),"Only a finite purezero leading frame is an implicit origin; malformed"+invalid+" remains excluded.");
+                }
+#endif
+            }
+            finally { UnityEngine.Object.DestroyImmediate(source);UnityEngine.Object.DestroyImmediate(target); }
         }
 
         private static void AuthorEndpointChecks(Action<bool, string> check)

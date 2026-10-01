@@ -815,6 +815,236 @@ namespace VRVlog.LilToonExporter.Tests
             finally { Object.DestroyImmediate(inert); }
         }
 
+        [TestCase("mixedMorph", false)]
+        [TestCase("mixedMorph", true)]
+        [TestCase("discardedInvalidMorph", false)]
+        [TestCase("discardedInvalidMorph", true)]
+        [TestCase("onlyExcluded", false)]
+        [TestCase("onlyExcluded", true)]
+        [TestCase("color", false)]
+        [TestCase("color", true)]
+        [TestCase("uv", false)]
+        [TestCase("uv", true)]
+        [TestCase("onlyExcludedColor", false)]
+        [TestCase("onlyExcludedColor", true)]
+        public async Task AuthoredExclusionsMatchFinalReferencePruning(string kind, bool fullLilToon)
+        {
+            using var fixture = new AttachmentConnectionTests.Fixture();
+            var vrm = ScriptableObject.CreateInstance<VRM10Object>();
+            var clip = ScriptableObject.CreateInstance<VRM10Expression>();
+            Material excludedMaterial = null; Vrm10Instance imported = null;
+            try
+            {
+                AddTrackingDelta(fixture.Mesh, "MouthClosed");
+                var front = fixture.Source.transform.Find("Front").GetComponent<SkinnedMeshRenderer>();
+                var back = fixture.Source.transform.Find("Back").GetComponent<SkinnedMeshRenderer>();
+                front.sharedMaterial.shader = Shader.Find("lilToon");
+                excludedMaterial = new Material(back.sharedMaterial) { name = "UE excluded material" }; back.sharedMaterial = excludedMaterial;
+                clip.name = "UE/MouthClosed";
+                if (kind == "mixedMorph" || kind == "discardedInvalidMorph") clip.MorphTargetBindings = new[] {
+                    new MorphTargetBinding("Front", 1, .5f), new MorphTargetBinding("Back", kind == "discardedInvalidMorph" ? 999 : 1, .7f) };
+                if (kind == "onlyExcluded") clip.MorphTargetBindings = new[] { new MorphTargetBinding("Back", 1, .7f) };
+                if (kind == "color" || kind == "uv") clip.MorphTargetBindings = new[] { new MorphTargetBinding("Front", 1, .5f) };
+                if (kind == "color" || kind == "onlyExcludedColor") clip.MaterialColorBindings =
+                    (kind == "color" ? new[] { front.sharedMaterial.name, excludedMaterial.name } : new[] { excludedMaterial.name })
+                    .Select(name => new MaterialColorBinding { MaterialName = name, BindType = MaterialColorType.color, TargetValue = Color.red }).ToArray();
+                if (kind == "uv") clip.MaterialUVBindings = new[] { front.sharedMaterial.name, excludedMaterial.name }.Select(name =>
+                    new MaterialUVBinding { MaterialName = name, Scaling = Vector2.one, Offset = Vector2.up }).ToArray();
+                vrm.Expression.CustomClips.Add(clip); fixture.Source.AddComponent<Vrm10Instance>().Vrm = vrm;
+                Assert.That(UnifiedExpressionPreparation.HasUsableEvidence(fixture.Source, target => target == back.transform), Is.True);
+                var bytes = UniVrmOneClickExporter.Export(fixture.Source, "Retained authored UE references", "Tests",
+                    excludedObjects: new[] { back.gameObject }, exporterVersion: fullLilToon ? "0.11.5" : null,
+                    lilToonVersion: fullLilToon ? "2.3.4" : null);
+                imported = await Vrm10.LoadBytesAsync(bytes, canLoadVrm0X: false, awaitCaller: new ImmediateCaller());
+                var route = imported.Vrm.Expression.CustomClips.Single(value => value.name == clip.name);
+                Assert.That(route.MorphTargetBindings.Length, Is.EqualTo(1));
+                Assert.That(route.MorphTargetBindings[0].RelativePath, Is.EqualTo("Front"));
+                var repaired = kind == "onlyExcluded" || kind == "onlyExcludedColor";
+                Assert.That(route.MorphTargetBindings[0].Weight, Is.EqualTo(repaired ? 1 : .5f).Within(.001));
+                Assert.That(route.MaterialColorBindings.Length, Is.EqualTo(kind == "color" ? 1 : 0));
+                Assert.That(route.MaterialUVBindings.Length, Is.EqualTo(kind == "uv" ? 1 : 0));
+                Assert.That(imported.transform.Find("Back"), Is.Null);
+                imported.Runtime.Expression.SetWeight(ExpressionKey.CreateCustom(route.name), .5f); imported.Runtime.Process();
+                Assert.That(imported.transform.Find("Front").GetComponent<SkinnedMeshRenderer>().GetBlendShapeWeight(route.MorphTargetBindings[0].Index),
+                    Is.EqualTo(repaired ? 50 : 25).Within(.001));
+                Assert.That(back.sharedMesh, Is.SameAs(fixture.Mesh)); Assert.That(back.sharedMaterial, Is.SameAs(excludedMaterial));
+                Assert.That(vrm.Expression.CustomClips.Single(), Is.SameAs(clip));
+                Assert.That(clip.MorphTargetBindings.Any(binding => binding.RelativePath == "Back"), Is.EqualTo(kind == "mixedMorph" || kind == "discardedInvalidMorph" || kind == "onlyExcluded"));
+            }
+            finally { if (imported != null) Object.DestroyImmediate(imported.gameObject); if (excludedMaterial != null) Object.DestroyImmediate(excludedMaterial); Object.DestroyImmediate(clip); Object.DestroyImmediate(vrm); }
+        }
+
+        [TestCase(false)]
+        [TestCase(true)]
+        public void AuthoredRouteWithOnlyExcludedTargetsCannotWaiveMissingBlink(bool fullLilToon)
+        {
+            using var fixture = new AttachmentConnectionTests.Fixture();
+            var vrm = ScriptableObject.CreateInstance<VRM10Object>(); var clip = ScriptableObject.CreateInstance<VRM10Expression>();
+            try
+            {
+                var back = fixture.Source.transform.Find("Back"); clip.name = "UE/MouthClosed";
+                clip.MorphTargetBindings = new[] { new MorphTargetBinding("Back", 0, .5f) };
+                vrm.Expression.CustomClips.Add(clip); fixture.Source.AddComponent<Vrm10Instance>().Vrm = vrm;
+                Assert.That(UnifiedExpressionPreparation.HasUsableEvidence(fixture.Source, target => target == back), Is.False);
+                Assert.Throws<InvalidOperationException>(() => UniVrmOneClickExporter.Export(fixture.Source, "No retained UE route", "Tests",
+                    excludedObjects: new[] { back.gameObject }, exporterVersion: fullLilToon ? "0.11.5" : null,
+                    lilToonVersion: fullLilToon ? "2.3.4" : null));
+                Assert.That(clip.MorphTargetBindings.Single().Weight, Is.EqualTo(.5f));
+            }
+            finally { Object.DestroyImmediate(clip); Object.DestroyImmediate(vrm); }
+        }
+
+        [TestCase(0f, false, false)]
+        [TestCase(0f, false, true)]
+        [TestCase(0f, true, false)]
+        [TestCase(0f, true, true)]
+        [TestCase(25f, false, false)]
+        [TestCase(25f, false, true)]
+        [TestCase(25f, true, false)]
+        [TestCase(25f, true, true)]
+        public async Task LeadingNeutralFrameSurvivesActualGlbAndContinuousPlayback(float rest, bool authored, bool fullLilToon)
+        {
+            using var fixture = new AttachmentConnectionTests.Fixture();
+            var vrm = ScriptableObject.CreateInstance<VRM10Object>(); var clip = ScriptableObject.CreateInstance<VRM10Expression>();
+            var baked = new Mesh(); Vrm10Instance imported = null;
+            try
+            {
+                fixture.Mesh.AddBlendShapeFrame("MouthClosed", 0, new Vector3[fixture.Mesh.vertexCount], null, null);
+                AddTrackingDelta(fixture.Mesh, "MouthClosed");
+                foreach (var skin in fixture.Source.GetComponentsInChildren<SkinnedMeshRenderer>()) { skin.SetBlendShapeWeight(1, rest); skin.sharedMaterial.shader = Shader.Find("lilToon"); }
+                clip.name = "UE/MouthClosed";
+                if (authored)
+                {
+                    clip.MorphTargetBindings = new[] { new MorphTargetBinding("Front", 1, .6f), new MorphTargetBinding("Back", 1, .6f) };
+                    vrm.Expression.CustomClips.Add(clip); fixture.Source.AddComponent<Vrm10Instance>().Vrm = vrm;
+                }
+                Assert.That(UnifiedExpressionPreparation.HasUsableEvidence(fixture.Source), Is.True);
+                var bytes = UniVrmOneClickExporter.Export(fixture.Source, "Leading neutral UE frame", "Tests",
+                    exporterVersion: fullLilToon ? "0.11.5" : null, lilToonVersion: fullLilToon ? "2.3.4" : null);
+                imported = await Vrm10.LoadBytesAsync(bytes, canLoadVrm0X: false, awaitCaller: new ImmediateCaller());
+                var route = imported.Vrm.Expression.CustomClips.Single(value => value.name == clip.name);
+                var baseline = new Dictionary<string, Vector3>();
+                foreach (var input in new[] { 0f, .5f, 1f })
+                {
+                    imported.Runtime.Expression.SetWeight(ExpressionKey.CreateCustom(route.name), input); imported.Runtime.Process();
+                    foreach (var binding in route.MorphTargetBindings)
+                    {
+                        var skin = imported.transform.Find(binding.RelativePath).GetComponent<SkinnedMeshRenderer>();
+                        Assert.That(skin.GetBlendShapeWeight(binding.Index), Is.EqualTo(input * (authored ? 60 : 100)).Within(.001));
+                        var delta = new Vector3[skin.sharedMesh.vertexCount]; skin.sharedMesh.GetBlendShapeFrameVertices(binding.Index, 0, delta, null, null);
+                        Assert.That(delta[0].y, Is.EqualTo(.02f * (1 - rest / 100)).Within(.00001));
+                        skin.BakeMesh(baked);
+                        if (input == 0) baseline.Add(binding.RelativePath, baked.vertices[0]);
+                        Assert.That(Vector3.Distance(baseline[binding.RelativePath], baked.vertices[0]),
+                            Is.EqualTo(.02f * (1 - rest / 100) * input * (authored ? .6f : 1)).Within(.0001));
+                    }
+                }
+                Assert.That(fixture.Mesh.GetBlendShapeFrameCount(1), Is.EqualTo(2));
+                Assert.That(fixture.Mesh.GetBlendShapeFrameWeight(1, 0), Is.Zero);
+                Assert.That(fixture.Source.GetComponentsInChildren<SkinnedMeshRenderer>().All(skin => skin.GetBlendShapeWeight(1) == rest), Is.True);
+            }
+            finally { if (imported != null) Object.DestroyImmediate(imported.gameObject); Object.DestroyImmediate(baked); Object.DestroyImmediate(clip); Object.DestroyImmediate(vrm); }
+        }
+
+        [TestCase("inertExplicitAlias")]
+        [TestCase("validExplicitAlias")]
+        [TestCase("ambiguousAlias")]
+        [TestCase("authoredCoverage")]
+        [TestCase("authoredDisabledAlias")]
+        [TestCase("authoredHigherAlias")]
+        [TestCase("authoredWeight")]
+        public void PreparationRejectsChangedCanonicalRouteWhileOtherUnifiedEvidenceSurvives(string change)
+        {
+            using var fixture = new AttachmentConnectionTests.Fixture();
+            var vrm = ScriptableObject.CreateInstance<VRM10Object>(); var clip = ScriptableObject.CreateInstance<VRM10Expression>();
+            var replacementClip = ScriptableObject.CreateInstance<VRM10Expression>(); Mesh changed = null;
+            try
+            {
+                var originalName = change == "ambiguousAlias" ? "mouth_closed" : change == "authoredCoverage" ? "LipFunnel" : "MouthClosed";
+                AddTrackingDelta(fixture.Mesh, originalName); AddTrackingDelta(fixture.Mesh, "EyeClosedLeft");
+                var isAuthored = change == "authoredDisabledAlias" || change == "authoredHigherAlias" || change == "authoredWeight";
+                if (isAuthored) { clip.name = "MouthClosed"; clip.MorphTargetBindings = new[] { new MorphTargetBinding("Front", 1, .5f) }; vrm.Expression.CustomClips.Add(clip); }
+                fixture.Copy.AddComponent<Vrm10Instance>().Vrm = vrm;
+                var guard = new UnifiedExpressionPreparation(fixture.Copy); Assert.DoesNotThrow(() => guard.Verify());
+                var front = fixture.Copy.transform.Find("Front").GetComponent<SkinnedMeshRenderer>();
+                if (change == "inertExplicitAlias" || change == "validExplicitAlias" || change == "ambiguousAlias")
+                {
+                    changed = Object.Instantiate(fixture.Mesh); AddTrackingDelta(changed, change == "ambiguousAlias" ? "mouth-closed" : "UE/MouthClosed", change == "inertExplicitAlias" ? 0 : .03f); front.sharedMesh = changed;
+                }
+                else if (change == "authoredCoverage")
+                {
+                    replacementClip.name = "UE/LipFunnelUpperLeft"; replacementClip.MaterialColorBindings = new[] { new MaterialColorBinding {
+                        MaterialName = front.sharedMaterial.name, BindType = MaterialColorType.color, TargetValue = Color.red } }; vrm.Expression.CustomClips.Add(replacementClip);
+                }
+                else if (change == "authoredWeight") clip.MorphTargetBindings = new[] { new MorphTargetBinding("Front", 1, .7f) };
+                else
+                {
+                    replacementClip.name = "UE/MouthClosed"; replacementClip.MorphTargetBindings = new[] { new MorphTargetBinding("Front", 1, change == "authoredDisabledAlias" ? 0 : .7f) }; vrm.Expression.CustomClips.Add(replacementClip);
+                }
+                Assert.That(AvatarBaseShape.HasUsableMorphEndpoint(front, front.sharedMesh.GetBlendShapeIndex(originalName)), Is.True);
+                Assert.That(UnifiedExpressionPreparation.HasUsableEvidence(fixture.Copy), Is.True, "Other UE channels must not conceal a changed selected canonical route.");
+                Assert.Throws<InvalidOperationException>(() => guard.Verify());
+            }
+            finally { if (changed != null) Object.DestroyImmediate(changed); Object.DestroyImmediate(replacementClip); Object.DestroyImmediate(clip); Object.DestroyImmediate(vrm); }
+        }
+
+        [TestCase(false)]
+        [TestCase(true)]
+        public void PreparationAuthoredTargetIdentityAllowsOnlyCorrectIndexRemapping(bool remapped)
+        {
+            using var fixture = new AttachmentConnectionTests.Fixture();
+            var vrm = ScriptableObject.CreateInstance<VRM10Object>(); var clip = ScriptableObject.CreateInstance<VRM10Expression>(); Mesh reordered = null;
+            try
+            {
+                AddTrackingDelta(fixture.Mesh, "EyeClosedLeft"); AddTrackingDelta(fixture.Mesh, "JawOpen");
+                clip.name = "UE/EyeClosedLeft"; clip.MorphTargetBindings = new[] { new MorphTargetBinding("Front", 1, .5f) };
+                vrm.Expression.CustomClips.Add(clip); fixture.Copy.AddComponent<Vrm10Instance>().Vrm = vrm;
+                var guard = new UnifiedExpressionPreparation(fixture.Copy); Assert.DoesNotThrow(() => guard.Verify());
+                reordered = Object.Instantiate(fixture.Mesh); reordered.ClearBlendShapes(); AddTrackingDelta(reordered, "Hair detail");
+                AddTrackingDelta(reordered, "JawOpen"); AddTrackingDelta(reordered, "EyeClosedLeft");
+                fixture.Copy.transform.Find("Front").GetComponent<SkinnedMeshRenderer>().sharedMesh = reordered;
+                if (remapped) clip.MorphTargetBindings = new[] { new MorphTargetBinding("Front", 2, .5f) };
+                Assert.That(UnifiedExpressionPreparation.HasUsableEvidence(fixture.Copy), Is.True);
+                if (remapped) Assert.DoesNotThrow(() => guard.Verify(), "An updated index that preserves renderer, shape and weight retains the authored route.");
+                else Assert.Throws<InvalidOperationException>(() => guard.Verify(), "A stale index retargeting a valid but different shape loses the authored route.");
+            }
+            finally { if (reordered != null) Object.DestroyImmediate(reordered); Object.DestroyImmediate(clip); Object.DestroyImmediate(vrm); }
+        }
+
+        [TestCase(false, false)]
+        [TestCase(false, true)]
+        [TestCase(true, false)]
+        [TestCase(true, true)]
+        public async Task DuplicateAuthoredTargetsMatchPinnedFirstBindingPlayback(bool positiveFirst, bool fullLilToon)
+        {
+            using var fixture = new AttachmentConnectionTests.Fixture();
+            var vrm = ScriptableObject.CreateInstance<VRM10Object>(); var clip = ScriptableObject.CreateInstance<VRM10Expression>(); Vrm10Instance imported = null;
+            try
+            {
+                AddTrackingDelta(fixture.Mesh, "MouthClosed");
+                foreach (var skin in fixture.Source.GetComponentsInChildren<SkinnedMeshRenderer>()) skin.sharedMaterial.shader = Shader.Find("lilToon");
+                clip.name = "UE/MouthClosed"; clip.MorphTargetBindings = new[] {
+                    new MorphTargetBinding("Front", 1, positiveFirst ? .6f : 0), new MorphTargetBinding("Front", 1, positiveFirst ? 0 : .6f) };
+                vrm.Expression.CustomClips.Add(clip); fixture.Source.AddComponent<Vrm10Instance>().Vrm = vrm;
+                Assert.That(UnifiedExpressionPreparation.HasUsableEvidence(fixture.Source), Is.EqualTo(positiveFirst));
+                if (!positiveFirst) Assert.Throws<InvalidOperationException>(() => UniVrmOneClickExporter.Export(fixture.Source, "Disabled first authored target", "Tests",
+                    exporterVersion: fullLilToon ? "0.11.5" : null, lilToonVersion: fullLilToon ? "2.3.4" : null));
+                var bytes = UniVrmOneClickExporter.Export(fixture.Source, "Pinned duplicate target semantics", "Tests",
+                    exporterVersion: fullLilToon ? "0.11.5" : null, lilToonVersion: fullLilToon ? "2.3.4" : null,
+                    blinkOptions: positiveFirst ? null : new BlinkExportOptions { Mode = BlinkExportMode.None });
+                imported = await Vrm10.LoadBytesAsync(bytes, canLoadVrm0X: false, awaitCaller: new ImmediateCaller());
+                var route = imported.Vrm.Expression.CustomClips.Single(value => value.name == clip.name);
+                Assert.That(route.MorphTargetBindings.Length, Is.EqualTo(2));
+                Assert.That(route.MorphTargetBindings[0].Weight, Is.EqualTo(positiveFirst ? .6f : 0));
+                imported.Runtime.Expression.SetWeight(ExpressionKey.CreateCustom(route.name), .5f); imported.Runtime.Process();
+                var target = imported.transform.Find("Front").GetComponent<SkinnedMeshRenderer>();
+                Assert.That(target.GetBlendShapeWeight(route.MorphTargetBindings[0].Index), Is.EqualTo(positiveFirst ? 30 : 0).Within(.001));
+                Assert.That(clip.MorphTargetBindings.Length, Is.EqualTo(2));
+                Assert.That(clip.MorphTargetBindings[1].Weight, Is.EqualTo(positiveFirst ? 0 : .6f));
+            }
+            finally { if (imported != null) Object.DestroyImmediate(imported.gameObject); Object.DestroyImmediate(clip); Object.DestroyImmediate(vrm); }
+        }
+
         private static void AddTrackingDelta(Mesh mesh, string name, float amount = .02f) =>
             mesh.AddBlendShapeFrame(name, 100, Enumerable.Repeat(Vector3.up * amount, mesh.vertexCount).ToArray(), null, null);
 
