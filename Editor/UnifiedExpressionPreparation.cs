@@ -14,9 +14,16 @@ namespace VRVlog.LilToonExporter
     {
         private readonly Dictionary<SkinnedMeshRenderer, string[]> required = new Dictionary<SkinnedMeshRenderer, string[]>();
 
-        internal UnifiedExpressionPreparation(GameObject clone)
+        internal bool SupportsUnified { get; private set; }
+
+        internal static bool HasUsableEvidence(GameObject source, Func<Transform, bool> excluded = null) =>
+            new UnifiedExpressionPreparation(source, excluded).SupportsUnified;
+
+        internal UnifiedExpressionPreparation(GameObject clone, Func<Transform, bool> excluded = null)
         {
-            var meshes = ExportRendererSelection.Enumerate(clone).OfType<SkinnedMeshRenderer>()
+            var renderers = ExportRendererSelection.Enumerate(clone)
+                .Where(renderer => excluded?.Invoke(renderer.transform) != true).ToArray();
+            var meshes = renderers.OfType<SkinnedMeshRenderer>()
                 .Where(skin => skin.sharedMesh != null).ToDictionary(skin => skin, skin =>
                     Enumerable.Range(0, skin.sharedMesh.blendShapeCount).Select(skin.sharedMesh.GetBlendShapeName).ToArray());
             var clips = clone.GetComponent<Vrm10Instance>()?.Vrm?.Expression?.CustomClips?.Where(clip => clip != null).ToArray()
@@ -54,9 +61,17 @@ namespace VRVlog.LilToonExporter
             var selected = meshes.ToDictionary(pair => pair.Key, pair => VrmUnifiedExpressions.Resolve(pair.Value, avatarSupportsUnified: true,
                 authoredCoverage: globalCoverage.Concat(coverage.TryGetValue(pair.Key, out var covered) ? covered : Enumerable.Empty<string>()),
                 reservedAuthoredNames: reserved));
-            var materials = new HashSet<string>(ExportRendererSelection.Enumerate(clone).SelectMany(renderer => renderer.sharedMaterials)
+            var materials = new HashSet<string>(renderers.SelectMany(renderer => renderer.sharedMaterials)
                 .Where(material => material != null).Select(material => material.name), StringComparer.Ordinal);
-            if (!VrmUnifiedExpressions.HasEvidence(clips.Where(clip => IsUsable(clip, clone, materials)).Select(clip => clip.name)
+            var usableAuthored = clips.Where(clip => IsUsable(clip, clone, materials, meshes)).Select(clip => clip.name).ToArray();
+            // Blink validation uses the same alias, authored-coverage and
+            // representation selection as preparation. A retained empty or
+            // disabled route and an inert/fully resting raw shape cannot alone
+            // waive the ordinary missing-blink safeguard.
+            SupportsUnified = VrmUnifiedExpressions.HasEvidence(usableAuthored.Concat(selected.SelectMany(pair =>
+                pair.Value.Values.Where(index => AvatarBaseShape.HasUsableRawEndpoint(pair.Key, index))
+                    .Select(index => meshes[pair.Key][index]))));
+            if (!VrmUnifiedExpressions.HasEvidence(usableAuthored
                 .Concat(selected.SelectMany(pair => pair.Value.Values.Select(index => meshes[pair.Key][index]))))) return;
             foreach (var pair in meshes)
             {
@@ -66,13 +81,17 @@ namespace VRVlog.LilToonExporter
             }
         }
 
-        private static bool IsUsable(VRM10Expression clip, GameObject clone, ISet<string> materials)
+        private static bool IsUsable(VRM10Expression clip, GameObject clone, ISet<string> materials, IDictionary<SkinnedMeshRenderer, string[]> meshes)
         {
             var positiveMorph = false;
             foreach (var binding in clip.MorphTargetBindings ?? Array.Empty<MorphTargetBinding>())
             {
                 var target = string.IsNullOrEmpty(binding.RelativePath) ? clone.transform : clone.transform.Find(binding.RelativePath);
-                var mesh = target == null ? null : target.GetComponent<SkinnedMeshRenderer>()?.sharedMesh;
+                var skin = target == null ? null : target.GetComponent<SkinnedMeshRenderer>();
+                // Unity's missing component compares equal to null but is not
+                // a CLR null, so null-conditional property access is unsafe.
+                if (skin == null || !meshes.ContainsKey(skin)) return false;
+                var mesh = skin.sharedMesh;
                 if (mesh == null || binding.Index < 0 || binding.Index >= mesh.blendShapeCount ||
                     !Finite(binding.Weight) || binding.Weight < 0 || binding.Weight > 1) return false;
                 positiveMorph |= binding.Weight > 0;

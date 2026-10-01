@@ -25,6 +25,7 @@ namespace VRVlog.LilToonExporter.Tests
 
         internal static void Run(Action<bool, string> check)
         {
+            AuthoredEvidenceControlsSharedJaw(check);
             var ordinary = Encode(Fixture("JawOpen", "EyeWideLeft", "TongueOut"));
             check(VrmUnifiedExpressions.Add(ordinary).SequenceEqual(ordinary), "ARKit shared names alone cannot establish UE support.");
             var unknown = Encode(Fixture("previewMouthClosed", "corrective_EyeClosedLeft_fix"));
@@ -283,6 +284,55 @@ namespace VRVlog.LilToonExporter.Tests
             var required = VrmUnifiedExpressions.Resolve(new[] { "LipFunnel", "LipFunnelUpperLeft" }, avatarSupportsUnified: true,
                 authoredCoverage: new[] { "LipFunnelUpperLeft" }, reservedAuthoredNames: new HashSet<string>(new[] { "LipFunnelUpperLeft" }, StringComparer.Ordinal));
             check(required.Count == 0, "Preparation does not require unused raw aggregate/split endpoints when an authored route reserves that mesh and channel.");
+        }
+
+        private static void AuthoredEvidenceControlsSharedJaw(Action<bool, string> check)
+        {
+            foreach (var issue in new[] { "empty", "emptyArrays", "malformed", "invalidIndex", "zero", "positive", "color", "uv", "rawDistinctive" })
+            {
+                var root = issue == "rawDistinctive" ? Fixture("EyeClosedLeft", "JawOpen") : Fixture("JawOpen");
+                root["materials"] = Arr(Obj());
+                var vrm = (Dictionary<string, object>)((Dictionary<string, object>)root["extensions"])["VRMC_vrm"];
+                var authored = Obj();
+                if (issue == "emptyArrays") authored = Obj("morphTargetBinds", Arr(), "materialColorBinds", Arr(), "textureTransformBinds", Arr());
+                if (issue == "malformed") authored = Obj("morphTargetBinds", "malformed");
+                if (issue == "invalidIndex" || issue == "zero" || issue == "positive")
+                    authored = Obj("morphTargetBinds", Arr(Obj("node", 1L, "index", issue == "invalidIndex" ? 99L : 0L, "weight", issue == "zero" ? 0.0 : .4)));
+                if (issue == "color") authored = Obj("materialColorBinds", Arr(Obj("material", 0L, "type", "color", "targetValue", Arr(.1, .2, .3, 1.0))));
+                if (issue == "uv") authored = Obj("textureTransformBinds", Arr(Obj("material", 0L, "scale", Arr(.7, .8), "offset", Arr(.2, .3))));
+                vrm["expressions"] = Obj("custom", Obj("UE/MouthClosed", authored));
+                var input = Encode(root); var output = VrmUnifiedExpressions.Add(input);
+                var routes = Custom(GlbDocument.Read(output).Json);
+                var usable = issue == "positive" || issue == "color" || issue == "uv" || issue == "rawDistinctive";
+                check(routes.ContainsKey("UE/JawOpen") == usable,
+                    "Authored evidence " + issue + " enables a shared raw JawOpen only with usable authored or surviving distinctive support.");
+                if (!usable)
+                    check(output.SequenceEqual(input), "Empty/unusable/zero-only UE metadata " + issue + " cannot mutate shared-name-only export or bypass preserved author intent.");
+                else
+                {
+                    var jaw = (Dictionary<string, object>)routes["UE/JawOpen"];
+                    var binding = ((List<object>)jaw["morphTargetBinds"]).Cast<Dictionary<string, object>>().Single();
+                    check((long)binding["node"] == 1L && (long)binding["index"] == (issue == "rawDistinctive" ? 1L : 0L) &&
+                        Convert.ToDouble(binding["weight"]) == 1.0 && !(bool)jaw["isBinary"],
+                        "Established support " + issue + " emits a continuous shared JawOpen on its actual final morph.");
+                }
+                if (issue == "positive")
+                    check(Convert.ToDouble(((Dictionary<string, object>)((List<object>)((Dictionary<string, object>)routes["UE/MouthClosed"])["morphTargetBinds"])[0])["weight"]) == .4,
+                        "Usable authored morph evidence retains its existing fractional weight.");
+                if (issue == "rawDistinctive")
+                    check(routes.ContainsKey("UE/EyeClosedLeft") && ((Dictionary<string, object>)routes["UE/MouthClosed"]).Count == 0,
+                        "An independent surviving distinctive raw channel can establish UE beside an untouched empty author route.");
+            }
+            var suppressed = Fixture("LipFunnel", "JawOpen");
+            suppressed["materials"] = Arr(Obj());
+            var suppressedVrm = (Dictionary<string, object>)((Dictionary<string, object>)suppressed["extensions"])["VRMC_vrm"];
+            suppressedVrm["expressions"] = Obj("custom", Obj("UE/LipFunnelUpperLeft",
+                Obj("materialColorBinds", Arr(Obj("material", 99L, "type", "color", "targetValue", Arr(.1, .2, .3, 1.0))))));
+            var suppressedInput = Encode(suppressed); var suppressedOutput = VrmUnifiedExpressions.Add(suppressedInput);
+            var suppressedRoutes = Custom(GlbDocument.Read(suppressedOutput).Json);
+            check(!suppressedRoutes.ContainsKey("UE/LipFunnel") && !suppressedRoutes.ContainsKey("UE/JawOpen"),
+                "A conflict-suppressed distinctive raw aggregate and unusable authored material route cannot enable shared JawOpen.");
+            check(suppressedOutput.SequenceEqual(suppressedInput), "Post-selection evidence preserves unusable anatomical author intent without adding unrelated shared tracking metadata.");
         }
     }
 }

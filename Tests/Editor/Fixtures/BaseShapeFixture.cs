@@ -27,6 +27,11 @@ namespace VRVlog.LilToonExporter.Tests
             var target = Create();
             try
             {
+                check(AvatarBaseShape.HasUsableRawEndpoint(source, 0, 0), "A finite nonzero raw endpoint is usable tracking evidence.");
+                check(AvatarBaseShape.HasUsableRawEndpoint(source, 0, 75), "A partially resting raw endpoint keeps usable residual range.");
+                foreach (var weight in new[] { 100f, 150f, -1f, float.NaN, float.PositiveInfinity })
+                    check(!AvatarBaseShape.HasUsableRawEndpoint(source, 0, weight), "A fully resting or unsupported raw weight cannot waive blink validation.");
+                check(!AvatarBaseShape.HasUsableRawEndpoint(source, 99, 0), "An invalid raw morph index is not usable evidence.");
                 AvatarBaseShape.Rebase(source, target, new[] { 25f, 50f });
                 check(Near(target.vertices[0].x, 2) && Near(target.vertices[0].y, 1), "Authored face and partially closed eye are stored in base geometry.");
                 check(target.blendShapeCount == 2 && target.GetBlendShapeName(1) == "Blink", "Expression target indices and names are preserved.");
@@ -56,6 +61,7 @@ namespace VRVlog.LilToonExporter.Tests
                 source.ClearBlendShapes();
                 source.AddBlendShapeFrame("Multi", 50, Delta(2, 0, 0), null, null);
                 source.AddBlendShapeFrame("Multi", 100, Delta(6, 0, 0), null, null);
+                check(AvatarBaseShape.HasUsableRawEndpoint(source, 0, 75), "Multiframe residual evidence uses the original interpolation curve.");
                 AvatarBaseShape.Rebase(source, target, new[] { 75f });
                 check(Near(target.vertices[0].x, 5), "Authored values interpolate between multiple frames.");
                 AvatarBaseShape.AppendExpression(source, target, "Menu multi", new[] { 75f }, new[] { 25f });
@@ -73,6 +79,28 @@ namespace VRVlog.LilToonExporter.Tests
                 AvatarBaseShape.AppendAnimatedShape(source, target, "Animated second frame", 0, 25, 75);
                 target.GetBlendShapeFrameVertices(2, 0, v, n, t);
                 check(Near(v[0].x, 3), "Animation basis retains the authored multi-frame geometry.");
+                source.ClearBlendShapes();
+                source.AddBlendShapeFrame("Inert", 100, Delta(0, 0, 0), null, null);
+                check(!AvatarBaseShape.HasUsableRawEndpoint(source, 0, 0), "An inert raw morph cannot waive blink validation.");
+                source.ClearBlendShapes();
+                source.AddBlendShapeFrame("Cancelled endpoint", 50, Delta(2, 0, 0), null, null);
+                source.AddBlendShapeFrame("Cancelled endpoint", 100, Delta(0, 0, 0), null, null);
+                check(!AvatarBaseShape.HasUsableRawEndpoint(source, 0, 0), "A meaningful intermediate frame cannot conceal a zero exported endpoint.");
+                check(AvatarBaseShape.HasUsableRawEndpoint(source, 0, 50), "A nonzero authored rest can leave a usable residual at a zero final frame.");
+#if EXPORTER_BEHAVIOR_TESTS
+                // Array-only host fixtures can represent invalid payloads that
+                // Unity's native mesh API may reject while constructing them.
+                source.ClearBlendShapes();
+                source.AddBlendShapeFrame("Invalid delta", 100, Delta(float.NaN, 0, 0), null, null);
+                check(!AvatarBaseShape.HasUsableRawEndpoint(source, 0, 0), "A nonfinite raw delta cannot waive blink validation.");
+                source.ClearBlendShapes();
+                source.AddBlendShapeFrame("Invalid frame", float.NaN, Delta(2, 0, 0), null, null);
+                check(!AvatarBaseShape.HasUsableRawEndpoint(source, 0, 0), "A nonfinite raw frame weight cannot waive blink validation.");
+                source.ClearBlendShapes();
+                source.AddBlendShapeFrame("Invalid normal", 100, Delta(2, 0, 0), Delta(float.PositiveInfinity, 0, 0), null);
+                check(!AvatarBaseShape.HasUsableRawEndpoint(source, 0, 0), "Invalid auxiliary raw geometry cannot waive blink validation.");
+#endif
+
             }
             finally
             {

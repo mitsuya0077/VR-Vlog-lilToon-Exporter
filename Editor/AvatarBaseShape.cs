@@ -44,6 +44,47 @@ namespace VRVlog.LilToonExporter
             }
         }
 
+        // Predict the endpoint that Rebase exports, without mutating source
+        // geometry. Only a finite residual with remaining range is usable raw
+        // tracking evidence for avatars whose eye rig cannot provide blink.
+        internal static bool HasUsableRawEndpoint(SkinnedMeshRenderer skin, int shape)
+        {
+            if (skin == null || skin.sharedMesh == null || shape < 0 || shape >= skin.sharedMesh.blendShapeCount) return false;
+            return HasUsableRawEndpoint(skin.sharedMesh, shape, skin.GetBlendShapeWeight(shape));
+        }
+
+        internal static bool HasUsableRawEndpoint(Mesh mesh, int shape, float weight)
+        {
+            if (mesh == null || mesh.vertexCount == 0 || shape < 0 || shape >= mesh.blendShapeCount) return false;
+            if (!Finite(weight) || weight < 0f || weight >= 100f) return false;
+            var frames = mesh.GetBlendShapeFrameCount(shape);
+            if (frames == 0) return false;
+            var endpoint = new Deltas(mesh.vertexCount);
+            for (var frame = 0; frame < frames; frame++)
+            {
+                var frameWeight = mesh.GetBlendShapeFrameWeight(shape, frame);
+                if (!Finite(frameWeight) || frameWeight <= 0f) return false;
+                mesh.GetBlendShapeFrameVertices(shape, frame, endpoint.Vertices, endpoint.Normals, endpoint.Tangents);
+                for (var vertex = 0; vertex < mesh.vertexCount; vertex++)
+                    if (!Finite(endpoint.Vertices[vertex]) || !Finite(endpoint.Normals[vertex]) || !Finite(endpoint.Tangents[vertex])) return false;
+            }
+            var rest = Evaluate(mesh, shape, weight);
+            var meaningful = false;
+            for (var vertex = 0; vertex < mesh.vertexCount; vertex++)
+            {
+                var vertices = endpoint.Vertices[vertex] - rest.Vertices[vertex];
+                var normals = endpoint.Normals[vertex] - rest.Normals[vertex];
+                var tangents = endpoint.Tangents[vertex] - rest.Tangents[vertex];
+                if (!Finite(vertices) || !Finite(normals) || !Finite(tangents)) return false;
+                meaningful |= Nonzero(vertices) || Nonzero(normals) || Nonzero(tangents);
+            }
+            return meaningful;
+        }
+
+        private static bool Finite(float value) => !float.IsNaN(value) && !float.IsInfinity(value);
+        private static bool Finite(Vector3 value) => Finite(value.x) && Finite(value.y) && Finite(value.z);
+        private static bool Nonzero(Vector3 value) => value.x != 0f || value.y != 0f || value.z != 0f;
+
         internal static void Rebase(Mesh source, Mesh target, float[] weights)
         {
             if (ReferenceEquals(source, target)) throw new ArgumentException("The source mesh must remain unchanged.");

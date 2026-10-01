@@ -119,9 +119,9 @@ namespace VRVlog.LilToonExporter.Tests
             Vrm10Instance imported = null;
             try
             {
-                fixture.Mesh.AddBlendShapeFrame("EyeClosedLeft", 100, new Vector3[fixture.Mesh.vertexCount], null, null);
-                mouthMesh.AddBlendShapeFrame("JawOpen", 100, new Vector3[mouthMesh.vertexCount], null, null);
-                if (bilateral) mouthMesh.AddBlendShapeFrame("EyeClosedRight", 100, new Vector3[mouthMesh.vertexCount], null, null);
+                fixture.Mesh.AddBlendShapeFrame("EyeClosedLeft", 100, Enumerable.Repeat(Vector3.up * .02f, fixture.Mesh.vertexCount).ToArray(), null, null);
+                mouthMesh.AddBlendShapeFrame("JawOpen", 100, Enumerable.Repeat(Vector3.right * .03f, mouthMesh.vertexCount).ToArray(), null, null);
+                if (bilateral) mouthMesh.AddBlendShapeFrame("EyeClosedRight", 100, Enumerable.Repeat(Vector3.up * .02f, mouthMesh.vertexCount).ToArray(), null, null);
                 var skins = fixture.Source.GetComponentsInChildren<SkinnedMeshRenderer>();
                 skins[1].sharedMesh = mouthMesh;
                 foreach (var skin in skins) skin.sharedMaterial.shader = Shader.Find("lilToon");
@@ -408,7 +408,7 @@ namespace VRVlog.LilToonExporter.Tests
             Vrm10Instance imported = null;
             try
             {
-                fixture.Mesh.AddBlendShapeFrame("MouthClosed", 100, new Vector3[fixture.Mesh.vertexCount], null, null);
+                fixture.Mesh.AddBlendShapeFrame("MouthClosed", 100, Enumerable.Repeat(Vector3.right * .01f, fixture.Mesh.vertexCount).ToArray(), null, null);
                 fixture.Mesh.AddBlendShapeFrame("Blink_L", 100, Enumerable.Repeat(Vector3.up * .02f, fixture.Mesh.vertexCount).ToArray(), null, null);
                 var rightName = compatible ? "Blink_R" : "eye_blink_1_R";
                 rightMesh.AddBlendShapeFrame(rightName, 100, Enumerable.Repeat(Vector3.up * .03f, rightMesh.vertexCount).ToArray(), null, null);
@@ -508,6 +508,157 @@ namespace VRVlog.LilToonExporter.Tests
                 Object.DestroyImmediate(rightMesh);
             }
         }
+
+        [TestCase("empty", false)]
+        [TestCase("empty", true)]
+        [TestCase("disabled", false)]
+        [TestCase("disabled", true)]
+        [TestCase("invalid", false)]
+        [TestCase("invalid", true)]
+        [TestCase("missingRenderer", false)]
+        [TestCase("missingRenderer", true)]
+        [TestCase("missingMaterial", false)]
+        [TestCase("missingMaterial", true)]
+        [TestCase("inert", false)]
+        [TestCase("inert", true)]
+        [TestCase("rest100", false)]
+        [TestCase("rest100", true)]
+        [TestCase("unsupportedRest", false)]
+        [TestCase("unsupportedRest", true)]
+        [TestCase("suppressed", false)]
+        [TestCase("suppressed", true)]
+        [TestCase("inertPreferred", false)]
+        [TestCase("inertPreferred", true)]
+        [TestCase("ambiguousRaw", false)]
+        [TestCase("ambiguousRaw", true)]
+        public void MissingBlinkRequiresUsableUnifiedRoute(string scenario, bool fullLilToon)
+        {
+            using var fixture = new AttachmentConnectionTests.Fixture();
+            var vrm = ScriptableObject.CreateInstance<VRM10Object>();
+            var clip = ScriptableObject.CreateInstance<VRM10Expression>();
+            try
+            {
+                // A shared ARKit jaw is useful only after a surviving UE route
+                // establishes the profile; the rejected route cannot enable it.
+                AddTrackingDelta(fixture.Mesh, "JawOpen");
+                clip.name = "UE/MouthClosed";
+                if (scenario == "empty") vrm.Expression.CustomClips.Add(clip);
+                else if (scenario == "disabled" || scenario == "invalid" || scenario == "missingRenderer")
+                {
+                    AddTrackingDelta(fixture.Mesh, "MouthClosed");
+                    clip.MorphTargetBindings = new[] { new MorphTargetBinding(
+                        scenario == "missingRenderer" ? null : "Front", scenario == "invalid" ? 999 : 2,
+                        scenario == "disabled" ? 0 : .4f) };
+                    vrm.Expression.CustomClips.Add(clip);
+                }
+                else if (scenario == "missingMaterial")
+                {
+                    AddTrackingDelta(fixture.Mesh, "MouthClosed");
+                    clip.MaterialColorBindings = new[] { new MaterialColorBinding {
+                        MaterialName = "missing material", BindType = MaterialColorType.color, TargetValue = Color.red } };
+                    vrm.Expression.CustomClips.Add(clip);
+                }
+                else if (scenario == "suppressed")
+                {
+                    AddTrackingDelta(fixture.Mesh, "LipFunnel");
+                    clip.name = "UE/LipFunnelUpperLeft";
+                    clip.MorphTargetBindings = new[] { new MorphTargetBinding("Front", 2, 0), new MorphTargetBinding("Back", 2, 0) };
+                    vrm.Expression.CustomClips.Add(clip);
+                }
+                else if (scenario == "ambiguousRaw")
+                {
+                    AddTrackingDelta(fixture.Mesh, "mouth_closed"); AddTrackingDelta(fixture.Mesh, "mouth-closed");
+                }
+                else
+                {
+                    AddTrackingDelta(fixture.Mesh, "MouthClosed", scenario == "inert" ? 0 : .02f);
+                    if (scenario == "inertPreferred") AddTrackingDelta(fixture.Mesh, "UE/MouthClosed", 0);
+                    if (scenario == "rest100" || scenario == "unsupportedRest")
+                        foreach (var skin in fixture.Source.GetComponentsInChildren<SkinnedMeshRenderer>())
+                            skin.SetBlendShapeWeight(2, scenario == "rest100" ? 100 : -10);
+                }
+                foreach (var skin in fixture.Source.GetComponentsInChildren<SkinnedMeshRenderer>()) skin.sharedMaterial.shader = Shader.Find("lilToon");
+                fixture.Source.AddComponent<Vrm10Instance>().Vrm = vrm;
+                Assert.That(UnifiedExpressionPreparation.HasUsableEvidence(fixture.Source), Is.False);
+                var error = Assert.Throws<InvalidOperationException>(() => UniVrmOneClickExporter.Export(fixture.Source,
+                    "Missing blink safeguard", "Tests", exporterVersion: fullLilToon ? "0.11.5" : null,
+                    lilToonVersion: fullLilToon ? "2.3.4" : null));
+                Assert.That(error.Message, Does.Contain("閉眼"));
+                Assert.That(fixture.Source.GetComponentsInChildren<SkinnedMeshRenderer>().All(skin => skin.sharedMesh == fixture.Mesh), Is.True);
+                Assert.That(fixture.Mesh.GetBlendShapeIndex("JawOpen"), Is.EqualTo(1));
+            }
+            finally { Object.DestroyImmediate(clip); Object.DestroyImmediate(vrm); }
+        }
+
+        [TestCase("partial", false)]
+        [TestCase("partial", true)]
+        [TestCase("rawMouth", false)]
+        [TestCase("rawMouth", true)]
+        [TestCase("authoredMorph", false)]
+        [TestCase("authoredMorph", true)]
+        [TestCase("authoredColor", false)]
+        [TestCase("authoredColor", true)]
+        [TestCase("authoredUv", false)]
+        [TestCase("authoredUv", true)]
+        [TestCase("emptyRepair", false)]
+        [TestCase("emptyRepair", true)]
+        public async Task SupportedUnifiedRouteWithoutBilateralEyeRigSurvivesBothExportModes(string scenario, bool fullLilToon)
+        {
+            using var fixture = new AttachmentConnectionTests.Fixture();
+            var vrm = ScriptableObject.CreateInstance<VRM10Object>();
+            var clip = ScriptableObject.CreateInstance<VRM10Expression>();
+            Vrm10Instance imported = null;
+            try
+            {
+                AddTrackingDelta(fixture.Mesh, "JawOpen");
+                clip.name = "UE/MouthClosed";
+                if (scenario == "partial") AddTrackingDelta(fixture.Mesh, "EyeClosedLeft");
+                else if (scenario == "rawMouth" || scenario == "emptyRepair")
+                {
+                    AddTrackingDelta(fixture.Mesh, "MouthClosed");
+                    if (scenario == "emptyRepair") vrm.Expression.CustomClips.Add(clip);
+                }
+                else
+                {
+                    if (scenario == "authoredMorph") clip.MorphTargetBindings = new[] { new MorphTargetBinding("Front", 0, .4f) };
+                    if (scenario == "authoredColor") clip.MaterialColorBindings = new[] { new MaterialColorBinding {
+                        MaterialName = fixture.Source.transform.Find("Front").GetComponent<SkinnedMeshRenderer>().sharedMaterial.name,
+                        BindType = MaterialColorType.color, TargetValue = Color.red } };
+                    if (scenario == "authoredUv") clip.MaterialUVBindings = new[] { new MaterialUVBinding {
+                        MaterialName = fixture.Source.transform.Find("Front").GetComponent<SkinnedMeshRenderer>().sharedMaterial.name,
+                        Scaling = Vector2.one, Offset = Vector2.up } };
+                    vrm.Expression.CustomClips.Add(clip);
+                }
+                foreach (var skin in fixture.Source.GetComponentsInChildren<SkinnedMeshRenderer>()) skin.sharedMaterial.shader = Shader.Find("lilToon");
+                fixture.Source.AddComponent<Vrm10Instance>().Vrm = vrm;
+                Assert.That(UnifiedExpressionPreparation.HasUsableEvidence(fixture.Source), Is.True);
+                var bytes = UniVrmOneClickExporter.Export(fixture.Source, "Supported UE without bilateral eyes", "Tests",
+                    exporterVersion: fullLilToon ? "0.11.5" : null, lilToonVersion: fullLilToon ? "2.3.4" : null);
+                imported = await Vrm10.LoadBytesAsync(bytes, canLoadVrm0X: false, awaitCaller: new ImmediateCaller());
+                Assert.That(imported.Vrm.Expression.Blink.MorphTargetBindings.Length, Is.Zero);
+                Assert.That(imported.Vrm.Expression.BlinkLeft.MorphTargetBindings.Length, Is.Zero);
+                Assert.That(imported.Vrm.Expression.BlinkRight.MorphTargetBindings.Length, Is.Zero);
+                var jaw = imported.Vrm.Expression.CustomClips.Single(value => value.name == "UE/JawOpen");
+                Assert.That(jaw.MorphTargetBindings.Length, Is.EqualTo(2));
+                imported.Runtime.Expression.SetWeight(ExpressionKey.CreateCustom(jaw.name), .3f);
+                imported.Runtime.Process();
+                foreach (var binding in jaw.MorphTargetBindings)
+                    Assert.That(imported.transform.Find(binding.RelativePath).GetComponent<SkinnedMeshRenderer>().GetBlendShapeWeight(binding.Index), Is.EqualTo(30).Within(.001));
+                var route = imported.Vrm.Expression.CustomClips.Single(value => value.name == (scenario == "partial" ? "UE/EyeClosedLeft" : "UE/MouthClosed"));
+                if (scenario == "authoredMorph") Assert.That(route.MorphTargetBindings.Single().Weight, Is.EqualTo(.4f).Within(.001));
+                if (scenario == "authoredColor") Assert.That(route.MaterialColorBindings.Length, Is.EqualTo(1));
+                if (scenario == "authoredUv") Assert.That(route.MaterialUVBindings.Length, Is.EqualTo(1));
+                Assert.That(fixture.Source.GetComponentsInChildren<SkinnedMeshRenderer>().All(skin => skin.sharedMesh == fixture.Mesh), Is.True);
+            }
+            finally
+            {
+                if (imported != null) Object.DestroyImmediate(imported.gameObject);
+                Object.DestroyImmediate(clip); Object.DestroyImmediate(vrm);
+            }
+        }
+
+        private static void AddTrackingDelta(Mesh mesh, string name, float amount = .02f) =>
+            mesh.AddBlendShapeFrame(name, 100, Enumerable.Repeat(Vector3.up * amount, mesh.vertexCount).ToArray(), null, null);
 
         [TestCase("missing", false)]
         [TestCase("missing", true)]

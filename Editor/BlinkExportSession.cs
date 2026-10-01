@@ -78,8 +78,7 @@ namespace VRVlog.LilToonExporter
                         .ToDictionary(renderer => renderer, renderer => Enumerable.Range(0, renderer.sharedMesh.blendShapeCount)
                             .Select(renderer.sharedMesh.GetBlendShapeName).ToArray());
                     result.allowMissingAutomaticBlink = source.GetComponentInChildren<VrmTrackingMarker>(true)?.profile == null &&
-                        VrmUnifiedExpressions.HasEvidence(rendererNames.Values.SelectMany(names => names).Concat(
-                            expressions?.CustomClips?.Where(clip => clip != null).Select(clip => clip.name) ?? Enumerable.Empty<string>()));
+                        UnifiedExpressionPreparation.HasUsableEvidence(source, excluded);
                     var completePairs = true;
                     var partialFamilies = new Dictionary<int, List<BlinkShapeBinding>[]>();
                     foreach (var pair in rendererNames)
