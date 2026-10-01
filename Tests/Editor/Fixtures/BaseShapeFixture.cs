@@ -26,6 +26,7 @@ namespace VRVlog.LilToonExporter.Tests
             AuthorEndpointChecks(check);
             LeadingNeutralFrameChecks(check);
             NegativeIntermediateFrameChecks(check);
+            NativeNegativeBracketChecks(check);
             EndpointBeyondHundredChecks(check);
             var source = Create();
             var target = Create();
@@ -161,7 +162,7 @@ namespace VRVlog.LilToonExporter.Tests
                     AvatarBaseShape.Rebase(source,target,new[]{rest});
                     var vertices=new Vector3[3];target.GetBlendShapeFrameVertices(0,0,vertices,new Vector3[3],new Vector3[3]);
                     check(Near(target.vertices[0].x,1+4*rest/100) && Near(vertices[0].x,4*(1-rest/100)) && Near(target.vertices[0].x+vertices[0].x,5),
-                        "Rebase preserves the implicit neutral and final positive endpoint across negative intermediate curves.");
+                        "Rebase interpolates the native proportional bracket and preserves its final positive endpoint.");
                 }
                 check(!AvatarBaseShape.HasUsableRawEndpoint(source,0,-25) && AvatarBaseShape.HasUsableMorphEndpoint(source,0,-25),"The existing negative raw-rest policy stays separate from valid negative authored rest.");
                 AvatarBaseShape.Rebase(source,target,new[]{-25f});
@@ -170,6 +171,34 @@ namespace VRVlog.LilToonExporter.Tests
                 check(source.GetBlendShapeFrameWeight(0,0)==-50 && source.GetBlendShapeFrameWeight(0,1)==100 && source.vertices[0].x==1,"Negative-curve inspection and rebase preserve source data.");
                 source.ClearBlendShapes();source.AddBlendShapeFrame("Negative-only endpoint",-50,Delta(-2,0,0),null,null);
                 check(!AvatarBaseShape.HasUsableRawEndpoint(source,0,0) && !AvatarBaseShape.HasUsableMorphEndpoint(source,0,0),"A nonpositive final endpoint cannot establish positive tracking range.");
+            }
+            finally { UnityEngine.Object.DestroyImmediate(source);UnityEngine.Object.DestroyImmediate(target); }
+        }
+
+        private static void NativeNegativeBracketChecks(Action<bool, string> check)
+        {
+            var source=Create();var target=Create();
+            try
+            {
+                foreach(var curve in new[]{"nonproportional","zeroEndpoint","explicitNeutral"})
+                {
+                    source.ClearBlendShapes();source.AddBlendShapeFrame("Native bracket",-50,Delta(3,0,0),null,null);
+                    if(curve=="explicitNeutral") source.AddBlendShapeFrame("Native bracket",0,Delta(0,0,0),null,null);
+                    var end=curve=="zeroEndpoint"?0f:2f;
+                    source.AddBlendShapeFrame("Native bracket",100,Delta(end,0,0),null,null);
+                    foreach(var rest in new[]{0f,25f,100f})
+                    {
+                        var neutral=curve=="explicitNeutral"?end*rest/100f:3f+(end-3f)*(rest+50f)/150f;
+                        check(AvatarBaseShape.HasUsableRawEndpoint(source,0,rest)==(rest<100),"Raw negative bracket "+curve+" uses its real finite endpoint-minus-rest residual at rest"+rest+".");
+                        check(AvatarBaseShape.HasUsableMorphEndpoint(source,0,rest)==(rest<100),"Authored negative bracket "+curve+" uses the real native zero/intermediate baseline.");
+                        AvatarBaseShape.Rebase(source,target,new[]{rest});
+                        var vertices=new Vector3[3];target.GetBlendShapeFrameVertices(0,0,vertices,new Vector3[3],new Vector3[3]);
+                        check(Near(target.vertices[0].x,1f+neutral) && Near(vertices[0].x,end-neutral) && Near(target.vertices[0].x+vertices[0].x,1f+end),
+                            "Negative bracket "+curve+" preserves actual native rest and endpoint without inventing an implicit zero knot.");
+                    }
+                    check(source.GetBlendShapeFrameCount(0)==(curve=="explicitNeutral"?3:2) && source.GetBlendShapeFrameWeight(0,0)==-50 && source.vertices[0].x==1,
+                        "Negative bracket "+curve+" retains original frames and source geometry.");
+                }
             }
             finally { UnityEngine.Object.DestroyImmediate(source);UnityEngine.Object.DestroyImmediate(target); }
         }

@@ -39,6 +39,39 @@ namespace VRVlog.LilToonExporter
             return result;
         }
 
+        static Dictionary<string, int> UnifiedCandidates(IReadOnlyList<string> names, Func<int, bool> usable)
+        {
+            var unified = VrmUnifiedExpressions.Resolve(names);
+            // Resolve aliases first: an inert preferred route must not
+            // select a lower-priority alias that detailed tracking omits.
+            if (usable != null)
+                foreach (var canonical in new[] { "EyeClosed", "EyeClosedLeft", "EyeClosedRight" })
+                    if (unified.TryGetValue(canonical, out var index) && !usable(index)) unified.Remove(canonical);
+            return unified;
+        }
+
+        internal static IEnumerable<(int Index, int Slot)> PartialCandidates(IReadOnlyList<string> names, Func<int, bool> unifiedUsable = null)
+        {
+            var unified = UnifiedCandidates(names, unifiedUsable);
+            var hasLeft = unified.TryGetValue("EyeClosedLeft", out var unifiedLeft);
+            var hasRight = unified.TryGetValue("EyeClosedRight", out var unifiedRight);
+            // A UE side retains its priority over alternate legacy closures on
+            // this renderer. Complete pairs are handled by Resolve first.
+            if (hasLeft || hasRight)
+            {
+                if (hasLeft) yield return (unifiedLeft, 1);
+                if (hasRight) yield return (unifiedRight, 2);
+                yield break;
+            }
+            foreach (var pair in Pairs)
+            {
+                var left = Unique(names, pair.Left); var right = Unique(names, pair.Right);
+                if (left >= 0 && right >= 0) continue;
+                if (left >= 0) yield return (left, 1);
+                if (right >= 0) yield return (right, 2);
+            }
+        }
+
         internal static int[] Resolve(IReadOnlyList<string> names, bool allowPartial = false, Func<int, bool> unifiedUsable = null)
         {
             var result = new[] { -1, -1, -1 };
@@ -73,12 +106,7 @@ namespace VRVlog.LilToonExporter
             {
                 // Use the same bounded normalization and collision rules as
                 // UE export, including prefixed names and the bilateral form.
-                var unified = VrmUnifiedExpressions.Resolve(names);
-                // Resolve aliases first: an inert preferred route must not
-                // select a lower-priority alias that detailed tracking omits.
-                if (unifiedUsable != null)
-                    foreach (var canonical in new[] { "EyeClosed", "EyeClosedLeft", "EyeClosedRight" })
-                        if (unified.TryGetValue(canonical, out var index) && !unifiedUsable(index)) unified.Remove(canonical);
+                var unified = UnifiedCandidates(names, unifiedUsable);
                 if (result[0] < 0 && unified.TryGetValue("EyeClosed", out var both)) result[0] = both;
                 var hasLeft = unified.TryGetValue("EyeClosedLeft", out var left);
                 var hasRight = unified.TryGetValue("EyeClosedRight", out var right);

@@ -99,25 +99,33 @@ namespace VRVlog.LilToonExporter
                             if (resolved[slot] < 0) continue;
                             var binding = new BlinkShapeBinding { Renderer = renderer, Shape = names[resolved[slot]] };
                             if (slot == 0 || completePair) result.Slots[slot].Add(binding);
-                            else
+                        }
+                        if (!completePair && result.allowMissingAutomaticBlink)
+                            foreach (var candidate in BlinkShapeNames.PartialCandidates(names,
+                                index => AvatarBaseShape.HasUsableRawEndpoint(renderer.sharedMesh, index, renderer.GetBlendShapeWeight(index))))
                             {
-                                var family = BlinkShapeNames.PartialFamily(binding.Shape, slot == 1);
+                                var binding = new BlinkShapeBinding { Renderer = renderer, Shape = names[candidate.Index] };
+                                var family = BlinkShapeNames.PartialFamily(binding.Shape, candidate.Slot == 1);
                                 if (family < 0) continue;
                                 if (!partialFamilies.TryGetValue(family, out var sides))
                                     partialFamilies.Add(family, sides = new[] { new List<BlinkShapeBinding>(), new List<BlinkShapeBinding>() });
-                                sides[slot - 1].Add(binding);
+                                sides[candidate.Slot - 1].Add(binding);
                             }
-                        }
                     }
                     // UE evidence allows incomplete renderer candidates, but
                     // cannot make unrelated legacy closure families compatible.
-                    foreach (var family in partialFamilies)
-                        if ((family.Value[0].Count > 0 || result.Slots[1].Any(binding => BlinkShapeNames.PartialFamily(binding.Shape, true) == family.Key)) &&
-                            (family.Value[1].Count > 0 || result.Slots[2].Any(binding => BlinkShapeNames.PartialFamily(binding.Shape, false) == family.Key)))
+                    var claimedPartialRenderers = new HashSet<SkinnedMeshRenderer>();
+                    foreach (var family in partialFamilies.OrderBy(pair => pair.Key))
+                    {
+                        var sides = family.Value.Select(side => side.Where(binding => !claimedPartialRenderers.Contains(binding.Renderer)).ToArray()).ToArray();
+                        if ((sides[0].Length > 0 || result.Slots[1].Any(binding => BlinkShapeNames.PartialFamily(binding.Shape, true) == family.Key)) &&
+                            (sides[1].Length > 0 || result.Slots[2].Any(binding => BlinkShapeNames.PartialFamily(binding.Shape, false) == family.Key)))
                         {
-                            result.Slots[1].AddRange(family.Value[0]);
-                            result.Slots[2].AddRange(family.Value[1]);
+                            result.Slots[1].AddRange(sides[0]);
+                            result.Slots[2].AddRange(sides[1]);
+                            claimedPartialRenderers.UnionWith(sides.SelectMany(side => side).Select(binding => binding.Renderer));
                         }
+                    }
                     // Resolve bilateral closure across the avatar: UE models
                     // may put their left and right eyes on different renderers.
                     if (result.Slots[1].Count > 0 && result.Slots[2].Count > 0)

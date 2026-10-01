@@ -23,7 +23,7 @@ namespace VRVlog.LilToonExporter
                     weights[i] = skin.GetBlendShapeWeight(i);
                     if (float.IsNaN(weights[i]) || float.IsInfinity(weights[i]))
                         throw new InvalidOperationException($"{skin.name}: BlendShapeの初期値が不正です。");
-                    changed |= weights[i] != 0f;
+                    changed |= weights[i] != 0f || HasZeroRestOffset(mesh, i);
                 }
                 if (!changed) continue;
 
@@ -80,7 +80,7 @@ namespace VRVlog.LilToonExporter
             {
                 var frameWeight = mesh.GetBlendShapeFrameWeight(shape, frame);
                 if (!Finite(frameWeight) || frame > 0 && frameWeight <= mesh.GetBlendShapeFrameWeight(shape, frame - 1) ||
-                    frameWeight == 0f && frame != 0) return false;
+                    frameWeight == 0f && frame != 0 && !SpansZero(mesh, shape)) return false;
                 mesh.GetBlendShapeFrameVertices(shape, frame, endpoint.Vertices, endpoint.Normals, endpoint.Tangents);
                 for (var vertex = 0; vertex < mesh.vertexCount; vertex++)
                 {
@@ -201,6 +201,21 @@ namespace VRVlog.LilToonExporter
             target.AddBlendShapeFrame(name, 100f, after.Vertices, after.Normals, after.Tangents);
         }
 
+        private static bool SpansZero(Mesh mesh, int shape)
+        {
+            var count = mesh.GetBlendShapeFrameCount(shape);
+            return count > 1 && mesh.GetBlendShapeFrameWeight(shape, 0) < 0 && mesh.GetBlendShapeFrameWeight(shape, count - 1) > 0;
+        }
+
+        private static bool HasZeroRestOffset(Mesh mesh, int shape)
+        {
+            if (!SpansZero(mesh, shape)) return false;
+            var rest = Evaluate(mesh, shape, 0);
+            for (var vertex = 0; vertex < mesh.vertexCount; vertex++)
+                if (Nonzero(rest.Vertices[vertex]) || Nonzero(rest.Normals[vertex]) || Nonzero(rest.Tangents[vertex])) return true;
+            return false;
+        }
+
         private static bool IsZeroFrame(Mesh mesh, int shape, int frame)
         {
             var deltas = new Deltas(mesh.vertexCount);
@@ -214,15 +229,18 @@ namespace VRVlog.LilToonExporter
         static Deltas Evaluate(Mesh mesh, int shape, double weight)
         {
             var result = new Deltas(mesh.vertexCount);
-            if (weight == 0f) return result;
-            var knots = new List<KeyValuePair<float, int>> { new KeyValuePair<float, int>(0f, -1) };
+            var spansZero = SpansZero(mesh, shape);
+            var knots = new List<KeyValuePair<float, int>>();
+            // Unity interpolates a negative/positive bracket through zero;
+            // inventing a neutral knot changes its actual rest geometry.
+            if (!spansZero) knots.Add(new KeyValuePair<float, int>(0f, -1));
             for (var i = 0; i < mesh.GetBlendShapeFrameCount(shape); i++)
             {
                 var frameWeight = mesh.GetBlendShapeFrameWeight(shape, i);
                 // A leading all-zero frame is the same implicit origin already
                 // present in knots. Do not duplicate it or reject valid curves.
                 if (frameWeight == 0f && i == 0 && IsZeroFrame(mesh, shape, i)) continue;
-                if (frameWeight == 0f || float.IsNaN(frameWeight) || float.IsInfinity(frameWeight))
+                if (frameWeight == 0f && !(spansZero && IsZeroFrame(mesh, shape, i)) || float.IsNaN(frameWeight) || float.IsInfinity(frameWeight))
                     throw new InvalidOperationException($"{mesh.name}/{mesh.GetBlendShapeName(shape)}: 初期値の保存に対応していないBlendShapeフレームです（重み{frameWeight}）。");
                 knots.Add(new KeyValuePair<float, int>(frameWeight, i));
             }

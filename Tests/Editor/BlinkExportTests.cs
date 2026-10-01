@@ -220,6 +220,50 @@ namespace VRVlog.LilToonExporter.Tests
             Assert.That(result.Slots[0].Select(binding => binding.Shape), Is.EquivalentTo(new[] { "UE/EyeClosedLeft", "UE/EyeClosedRight" }));
         }
 
+        [TestCase(false)][TestCase(true)]
+        public void AllPartialFamiliesRemainAvailableForTheirMatchingOtherRenderer(bool reversed)
+        {
+            var right = Skin(reversed ? new[] { "eye_blink_1_R", "Blink_L", "UE/JawOpen" } : new[] { "Blink_L", "eye_blink_1_R", "UE/JawOpen" });
+            var left = Skin("eye_blink_1_L");
+            var result = BlinkExportSession.Resolve(root);
+            Assert.That(result.Slots[0].Select(binding => binding.Shape), Is.EquivalentTo(new[] { "eye_blink_1_L", "eye_blink_1_R" }));
+            Assert.That(result.Slots[1].Single().Renderer, Is.SameAs(left));
+            Assert.That(result.Slots[2].Single().Renderer, Is.SameAs(right));
+            Assert.That(result.Slots.All(slot => slot.All(binding => binding.Shape != "Blink_L")), Is.True);
+            Assert.That(right.sharedMesh.blendShapeCount, Is.EqualTo(3));
+            Assert.That(left.sharedMesh.blendShapeCount, Is.EqualTo(1));
+        }
+
+        [Test] public void ACompleteRendererPairKeepsPriorityOverAlternatePartialFamilies()
+        {
+            var face = Skin("Blink_L", "Blink_R", "eye_blink_1_R", "UE/JawOpen");
+            Skin("eye_blink_1_L");
+            var result = BlinkExportSession.Resolve(root);
+            Assert.That(result.Slots[0].Select(binding => binding.Shape), Is.EquivalentTo(new[] { "Blink_L", "Blink_R" }));
+            Assert.That(result.Slots[1].Single().Renderer, Is.SameAs(face));
+            Assert.That(result.Slots[2].Single().Renderer, Is.SameAs(face));
+        }
+
+        [Test] public void AUnifiedPartialKeepsPriorityOverMultipleLegacyPartialFamilies()
+        {
+            var left = Skin("Blink_L", "eye_blink_1_R", "UE/EyeClosedLeft");
+            var right = Skin("eye_blink_1_L", "UE/EyeClosedRight");
+            var result = BlinkExportSession.Resolve(root);
+            Assert.That(result.Slots[0].Select(binding => binding.Shape), Is.EquivalentTo(new[] { "UE/EyeClosedLeft", "UE/EyeClosedRight" }));
+            Assert.That(result.Slots[1].Single().Renderer, Is.SameAs(left));
+            Assert.That(result.Slots[2].Single().Renderer, Is.SameAs(right));
+        }
+
+        [Test] public void TheFirstCompatiblePartialFamilyOwnsEachRenderer()
+        {
+            var left = Skin("eye_blink_1_R", "Blink_L");
+            var right = Skin("eye_blink_1_L", "Blink_R", "UE/JawOpen");
+            var result = BlinkExportSession.Resolve(root);
+            Assert.That(result.Slots[0].Select(binding => binding.Shape), Is.EquivalentTo(new[] { "Blink_L", "Blink_R" }));
+            Assert.That(result.Slots[1].Single().Renderer, Is.SameAs(left));
+            Assert.That(result.Slots[2].Single().Renderer, Is.SameAs(right));
+        }
+
         [Test] public void DuplicateSemanticNamesAreNotGuessed()
         {
             Skin("Blink", "BLINK");

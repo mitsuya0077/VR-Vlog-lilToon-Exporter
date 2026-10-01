@@ -1175,6 +1175,85 @@ namespace VRVlog.LilToonExporter.Tests
             finally { if (imported != null) Object.DestroyImmediate(imported.gameObject); Object.DestroyImmediate(baked); Object.DestroyImmediate(clip); Object.DestroyImmediate(vrm); }
         }
 
+        private static IEnumerable<TestCaseData> NativeNegativeBracketCases()
+        {
+            foreach (var curve in new[] { "nonproportional", "zeroEndpoint", "explicitNeutral" })
+            foreach (var rest in new[] { 0f, 25f, 100f })
+            foreach (var authored in new[] { false, true })
+            foreach (var full in new[] { false, true })
+                yield return new TestCaseData(curve, rest, authored, full);
+        }
+
+        [TestCaseSource(nameof(NativeNegativeBracketCases))]
+        public async Task NegativeBracketPreservesNativeRestAndRebasedContinuousPlayback(string curve, float rest, bool authored, bool fullLilToon)
+        {
+            using var fixture = new AttachmentConnectionTests.Fixture();
+            var vrm = ScriptableObject.CreateInstance<VRM10Object>(); var clip = ScriptableObject.CreateInstance<VRM10Expression>();
+            var baked = new Mesh(); Vrm10Instance imported = null;
+            try
+            {
+                fixture.Mesh.AddBlendShapeFrame("MouthClosed", -50, Enumerable.Repeat(Vector3.up * .03f, fixture.Mesh.vertexCount).ToArray(), null, null);
+                if (curve == "explicitNeutral") fixture.Mesh.AddBlendShapeFrame("MouthClosed", 0, new Vector3[fixture.Mesh.vertexCount], null, null);
+                fixture.Mesh.AddBlendShapeFrame("MouthClosed", 100, Enumerable.Repeat(Vector3.up * (curve == "zeroEndpoint" ? 0 : .02f), fixture.Mesh.vertexCount).ToArray(), null, null);
+                var sourceSkins = fixture.Source.GetComponentsInChildren<SkinnedMeshRenderer>();
+                var nativeRest = new Dictionary<string, Vector3>(); var nativeEnd = new Dictionary<string, Vector3>();
+                foreach (var skin in sourceSkins)
+                {
+                    // All stored weights really are zero in the rest0 cases.
+                    // BakeMesh provides an independent native neutral reference.
+                    skin.SetBlendShapeWeight(0, 0); skin.SetBlendShapeWeight(1, rest); skin.sharedMaterial.shader = Shader.Find("lilToon");
+                    skin.BakeMesh(baked); nativeRest.Add(skin.name, skin.transform.TransformPoint(baked.vertices[0]));
+                    if (rest == 0)
+                    {
+                        var expectedOffset = curve == "explicitNeutral" ? 0f : curve == "zeroEndpoint" ? .02f : .026666667f;
+                        Assert.That(Vector3.Distance(baked.vertices[0], fixture.Mesh.vertices[0] + Vector3.up * expectedOffset), Is.LessThan(.000001f));
+                    }
+                    skin.SetBlendShapeWeight(1, 100); skin.BakeMesh(baked); nativeEnd.Add(skin.name, skin.transform.TransformPoint(baked.vertices[0]));
+                    skin.SetBlendShapeWeight(1, rest);
+                }
+                clip.name = "UE/MouthClosed";
+                if (authored)
+                {
+                    clip.MorphTargetBindings = new[] { new MorphTargetBinding("Front", 1, .6f), new MorphTargetBinding("Back", 1, .6f) };
+                    vrm.Expression.CustomClips.Add(clip); fixture.Source.AddComponent<Vrm10Instance>().Vrm = vrm;
+                }
+                var usable = rest < 100;
+                Assert.That(UnifiedExpressionPreparation.HasUsableEvidence(fixture.Source), Is.EqualTo(usable));
+                if (!usable)
+                {
+                    var error = Assert.Throws<InvalidOperationException>(() => UniVrmOneClickExporter.Export(fixture.Source, "Native negative bracket safeguard", "Tests",
+                        exporterVersion: fullLilToon ? "0.11.5" : null, lilToonVersion: fullLilToon ? "2.3.4" : null));
+                    Assert.That(error.Message, Does.Contain("閉眼"));
+                }
+                var bytes = UniVrmOneClickExporter.Export(fixture.Source, "Native negative bracket", "Tests",
+                    exporterVersion: fullLilToon ? "0.11.5" : null, lilToonVersion: fullLilToon ? "2.3.4" : null,
+                    blinkOptions: usable ? null : new BlinkExportOptions { Mode = BlinkExportMode.None });
+                imported = await Vrm10.LoadBytesAsync(bytes, canLoadVrm0X: false, awaitCaller: new ImmediateCaller());
+                var route = imported.Vrm.Expression.CustomClips.Single(value => value.name == clip.name);
+                Assert.That(route.MorphTargetBindings.Length, Is.EqualTo(2));
+                foreach (var input in new[] { 0f, .5f, 1f })
+                {
+                    imported.Runtime.Expression.SetWeight(ExpressionKey.CreateCustom(route.name), input); imported.Runtime.Process();
+                    foreach (var binding in route.MorphTargetBindings)
+                    {
+                        var skin = imported.transform.Find(binding.RelativePath).GetComponent<SkinnedMeshRenderer>();
+                        var expected = Vector3.LerpUnclamped(nativeRest[skin.name], nativeEnd[skin.name], input * (authored ? .6f : 1));
+                        skin.BakeMesh(baked);
+                        Assert.That(Vector3.Distance(skin.transform.TransformPoint(baked.vertices[0]), expected), Is.LessThan(.00001f),
+                            "Exported coefficient " + input + " must start from the actual native rest, including a negative/positive bracket's nonzero weight0 geometry.");
+                        Assert.That(skin.sharedMesh.GetBlendShapeFrameCount(binding.Index), Is.EqualTo(1));
+                        Assert.That(skin.sharedMesh.GetBlendShapeFrameWeight(binding.Index, 0), Is.EqualTo(100));
+                    }
+                }
+                Assert.That(fixture.Mesh.GetBlendShapeFrameCount(1), Is.EqualTo(curve == "explicitNeutral" ? 3 : 2));
+                Assert.That(fixture.Mesh.GetBlendShapeFrameWeight(1, 0), Is.EqualTo(-50));
+                if (curve == "explicitNeutral") Assert.That(fixture.Mesh.GetBlendShapeFrameWeight(1, 1), Is.Zero);
+                Assert.That(sourceSkins.All(skin => skin.sharedMesh == fixture.Mesh && skin.GetBlendShapeWeight(0) == 0 && skin.GetBlendShapeWeight(1) == rest), Is.True);
+                Assert.That(fixture.Mesh.vertices[0], Is.EqualTo(new Vector3(-.1f, 1.7f, .08f)));
+            }
+            finally { if (imported != null) Object.DestroyImmediate(imported.gameObject); Object.DestroyImmediate(baked); Object.DestroyImmediate(clip); Object.DestroyImmediate(vrm); }
+        }
+
         private static void AddTrackingDelta(Mesh mesh, string name, float amount = .02f) =>
             mesh.AddBlendShapeFrame(name, 100, Enumerable.Repeat(Vector3.up * amount, mesh.vertexCount).ToArray(), null, null);
 
