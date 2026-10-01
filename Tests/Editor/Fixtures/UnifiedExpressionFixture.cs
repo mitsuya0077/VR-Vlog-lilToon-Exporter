@@ -65,6 +65,42 @@ namespace VRVlog.LilToonExporter.Tests
             aliases = VrmUnifiedExpressions.Resolve(new[] { "LipFunnel", "LipFunnelUpperLeft", "MouthClosed" });
             check(aliases.ContainsKey("LipFunnel") && !aliases.ContainsKey("LipFunnelUpperLeft"), "Conflicting aggregate and split representations are selected once per mesh.");
             check(VrmUnifiedExpressions.Resolve(new[] { "ue/jaw_open" }).ContainsKey("JawOpen"), "Explicit UE prefixes enable shared-name partial profiles.");
+            aliases = VrmUnifiedExpressions.Resolve(new[] { "EyeClosedLeft", "UE/eye_closed_left" });
+            check(aliases["EyeClosedLeft"] == 1, "An explicit UE morph wins over a bare canonical alias.");
+            aliases = VrmUnifiedExpressions.Resolve(new[] { "UE/EyeClosedLeft", "ue/eye_closed_left", "MouthClosed" }, warnings);
+            check(!aliases.ContainsKey("EyeClosedLeft") && aliases.ContainsKey("MouthClosed"), "Equally preferred explicit aliases are ambiguous; lower tiers cannot bypass them.");
+            var invalidPreferred = Fixture("EyeClosedLeft", "UE/EyeClosedLeft");
+            ((List<object>)((Dictionary<string, object>)((List<object>)((Dictionary<string, object>)((List<object>)invalidPreferred["meshes"])[0])["primitives"])[0])["targets"]).RemoveAt(1);
+            var rejectedPreferred = false;
+            try { VrmUnifiedExpressions.Add(Encode(invalidPreferred)); } catch (InvalidOperationException) { rejectedPreferred = true; }
+            check(rejectedPreferred, "A selected explicit route with an invalid target cannot fall back to a lower-priority raw alias.");
+
+            var covered = Fixture("LipFunnel", "LipFunnelUpperLeft");
+            var coveredVrm = (Dictionary<string, object>)((Dictionary<string, object>)covered["extensions"])["VRMC_vrm"];
+            var splitRoute = Obj("morphTargetBinds", Arr(Obj("node", 1L, "index", 1L, "weight", .4)), "isBinary", false);
+            coveredVrm["expressions"] = Obj("custom", Obj("UE/LipFunnelUpperLeft", splitRoute));
+            var coveredCustom = Custom(GlbDocument.Read(VrmUnifiedExpressions.Add(Encode(covered))).Json);
+            check(!coveredCustom.ContainsKey("UE/LipFunnel") && coveredCustom.ContainsKey("UE/LipFunnelUpperLeft"), "An authored split route reserves its mesh before raw aggregate selection.");
+            splitRoute["morphTargetBinds"] = Arr(Obj("node", 1L, "index", 1L, "weight", 0.0));
+            coveredCustom = Custom(GlbDocument.Read(VrmUnifiedExpressions.Add(Encode(covered))).Json);
+            check(!coveredCustom.ContainsKey("UE/LipFunnel"), "Zero-only authored coverage cannot be bypassed by an overlapping aggregate.");
+            ((List<object>)covered["nodes"]).Add(Obj("mesh", 1L));
+            ((List<object>)covered["meshes"]).Add(((List<object>)Fixture("LipFunnel")["meshes"])[0]);
+            coveredCustom = Custom(GlbDocument.Read(VrmUnifiedExpressions.Add(Encode(covered))).Json);
+            var uncoveredBinds = (List<object>)((Dictionary<string, object>)coveredCustom["UE/LipFunnel"])["morphTargetBinds"];
+            check(uncoveredBinds.Count == 1 && (long)((Dictionary<string, object>)uncoveredBinds[0])["node"] == 2L, "Authored anatomical coverage reserves only its actual mesh; another face mesh remains usable.");
+            var coveredRoutes = (Dictionary<string, object>)((Dictionary<string, object>)coveredVrm["expressions"])["custom"];
+            coveredRoutes.Remove("UE/LipFunnelUpperLeft"); coveredRoutes.Add("lip_funnel_upper_left", splitRoute);
+            coveredCustom = Custom(GlbDocument.Read(VrmUnifiedExpressions.Add(Encode(covered))).Json);
+            uncoveredBinds = (List<object>)((Dictionary<string, object>)coveredCustom["UE/LipFunnel"])["morphTargetBinds"];
+            check(coveredCustom.ContainsKey("lip_funnel_upper_left") && !coveredCustom.ContainsKey("UE/LipFunnelUpperLeft") && uncoveredBinds.Count == 1 &&
+                (long)((Dictionary<string, object>)uncoveredBinds[0])["node"] == 2L, "Once UE is established, normalized bare authored routes reserve their actual mesh too.");
+            splitRoute["morphTargetBinds"] = Arr(Obj("node", 1L, "index", 999L, "weight", .4));
+            var coveredDiagnostics = new List<string>();
+            coveredCustom = Custom(GlbDocument.Read(VrmUnifiedExpressions.Add(Encode(covered), coveredDiagnostics)).Json);
+            uncoveredBinds = (List<object>)((Dictionary<string, object>)coveredCustom["UE/LipFunnel"])["morphTargetBinds"];
+            check(uncoveredBinds.Count == 1 && (long)((Dictionary<string, object>)uncoveredBinds[0])["node"] == 2L && coveredDiagnostics.Any(message => message.Contains("既存")),
+                "Malformed authored indices still reserve their known mesh and produce diagnostics, preventing a conflicting raw bypass.");
 
             var authored = Fixture("MouthClosed", "JawOpen");
             var vrm = (Dictionary<string, object>)((Dictionary<string, object>)authored["extensions"])["VRMC_vrm"];
@@ -121,6 +157,8 @@ namespace VRVlog.LilToonExporter.Tests
             check(blink[1] == 0 && blink[2] == 1, "Normalized UE closure aliases also pass the blink gate.");
             check(BlinkShapeNames.Resolve(new[] { "UE/EyeClosed" })[0] == 0, "The bilateral UE closure form supports automatic blinking.");
             check(BlinkShapeNames.Resolve(new[] { "EyeClosedLeft" }, allowPartial: true)[1] == 0 && BlinkShapeNames.Resolve(new[] { "EyeClosedLeft" }, allowPartial: true)[2] < 0, "Partial UE closure retains its available side for avatar-wide pairing.");
+            blink = BlinkShapeNames.Resolve(new[] { "Blink_L", "EyeClosedLeft", "EyeClosedRight" }, allowPartial: true);
+            check(blink[1] == 1 && blink[2] == 2, "A complete UE eyelid pair wins before accepting an earlier incomplete legacy alias.");
         }
     }
 }

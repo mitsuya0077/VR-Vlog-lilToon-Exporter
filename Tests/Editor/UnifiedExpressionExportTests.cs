@@ -126,6 +126,11 @@ namespace VRVlog.LilToonExporter.Tests
                 foreach (var skin in skins) skin.sharedMaterial.shader = Shader.Find("lilToon");
                 var bytes = UniVrmOneClickExporter.Export(fixture.Source, "Split UE face", "Tests",
                     exporterVersion: fullLilToon ? "0.11.5" : null, lilToonVersion: fullLilToon ? "2.3.4" : null);
+                var json = GlbDocument.Read(bytes).Json;
+                var extension = (Dictionary<string, object>)((Dictionary<string, object>)json["extensions"])["VRMC_vrm"];
+                var presets = (Dictionary<string, object>)((Dictionary<string, object>)extension["expressions"])["preset"];
+                foreach (var name in BlinkShapeNames.Presets)
+                    Assert.That(presets.ContainsKey(name), Is.EqualTo(bilateral), "A partial UE face does not serialize an invented standard blink route: " + name);
                 imported = await Vrm10.LoadBytesAsync(bytes, canLoadVrm0X: false, awaitCaller: new ImmediateCaller());
                 foreach (var pair in new[] { ("UE/JawOpen", .6f), ("UE/EyeClosedLeft", .4f) })
                 {
@@ -138,9 +143,11 @@ namespace VRVlog.LilToonExporter.Tests
                     Assert.That(skin.GetBlendShapeWeight(binding.Index), Is.EqualTo(pair.Item2 * 100).Within(.001));
                 }
                 Assert.That(imported.Vrm.Expression.CustomClips.Any(clip => clip.name == "UE/EyeClosedRight"), Is.EqualTo(bilateral));
-                Assert.That(imported.Vrm.Expression.Blink != null, Is.EqualTo(bilateral), "One-sided closure cannot be synthesized into bilateral blink.");
-                Assert.That(imported.Vrm.Expression.BlinkLeft != null, Is.EqualTo(bilateral));
-                Assert.That(imported.Vrm.Expression.BlinkRight != null, Is.EqualTo(bilateral));
+                // UniVRM creates empty preset assets even when the serialized
+                // key is absent; binding counts express actual capability.
+                Assert.That(imported.Vrm.Expression.Blink.MorphTargetBindings.Length, Is.EqualTo(bilateral ? 2 : 0), "One-sided closure cannot be synthesized into bilateral blink.");
+                Assert.That(imported.Vrm.Expression.BlinkLeft.MorphTargetBindings.Length, Is.EqualTo(bilateral ? 1 : 0));
+                Assert.That(imported.Vrm.Expression.BlinkRight.MorphTargetBindings.Length, Is.EqualTo(bilateral ? 1 : 0));
                 Assert.That(skins[0].sharedMesh, Is.SameAs(fixture.Mesh));
                 Assert.That(skins[1].sharedMesh, Is.SameAs(mouthMesh));
             }
@@ -165,6 +172,85 @@ namespace VRVlog.LilToonExporter.Tests
                 Assert.Throws<InvalidOperationException>(() => guard.Verify());
             }
             finally { Object.DestroyImmediate(privateMesh); }
+        }
+
+        [TestCase(0f, false, "UE/LipFunnelUpperLeft")]
+        [TestCase(.4f, false, "UE/LipFunnelUpperLeft")]
+        [TestCase(0f, true, "UE/LipFunnelUpperLeft")]
+        [TestCase(.4f, true, "UE/LipFunnelUpperLeft")]
+        [TestCase(.4f, false, "LipFunnelUpperLeft")]
+        [TestCase(.4f, true, "lip_funnel_upper_left")]
+        public async Task AuthoredSplitCoverageWinsBeforeRawAggregateOnItsMeshes(float authoredWeight, bool otherMeshUncovered, string authoredName)
+        {
+            using var fixture = new AttachmentConnectionTests.Fixture();
+            var vrm = ScriptableObject.CreateInstance<VRM10Object>();
+            var clip = ScriptableObject.CreateInstance<VRM10Expression>();
+            Vrm10Instance imported = null;
+            try
+            {
+                fixture.Mesh.AddBlendShapeFrame("LipFunnel", 100, Enumerable.Repeat(Vector3.right * .03f, fixture.Mesh.vertexCount).ToArray(), null, null);
+                fixture.Mesh.AddBlendShapeFrame("LipFunnelUpperLeft", 100, Enumerable.Repeat(Vector3.up * .04f, fixture.Mesh.vertexCount).ToArray(), null, null);
+                foreach (var skin in fixture.Source.GetComponentsInChildren<SkinnedMeshRenderer>()) skin.sharedMaterial.shader = Shader.Find("lilToon");
+                clip.name = authoredName;
+                clip.MorphTargetBindings = (otherMeshUncovered ? new[] { "Front" } : new[] { "Front", "Back" })
+                    .Select(path => new MorphTargetBinding(path, 2, authoredWeight)).ToArray();
+                vrm.Expression.CustomClips.Add(clip);
+                fixture.Source.AddComponent<Vrm10Instance>().Vrm = vrm;
+                var bytes = UniVrmOneClickExporter.Export(fixture.Source, "Authored UE coverage", "Tests");
+                imported = await Vrm10.LoadBytesAsync(bytes, canLoadVrm0X: false, awaitCaller: new ImmediateCaller());
+                var retained = imported.Vrm.Expression.CustomClips.Single(value => value.name == clip.name);
+                Assert.That(retained.MorphTargetBindings.All(binding => Math.Abs(binding.Weight - authoredWeight) < .0001), Is.True);
+                var aggregate = imported.Vrm.Expression.CustomClips.SingleOrDefault(value => value.name == "UE/LipFunnel");
+                Assert.That(aggregate != null, Is.EqualTo(otherMeshUncovered), "Raw aggregate cannot displace authored split coverage.");
+                if (aggregate != null)
+                {
+                    Assert.That(aggregate.MorphTargetBindings.Length, Is.EqualTo(1));
+                    Assert.That(aggregate.MorphTargetBindings[0].RelativePath, Is.EqualTo("Back"));
+                    imported.Runtime.Expression.SetWeight(ExpressionKey.CreateCustom(aggregate.name), .5f);
+                }
+                imported.Runtime.Expression.SetWeight(ExpressionKey.CreateCustom(retained.name), 1f);
+                imported.Runtime.Process();
+                var front = imported.transform.Find("Front").GetComponent<SkinnedMeshRenderer>();
+                Assert.That(front.GetBlendShapeWeight(front.sharedMesh.GetBlendShapeIndex("LipFunnel")), Is.Zero);
+                Assert.That(front.GetBlendShapeWeight(front.sharedMesh.GetBlendShapeIndex("LipFunnelUpperLeft")), Is.EqualTo(authoredWeight * 100).Within(.001));
+                Assert.That(vrm.Expression.CustomClips.Single(), Is.SameAs(clip));
+                Assert.That(clip.MorphTargetBindings.All(binding => binding.Weight == authoredWeight), Is.True);
+            }
+            finally
+            {
+                if (imported != null) Object.DestroyImmediate(imported.gameObject);
+                Object.DestroyImmediate(clip); Object.DestroyImmediate(vrm);
+            }
+        }
+
+        [TestCase(false)]
+        [TestCase(true)]
+        public async Task ExplicitRawAliasWinsOverCanonicalInExportedBindings(bool fullLilToon)
+        {
+            using var fixture = new AttachmentConnectionTests.Fixture();
+            Vrm10Instance imported = null;
+            try
+            {
+                fixture.Mesh.AddBlendShapeFrame("EyeClosedLeft", 100, Enumerable.Repeat(Vector3.right * .03f, fixture.Mesh.vertexCount).ToArray(), null, null);
+                fixture.Mesh.AddBlendShapeFrame("UE/EyeClosedLeft", 100, Enumerable.Repeat(Vector3.up * .04f, fixture.Mesh.vertexCount).ToArray(), null, null);
+                fixture.Mesh.AddBlendShapeFrame("EyeClosedRight", 100, new Vector3[fixture.Mesh.vertexCount], null, null);
+                foreach (var skin in fixture.Source.GetComponentsInChildren<SkinnedMeshRenderer>()) skin.sharedMaterial.shader = Shader.Find("lilToon");
+                var bytes = UniVrmOneClickExporter.Export(fixture.Source, "UE alias priority", "Tests",
+                    exporterVersion: fullLilToon ? "0.11.5" : null, lilToonVersion: fullLilToon ? "2.3.4" : null);
+                imported = await Vrm10.LoadBytesAsync(bytes, canLoadVrm0X: false, awaitCaller: new ImmediateCaller());
+                var clip = imported.Vrm.Expression.CustomClips.Single(value => value.name == "UE/EyeClosedLeft");
+                Assert.That(clip.MorphTargetBindings.Length, Is.EqualTo(2));
+                imported.Runtime.Expression.SetWeight(ExpressionKey.CreateCustom(clip.name), .5f);
+                imported.Runtime.Process();
+                foreach (var binding in clip.MorphTargetBindings)
+                {
+                    var skin = imported.transform.Find(binding.RelativePath).GetComponent<SkinnedMeshRenderer>();
+                    Assert.That(skin.sharedMesh.GetBlendShapeName(binding.Index), Is.EqualTo("UE/EyeClosedLeft"));
+                    Assert.That(skin.GetBlendShapeWeight(binding.Index), Is.EqualTo(50).Within(.001));
+                    Assert.That(skin.GetBlendShapeWeight(skin.sharedMesh.GetBlendShapeIndex("EyeClosedLeft")), Is.Zero);
+                }
+            }
+            finally { if (imported != null) Object.DestroyImmediate(imported.gameObject); }
         }
 
         [Test]

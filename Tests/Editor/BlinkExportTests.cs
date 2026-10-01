@@ -129,6 +129,15 @@ namespace VRVlog.LilToonExporter.Tests
             Assert.Throws<InvalidOperationException>(() => BlinkExportSession.Resolve(root));
         }
 
+        [Test] public void CompleteUnifiedBlinkPairWinsBeforeAnEarlierLegacySingleSide()
+        {
+            Skin("Blink_L", "EyeClosedLeft", "EyeClosedRight");
+            var result = BlinkExportSession.Resolve(root);
+            Assert.That(result.Slots[1].Single().Shape, Is.EqualTo("EyeClosedLeft"));
+            Assert.That(result.Slots[2].Single().Shape, Is.EqualTo("EyeClosedRight"));
+            Assert.That(result.Slots[0].Count, Is.EqualTo(2));
+        }
+
         [Test] public void DuplicateSemanticNamesAreNotGuessed()
         {
             Skin("Blink", "BLINK");

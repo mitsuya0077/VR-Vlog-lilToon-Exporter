@@ -39,6 +39,8 @@ namespace VRVlog.LilToonExporter
                 break;
             }
             var partial = false;
+            var partialLeft = -1;
+            var partialRight = -1;
             foreach (var pair in Pairs)
             {
                 var left = Unique(names, pair.Left);
@@ -47,7 +49,8 @@ namespace VRVlog.LilToonExporter
                 if (left < 0 || right < 0)
                 {
                     partial |= left >= 0 || right >= 0;
-                    if (allowPartial && (left >= 0 || right >= 0)) { result[1] = left; result[2] = right; break; }
+                    if (allowPartial && partialLeft < 0 && partialRight < 0 && (left >= 0 || right >= 0))
+                    { partialLeft = left; partialRight = right; }
                     continue;
                 }
                 result[1] = left;
@@ -66,9 +69,11 @@ namespace VRVlog.LilToonExporter
                 else
                 {
                     partial |= hasLeft || hasRight;
-                    if (allowPartial) { result[1] = hasLeft ? left : -1; result[2] = hasRight ? right : -1; }
+                    if (allowPartial && partialLeft < 0 && partialRight < 0)
+                    { partialLeft = hasLeft ? left : -1; partialRight = hasRight ? right : -1; }
                 }
             }
+            if (allowPartial && result[1] < 0 && result[2] < 0) { result[1] = partialLeft; result[2] = partialRight; }
             if (!allowPartial && partial && result[1] < 0) result[1] = result[2] = PartialPair;
             return result;
         }

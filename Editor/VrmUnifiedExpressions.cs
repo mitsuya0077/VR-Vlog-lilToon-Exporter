@@ -10,7 +10,8 @@ namespace VRVlog.LilToonExporter
     internal static class VrmUnifiedExpressions
     {
         internal static Dictionary<string, int> Resolve(IReadOnlyList<string> names,
-            ICollection<string> warnings = null, string label = "mesh", bool avatarSupportsUnified = false)
+            ICollection<string> warnings = null, string label = "mesh", bool avatarSupportsUnified = false,
+            IEnumerable<string> authoredCoverage = null)
         {
             var matches = new Dictionary<string, List<int>>(StringComparer.Ordinal);
             var eligible = avatarSupportsUnified;
@@ -25,14 +26,22 @@ namespace VRVlog.LilToonExporter
             if (!eligible) return resolved;
             foreach (var pair in matches)
             {
-                var exact = pair.Value.Where(index => string.Equals(names[index], pair.Key, StringComparison.Ordinal)).ToArray();
-                var candidates = exact.Length > 0 ? exact : pair.Value.ToArray();
+                var priority = pair.Value.Min(index => RawPriority(names[index], pair.Key));
+                var candidates = pair.Value.Where(index => RawPriority(names[index], pair.Key) == priority).ToArray();
                 if (candidates.Length != 1)
                 {
                     Warn(warnings, label + ": Unified Expressions の名前が重複するため省略しました: " + pair.Key);
                     continue;
                 }
                 resolved.Add(pair.Key, candidates[0]);
+            }
+            // Authored routes reserve their anatomical coverage before raw
+            // aggregate/split selection, even when their weight is zero.
+            if (authoredCoverage != null)
+            {
+                var authored = authoredCoverage.ToArray();
+                foreach (var name in resolved.Keys.Where(name => authored.Any(existing =>
+                    existing != name && UnifiedExpressionRegistry.Conflicts(name, existing))).ToArray()) resolved.Remove(name);
             }
             var selected = new HashSet<string>(UnifiedExpressionRegistry.SelectCandidates(resolved.Keys), StringComparer.Ordinal);
             foreach (var name in resolved.Keys.Where(name => !selected.Contains(name)).ToArray()) resolved.Remove(name);
@@ -42,6 +51,9 @@ namespace VRVlog.LilToonExporter
         internal static bool HasEvidence(IEnumerable<string> names) => names.Any(name =>
             UnifiedExpressionRegistry.TryCanonicalize(name, out var canonical) &&
             (UnifiedExpressionRegistry.IsDistinctive(canonical) || UnifiedExpressionRegistry.IsExplicit(name)));
+
+        private static int RawPriority(string name, string canonical) => UnifiedExpressionRegistry.IsExplicit(name) ? 0 :
+            string.Equals(name, canonical, StringComparison.OrdinalIgnoreCase) ? 1 : 2;
 
         internal static byte[] Add(byte[] bytes, ICollection<string> warnings = null)
         {
@@ -61,6 +73,16 @@ namespace VRVlog.LilToonExporter
                 Array(Object(meshes[index] as Dictionary<string, object>, "extras"), "targetNames") ?? new List<object>()).OfType<string>()
                 .Concat(custom?.Keys ?? Enumerable.Empty<string>()));
             if (!supportsUnified) return bytes;
+            var authoredKeys = new Dictionary<string, List<string>>(StringComparer.Ordinal);
+            var retainedKeys = new HashSet<string>(StringComparer.Ordinal);
+            foreach (var key in custom?.Keys ?? Enumerable.Empty<string>())
+            {
+                if (!UnifiedExpressionRegistry.TryCanonicalize(key, out var canonical)) continue;
+                if (!authoredKeys.TryGetValue(canonical, out var keys)) authoredKeys.Add(canonical, keys = new List<string>());
+                keys.Add(key);
+                if (PreserveAuthored(custom[key], nodes, meshes, Array(glb.Json, "materials"), key, warnings)) retainedKeys.Add(key);
+            }
+            var authoredCoverage = AuthoredMorphCoverage(custom, retainedKeys, nodes, meshes);
             var bindings = new Dictionary<string, List<object>>(StringComparer.Ordinal);
             var meshCandidates = new Dictionary<int, Dictionary<string, int>>();
             for (var nodeIndex = 0; nodeIndex < nodes.Count; nodeIndex++)
@@ -72,7 +94,8 @@ namespace VRVlog.LilToonExporter
                 {
                     var names = Array(Object(mesh, "extras"), "targetNames");
                     candidates = names == null ? new Dictionary<string, int>() :
-                        Resolve(names.Select(name => name as string).ToArray(), warnings, "mesh " + meshIndex, supportsUnified);
+                        Resolve(names.Select(name => name as string).ToArray(), warnings, "mesh " + meshIndex, supportsUnified,
+                            authoredCoverage.TryGetValue(meshIndex, out var coverage) ? coverage : null);
                     meshCandidates.Add(meshIndex, candidates);
                 }
                 foreach (var pair in candidates)
@@ -87,13 +110,6 @@ namespace VRVlog.LilToonExporter
             if (bindings.Count == 0) return bytes;
             if (expressions == null) vrm["expressions"] = expressions = new Dictionary<string, object>();
             if (custom == null) expressions["custom"] = custom = new Dictionary<string, object>();
-            var authoredKeys = new Dictionary<string, List<string>>(StringComparer.Ordinal);
-            foreach (var key in custom.Keys)
-            {
-                if (!UnifiedExpressionRegistry.IsExplicit(key) || !UnifiedExpressionRegistry.TryCanonicalize(key, out var canonical)) continue;
-                if (!authoredKeys.TryGetValue(canonical, out var keys)) authoredKeys.Add(canonical, keys = new List<string>());
-                keys.Add(key);
-            }
             var added = 0;
             foreach (var pair in bindings)
             {
@@ -102,8 +118,7 @@ namespace VRVlog.LilToonExporter
                 {
                     // A declared nonempty route, including an intentional zero
                     // weight, is authoritative. Empty bindings can be repaired.
-                    var retained = existingKeys.Where(existingKey => PreserveAuthored(custom[existingKey], nodes, meshes,
-                        Array(glb.Json, "materials"), existingKey, warnings)).ToArray();
+                    var retained = existingKeys.Where(retainedKeys.Contains).ToArray();
                     if (retained.Length > 1)
                         Warn(warnings, "Unified Expressions の手動設定名が重複するため自動設定を省略しました: " + pair.Key);
                     if (retained.Length > 0) continue;
@@ -118,6 +133,33 @@ namespace VRVlog.LilToonExporter
             if (added == 0) return bytes;
             Warn(warnings, "Unified Expressions の追跡表情を " + added + " 項目登録しました。端末で検出できる動きだけを反映します。");
             return glb.Write();
+        }
+
+        private static Dictionary<int, HashSet<string>> AuthoredMorphCoverage(Dictionary<string, object> custom,
+            IEnumerable<string> retainedKeys, List<object> nodes, List<object> meshes)
+        {
+            var result = new Dictionary<int, HashSet<string>>();
+            foreach (var key in retainedKeys)
+            {
+                UnifiedExpressionRegistry.TryCanonicalize(key, out var canonical);
+                foreach (var item in Array(custom[key] as Dictionary<string, object>, "morphTargetBinds") ?? new List<object>())
+                {
+                    try
+                    {
+                        if (!(item is Dictionary<string, object> bind) || !bind.TryGetValue("node", out var rawNode)) continue;
+                        var node = nodes[Index(rawNode, nodes.Count, "node")] as Dictionary<string, object>;
+                        if (node == null || !node.TryGetValue("mesh", out var rawMesh)) continue;
+                        var meshIndex = Index(rawMesh, meshes.Count, "mesh");
+                        // A known mesh reserves declared coverage even when
+                        // index/weight is malformed. Validation diagnoses it;
+                        // an overlapping raw route must not bypass that choice.
+                        if (!result.TryGetValue(meshIndex, out var coverage)) result.Add(meshIndex, coverage = new HashSet<string>(StringComparer.Ordinal));
+                        coverage.Add(canonical);
+                    }
+                    catch (InvalidOperationException) { /* PreserveAuthored already diagnoses malformed references. */ }
+                }
+            }
+            return result;
         }
 
         private static bool PreserveAuthored(object value, List<object> nodes, List<object> meshes,
