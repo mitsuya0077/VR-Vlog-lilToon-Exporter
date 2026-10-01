@@ -135,6 +135,22 @@ namespace VRVlog.LilToonExporter.Tests
             check(remainingSplit.Count == 1 && (long)((Dictionary<string, object>)remainingSplit[0])["node"] == 1L,
                 "Per-node filtering precedes representation selection, so the disjoint split remains available on the authored node.");
 
+            var duplicateAuthored = Fixture("MouthClosed");
+            var duplicateVrm = (Dictionary<string, object>)((Dictionary<string, object>)duplicateAuthored["extensions"])["VRMC_vrm"];
+            var firstAlias = Obj("morphTargetBinds", Arr(Obj("node", 1L, "index", 0L, "weight", .35)), "isBinary", false);
+            var secondAlias = Obj("morphTargetBinds", Arr(Obj("node", 1L, "index", 0L, "weight", .75)), "isBinary", false);
+            duplicateVrm["expressions"] = Obj("custom", Obj("UE/MouthClosed", firstAlias, "mouth_closed", secondAlias));
+            var duplicateInput = Encode(duplicateAuthored);
+            var duplicateDiagnostics = new List<string>();
+            var duplicateOutput = VrmUnifiedExpressions.Add(duplicateInput, duplicateDiagnostics);
+            check(duplicateDiagnostics.Count(message => message.Contains("重複") && message.Contains("MouthClosed")) == 1,
+                "Duplicate retained aliases are diagnosed even when their raw channel was reserved before generation.");
+            check(duplicateOutput.SequenceEqual(duplicateInput), "Both authored aliases and their settings remain byte-identical; duplicate raw fallback remains blocked.");
+            secondAlias["morphTargetBinds"] = Arr();
+            duplicateDiagnostics.Clear();
+            VrmUnifiedExpressions.Add(Encode(duplicateAuthored), duplicateDiagnostics);
+            check(!duplicateDiagnostics.Any(message => message.Contains("重複")), "An empty alias beside one retained authored route does not report a duplicate retained setting.");
+
             var authored = Fixture("MouthClosed", "JawOpen");
             var vrm = (Dictionary<string, object>)((Dictionary<string, object>)authored["extensions"])["VRMC_vrm"];
             var own = Obj("morphTargetBinds", Arr(Obj("node", 1L, "index", 0L, "weight", .35)), "isBinary", false, "overrideBlink", "block");

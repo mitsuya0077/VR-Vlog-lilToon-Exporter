@@ -95,9 +95,16 @@ namespace VRVlog.LilToonExporter
                 if (PreserveAuthored(custom[key], nodes, meshes, Array(glb.Json, "materials"), key, warnings, out var usable)) retainedKeys.Add(key);
                 if (usable) usableKeys.Add(key);
             }
+            var reserved = new HashSet<string>(StringComparer.Ordinal);
+            foreach (var pair in authoredKeys)
+            {
+                var retainedCount = pair.Value.Count(retainedKeys.Contains);
+                if (retainedCount > 1)
+                    Warn(warnings, "Unified Expressions の手動設定名が重複するため自動設定を省略しました: " + pair.Key);
+                if (retainedCount > 0) reserved.Add(pair.Key);
+            }
             var authoredCoverage = AuthoredMorphCoverage(custom, retainedKeys, nodes, meshes);
             var globalCoverage = AuthoredNonMorphCoverage(custom, retainedKeys);
-            var reserved = new HashSet<string>(authoredKeys.Where(pair => pair.Value.Any(retainedKeys.Contains)).Select(pair => pair.Key), StringComparer.Ordinal);
             var bindings = new Dictionary<string, List<object>>(StringComparer.Ordinal);
             var meshCandidates = new Dictionary<int, Dictionary<string, int>>();
             var selectedNames = new HashSet<string>(StringComparer.Ordinal);
@@ -143,10 +150,7 @@ namespace VRVlog.LilToonExporter
                 {
                     // A declared nonempty route, including an intentional zero
                     // weight, is authoritative. Empty bindings can be repaired.
-                    var retained = existingKeys.Where(retainedKeys.Contains).ToArray();
-                    if (retained.Length > 1)
-                        Warn(warnings, "Unified Expressions の手動設定名が重複するため自動設定を省略しました: " + pair.Key);
-                    if (retained.Length > 0) continue;
+                    if (existingKeys.Any(retainedKeys.Contains)) continue;
                     foreach (var existingKey in existingKeys) custom.Remove(existingKey);
                 }
                 custom.Add(key, new Dictionary<string, object> {
