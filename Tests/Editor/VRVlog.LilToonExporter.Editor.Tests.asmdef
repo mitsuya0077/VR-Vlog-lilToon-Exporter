@@ -3,6 +3,7 @@
   "rootNamespace": "VRVlog.LilToonExporter.Tests",
   "references": [
     "VRVlog.LilToonExporter.Editor",
+    "VRVlog.LilToonExporter.Runtime",
     "VRM10",
     "UniGLTF",
     "UniGLTF.Utils",

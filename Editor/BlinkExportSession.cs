@@ -18,6 +18,7 @@ namespace VRVlog.LilToonExporter
         internal string Description;
         internal bool PreserveAuthored;
         internal bool Disabled;
+        bool allowMissingAutomaticBlink;
         internal bool HasBilateralPreset => authored[0] || Slots[0].Count > 0;
         readonly Dictionary<SkinnedMeshRenderer, int> nodes = new Dictionary<SkinnedMeshRenderer, int>();
         readonly bool[] authored = new bool[3];
@@ -72,13 +73,19 @@ namespace VRVlog.LilToonExporter
                 }
                 else
                 {
+                    var rendererNames = ExportRendererSelection.Enumerate(source).OfType<SkinnedMeshRenderer>()
+                        .Where(renderer => excluded?.Invoke(renderer.transform) != true && renderer.sharedMesh != null)
+                        .ToDictionary(renderer => renderer, renderer => Enumerable.Range(0, renderer.sharedMesh.blendShapeCount)
+                            .Select(renderer.sharedMesh.GetBlendShapeName).ToArray());
+                    result.allowMissingAutomaticBlink = source.GetComponentInChildren<VrmTrackingMarker>(true)?.profile == null &&
+                        VrmUnifiedExpressions.HasEvidence(rendererNames.Values.SelectMany(names => names).Concat(
+                            expressions?.CustomClips?.Where(clip => clip != null).Select(clip => clip.name) ?? Enumerable.Empty<string>()));
                     var completePairs = true;
-                    foreach (var renderer in ExportRendererSelection.Enumerate(source).OfType<SkinnedMeshRenderer>())
+                    foreach (var pair in rendererNames)
                     {
-                        if (excluded?.Invoke(renderer.transform) == true || renderer.sharedMesh == null) continue;
-                        var mesh = renderer.sharedMesh;
-                        var names = Enumerable.Range(0, mesh.blendShapeCount).Select(mesh.GetBlendShapeName).ToArray();
-                        var resolved = BlinkShapeNames.Resolve(names);
+                        var renderer = pair.Key;
+                        var names = pair.Value;
+                        var resolved = BlinkShapeNames.Resolve(names, result.allowMissingAutomaticBlink);
                         if (resolved[0] == -2)
                             throw new InvalidOperationException("閉眼用の名前が重複しています。「確認・調整」で設定してください。");
                         if (resolved[0] < 0 && resolved[1] == BlinkShapeNames.PartialPair)
@@ -87,12 +94,16 @@ namespace VRVlog.LilToonExporter
                         for (var slot = 0; slot < resolved.Length; slot++)
                             if (resolved[slot] >= 0)
                                 result.Slots[slot].Add(new BlinkShapeBinding { Renderer = renderer, Shape = names[resolved[slot]] });
-                        // A renderer with only a complete left/right pair still
-                        // contributes to the bilateral fallback used by viewers.
-                        if (resolved[0] < 0 && resolved[1] >= 0 && resolved[2] >= 0)
-                            for (var slot = 1; slot < 3; slot++)
-                                result.Slots[0].Add(new BlinkShapeBinding { Renderer = renderer, Shape = names[resolved[slot]] });
                     }
+                    // Resolve bilateral closure across the avatar: UE models
+                    // may put their left and right eyes on different renderers.
+                    if (result.Slots[1].Count > 0 && result.Slots[2].Count > 0)
+                    {
+                        var bilateralRenderers = new HashSet<SkinnedMeshRenderer>(result.Slots[0].Select(binding => binding.Renderer));
+                        foreach (var binding in result.Slots[1].Concat(result.Slots[2]))
+                            if (!bilateralRenderers.Contains(binding.Renderer)) result.Slots[0].Add(binding.Copy());
+                    }
+                    else { result.Slots[1].Clear(); result.Slots[2].Clear(); }
                     if (!completePairs) { result.Slots[1].Clear(); result.Slots[2].Clear(); }
                     result.Description = "自動設定";
                 }
@@ -145,7 +156,7 @@ namespace VRVlog.LilToonExporter
             if (PreserveAuthored) return; // An intentionally empty clip is authoritative.
             if (Slots[1].Count == 0 != (Slots[2].Count == 0))
                 throw new InvalidOperationException("左右別の瞬きは左目・右目を両方指定してください。");
-            if (Slots[0].Count == 0 && Slots[1].Count == 0)
+            if (Slots[0].Count == 0 && Slots[1].Count == 0 && !allowMissingAutomaticBlink)
                 throw new InvalidOperationException("閉眼用の変形を特定できません。「確認・調整」で選択するか「瞬きなし」を指定してください。");
             if (Slots[1].Any(left => Slots[2].Any(right => left.Renderer == right.Renderer &&
                 string.Equals(left.Shape, right.Shape, StringComparison.OrdinalIgnoreCase))))
@@ -155,7 +166,8 @@ namespace VRVlog.LilToonExporter
         internal BlinkExportSession ForClone(GameObject source, GameObject clone)
         {
             if (source == clone) throw new ArgumentException("An independent export copy is required.");
-            var copy = new BlinkExportSession { Description = Description, PreserveAuthored = PreserveAuthored, Disabled = Disabled };
+            var copy = new BlinkExportSession { Description = Description, PreserveAuthored = PreserveAuthored, Disabled = Disabled,
+                allowMissingAutomaticBlink = allowMissingAutomaticBlink };
             Array.Copy(authored, copy.authored, authored.Length);
             for (var slot = 0; slot < Slots.Length; slot++)
                 foreach (var binding in Slots[slot])
@@ -287,7 +299,8 @@ namespace VRVlog.LilToonExporter
                         string.Equals(key, "EyeBlinkRight", StringComparison.OrdinalIgnoreCase))
                     {
                         var slot = key.EndsWith("Left", StringComparison.OrdinalIgnoreCase) ? 1 : 2;
-                        custom[key] = presets.TryGetValue(BlinkShapeNames.Presets[slot], out var value) ? value : presets["blink"];
+                        if (presets.TryGetValue(BlinkShapeNames.Presets[slot], out var value) || presets.TryGetValue("blink", out value))
+                            custom[key] = value;
                     }
             return glb.Write();
         }

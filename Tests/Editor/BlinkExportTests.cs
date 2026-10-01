@@ -101,6 +101,34 @@ namespace VRVlog.LilToonExporter.Tests
             Assert.Throws<InvalidOperationException>(() => BlinkExportSession.Resolve(root));
         }
 
+        [Test] public void PartialUnifiedClosureDoesNotInventBilateralBlink()
+        {
+            Skin("EyeClosedLeft");
+            var result = BlinkExportSession.Resolve(root);
+            Assert.That(result.Disabled, Is.False);
+            Assert.That(result.Slots.All(slot => slot.Count == 0), Is.True);
+            copy = Object.Instantiate(root);
+            using var prepared = result.ForClone(root, copy);
+            Assert.DoesNotThrow(() => prepared.Bake(copy, generated));
+        }
+
+        [Test] public void UnifiedEyesOnDifferentRenderersFormOneBilateralClosure()
+        {
+            var left = Skin("EyeClosedLeft"); var right = Skin("EyeClosedRight");
+            var result = BlinkExportSession.Resolve(root);
+            Assert.That(result.Slots[0].Count, Is.EqualTo(2));
+            Assert.That(result.Slots[1].Single().Renderer, Is.SameAs(left));
+            Assert.That(result.Slots[2].Single().Renderer, Is.SameAs(right));
+        }
+
+        [Test] public void ExplicitTrackingMarkerKeepsPartialBlinkValidation()
+        {
+            Skin("EyeClosedLeft");
+            var profile = ScriptableObject.CreateInstance<VrmTrackingProfile>(); owned.Add(profile);
+            root.AddComponent<VrmTrackingMarker>().profile = profile;
+            Assert.Throws<InvalidOperationException>(() => BlinkExportSession.Resolve(root));
+        }
+
         [Test] public void DuplicateSemanticNamesAreNotGuessed()
         {
             Skin("Blink", "BLINK");

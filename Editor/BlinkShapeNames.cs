@@ -27,7 +27,7 @@ namespace VRVlog.LilToonExporter
             return result;
         }
 
-        internal static int[] Resolve(IReadOnlyList<string> names)
+        internal static int[] Resolve(IReadOnlyList<string> names, bool allowPartial = false)
         {
             var result = new[] { -1, -1, -1 };
             foreach (var name in Both)
@@ -47,13 +47,29 @@ namespace VRVlog.LilToonExporter
                 if (left < 0 || right < 0)
                 {
                     partial |= left >= 0 || right >= 0;
+                    if (allowPartial && (left >= 0 || right >= 0)) { result[1] = left; result[2] = right; break; }
                     continue;
                 }
                 result[1] = left;
                 result[2] = right;
                 break;
             }
-            if (partial && result[1] < 0) result[1] = result[2] = PartialPair;
+            if (result[1] < 0 && result[2] < 0)
+            {
+                // Use the same bounded normalization and collision rules as
+                // UE export, including prefixed names and the bilateral form.
+                var unified = VrmUnifiedExpressions.Resolve(names);
+                if (result[0] < 0 && unified.TryGetValue("EyeClosed", out var both)) result[0] = both;
+                var hasLeft = unified.TryGetValue("EyeClosedLeft", out var left);
+                var hasRight = unified.TryGetValue("EyeClosedRight", out var right);
+                if (hasLeft && hasRight) { result[1] = left; result[2] = right; }
+                else
+                {
+                    partial |= hasLeft || hasRight;
+                    if (allowPartial) { result[1] = hasLeft ? left : -1; result[2] = hasRight ? right : -1; }
+                }
+            }
+            if (!allowPartial && partial && result[1] < 0) result[1] = result[2] = PartialPair;
             return result;
         }
     }

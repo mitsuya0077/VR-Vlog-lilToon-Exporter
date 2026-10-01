@@ -69,8 +69,10 @@ namespace VRVlog.LilToonExporter
                 // they participate in the same bindpose preservation as the skin.
                 if (requiresPreparation)
                     SkinnedMeshFallbackWeights.Preserve(clone, temporaryMeshes, warnings, fixedRootJoints);
+                var unifiedPreparation = trackingProfile == null ? new UnifiedExpressionPreparation(clone) : null;
                 using var preparation = NdmfExportPreparation.Prepare(source, clone, warnings);
                 gimmicks.Apply(expressionBindings, menu, warnings);
+                unifiedPreparation?.Verify();
                 poses.CollectPrepared(clone, warnings);
                 expressionBindings.Capture(menu);
                 blink.Bake(clone, temporaryMeshes);
@@ -108,6 +110,7 @@ namespace VRVlog.LilToonExporter
                 exported = ExportSkinRoots.Repair(exported, warnings);
                 exported = blink.Apply(VrmExpressionBindings.AddMissing(VrmMenuExpressions.Add(exported, expressions), warnings, inferBlink: false));
                 if (trackingProfile != null) exported = VrmTrackingExpressions.Add(exported, trackingProfile);
+                else exported = VrmUnifiedExpressions.Add(exported, warnings);
                 if (exporterVersion != null)
                 {
                     // The dedicated snapshot predates fallback baking. Its binary
