@@ -15,6 +15,18 @@ namespace VRVlog.LilToonExporter
             ("eye_blink_1_L", "eye_blink_1_R"), ("eye_blink_2_L", "eye_blink_2_R")
         };
 
+        internal static int PartialFamily(string shape, bool left)
+        {
+            for (var index = 0; index < Pairs.Length; index++)
+                if (string.Equals(shape, left ? Pairs[index].Left : Pairs[index].Right, StringComparison.OrdinalIgnoreCase)) return index;
+            if (VRVlog.FaceTracking.UnifiedExpressionRegistry.TryCanonicalize(shape, out var canonical) &&
+                canonical == (left ? "EyeClosedLeft" : "EyeClosedRight")) return Pairs.Length;
+            return -1;
+        }
+
+        internal static bool CompatiblePartials(string left, string right) =>
+            PartialFamily(left, true) >= 0 && PartialFamily(left, true) == PartialFamily(right, false);
+
         internal static int Unique(IReadOnlyList<string> names, string name)
         {
             var result = -1;
@@ -27,7 +39,40 @@ namespace VRVlog.LilToonExporter
             return result;
         }
 
-        internal static int[] Resolve(IReadOnlyList<string> names)
+        static Dictionary<string, int> UnifiedCandidates(IReadOnlyList<string> names, Func<int, bool> usable)
+        {
+            var unified = VrmUnifiedExpressions.Resolve(names);
+            // Resolve aliases first: an inert preferred route must not
+            // select a lower-priority alias that detailed tracking omits.
+            if (usable != null)
+                foreach (var canonical in new[] { "EyeClosed", "EyeClosedLeft", "EyeClosedRight" })
+                    if (unified.TryGetValue(canonical, out var index) && !usable(index)) unified.Remove(canonical);
+            return unified;
+        }
+
+        internal static IEnumerable<(int Index, int Slot)> PartialCandidates(IReadOnlyList<string> names, Func<int, bool> unifiedUsable = null)
+        {
+            var unified = UnifiedCandidates(names, unifiedUsable);
+            var hasLeft = unified.TryGetValue("EyeClosedLeft", out var unifiedLeft);
+            var hasRight = unified.TryGetValue("EyeClosedRight", out var unifiedRight);
+            // A UE side retains its priority over alternate legacy closures on
+            // this renderer. Complete pairs are handled by Resolve first.
+            if (hasLeft || hasRight)
+            {
+                if (hasLeft) yield return (unifiedLeft, 1);
+                if (hasRight) yield return (unifiedRight, 2);
+                yield break;
+            }
+            foreach (var pair in Pairs)
+            {
+                var left = Unique(names, pair.Left); var right = Unique(names, pair.Right);
+                if (left >= 0 && right >= 0) continue;
+                if (left >= 0) yield return (left, 1);
+                if (right >= 0) yield return (right, 2);
+            }
+        }
+
+        internal static int[] Resolve(IReadOnlyList<string> names, bool allowPartial = false, Func<int, bool> unifiedUsable = null)
         {
             var result = new[] { -1, -1, -1 };
             foreach (var name in Both)
@@ -39,6 +84,8 @@ namespace VRVlog.LilToonExporter
                 break;
             }
             var partial = false;
+            var partialLeft = -1;
+            var partialRight = -1;
             foreach (var pair in Pairs)
             {
                 var left = Unique(names, pair.Left);
@@ -47,13 +94,35 @@ namespace VRVlog.LilToonExporter
                 if (left < 0 || right < 0)
                 {
                     partial |= left >= 0 || right >= 0;
+                    if (allowPartial && partialLeft < 0 && partialRight < 0 && (left >= 0 || right >= 0))
+                    { partialLeft = left; partialRight = right; }
                     continue;
                 }
                 result[1] = left;
                 result[2] = right;
                 break;
             }
-            if (partial && result[1] < 0) result[1] = result[2] = PartialPair;
+            if (result[1] < 0 && result[2] < 0)
+            {
+                // Use the same bounded normalization and collision rules as
+                // UE export, including prefixed names and the bilateral form.
+                var unified = UnifiedCandidates(names, unifiedUsable);
+                if (result[0] < 0 && unified.TryGetValue("EyeClosed", out var both)) result[0] = both;
+                var hasLeft = unified.TryGetValue("EyeClosedLeft", out var left);
+                var hasRight = unified.TryGetValue("EyeClosedRight", out var right);
+                if (hasLeft && hasRight) { result[1] = left; result[2] = right; }
+                else
+                {
+                    partial |= hasLeft || hasRight;
+                    // A usable UE partial must agree with the channel exported
+                    // for detailed tracking before another renderer supplies
+                    // the other eye. Complete legacy pairs still win above.
+                    if (allowPartial && (hasLeft || hasRight))
+                    { partialLeft = hasLeft ? left : -1; partialRight = hasRight ? right : -1; }
+                }
+            }
+            if (allowPartial && result[1] < 0 && result[2] < 0) { result[1] = partialLeft; result[2] = partialRight; }
+            if (!allowPartial && partial && result[1] < 0) result[1] = result[2] = PartialPair;
             return result;
         }
     }

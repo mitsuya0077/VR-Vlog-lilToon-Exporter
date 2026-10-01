@@ -18,7 +18,7 @@ listing = json.loads((root / "source.json").read_text(encoding="utf-8"))
 
 assert package["name"] == "com.vrvlog.liltoon-vrm-exporter"
 assert package["unity"] == "2022.3"
-assert package["version"] == "0.11.4"
+assert package["version"] == "0.11.5"
 assert one_click.index("AvatarBaseShape.Preserve(clone, clone,") < one_click.index("Vrm10AppearanceExporter.Export(")
 assert "foreach (var mesh in temporaryMeshes) UnityEngine.Object.DestroyImmediate(mesh);" in one_click
 assert package["vpmDependencies"] == {
@@ -245,12 +245,12 @@ assert (root / "LICENSE").is_file()
 assert "instance.Vrm.Meta.CopyTo" not in one_click
 assert "Never copy contact information" in one_click
 assert "NormalTextureScale = normalEnabled ?" in one_click
-assert "EmissiveFactorLinear = emissionEnabled ?" in one_click
-assert "MatcapColorFactorSrgb = matcapEnabled ?" in one_click
-assert "ParametricRimColorFactorSrgb = rimEnabled" in one_click
-assert 'backlightEnabled ? Color(source, "_BacklightColor"' in one_click
+assert "EmissiveFactorLinear = FallbackColor(source, MaterialColorType.emissionColor," in one_click
+assert "MatcapColorFactorSrgb = FallbackColor(source, MaterialColorType.matcapColor," in one_click
+assert "ParametricRimColorFactorSrgb = FallbackColor(source, MaterialColorType.rimColor," in one_click
+assert 'source.GetFloat("_UseBacklight") > .5f ? Color(source, "_BacklightColor"' in one_click
 assert 'backlightEnabled ? Float(source, "_BacklightDirectivity"' in one_click
-assert "ShadeColorFactorSrgb = shadowEnabled ?" in one_click
+assert "ShadeColorFactorSrgb = FallbackColor(source, MaterialColorType.shadeColor," in one_click
 assert "ShadeColorTexture = shadowEnabled" in one_click
 for gated_texture in ("NormalTexture", "EmissiveTexture", "MatcapTexture", "RimMultiplyTexture"):
     assert f"{gated_texture} =" in one_click and "? Texture(source," in one_click
@@ -288,7 +288,21 @@ assert (root / "Tests/Editor/VRVlog.LilToonExporter.Editor.Tests.asmdef").is_fil
 test_assembly = json.loads((root / "Tests/Editor/VRVlog.LilToonExporter.Editor.Tests.asmdef").read_text(encoding="utf-8"))
 assert {"VRM10", "UniGLTF", "VrmLib"}.issubset(test_assembly["references"])
 
-print("Exporter implementation, package, and schema checks passed.")
+# User-facing UE failures must remain actionable in every shipped locale.
+unified_failure_sources = (
+    "Modular Avatar / NDMF の処理で Unified Expressions の追跡用変形が失われました。メッシュや BlendShape を変更する追加ツールの設定を確認してください。",
+    "Unified Expressions の書き出しに必要な VRM 情報がありません。",
+    "Unified Expressions の出力 mesh に primitive がありません: ",
+    "Unified Expressions の morph target 参照が不正です: ",
+) + tuple("Invalid Unified Expressions " + index + " index." for index in ("node", "mesh", "morph", "material"))
+for locale in ("en", "ko", "zh-Hans", "zh-Hant"):
+    entries = json.loads((root / ("Editor/Locales/ExporterLocale_" + locale + ".json")).read_text(encoding="utf-8"))["entries"]
+    translations = {entry["source"]: entry["translated"] for entry in entries}
+    assert len(translations) == len(entries), locale + ": duplicate locale source"
+    for source in unified_failure_sources:
+        assert translations.get(source) and translations[source] != source, locale + ": missing UE failure translation"
+
+print("Exporter implementation, package, schema, and UE locale checks passed.")
 
 # A name inventory alone must not hide an unclassified rendering property.
 catalogue = json.loads((root / "Schema/LilToon234Catalogue.json").read_text(encoding="utf-8"))

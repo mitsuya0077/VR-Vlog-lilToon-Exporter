@@ -18,13 +18,15 @@ namespace VRVlog.LilToonExporter
         internal string Description;
         internal bool PreserveAuthored;
         internal bool Disabled;
+        bool allowMissingAutomaticBlink;
         internal bool HasBilateralPreset => authored[0] || Slots[0].Count > 0;
+        internal bool RequiresUnifiedEvidence => allowMissingAutomaticBlink && !PreserveAuthored && Slots[0].Count == 0 && Slots[1].Count == 0;
         readonly Dictionary<SkinnedMeshRenderer, int> nodes = new Dictionary<SkinnedMeshRenderer, int>();
         readonly bool[] authored = new bool[3];
         readonly List<Object> expressionCopies = new List<Object>();
 
         internal static BlinkExportSession Resolve(GameObject source, BlinkExportOptions options = null,
-            Func<Transform, bool> excluded = null)
+            Func<Transform, bool> excluded = null, bool suppressSharedTextureEmission = false, bool suppressHdrTextureEmission = false)
         {
             if (source == null) throw new InvalidOperationException("アバターを指定してください。");
             options = options ?? new BlinkExportOptions();
@@ -72,27 +74,67 @@ namespace VRVlog.LilToonExporter
                 }
                 else
                 {
+                    var rendererNames = ExportRendererSelection.Enumerate(source).OfType<SkinnedMeshRenderer>()
+                        .Where(renderer => excluded?.Invoke(renderer.transform) != true && renderer.sharedMesh != null)
+                        .ToDictionary(renderer => renderer, renderer => Enumerable.Range(0, renderer.sharedMesh.blendShapeCount)
+                            .Select(renderer.sharedMesh.GetBlendShapeName).ToArray());
+                    result.allowMissingAutomaticBlink = source.GetComponentInChildren<VrmTrackingMarker>(true)?.profile == null &&
+                        UnifiedExpressionPreparation.HasUsableEvidence(source, excluded, suppressSharedTextureEmission, suppressHdrTextureEmission);
                     var completePairs = true;
-                    foreach (var renderer in ExportRendererSelection.Enumerate(source).OfType<SkinnedMeshRenderer>())
+                    var partialFamilies = new Dictionary<int, List<BlinkShapeBinding>[]>();
+                    foreach (var pair in rendererNames)
                     {
-                        if (excluded?.Invoke(renderer.transform) == true || renderer.sharedMesh == null) continue;
-                        var mesh = renderer.sharedMesh;
-                        var names = Enumerable.Range(0, mesh.blendShapeCount).Select(mesh.GetBlendShapeName).ToArray();
-                        var resolved = BlinkShapeNames.Resolve(names);
+                        var renderer = pair.Key;
+                        var names = pair.Value;
+                        var resolved = BlinkShapeNames.Resolve(names, result.allowMissingAutomaticBlink,
+                            index => AvatarBaseShape.HasUsableRawEndpoint(renderer.sharedMesh, index, renderer.GetBlendShapeWeight(index)));
                         if (resolved[0] == -2)
                             throw new InvalidOperationException("閉眼用の名前が重複しています。「確認・調整」で設定してください。");
                         if (resolved[0] < 0 && resolved[1] == BlinkShapeNames.PartialPair)
                             throw new InvalidOperationException("閉眼用の左右がそろっていません: " + renderer.name + "。「確認・調整」で設定してください。");
-                        if (resolved[0] >= 0 && resolved[1] < 0) completePairs = false;
+                        var completePair = resolved[1] >= 0 && resolved[2] >= 0;
+                        if (resolved[0] >= 0 && !completePair) completePairs = false;
                         for (var slot = 0; slot < resolved.Length; slot++)
-                            if (resolved[slot] >= 0)
-                                result.Slots[slot].Add(new BlinkShapeBinding { Renderer = renderer, Shape = names[resolved[slot]] });
-                        // A renderer with only a complete left/right pair still
-                        // contributes to the bilateral fallback used by viewers.
-                        if (resolved[0] < 0 && resolved[1] >= 0 && resolved[2] >= 0)
-                            for (var slot = 1; slot < 3; slot++)
-                                result.Slots[0].Add(new BlinkShapeBinding { Renderer = renderer, Shape = names[resolved[slot]] });
+                        {
+                            if (resolved[slot] < 0) continue;
+                            var binding = new BlinkShapeBinding { Renderer = renderer, Shape = names[resolved[slot]] };
+                            if (slot == 0 || completePair) result.Slots[slot].Add(binding);
+                        }
+                        if (!completePair && result.allowMissingAutomaticBlink)
+                            foreach (var candidate in BlinkShapeNames.PartialCandidates(names,
+                                index => AvatarBaseShape.HasUsableRawEndpoint(renderer.sharedMesh, index, renderer.GetBlendShapeWeight(index))))
+                            {
+                                var binding = new BlinkShapeBinding { Renderer = renderer, Shape = names[candidate.Index] };
+                                var family = BlinkShapeNames.PartialFamily(binding.Shape, candidate.Slot == 1);
+                                if (family < 0) continue;
+                                if (!partialFamilies.TryGetValue(family, out var sides))
+                                    partialFamilies.Add(family, sides = new[] { new List<BlinkShapeBinding>(), new List<BlinkShapeBinding>() });
+                                sides[candidate.Slot - 1].Add(binding);
+                            }
                     }
+                    // UE evidence allows incomplete renderer candidates, but
+                    // cannot make unrelated legacy closure families compatible.
+                    var claimedPartialRenderers = new HashSet<SkinnedMeshRenderer>();
+                    foreach (var family in partialFamilies.OrderBy(pair => pair.Key))
+                    {
+                        var sides = family.Value.Select(side => side.Where(binding => !claimedPartialRenderers.Contains(binding.Renderer)).ToArray()).ToArray();
+                        if ((sides[0].Length > 0 || result.Slots[1].Any(binding => BlinkShapeNames.PartialFamily(binding.Shape, true) == family.Key)) &&
+                            (sides[1].Length > 0 || result.Slots[2].Any(binding => BlinkShapeNames.PartialFamily(binding.Shape, false) == family.Key)))
+                        {
+                            result.Slots[1].AddRange(sides[0]);
+                            result.Slots[2].AddRange(sides[1]);
+                            claimedPartialRenderers.UnionWith(sides.SelectMany(side => side).Select(binding => binding.Renderer));
+                        }
+                    }
+                    // Resolve bilateral closure across the avatar: UE models
+                    // may put their left and right eyes on different renderers.
+                    if (result.Slots[1].Count > 0 && result.Slots[2].Count > 0)
+                    {
+                        var bilateralRenderers = new HashSet<SkinnedMeshRenderer>(result.Slots[0].Select(binding => binding.Renderer));
+                        foreach (var binding in result.Slots[1].Concat(result.Slots[2]))
+                            if (!bilateralRenderers.Contains(binding.Renderer)) result.Slots[0].Add(binding.Copy());
+                    }
+                    else { result.Slots[1].Clear(); result.Slots[2].Clear(); }
                     if (!completePairs) { result.Slots[1].Clear(); result.Slots[2].Clear(); }
                     result.Description = "自動設定";
                 }
@@ -145,7 +187,7 @@ namespace VRVlog.LilToonExporter
             if (PreserveAuthored) return; // An intentionally empty clip is authoritative.
             if (Slots[1].Count == 0 != (Slots[2].Count == 0))
                 throw new InvalidOperationException("左右別の瞬きは左目・右目を両方指定してください。");
-            if (Slots[0].Count == 0 && Slots[1].Count == 0)
+            if (Slots[0].Count == 0 && Slots[1].Count == 0 && !allowMissingAutomaticBlink)
                 throw new InvalidOperationException("閉眼用の変形を特定できません。「確認・調整」で選択するか「瞬きなし」を指定してください。");
             if (Slots[1].Any(left => Slots[2].Any(right => left.Renderer == right.Renderer &&
                 string.Equals(left.Shape, right.Shape, StringComparison.OrdinalIgnoreCase))))
@@ -155,7 +197,8 @@ namespace VRVlog.LilToonExporter
         internal BlinkExportSession ForClone(GameObject source, GameObject clone)
         {
             if (source == clone) throw new ArgumentException("An independent export copy is required.");
-            var copy = new BlinkExportSession { Description = Description, PreserveAuthored = PreserveAuthored, Disabled = Disabled };
+            var copy = new BlinkExportSession { Description = Description, PreserveAuthored = PreserveAuthored, Disabled = Disabled,
+                allowMissingAutomaticBlink = allowMissingAutomaticBlink };
             Array.Copy(authored, copy.authored, authored.Length);
             for (var slot = 0; slot < Slots.Length; slot++)
                 foreach (var binding in Slots[slot])
@@ -287,7 +330,8 @@ namespace VRVlog.LilToonExporter
                         string.Equals(key, "EyeBlinkRight", StringComparison.OrdinalIgnoreCase))
                     {
                         var slot = key.EndsWith("Left", StringComparison.OrdinalIgnoreCase) ? 1 : 2;
-                        custom[key] = presets.TryGetValue(BlinkShapeNames.Presets[slot], out var value) ? value : presets["blink"];
+                        if (presets.TryGetValue(BlinkShapeNames.Presets[slot], out var value) || presets.TryGetValue("blink", out value))
+                            custom[key] = value;
                     }
             return glb.Write();
         }

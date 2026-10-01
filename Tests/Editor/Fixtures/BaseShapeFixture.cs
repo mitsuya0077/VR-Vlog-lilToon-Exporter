@@ -23,10 +23,21 @@ namespace VRVlog.LilToonExporter.Tests
 
         internal static void Run(Action<bool, string> check)
         {
+            AuthorEndpointChecks(check);
+            LeadingNeutralFrameChecks(check);
+            NegativeIntermediateFrameChecks(check);
+            NativeNegativeBracketChecks(check);
+            EndpointBeyondHundredChecks(check);
             var source = Create();
             var target = Create();
             try
             {
+                check(AvatarBaseShape.HasUsableRawEndpoint(source, 0, 0), "A finite nonzero raw endpoint is usable tracking evidence.");
+                check(AvatarBaseShape.HasUsableRawEndpoint(source, 0, 75), "A partially resting raw endpoint keeps usable residual range.");
+                check(AvatarBaseShape.HasUsableRawEndpoint(source, 0, 150), "A finite raw rest beyond the final frame retains a negative residual endpoint.");
+                foreach (var weight in new[] { 100f, -1f, float.NaN, float.PositiveInfinity })
+                    check(!AvatarBaseShape.HasUsableRawEndpoint(source, 0, weight), "A fully resting or unsupported raw weight cannot waive blink validation.");
+                check(!AvatarBaseShape.HasUsableRawEndpoint(source, 99, 0), "An invalid raw morph index is not usable evidence.");
                 AvatarBaseShape.Rebase(source, target, new[] { 25f, 50f });
                 check(Near(target.vertices[0].x, 2) && Near(target.vertices[0].y, 1), "Authored face and partially closed eye are stored in base geometry.");
                 check(target.blendShapeCount == 2 && target.GetBlendShapeName(1) == "Blink", "Expression target indices and names are preserved.");
@@ -56,6 +67,7 @@ namespace VRVlog.LilToonExporter.Tests
                 source.ClearBlendShapes();
                 source.AddBlendShapeFrame("Multi", 50, Delta(2, 0, 0), null, null);
                 source.AddBlendShapeFrame("Multi", 100, Delta(6, 0, 0), null, null);
+                check(AvatarBaseShape.HasUsableRawEndpoint(source, 0, 75), "Multiframe residual evidence uses the original interpolation curve.");
                 AvatarBaseShape.Rebase(source, target, new[] { 75f });
                 check(Near(target.vertices[0].x, 5), "Authored values interpolate between multiple frames.");
                 AvatarBaseShape.AppendExpression(source, target, "Menu multi", new[] { 75f }, new[] { 25f });
@@ -73,12 +85,190 @@ namespace VRVlog.LilToonExporter.Tests
                 AvatarBaseShape.AppendAnimatedShape(source, target, "Animated second frame", 0, 25, 75);
                 target.GetBlendShapeFrameVertices(2, 0, v, n, t);
                 check(Near(v[0].x, 3), "Animation basis retains the authored multi-frame geometry.");
+                source.ClearBlendShapes();
+                source.AddBlendShapeFrame("Inert", 100, Delta(0, 0, 0), null, null);
+                check(!AvatarBaseShape.HasUsableRawEndpoint(source, 0, 0), "An inert raw morph cannot waive blink validation.");
+                source.ClearBlendShapes();
+                source.AddBlendShapeFrame("Cancelled endpoint", 50, Delta(2, 0, 0), null, null);
+                source.AddBlendShapeFrame("Cancelled endpoint", 100, Delta(0, 0, 0), null, null);
+                check(!AvatarBaseShape.HasUsableRawEndpoint(source, 0, 0), "A meaningful intermediate frame cannot conceal a zero exported endpoint.");
+                check(AvatarBaseShape.HasUsableRawEndpoint(source, 0, 50), "A nonzero authored rest can leave a usable residual at a zero final frame.");
+#if EXPORTER_BEHAVIOR_TESTS
+                // Array-only host fixtures can represent invalid payloads that
+                // Unity's native mesh API may reject while constructing them.
+                source.ClearBlendShapes();
+                source.AddBlendShapeFrame("Invalid delta", 100, Delta(float.NaN, 0, 0), null, null);
+                check(!AvatarBaseShape.HasUsableRawEndpoint(source, 0, 0), "A nonfinite raw delta cannot waive blink validation.");
+                source.ClearBlendShapes();
+                source.AddBlendShapeFrame("Invalid frame", float.NaN, Delta(2, 0, 0), null, null);
+                check(!AvatarBaseShape.HasUsableRawEndpoint(source, 0, 0), "A nonfinite raw frame weight cannot waive blink validation.");
+                source.ClearBlendShapes();
+                source.AddBlendShapeFrame("Invalid normal", 100, Delta(2, 0, 0), Delta(float.PositiveInfinity, 0, 0), null);
+                check(!AvatarBaseShape.HasUsableRawEndpoint(source, 0, 0), "Invalid auxiliary raw geometry cannot waive blink validation.");
+#endif
+
             }
             finally
             {
                 UnityEngine.Object.DestroyImmediate(source);
                 UnityEngine.Object.DestroyImmediate(target);
             }
+        }
+
+        private static void LeadingNeutralFrameChecks(Action<bool, string> check)
+        {
+            var source=Create();var target=Create();
+            try
+            {
+                source.ClearBlendShapes();
+                source.AddBlendShapeFrame("Neutral origin",0,Delta(0,0,0),null,null);
+                source.AddBlendShapeFrame("Neutral origin",100,Delta(4,0,0),null,null);
+                foreach(var rest in new[]{0f,25f,100f})
+                {
+                    check(AvatarBaseShape.HasUsableRawEndpoint(source,0,rest)==(rest<100f),"A pure leading0 frame preserves raw residual qualification at rest"+rest+".");
+                    check(AvatarBaseShape.HasUsableMorphEndpoint(source,0,rest)==(rest<100f),"A pure leading0 frame preserves authored residual qualification at rest"+rest+".");
+                    AvatarBaseShape.Rebase(source,target,new[]{rest});
+                    var vertices=new Vector3[3];target.GetBlendShapeFrameVertices(0,0,vertices,new Vector3[3],new Vector3[3]);
+                    check(Near(target.vertices[0].x,1f+4f*rest/100f) && Near(vertices[0].x,4f*(1f-rest/100f)) && Near(target.vertices[0].x+vertices[0].x,5f),
+                        "Rebase evaluates a leading purezero as the implicit origin, preserves authored rest and reaches the original endpoint.");
+                }
+                check(source.GetBlendShapeFrameCount(0)==2 && source.GetBlendShapeFrameWeight(0,0)==0f && source.GetBlendShapeFrameWeight(0,1)==100f && source.vertices[0].x==1f,"Neutral-frame qualification and rebase never mutate the source mesh or frame intervals.");
+                source.ClearBlendShapes();source.AddBlendShapeFrame("Only neutral",0,Delta(0,0,0),null,null);
+                check(!AvatarBaseShape.HasUsableRawEndpoint(source,0,0) && !AvatarBaseShape.HasUsableMorphEndpoint(source,0,0),"A leading zero frame without any positive moving frame cannot establish an endpoint.");
+#if EXPORTER_BEHAVIOR_TESTS
+                foreach(var invalid in new[]{"nonzeroZero","unordered","nonfinite"})
+                {
+                    source.ClearBlendShapes();source.AddBlendShapeFrame("Invalid origin",invalid=="unordered"?200f:invalid=="nonfinite"?float.PositiveInfinity:0f,
+                        Delta(invalid=="nonzeroZero"?1f:0f,0,0),null,null);
+                    source.AddBlendShapeFrame("Invalid origin",100,Delta(4,0,0),null,null);
+                    check(!AvatarBaseShape.HasUsableRawEndpoint(source,0,0) && !AvatarBaseShape.HasUsableMorphEndpoint(source,0,0),"Only a finite purezero leading frame is an implicit origin; malformed"+invalid+" remains excluded.");
+                }
+#endif
+            }
+            finally { UnityEngine.Object.DestroyImmediate(source);UnityEngine.Object.DestroyImmediate(target); }
+        }
+
+        private static void NegativeIntermediateFrameChecks(Action<bool, string> check)
+        {
+            var source=Create();var target=Create();
+            try
+            {
+                source.ClearBlendShapes(); source.AddBlendShapeFrame("Negative intermediate",-50,Delta(-2,0,0),null,null);
+                source.AddBlendShapeFrame("Negative intermediate",100,Delta(4,0,0),null,null);
+                foreach(var rest in new[]{0f,25f,100f})
+                {
+                    check(AvatarBaseShape.HasUsableRawEndpoint(source,0,rest)==(rest<100),"Finite ordered negative intermediates retain raw positive endpoint evidence at rest"+rest+".");
+                    check(AvatarBaseShape.HasUsableMorphEndpoint(source,0,rest)==(rest<100),"Authored endpoint evidence accepts negative intermediate frames at rest"+rest+".");
+                    AvatarBaseShape.Rebase(source,target,new[]{rest});
+                    var vertices=new Vector3[3];target.GetBlendShapeFrameVertices(0,0,vertices,new Vector3[3],new Vector3[3]);
+                    check(Near(target.vertices[0].x,1+4*rest/100) && Near(vertices[0].x,4*(1-rest/100)) && Near(target.vertices[0].x+vertices[0].x,5),
+                        "Rebase interpolates the native proportional bracket and preserves its final positive endpoint.");
+                }
+                check(!AvatarBaseShape.HasUsableRawEndpoint(source,0,-25) && AvatarBaseShape.HasUsableMorphEndpoint(source,0,-25),"The existing negative raw-rest policy stays separate from valid negative authored rest.");
+                AvatarBaseShape.Rebase(source,target,new[]{-25f});
+                var delta=new Vector3[3];target.GetBlendShapeFrameVertices(0,0,delta,new Vector3[3],new Vector3[3]);
+                check(Near(target.vertices[0].x,0) && Near(delta[0].x,5),"Negative authored rest interpolates the native negative frame before normalization.");
+                check(source.GetBlendShapeFrameWeight(0,0)==-50 && source.GetBlendShapeFrameWeight(0,1)==100 && source.vertices[0].x==1,"Negative-curve inspection and rebase preserve source data.");
+                source.ClearBlendShapes();source.AddBlendShapeFrame("Negative-only endpoint",-50,Delta(-2,0,0),null,null);
+                check(!AvatarBaseShape.HasUsableRawEndpoint(source,0,0) && !AvatarBaseShape.HasUsableMorphEndpoint(source,0,0),"A nonpositive final endpoint cannot establish positive tracking range.");
+            }
+            finally { UnityEngine.Object.DestroyImmediate(source);UnityEngine.Object.DestroyImmediate(target); }
+        }
+
+        private static void NativeNegativeBracketChecks(Action<bool, string> check)
+        {
+            var source=Create();var target=Create();
+            try
+            {
+                foreach(var curve in new[]{"nonproportional","zeroEndpoint","explicitNeutral"})
+                {
+                    source.ClearBlendShapes();source.AddBlendShapeFrame("Native bracket",-50,Delta(3,0,0),null,null);
+                    if(curve=="explicitNeutral") source.AddBlendShapeFrame("Native bracket",0,Delta(0,0,0),null,null);
+                    var end=curve=="zeroEndpoint"?0f:2f;
+                    source.AddBlendShapeFrame("Native bracket",100,Delta(end,0,0),null,null);
+                    foreach(var rest in new[]{0f,25f,100f})
+                    {
+                        var neutral=curve=="explicitNeutral"?end*rest/100f:3f+(end-3f)*(rest+50f)/150f;
+                        check(AvatarBaseShape.HasUsableRawEndpoint(source,0,rest)==(rest<100),"Raw negative bracket "+curve+" uses its real finite endpoint-minus-rest residual at rest"+rest+".");
+                        check(AvatarBaseShape.HasUsableMorphEndpoint(source,0,rest)==(rest<100),"Authored negative bracket "+curve+" uses the real native zero/intermediate baseline.");
+                        AvatarBaseShape.Rebase(source,target,new[]{rest});
+                        var vertices=new Vector3[3];target.GetBlendShapeFrameVertices(0,0,vertices,new Vector3[3],new Vector3[3]);
+                        check(Near(target.vertices[0].x,1f+neutral) && Near(vertices[0].x,end-neutral) && Near(target.vertices[0].x+vertices[0].x,1f+end),
+                            "Negative bracket "+curve+" preserves actual native rest and endpoint without inventing an implicit zero knot.");
+                    }
+                    check(source.GetBlendShapeFrameCount(0)==(curve=="explicitNeutral"?3:2) && source.GetBlendShapeFrameWeight(0,0)==-50 && source.vertices[0].x==1,
+                        "Negative bracket "+curve+" retains original frames and source geometry.");
+                }
+            }
+            finally { UnityEngine.Object.DestroyImmediate(source);UnityEngine.Object.DestroyImmediate(target); }
+        }
+
+        private static void EndpointBeyondHundredChecks(Action<bool, string> check)
+        {
+            var source=Create();var target=Create();
+            try
+            {
+                source.ClearBlendShapes();source.AddBlendShapeFrame("Extended endpoint",200,Delta(4,0,0),null,null);
+                foreach(var rest in new[]{0f,100f,150f,200f})
+                {
+                    var hasResidual=rest!=200f;
+                    check(AvatarBaseShape.HasUsableRawEndpoint(source,0,rest)==hasResidual,"Raw capability uses the actual final frame200 residual at rest"+rest+".");
+                    check(AvatarBaseShape.HasUsableMorphEndpoint(source,0,rest)==hasResidual,"Authored and raw routes agree about the final frame200 residual at rest"+rest+".");
+                    AvatarBaseShape.Rebase(source,target,new[]{rest});
+                    var vertices=new Vector3[3];target.GetBlendShapeFrameVertices(0,0,vertices,new Vector3[3],new Vector3[3]);
+                    check(Near(target.vertices[0].x,1f+4f*rest/200f) && Near(vertices[0].x,4f*(1f-rest/200f)) && Near(target.vertices[0].x+vertices[0].x,5f),
+                        "Rebase preserves rest"+rest+" and exports the actual frame200 endpoint without a hardcoded100 limit.");
+                }
+                check(source.GetBlendShapeFrameCount(0)==1 && source.GetBlendShapeFrameWeight(0,0)==200f && source.vertices[0].x==1f,"Extended endpoint qualification and rebase preserve the source mesh and final frame weight.");
+            }
+            finally { UnityEngine.Object.DestroyImmediate(source);UnityEngine.Object.DestroyImmediate(target); }
+        }
+
+        private static void AuthorEndpointChecks(Action<bool, string> check)
+        {
+            var source = Create();
+            try
+            {
+                check(AvatarBaseShape.HasUsableMorphEndpoint(source, 0, 0), "A positive authored morph route needs a finite nonzero residual endpoint.");
+                check(AvatarBaseShape.HasUsableMorphEndpoint(source, 0, 75), "A partially resting authored route preserves its remaining endpoint range.");
+                check(!AvatarBaseShape.HasUsableMorphEndpoint(source, 0, 100), "An authored morph already at its exported endpoint cannot establish tracking support.");
+                check(AvatarBaseShape.HasUsableMorphEndpoint(source, 0, -25), "A finite negative authored rest remains usable when its exported endpoint differs.");
+                check(AvatarBaseShape.HasUsableMorphEndpoint(source, 0, 150), "A finite authored rest beyond the final frame can retain a nonzero residual endpoint.");
+                foreach (var rest in new[] { float.NaN, float.PositiveInfinity, float.NegativeInfinity })
+                    check(!AvatarBaseShape.HasUsableMorphEndpoint(source, 0, rest), "Nonfinite authored rest cannot qualify an endpoint.");
+                check(!AvatarBaseShape.HasUsableMorphEndpoint(source, -1, 0) && !AvatarBaseShape.HasUsableMorphEndpoint(source, 99, 0), "Invalid authored target indices cannot qualify geometry.");
+                source.ClearBlendShapes();
+                source.AddBlendShapeFrame("Inert author", 100, Delta(0, 0, 0), null, null);
+                check(!AvatarBaseShape.HasUsableMorphEndpoint(source, 0, 0), "A named authored zero-delta shape has no usable endpoint.");
+                source.ClearBlendShapes();
+                source.AddBlendShapeFrame("Normal-only author", 100, Delta(0, 0, 0), Delta(1, 0, 0), null);
+                check(AvatarBaseShape.HasUsableMorphEndpoint(source, 0, 0), "Finite authored normal movement qualifies even without positional delta.");
+                source.ClearBlendShapes();
+                source.AddBlendShapeFrame("Tangent-only author", 100, Delta(0, 0, 0), null, Delta(0, 1, 0));
+                check(AvatarBaseShape.HasUsableMorphEndpoint(source, 0, 0), "Finite authored tangent movement qualifies even without positional delta.");
+                source.ClearBlendShapes();
+                source.AddBlendShapeFrame("Rest cancels endpoint", 50, Delta(3, 0, 0), null, null);
+                source.AddBlendShapeFrame("Rest cancels endpoint", 100, Delta(3, 0, 0), null, null);
+                check(!AvatarBaseShape.HasUsableMorphEndpoint(source, 0, 50), "An intermediate rest equal to the final endpoint has no exported residual despite nonzero frames.");
+                check(AvatarBaseShape.HasUsableMorphEndpoint(source, 0, 0), "The same multiframe authored morph can qualify from a different rest.");
+                source.ClearBlendShapes();
+                source.AddBlendShapeFrame("Final cancellation", 50, Delta(2, 0, 0), null, null);
+                source.AddBlendShapeFrame("Final cancellation", 100, Delta(0, 0, 0), null, null);
+                check(!AvatarBaseShape.HasUsableMorphEndpoint(source, 0, 0), "An intermediate moving frame cannot make a zero final/rest residual usable.");
+                check(AvatarBaseShape.HasUsableMorphEndpoint(source, 0, 50), "A zero final frame still moves away from a nonzero authored rest.");
+#if EXPORTER_BEHAVIOR_TESTS
+                foreach (var invalid in new[] { "delta", "normal", "tangent", "frame" })
+                {
+                    source.ClearBlendShapes();
+                    source.AddBlendShapeFrame("Malformed author", invalid == "frame" ? float.NaN : 100,
+                        Delta(invalid == "delta" ? float.NaN : 2, 0, 0),
+                        invalid == "normal" ? Delta(float.PositiveInfinity, 0, 0) : null,
+                        invalid == "tangent" ? Delta(0, float.NegativeInfinity, 0) : null);
+                    check(!AvatarBaseShape.HasUsableMorphEndpoint(source, 0, 0), "Malformed authored " + invalid + " data cannot qualify an endpoint.");
+                }
+#endif
+            }
+            finally { UnityEngine.Object.DestroyImmediate(source); }
         }
     }
 }
