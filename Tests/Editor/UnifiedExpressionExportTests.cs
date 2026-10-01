@@ -1359,6 +1359,91 @@ namespace VRVlog.LilToonExporter.Tests
             }
         }
 
+        [TestCase("reorder")]
+        [TestCase("replacement")]
+        [TestCase("shared")]
+        public void DuplicateMaterialNamesKeepTheOriginallySelectedRendererSlot(string change)
+        {
+            using var fixture = new AttachmentConnectionTests.Fixture();
+            var vrm = ScriptableObject.CreateInstance<VRM10Object>(); var clip = ScriptableObject.CreateInstance<VRM10Expression>();
+            var first = new Material(Shader.Find("VRM10/MToon10")) { name = "Repeated UE Material" };
+            var second = new Material(first) { name = first.name }; Material replacement = null;
+            try
+            {
+                first.SetColor("_Color", Color.white); second.SetColor("_Color", Color.blue);
+                fixture.Skins[0].sharedMaterial = first; fixture.Skins[1].sharedMaterial = change == "shared" ? first : second;
+                clip.name = "UE/MouthClosed"; clip.MaterialColorBindings = new[] { new MaterialColorBinding {
+                    MaterialName = first.name, BindType = MaterialColorType.color, TargetValue = Color.red } };
+                vrm.Expression.CustomClips.Add(clip); fixture.Copy.AddComponent<Vrm10Instance>().Vrm = vrm;
+                var guard = new UnifiedExpressionPreparation(fixture.Copy);
+                Assert.That(guard.SupportsUnified, Is.True);
+                if (change == "replacement")
+                {
+                    replacement = new Material(first) { name = first.name }; fixture.Skins[0].sharedMaterial = replacement;
+                }
+                else fixture.Skins[1].transform.SetSiblingIndex(0);
+                Assert.That(UnifiedExpressionPreparation.HasUsableEvidence(fixture.Copy), Is.True, "Both competing material endpoints still move.");
+                if (change == "reorder") Assert.Throws<InvalidOperationException>(() => guard.Verify(), "A different first same-name material cannot silently replace the selected authored target.");
+                else Assert.DoesNotThrow(() => guard.Verify(), "Owned same-slot material copies and the same shared instance retain their authored target.");
+                Assert.That(first.GetColor("_Color"), Is.EqualTo(Color.white)); Assert.That(second.GetColor("_Color"), Is.EqualTo(Color.blue));
+                Assert.That(clip.MaterialColorBindings.Single().MaterialName, Is.EqualTo(first.name));
+            }
+            finally
+            {
+                if (replacement != null) Object.DestroyImmediate(replacement);
+                Object.DestroyImmediate(first); Object.DestroyImmediate(second); Object.DestroyImmediate(clip); Object.DestroyImmediate(vrm);
+            }
+        }
+
+        [TestCase(false, false)]
+        [TestCase(false, true)]
+        [TestCase(true, false)]
+        [TestCase(true, true)]
+        public async Task StandardEmissionEvidenceUsesItsActualGammaProxy(bool moving, bool fullLilToon)
+        {
+            using var fixture = new AttachmentConnectionTests.Fixture();
+            var vrm = ScriptableObject.CreateInstance<VRM10Object>(); var clip = ScriptableObject.CreateInstance<VRM10Expression>();
+            var material = new Material(Shader.Find("Standard")) { name = "Standard UE Material" };
+            Vrm10Instance imported = null;
+            try
+            {
+                AddTrackingDelta(fixture.Mesh, "JawOpen");
+                var skins = fixture.Source.GetComponentsInChildren<SkinnedMeshRenderer>();
+                skins[0].sharedMaterial.shader = Shader.Find("lilToon"); skins[1].sharedMaterial = material;
+                var baseline = new Color(.5f, .3f, .2f, 1);
+                material.SetColor("_EmissionColor", baseline); material.EnableKeyword("_EMISSION");
+                Vector4 target = baseline; if (moving) target.x += .1f;
+                clip.name = "UE/MouthClosed"; clip.MaterialColorBindings = new[] { new MaterialColorBinding {
+                    MaterialName = material.name, BindType = MaterialColorType.emissionColor, TargetValue = target } };
+                vrm.Expression.CustomClips.Add(clip); fixture.Source.AddComponent<Vrm10Instance>().Vrm = vrm;
+                Assert.That(UnifiedExpressionPreparation.HasUsableEvidence(fixture.Source), Is.EqualTo(moving));
+                if (!moving) Assert.Throws<InvalidOperationException>(() => UniVrmOneClickExporter.Export(fixture.Source, "Inert Standard emission", "Tests",
+                    exporterVersion: fullLilToon ? "0.11.5" : null, lilToonVersion: fullLilToon ? "2.3.4" : null));
+                var bytes = UniVrmOneClickExporter.Export(fixture.Source, "Standard emission gamma", "Tests",
+                    exporterVersion: fullLilToon ? "0.11.5" : null, lilToonVersion: fullLilToon ? "2.3.4" : null,
+                    blinkOptions: moving ? null : new BlinkExportOptions { Mode = BlinkExportMode.None });
+                Assert.That(VrmUnifiedExpressions.HasUsableEvidence(bytes), Is.EqualTo(moving));
+                imported = await Vrm10.LoadBytesAsync(bytes, canLoadVrm0X: false, awaitCaller: new ImmediateCaller());
+                var proxy = imported.GetComponentsInChildren<Renderer>().SelectMany(renderer => renderer.sharedMaterials).First(value => value.name == material.name);
+                Assert.That(proxy.shader.name, Is.EqualTo("Standard"));
+                Assert.That(Vector4.Distance(proxy.GetVector("_EmissionColor"), baseline), Is.LessThan(.00005f));
+                Assert.That(imported.Vrm.Expression.CustomClips.Any(value => value.name == "UE/JawOpen"), Is.EqualTo(moving));
+                foreach (var coefficient in new[] { 0f, .5f, 1f })
+                {
+                    imported.Runtime.Expression.SetWeight(ExpressionKey.CreateCustom(clip.name), coefficient); imported.Runtime.Process();
+                    Assert.That(Vector4.Distance(proxy.GetVector("_EmissionColor"), (Vector4)baseline + (target - (Vector4)baseline) * coefficient), Is.LessThan(.00005f));
+                }
+                Assert.That(material.GetColor("_EmissionColor"), Is.EqualTo(baseline));
+                Assert.That(material.IsKeywordEnabled("_EMISSION"), Is.True);
+                Assert.That(clip.MaterialColorBindings.Single().TargetValue, Is.EqualTo(target));
+            }
+            finally
+            {
+                if (imported != null) Object.DestroyImmediate(imported.gameObject);
+                Object.DestroyImmediate(material); Object.DestroyImmediate(clip); Object.DestroyImmediate(vrm);
+            }
+        }
+
         [TestCase("color")]
         [TestCase("uv")]
         [TestCase("cancellation")]

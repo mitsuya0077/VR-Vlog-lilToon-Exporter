@@ -20,6 +20,8 @@ namespace VRVlog.LilToonExporter
         private readonly HashSet<(string Canonical, SkinnedMeshRenderer Renderer, string Shape, float Weight)> effectiveAuthoredRoutes =
             new HashSet<(string, SkinnedMeshRenderer, string, float)>();
         private readonly HashSet<(string Canonical, string Material, string Kind)> effectiveMaterialRoutes = new HashSet<(string, string, string)>();
+        private readonly Dictionary<string, (Renderer Renderer, int Slot)> materialScopes = new Dictionary<string, (Renderer, int)>(StringComparer.Ordinal);
+        private readonly HashSet<(string Material, Renderer Renderer, int Slot)> ambiguousMaterialScopes = new HashSet<(string, Renderer, int)>();
         private readonly Dictionary<SkinnedMeshRenderer, Dictionary<string, string>> selectedRawRoutes = new Dictionary<SkinnedMeshRenderer, Dictionary<string, string>>();
         private readonly GameObject avatar;
         private readonly Func<Transform, bool> excluded;
@@ -41,6 +43,15 @@ namespace VRVlog.LilToonExporter
                     Enumerable.Range(0, skin.sharedMesh.blendShapeCount).Select(skin.sharedMesh.GetBlendShapeName).ToArray());
             var materialMap = renderers.SelectMany(renderer => renderer.sharedMaterials).Where(material => material != null)
                 .GroupBy(material => material.name, StringComparer.Ordinal).ToDictionary(group => group.Key, group => group.First(), StringComparer.Ordinal);
+            var materialSlots = renderers.SelectMany(renderer => renderer.sharedMaterials.Select((material, slot) =>
+                (Renderer: renderer, Slot: slot, Material: material))).Where(item => item.Material != null)
+                .GroupBy(item => item.Material.name, StringComparer.Ordinal).ToArray();
+            foreach (var group in materialSlots)
+            {
+                var first = group.First(); materialScopes.Add(group.Key, (first.Renderer, first.Slot));
+            }
+            var ambiguousMaterials = new HashSet<string>(materialSlots.Where(group => group.Select(item => item.Material).Distinct().Count() > 1)
+                .Select(group => group.Key), StringComparer.Ordinal);
             var materials = new HashSet<string>(materialMap.Keys, StringComparer.Ordinal);
             var omittedMaterials = new HashSet<string>(clone.GetComponentsInChildren<Renderer>(true)
                 .Where(renderer => excluded?.Invoke(renderer.transform) == true).SelectMany(renderer => renderer.sharedMaterials)
@@ -116,7 +127,17 @@ namespace VRVlog.LilToonExporter
                 {
                     UnifiedExpressionRegistry.TryCanonicalize(clip.name, out var canonical);
                     foreach (var route in MaterialRoutes(clip, materialMap, omittedMaterials))
+                    {
                         effectiveMaterialRoutes.Add((canonical, route.Material, route.Kind));
+                        // UniVRM resolves duplicate material names to the first
+                        // model material. Protect its renderer/slot identity,
+                        // while permitting owned copies at that same slot.
+                        if (ambiguousMaterials.Contains(route.Material))
+                        {
+                            var scope = materialScopes[route.Material];
+                            ambiguousMaterialScopes.Add((route.Material, scope.Renderer, scope.Slot));
+                        }
+                    }
                     foreach (var binding in EffectiveMorphs(clip, clone, excluded))
                     {
                         var target = Target(clone, binding.RelativePath);
@@ -262,7 +283,9 @@ namespace VRVlog.LilToonExporter
                 var current = new UnifiedExpressionPreparation(avatar, excluded);
                 if (!current.SupportsUnified || usableAuthoredNames.Any(name => !current.usableAuthoredNames.Contains(name)) ||
                     effectiveAuthoredRoutes.Any(route => !current.effectiveAuthoredRoutes.Contains(route)) ||
-                    effectiveMaterialRoutes.Any(route => !current.effectiveMaterialRoutes.Contains(route)))
+                    effectiveMaterialRoutes.Any(route => !current.effectiveMaterialRoutes.Contains(route)) ||
+                    ambiguousMaterialScopes.Any(scope => !current.materialScopes.TryGetValue(scope.Material, out var selected) ||
+                        selected.Renderer != scope.Renderer || selected.Slot != scope.Slot))
                     throw new InvalidOperationException(LostTracking);
                 foreach (var pair in effectiveRaw)
                     foreach (var name in pair.Value)

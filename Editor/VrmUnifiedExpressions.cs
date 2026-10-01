@@ -340,6 +340,9 @@ namespace VRVlog.LilToonExporter
                     var strength = Object(extensions, "KHR_materials_emissive_strength");
                     var multiplier = strength != null && strength.TryGetValue("emissiveStrength", out var value) ? Number(value) : 1.0;
                     for (var i = 0; i < 3; i++) baseline[i] *= multiplier;
+                    // MToon stores emission linearly; the pinned Standard
+                    // importer stores that same emissive factor in sRGB.
+                    if (mtoon == null) for (var i = 0; i < 3; i++) baseline[i] = LinearToSrgb(baseline[i]);
                     return true;
                 default:
                     if (mtoon == null) return false;

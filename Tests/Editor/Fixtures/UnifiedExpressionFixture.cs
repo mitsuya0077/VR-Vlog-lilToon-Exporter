@@ -332,7 +332,7 @@ namespace VRVlog.LilToonExporter.Tests
                 if(type=="color")material["pbrMetallicRoughness"]=Obj("baseColorFactor",Arr(.21404114,.21404114,.21404114,.4));
                 else if(type=="emissionColor")
                 {
-                    material["emissiveFactor"]=Arr(.1,.1,.1);material["extensions"]=Obj("KHR_materials_emissive_strength",Obj("emissiveStrength",2.0));
+                    material["emissiveFactor"]=Arr(.1,.1,.1);material["extensions"]=Obj("VRMC_materials_mtoon",Obj("specVersion","1.0"),"KHR_materials_emissive_strength",Obj("emissiveStrength",2.0));
                 }
                 else
                 {
@@ -355,6 +355,24 @@ namespace VRVlog.LilToonExporter.Tests
                 var input=Encode(root);var output=VrmUnifiedExpressions.Add(input);var custom=Custom(GlbDocument.Read(output).Json);
                 check(custom.ContainsKey("UE/JawOpen")==moving,"Nonidentity baseColorTexture KHR transform uses the same pinned vertical flip as authored UV bindings.");
                 check(moving?JsonDom.Serialize(custom["UE/MouthClosed"])==JsonDom.Serialize(route):output.SequenceEqual(input),"A matching nonidentity UV transform is preserved inert, while an actual offset residual establishes tracking.");
+            }
+            foreach(var moving in new[]{false,true})
+            {
+                var root=Fixture("JawOpen");root["materials"]=Arr(Obj("emissiveFactor",Arr(.21404114,.21404114,.21404114)));
+                var route=Obj("materialColorBinds",Arr(Obj("material",0L,"type","emissionColor","targetValue",Arr(moving?.6:.5,.5,.5,1.0))));
+                var vrm=(Dictionary<string,object>)((Dictionary<string,object>)root["extensions"])["VRMC_vrm"];vrm["expressions"]=Obj("custom",Obj("UE/MouthClosed",route));
+                var input=Encode(root);var output=VrmUnifiedExpressions.Add(input);var custom=Custom(GlbDocument.Read(output).Json);
+                check(custom.ContainsKey("UE/JawOpen")==moving,"Pinned Standard emission imports the linear factor through gamma conversion, unlike MToon emission.");
+                check(moving?JsonDom.Serialize(custom["UE/MouthClosed"])==JsonDom.Serialize(route):output.SequenceEqual(input),"Standard emission matching its actual imported baseline stays inert and retained; changed gamma-space target establishes tracking.");
+            }
+            foreach(var type in new[]{"shadeColor","matcapColor","rimColor","outlineColor","unlitEmission"})
+            {
+                var root=Fixture("JawOpen");var material=type=="unlitEmission"?Obj("extensions",Obj("KHR_materials_unlit",Obj())):Obj();root["materials"]=Arr(material);
+                var route=Obj("materialColorBinds",Arr(Obj("material",0L,"type",type=="unlitEmission"?"emissionColor":type,"targetValue",Arr(.8,.7,.6,1.0))));
+                var vrm=(Dictionary<string,object>)((Dictionary<string,object>)root["extensions"])["VRMC_vrm"];vrm["expressions"]=Obj("custom",Obj("UE/MouthClosed",route));
+                var input=Encode(root);var output=VrmUnifiedExpressions.Add(input);var custom=Custom(GlbDocument.Read(output).Json);
+                check(!custom.ContainsKey("UE/JawOpen"),"An unavailable Standard/Unlit "+type+" property cannot establish shared tracking evidence.");
+                check(output.SequenceEqual(input),"An authored "+type+" declaration is preserved even when the selected imported shader has no applicable property.");
             }
         }
 
