@@ -17,11 +17,13 @@ namespace VRVlog.LilToonExporter
         internal readonly List<PoseCandidate> Entries = new List<PoseCandidate>();
         readonly List<Object> owned = new List<Object>();
         readonly PoseExportOptions options;
+        readonly VrChatMenuImportPolicy menuPolicy;
         GameObject prepared;
 
-        internal PoseExportSession(GameObject source, PoseExportOptions options, Func<Transform, bool> excluded = null)
+        internal PoseExportSession(GameObject source, PoseExportOptions options, Func<Transform, bool> excluded = null, VrChatMenuImportPolicy menuPolicy = null)
         {
             this.options = options ?? new PoseExportOptions();
+            this.menuPolicy = menuPolicy;
             foreach (var component in source.GetComponentsInChildren<Component>(false))
             {
                 if (component == null || component.GetType().FullName != AplType || excluded?.Invoke(component.transform) == true) continue;
@@ -86,17 +88,17 @@ namespace VRVlog.LilToonExporter
                 if (c != null && c.GetType().FullName == AplType) Object.DestroyImmediate(c);
         }
 
-        internal void CollectPrepared(GameObject copy, ICollection<string> warnings = null)
+        internal void CollectPrepared(GameObject copy, ICollection<string> warnings = null, VrChatMenuImportPolicy preparedMenuPolicy = null)
         {
-            foreach (var row in CollectPreparedIncrementally(copy, warnings)) { }
+            foreach (var row in CollectPreparedIncrementally(copy, warnings, preparedMenuPolicy)) { }
         }
 
         // Export keeps the synchronous path; the review window yields between
         // candidates while sharing exactly the same validation/deduplication.
-        internal IEnumerable<PoseCandidate> CollectPreparedIncrementally(GameObject copy, ICollection<string> warnings = null)
+        internal IEnumerable<PoseCandidate> CollectPreparedIncrementally(GameObject copy, ICollection<string> warnings = null, VrChatMenuImportPolicy preparedMenuPolicy = null)
         {
             prepared = copy;
-            Entries.AddRange(PoseMenuResolver.Read(copy));
+            Entries.AddRange(PoseMenuResolver.Read(copy, preparedMenuPolicy ?? menuPolicy));
             var seen = new Dictionary<string, PoseCandidate>();
             foreach (var row in Entries.ToArray())
             {

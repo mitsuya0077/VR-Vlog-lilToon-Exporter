@@ -193,18 +193,22 @@ namespace VRVlog.LilToonExporter
             {
             contentScroll = content.scrollPosition;
             EditorGUILayout.HelpBox(ExporterLocalization.T("この設定を変更したコピーでは書き出せました。見た目を確認してから保存してください。"), MessageType.Info);
-            if (session.LastSuccess.Options.Actions.Count > 0)
+            var skipAllMenus = session.LastSuccess.Options.Actions.Any(action => action.Kind == ExportRecoveryActionKind.SkipVrChatMenus);
+            var appliedActions = session.LastSuccess.Options.Actions.Where(action =>
+                !skipAllMenus || action.Kind != ExportRecoveryActionKind.ExcludeMenuBranch).ToArray();
+            DrawMenuOmissions(appliedActions);
+            if (appliedActions.Length > 0)
             {
                 showAppliedRemedies = EditorGUILayout.Foldout(showAppliedRemedies,
-                    ExporterLocalization.T("適用した対策: ") + session.LastSuccess.Options.Actions.Count, true);
+                    ExporterLocalization.T("適用した対策: ") + appliedActions.Length, true);
                 if (showAppliedRemedies)
                 {
                     using (var view = new EditorGUILayout.ScrollViewScope(remediesScroll, GUILayout.MaxHeight(120)))
                     {
                         remediesScroll = view.scrollPosition;
-                        foreach (var action in session.LastSuccess.Options.Actions)
+                        foreach (var action in appliedActions)
                         {
-                            var diagnostic = session.AvailableDiagnostics.FirstOrDefault(item => item.Action?.Id == action.Id);
+                            var diagnostic = AppliedDiagnostic(action);
                             if (diagnostic == null) continue;
                             EditorGUILayout.LabelField(diagnostic.Target + " / " + ExporterLocalization.T(diagnostic.Remedy), EditorStyles.wordWrappedLabel);
                             EditorGUILayout.LabelField(ExporterLocalization.T("失われる効果: ") + ExporterLocalization.T(diagnostic.LostEffect), EditorStyles.wordWrappedMiniLabel);
@@ -249,6 +253,31 @@ namespace VRVlog.LilToonExporter
                 if (GUILayout.Button(ExporterLocalization.T("保存しないで閉じる"), GUILayout.Height(32))) Close();
             }
         }
+
+        private void DrawMenuOmissions(ExportRecoveryAction[] actions)
+        {
+            var omissions = actions.Where(action => action.Kind == ExportRecoveryActionKind.SkipVrChatMenus ||
+                action.Kind == ExportRecoveryActionKind.ExcludeMenuBranch).ToArray();
+            if (omissions.Length == 0) return;
+            // A still image cannot reveal that expression and pose entries were
+            // not imported. Keep their selected scope visible outside a foldout.
+            EditorGUILayout.LabelField(ExporterLocalization.T("メニュー取り込みを省略した範囲"), EditorStyles.boldLabel);
+            EditorGUILayout.HelpBox(ExporterLocalization.T("入力コピーの静止画像では、取り込まれなくなった表情・ポーズは確認できません。以下の範囲と失われる効果も確認してください。"), MessageType.Warning);
+            foreach (var action in omissions)
+            {
+                var diagnostic = AppliedDiagnostic(action);
+                var target = diagnostic?.Target ?? (action.Kind == ExportRecoveryActionKind.SkipVrChatMenus
+                    ? ExporterLocalization.T("すべてのVRChatメニュー") : action.MenuPath);
+                var lost = diagnostic?.LostEffect ?? "指定した範囲のメニュー由来の表情・ポーズは取り込まれません。";
+                EditorGUILayout.LabelField(ExporterLocalization.T("対象: ") + target, EditorStyles.wordWrappedLabel);
+                EditorGUILayout.LabelField(ExporterLocalization.T("失われる効果: ") + ExporterLocalization.T(lost), EditorStyles.wordWrappedLabel);
+            }
+            EditorGUILayout.LabelField(ExporterLocalization.T("この対策はメニュー由来の表情・ポーズの取り込みだけを変えます。衣装・髪・骨格のオブジェクト自体は削除しません。"), EditorStyles.wordWrappedMiniLabel);
+        }
+
+        private ExportRecoveryDiagnostic AppliedDiagnostic(ExportRecoveryAction action) =>
+            session.LastSuccess.Diagnostics.FirstOrDefault(item => item.Action?.Id == action.Id) ??
+            session.AvailableDiagnostics.FirstOrDefault(item => item.Action?.Id == action.Id);
 
         private void DrawPreview(PreviewRenderUtility preview, string label)
         {

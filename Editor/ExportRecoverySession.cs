@@ -16,13 +16,27 @@ namespace VRVlog.LilToonExporter
             internal IReadOnlyList<string> Warnings { get; }
             internal ExportRecoveryOptions Options { get; }
             internal ExportRecoverySourceStamp Stamp { get; }
+            internal IReadOnlyList<ExportRecoveryDiagnostic> Diagnostics { get; }
             internal SuccessfulAttempt(byte[] bytes, ICollection<string> warnings,
-                ExportRecoveryOptions options, ExportRecoverySourceStamp stamp)
+                ExportRecoveryOptions options, ExportRecoverySourceStamp stamp,
+                IEnumerable<ExportRecoveryDiagnostic> diagnostics = null)
             {
                 Bytes = bytes;
                 Warnings = warnings.ToArray();
                 Options = CopyOptions(options);
                 Stamp = stamp;
+                Diagnostics = (diagnostics ?? Array.Empty<ExportRecoveryDiagnostic>())
+                    .Where(item => item?.Action != null && Options.Actions.Any(action => action.Id == item.Action.Id))
+                    .GroupBy(item => item.Action.Id).Select(group =>
+                    {
+                        var item = group.First();
+                        return new ExportRecoveryDiagnostic
+                        {
+                            Id = item.Id, Code = item.Code, Stage = item.Stage, Target = item.Target,
+                            Reason = item.Reason, Remedy = item.Remedy, LostEffect = item.LostEffect,
+                            Source = item.Source, Action = Options.Actions.First(action => action.Id == item.Action.Id)
+                        };
+                    }).ToArray();
             }
         }
 
@@ -97,7 +111,8 @@ namespace VRVlog.LilToonExporter
                 Report = report;
                 Report.Succeeded = true;
                 Failure = null;
-                LastSuccess = new SuccessfulAttempt(bytes, warnings, SelectedOptions, stamp);
+                LastSuccess = new SuccessfulAttempt(bytes, warnings, SelectedOptions, stamp,
+                    report.Diagnostics.Concat(availableDiagnostics));
                 HasPendingSave = true;
                 RememberDiagnostics(report);
                 return true;
@@ -143,6 +158,10 @@ namespace VRVlog.LilToonExporter
 
         private void RememberDiagnostics(ExportRecoveryReport report)
         {
+            // A build pass changed the menu tree. Routes from the original
+            // failure can no longer be offered as a valid prepared-tree remedy.
+            if (report.Diagnostics.Any(diagnostic => diagnostic?.Code == "menu-import-changed"))
+                availableDiagnostics.RemoveAll(diagnostic => diagnostic?.Action?.Kind == ExportRecoveryActionKind.ExcludeMenuBranch);
             // Do not offer a recipe which the captured normal-export settings
             // have already applied. In particular, the default safe-gimmick
             // filter has already removed these hidden renderer components.
@@ -169,7 +188,13 @@ namespace VRVlog.LilToonExporter
         internal static ExportRecoveryOptions CopyOptions(ExportRecoveryOptions options)
         {
             var copy = new ExportRecoveryOptions();
-            if (options != null) copy.Actions.AddRange(options.Actions.Where(action => action != null));
+            if (options != null)
+                foreach (var action in options.Actions.Where(action => action != null))
+                    copy.Actions.Add(new ExportRecoveryAction
+                    {
+                        Id = action.Id, Kind = action.Kind, Material = action.Material, Renderer = action.Renderer,
+                        MenuRoot = action.MenuRoot, MenuOwner = action.MenuOwner, MenuPath = action.MenuPath
+                    });
             return copy;
         }
     }

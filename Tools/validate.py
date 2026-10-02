@@ -23,7 +23,7 @@ listing = json.loads((root / "source.json").read_text(encoding="utf-8"))
 
 assert package["name"] == "com.vrvlog.liltoon-vrm-exporter"
 assert package["unity"] == "2022.3"
-assert package["version"] == "0.11.6"
+assert package["version"] == "0.11.7"
 assert one_click.index("AvatarBaseShape.Preserve(clone, clone,") < one_click.index("Vrm10AppearanceExporter.Export(")
 assert "foreach (var mesh in temporaryMeshes) UnityEngine.Object.DestroyImmediate(mesh);" in one_click
 assert package["vpmDependencies"] == {
@@ -291,7 +291,10 @@ assert one_click.index('LilToonFullSnapshot.Capture(clone,suppressSharedTextureE
 assert 'fullSnapshot?.Bind(converter, model, storage);' in one_click
 assert 'blink.Bind(converter, model, storage);' in one_click
 assert 'excludedExpressions' not in window and 'DrawExpressions' not in window
-assert 'var menu = VrChatExpressionSampler.Analyze(source, exclusions.ContainsPath);' in one_click
+assert 'var menuPolicy = ExportRecoveryReport.MenuImportPolicy(source, recoveryOptions);' in one_click
+assert 'var menu = VrChatExpressionSampler.Analyze(source, exclusions.ContainsPath, menuPolicy);' in one_click
+assert 'new PoseExportSession(source, poseOptions, exclusions.Contains, menuPolicy)' in one_click
+assert 'SkipVrChatMenus' in recovery and 'ExcludeMenuBranch' in recovery
 assert one_click.index('AvatarBaseShape.Preserve(clone, clone,') < one_click.index('VrChatExpressionBaker.Bake(') < one_click.index('Vrm10AppearanceExporter.Export(')
 assert 'VrmMenuExpressions.Add(exported, expressions)' in one_click
 assert 'return avatar != null && !string.IsNullOrWhiteSpace(avatar.name) ? avatar.name.Trim() : "avatar";' in window

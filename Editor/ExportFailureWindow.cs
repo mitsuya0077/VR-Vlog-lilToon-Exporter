@@ -14,6 +14,7 @@ namespace VRVlog.LilToonExporter
             public string id, stage, target, reason, remedy, lostEffect;
             public UnityEngine.Object source;
             public bool hasAction;
+            public ExportRecoveryActionKind actionKind;
         }
 
         [SerializeField] private string message, technicalDetails, supportText;
@@ -94,7 +95,8 @@ namespace VRVlog.LilToonExporter
                 {
                     id = issue.Action?.Id ?? issue.Id, stage = issue.Stage, target = issue.Target,
                     reason = issue.Reason, remedy = issue.Remedy, lostEffect = issue.LostEffect,
-                    source = issue.Source, hasAction = issue.Action != null
+                    source = issue.Source, hasAction = issue.Action != null,
+                    actionKind = issue.Action != null ? issue.Action.Kind : default
                 });
             }
         }
@@ -132,6 +134,17 @@ namespace VRVlog.LilToonExporter
                     if (!string.IsNullOrEmpty(message)) EditorGUILayout.HelpBox(ExporterLocalization.T(message), session?.WasCanceled == true ? MessageType.Info : MessageType.Error);
                     if (session != null)
                         EditorGUILayout.HelpBox(ExporterLocalization.T("対策は新しい変換用コピーに適用します。元のアバターと共有マテリアルは変更しません。未知の仕組みという理由だけでは除外しません。"), MessageType.Info);
+                    if (issues.Any(IsMenuIssue))
+                    {
+                        EditorGUILayout.LabelField(ExporterLocalization.T("VRChatメニューの取り込み範囲"), EditorStyles.boldLabel);
+                        var scopeHelp = issues.Any(issue => issue.hasAction && issue.actionKind == ExportRecoveryActionKind.ExcludeMenuBranch)
+                            ? "取り込まない範囲を選んでください。複数の枝を選べます。メニューを分割するだけでは合計項目数は減りません。"
+                            : "枝ごとの候補がない場合は、全省略を選ぶかメニューを見直して再検査してください。";
+                        EditorGUILayout.HelpBox(ExporterLocalization.T(scopeHelp), MessageType.Info);
+                        EditorGUILayout.LabelField(ExporterLocalization.T("この対策はメニュー由来の表情・ポーズの取り込みだけを変えます。衣装・髪・骨格のオブジェクト自体は削除しません。"), EditorStyles.wordWrappedLabel);
+                        if (issues.Any(issue => issue.hasAction && issue.actionKind == ExportRecoveryActionKind.SkipVrChatMenus && selected.Contains(issue.id)))
+                            EditorGUILayout.HelpBox(ExporterLocalization.T("全省略を選ぶと、枝の選択にかかわらずVRChatメニュー由来の表情・ポーズをすべて省略します。"), MessageType.Warning);
+                    }
                     using (new EditorGUI.DisabledScope(busy))
                         foreach (var issue in issues) DrawIssue(issue);
                     showTechnicalDetails = EditorGUILayout.Foldout(showTechnicalDetails, ExporterLocalization.T("技術的な詳細"));
@@ -181,7 +194,9 @@ namespace VRVlog.LilToonExporter
                 if (issue.hasAction && session != null)
                 {
                     var enabled = selected.Contains(issue.id);
-                    var next = EditorGUILayout.ToggleLeft(ExporterLocalization.T("この対策をコピーに適用する"), enabled, EditorStyles.boldLabel);
+                    var label = issue.actionKind == ExportRecoveryActionKind.SkipVrChatMenus ? "VRChatメニュー由来の表情・ポーズをすべて取り込まない" :
+                        issue.actionKind == ExportRecoveryActionKind.ExcludeMenuBranch ? "このメニューの枝を取り込まない" : "この対策をコピーに適用する";
+                    var next = EditorGUILayout.ToggleLeft(ExporterLocalization.T(label), enabled, EditorStyles.boldLabel);
                     if (next != enabled) { if (next) selected.Add(issue.id); else selected.Remove(issue.id); }
                 }
                 EditorGUILayout.LabelField(ExporterLocalization.T("工程: ") + ExporterLocalization.T(issue.stage), EditorStyles.wordWrappedLabel);
@@ -198,6 +213,9 @@ namespace VRVlog.LilToonExporter
                     }
             }
         }
+
+        private static bool IsMenuIssue(IssueView issue) => issue.hasAction &&
+            (issue.actionKind == ExportRecoveryActionKind.SkipVrChatMenus || issue.actionKind == ExportRecoveryActionKind.ExcludeMenuBranch);
 
         private void Schedule(bool reinspect)
         {
