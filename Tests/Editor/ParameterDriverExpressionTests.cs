@@ -166,19 +166,334 @@ namespace VRVlog.LilToonExporter.Tests
             Assert.That(avatar.GetComponentInChildren<SkinnedMeshRenderer>().GetBlendShapeWeight(0), Is.EqualTo(25));
         }
 
-        [TestCase(0)]
-        [TestCase(1)]
-        public void FxPlayableControlStillRejectsFaceEvenOnUnselectedDanceState(float weight)
+        private AnimatorState NeutralFxGate(string parameter = "Dance")
         {
-            Gate().motion = Clip("Menu face", 75);
-            var dance = Layer("Dance"); var idle = State(dance, "0"); dance.defaultState = idle;
-            var selected = State(dance, "1");
-            var control = PlayableControl(selected, "FX", weight, 0);
-            Assert.That(VrChatParameterDriver.IsNonFxPlayableControl(control), Is.False);
-            Assert.That(Assert.Throws<InvalidOperationException>(() => Sample()).Message,
-                Does.Contain("Dance/1").And.Contain("VRCPlayableLayerControl").And.Contain("影響範囲"));
+            controller.AddParameter(parameter, AnimatorControllerParameterType.Int);
+            var machine = Layer("Dance gate"); var neutral = State(machine, "DISABLE dance"); machine.defaultState = neutral;
+            var disabled = State(machine, "ENABLE dance");
+            PlayableControl(neutral, "FX", 1, 0); PlayableControl(disabled, "FX", 0, 0);
+            Transition(neutral, disabled, parameter, 1);
+            return neutral;
         }
 
+        private AnimatorState AndGuardedFxGate()
+        {
+            controller.AddParameter("Dance", AnimatorControllerParameterType.Bool);
+            controller.AddParameter("InStation", AnimatorControllerParameterType.Bool);
+            var machine = Layer("Station dance gate"); var neutral = State(machine, "Neutral FX"); machine.defaultState = neutral;
+            var disabled = State(machine, "Station dance disables FX");
+            PlayableControl(neutral, "FX", 1, 0); PlayableControl(disabled, "FX", 0, 0);
+            Transition(neutral, disabled, "Dance", 0, AnimatorConditionMode.If);
+            neutral.transitions[0].AddCondition(AnimatorConditionMode.If, 0, "InStation");
+            Transition(disabled, neutral, "Dance", 0, AnimatorConditionMode.IfNot);
+            Transition(disabled, neutral, "InStation", 0, AnimatorConditionMode.IfNot);
+            return neutral;
+        }
+
+        [TestCase(false)]
+        [TestCase(true)]
+        public void UnwrittenFalseAndGuardProvesNeutralFxIndependentOfStationInput(bool listedExternal)
+        {
+            Gate().motion = Clip("Menu face", 75); AndGuardedFxGate();
+            if (listedExternal) metadata.ExternalParameters.Add("InStation");
+            Assert.That(Sample().Single(v => v.Shape == "Face size").Weight, Is.EqualTo(75).Within(.01));
+        }
+
+        [Test]
+        public void SelectedTrueAndGuardCannotAssumeStationInputFalse()
+        {
+            Gate().motion = Clip("Menu face", 75); AndGuardedFxGate();
+            var selection = new Dictionary<string, float> { ["Menu"] = 1, ["Dance"] = 1 };
+            Assert.That(Assert.Throws<InvalidOperationException>(() => VrChatExpressionSampler.Sample(
+                avatar, controller, metadata.Defaults, selection, null, metadata)).Message,
+                Does.Contain("外部入力").And.Contain("InStation"));
+        }
+
+        [Test]
+        public void TrueDefaultAndGuardCannotAssumeStationInputFalse()
+        {
+            Gate().motion = Clip("Menu face", 75); AndGuardedFxGate(); metadata.Defaults["Dance"] = 1;
+            Assert.That(Assert.Throws<InvalidOperationException>(() => Sample()).Message,
+                Does.Contain("外部入力").And.Contain("InStation"));
+        }
+
+        [Test]
+        public void DriverWrittenFalseAndGuardIsNotAssumedInvariant()
+        {
+            var face = Gate(); face.motion = Clip("Menu face", 75); AndGuardedFxGate();
+            Driver(face, Op("Set", "Dance", 0));
+            Assert.That(Assert.Throws<InvalidOperationException>(() => Sample()).Message,
+                Does.Contain("外部入力").And.Contain("InStation"));
+        }
+
+        [Test]
+        public void AnotherPlayableWriterInvalidatesFalseAndGuardProof()
+        {
+            Gate().motion = Clip("Menu face", 75); AndGuardedFxGate();
+            var other = AnimatorController.CreateAnimatorControllerAtPath(folder + "/Other.controller");
+            other.AddParameter("Dance", AnimatorControllerParameterType.Bool);
+            var state = State(other.layers[0].stateMachine, "Writes guard"); other.layers[0].stateMachine.defaultState = state;
+            Driver(state, Op("Set", "Dance", 0)); metadata.OtherControllers.Add(other);
+            Assert.That(Assert.Throws<InvalidOperationException>(() => Sample()).Message,
+                Does.Contain("外部入力").And.Contain("InStation"));
+        }
+
+        [Test]
+        public void AnimatorCurveWriterInvalidatesFalseAndGuardProof()
+        {
+            Gate().motion = Clip("Menu face", 75); AndGuardedFxGate();
+            var machine = Layer("Writes guard curve"); var clip = new AnimationClip { name = "Guard curve" };
+            AnimationUtility.SetEditorCurve(clip, EditorCurveBinding.FloatCurve("", typeof(Animator), "Dance"), AnimationCurve.Constant(0, 1, 0));
+            AssetDatabase.AddObjectToAsset(clip, controller); machine.defaultState = State(machine, "Writes guard", clip);
+            Assert.That(Assert.Throws<InvalidOperationException>(() => Sample()).Message,
+                Does.Contain("外部入力").And.Contain("InStation"));
+        }
+
+        [Test]
+        public void UnguardedReachableStationBranchIsNotHiddenByAnotherFalseAndGuard()
+        {
+            Gate().motion = Clip("Menu face", 75); var neutral = AndGuardedFxGate();
+            var disabled = controller.layers[controller.layers.Length - 1].stateMachine.states.Single(s => s.state.name == "Station dance disables FX").state;
+            Transition(neutral, disabled, "InStation", 0, AnimatorConditionMode.If);
+            Assert.That(Assert.Throws<InvalidOperationException>(() => Sample()).Message,
+                Does.Contain("外部入力").And.Contain("InStation"));
+        }
+
+        [Test]
+        public void WriteDefaultsCommandLayerDoesNotQualifyForFalseAndGuardProof()
+        {
+            Gate().motion = Clip("Menu face", 75); var neutral = AndGuardedFxGate(); neutral.writeDefaultValues = true;
+            Assert.That(Assert.Throws<InvalidOperationException>(() => Sample()).Message,
+                Does.Contain("外部入力").And.Contain("InStation"));
+        }
+        [Test]
+        public void ExplicitNeutralFxGateAllowsUnreachedDisableWithoutEditingSources()
+        {
+            Gate().motion = Clip("Menu face", 75); NeutralFxGate();
+            var assets = AssetDatabase.LoadAllAssetsAtPath(folder + "/FX.controller");
+            var before = assets.ToDictionary(a => a, a => EditorJsonUtility.ToJson(a));
+            Assert.That(Sample().Single(v => v.Shape == "Face size").Weight, Is.EqualTo(75).Within(.01));
+            foreach (var asset in assets) Assert.That(EditorJsonUtility.ToJson(asset), Is.EqualTo(before[asset]), asset.name);
+            Assert.That(avatar.GetComponentInChildren<SkinnedMeshRenderer>().GetBlendShapeWeight(0), Is.EqualTo(25));
+        }
+
+        [TestCase(0)]
+        [TestCase(1)]
+        public void UninitializedFxGateDoesNotAssumeFullWeight(float weight)
+        {
+            Gate().motion = Clip("Menu face", 75);
+            var dance = Layer("Dance"); dance.defaultState = State(dance, "No command");
+            var selected = State(dance, "Unreached command");
+            PlayableControl(selected, "FX", weight, 0);
+            Assert.That(Assert.Throws<InvalidOperationException>(() => Sample()).Message,
+                Does.Contain("FXの初期状態").And.Contain("VRCPlayableLayerControl"));
+        }
+
+        [Test]
+        public void FxOffSelectionIsRejectedAndLaterSamplesStartFromFreshDefaults()
+        {
+            Gate().motion = Clip("Menu face", 75); NeutralFxGate();
+            var selection = new Dictionary<string, float> { ["Menu"] = 1, ["Dance"] = 1 };
+            Assert.That(Assert.Throws<InvalidOperationException>(() => VrChatExpressionSampler.Sample(
+                avatar, controller, metadata.Defaults, selection, null, metadata)).Message,
+                Does.Contain("ENABLE dance").And.Contain("FXの重み"));
+            Assert.That(Sample().Single(v => v.Shape == "Face size").Weight, Is.EqualTo(75).Within(.01));
+        }
+
+        [Test]
+        public void TransientFxDisableDuringDefaultsIsNotResetIntoAnInventedFace()
+        {
+            Gate().motion = Clip("Menu face", 75);
+            var machine = Layer("Transient FX gate"); var disable = State(machine, "Disable first"); machine.defaultState = disable;
+            var restore = State(machine, "Restore");
+            PlayableControl(disable, "FX", 0, 0); PlayableControl(restore, "FX", 1, 0);
+            Transition(disable, restore, "Menu", 0);
+            Assert.That(Assert.Throws<InvalidOperationException>(() => Sample()).Message,
+                Does.Contain("Disable first").And.Contain("FXの重み"));
+        }
+
+        [Test]
+        public void ImmediateFxDisableAndRestoreAfterSelectionCannotDisappearBetweenCallbacks()
+        {
+            Gate().motion = Clip("Menu face", 75);
+            var machine = Layer("Transient selected FX gate"); var neutral = State(machine, "Neutral"); machine.defaultState = neutral;
+            var disable = State(machine, "Immediate disable"); var restore = State(machine, "Immediate restore");
+            PlayableControl(neutral, "FX", 1, 0); PlayableControl(disable, "FX", 0, 0); PlayableControl(restore, "FX", 1, 0);
+            Transition(neutral, disable, "Menu", 1); Transition(disable, restore, "Menu", 1);
+            Assert.That(Assert.Throws<InvalidOperationException>(() => Sample()).Message,
+                Does.Contain("Immediate disable").And.Contain("FXの重み"));
+        }
+
+        [Test]
+        public void NonUnitFxCommandCannotBeCancelledByAnotherCommandOnTheSameState()
+        {
+            Gate().motion = Clip("Menu face", 75);
+            var machine = Layer("Multiple FX commands"); var state = State(machine, "Disable then restore"); machine.defaultState = state;
+            PlayableControl(state, "FX", 0, 0); PlayableControl(state, "FX", 1, 0);
+            Assert.That(Assert.Throws<InvalidOperationException>(() => Sample()).Message,
+                Does.Contain("Disable then restore").And.Contain("FXの重み"));
+        }
+        [Test]
+        public void ConflictingReachedFxCommandsCannotDependOnCallbackOrder()
+        {
+            Gate().motion = Clip("Menu face", 75); NeutralFxGate();
+            var other = Layer("Conflicting FX gate"); other.defaultState = State(other, "Disable FX");
+            PlayableControl(other.defaultState, "FX", 0, 0);
+            Assert.That(Assert.Throws<InvalidOperationException>(() => Sample()).Message,
+                Does.Contain("Disable FX").And.Contain("FXの重み"));
+        }
+
+        [TestCase(.5f)]
+        [TestCase(10)]
+        public void TemporalFxBlendRemainsUnsupportedEvenAtFullGoalWeight(float duration)
+        {
+            Gate().motion = Clip("Menu face", 75);
+            var machine = Layer("Temporal FX gate"); machine.defaultState = State(machine, "Blend FX");
+            PlayableControl(machine.defaultState, "FX", 1, duration);
+            Assert.That(Assert.Throws<InvalidOperationException>(() => Sample()).Message,
+                Does.Contain("Blend FX").And.Contain("影響範囲"));
+        }
+
+        [Test]
+        public void FxGateExternalInputIsNotAssumedConstant()
+        {
+            Gate().motion = Clip("Menu face", 75); NeutralFxGate();
+            metadata.ExternalParameters.Add("Dance");
+            Assert.That(Assert.Throws<InvalidOperationException>(() => Sample()).Message,
+                Does.Contain("外部入力").And.Contain("Dance"));
+        }
+
+        [Test]
+        public void AnotherPlayableWritingAnFxGateRemainsUnsupported()
+        {
+            Gate().motion = Clip("Menu face", 75); NeutralFxGate();
+            var other = AnimatorController.CreateAnimatorControllerAtPath(folder + "/Other.controller");
+            other.AddParameter("Dance", AnimatorControllerParameterType.Int);
+            var state = State(other.layers[0].stateMachine, "External gate writer"); other.layers[0].stateMachine.defaultState = state;
+            Driver(state, Op("Set", "Dance", 1)); metadata.OtherControllers.Add(other);
+            Assert.That(Assert.Throws<InvalidOperationException>(() => Sample()).Message,
+                Does.Contain("FX以外").And.Contain("Dance"));
+        }
+
+        [Test]
+        public void MenuDriverCanReachAndDisableAnOtherwiseUnrelatedFxGate()
+        {
+            var face = Gate(); face.motion = Clip("Menu face", 75); NeutralFxGate();
+            Driver(face, Op("Set", "Dance", 1));
+            Assert.That(Assert.Throws<InvalidOperationException>(() => Sample()).Message,
+                Does.Contain("ENABLE dance").And.Contain("FXの重み"));
+        }
+
+        [Test]
+        public void DelayedFxDisableOutsideTheSampleWindowRemainsUnsupported()
+        {
+            Gate().motion = Clip("Menu face", 75); var neutral = NeutralFxGate();
+            neutral.motion = Clip("Neutral gate timing", 0);
+            var timed = neutral.AddTransition(controller.layers[controller.layers.Length - 1].stateMachine.states
+                .Single(s => s.state.name == "ENABLE dance").state);
+            timed.hasExitTime = true; timed.exitTime = 10; timed.duration = 0;
+            Assert.That(Assert.Throws<InvalidOperationException>(() => Sample()).Message, Does.Contain("FXの重み").Or.Contain("時間で遷移"));
+        }
+
+        [Test]
+        public void ChangingParameterCurveCannotDisableFxAfterTheSampleWindow()
+        {
+            Gate().motion = Clip("Menu face", 75); var neutral = NeutralFxGate();
+            var clip = new AnimationClip { name = "Delayed gate input" };
+            AnimationUtility.SetEditorCurve(clip, EditorCurveBinding.FloatCurve("", typeof(Animator), "Dance"), AnimationCurve.Linear(0, 0, 20, 1));
+            AssetDatabase.AddObjectToAsset(clip, controller); neutral.motion = clip;
+            Assert.That(Assert.Throws<InvalidOperationException>(() => Sample()).Message,
+                Does.Contain("時間で変わる").Or.Contain("FXの重み"));
+        }
+        [Test]
+        public void FxCommandsOnStateMachinesAreNotSilentlySkippedByStateCallbacks()
+        {
+            Gate().motion = Clip("Menu face", 75); NeutralFxGate();
+            var type = AppDomain.CurrentDomain.GetAssemblies().Select(a => a.GetType("VRC.SDK3.Avatars.Components.VRCPlayableLayerControl")).First(t => t != null);
+            var control = controller.layers[controller.layers.Length - 1].stateMachine.AddStateMachineBehaviour(type);
+            using (var data = new SerializedObject(control))
+            {
+                var layer = data.FindProperty("layer");
+                layer.enumValueIndex = Array.IndexOf(layer.enumNames, "FX");
+                data.FindProperty("goalWeight").floatValue = 1;
+                data.FindProperty("blendDuration").floatValue = 0;
+                data.ApplyModifiedPropertiesWithoutUndo();
+            }
+            Assert.That(Assert.Throws<InvalidOperationException>(() => Sample()).Message,
+                Does.Contain("Dance gate").And.Contain("影響範囲"));
+        }
+
+        [TestCase(false, false)]
+        [TestCase(false, true)]
+        [TestCase(true, false)]
+        [TestCase(true, true)]
+        public void LocomotionControlDoesNotBlockFixedFacialSampling(bool disabled, bool otherPlayable)
+        {
+            var face = Gate(); face.motion = Clip("Menu face", 75);
+            var state = face;
+            if (otherPlayable)
+            {
+                var other = AnimatorController.CreateAnimatorControllerAtPath(folder + "/Other.controller");
+                state = State(other.layers[0].stateMachine, "Locomotion control"); other.layers[0].stateMachine.defaultState = state;
+                metadata.OtherControllers.Add(other);
+            }
+            var control = SdkBehaviour(state, "VRC.SDK3.Avatars.Components.VRCAnimatorLocomotionControl");
+            using (var data = new SerializedObject(control))
+            {
+                data.FindProperty("disableLocomotion").boolValue = disabled;
+                data.ApplyModifiedPropertiesWithoutUndo();
+            }
+            Assert.That(VrChatParameterDriver.IsLocomotionControl(control), Is.True);
+            Assert.That(Sample().Single(v => v.Shape == "Face size").Weight, Is.EqualTo(75).Within(.01));
+        }
+
+        [Test]
+        public void LocomotionControlDoesNotHideOtherPlayableParameterWrites()
+        {
+            Driver(Gate(), Op("Set", "Face", 1)); FaceLayer();
+            var other = AnimatorController.CreateAnimatorControllerAtPath(folder + "/Other.controller");
+            other.AddParameter("Face", AnimatorControllerParameterType.Int);
+            var state = State(other.layers[0].stateMachine, "Locomotion plus face writer"); other.layers[0].stateMachine.defaultState = state;
+            SdkBehaviour(state, "VRC.SDK3.Avatars.Components.VRCAnimatorLocomotionControl");
+            Driver(state, Op("Set", "Face", 2)); metadata.OtherControllers.Add(other);
+            Assert.That(Assert.Throws<InvalidOperationException>(() => Sample()).Message,
+                Does.Contain("FX以外").And.Contain("Face"));
+        }
+        [TestCase(false, false)]
+        [TestCase(false, true)]
+        [TestCase(true, false)]
+        [TestCase(true, true)]
+        public void TemporaryPoseSpaceDoesNotBlockFixedFacialSampling(bool enter, bool fixedDelay)
+        {
+            var face = Gate(); face.motion = Clip("Menu face", 75);
+            var control = SdkBehaviour(face, "VRC.SDK3.Avatars.Components.VRCAnimatorTemporaryPoseSpace");
+            using (var data = new SerializedObject(control))
+            {
+                data.FindProperty("enterPoseSpace").boolValue = enter;
+                data.FindProperty("fixedDelay").boolValue = fixedDelay;
+                data.FindProperty("delayTime").floatValue = .5f;
+                data.ApplyModifiedPropertiesWithoutUndo();
+            }
+            Assert.That(VrChatParameterDriver.IsTemporaryPoseSpace(control), Is.True);
+            Assert.That(Sample().Single(v => v.Shape == "Face size").Weight, Is.EqualTo(75).Within(.01));
+        }
+
+        [TestCase(-1)]
+        [TestCase(float.NaN)]
+        [TestCase(float.PositiveInfinity)]
+        public void MalformedTemporaryPoseSpaceIsNotIgnored(float delay)
+        {
+            var face = Gate(); face.motion = Clip("Menu face", 75);
+            var control = SdkBehaviour(face, "VRC.SDK3.Avatars.Components.VRCAnimatorTemporaryPoseSpace");
+            using (var data = new SerializedObject(control))
+            {
+                data.FindProperty("delayTime").floatValue = delay;
+                data.ApplyModifiedPropertiesWithoutUndo();
+            }
+            Assert.That(VrChatParameterDriver.IsTemporaryPoseSpace(control), Is.False);
+            Assert.That(Assert.Throws<InvalidOperationException>(() => Sample()).Message,
+                Does.Contain("VRCAnimatorTemporaryPoseSpace").And.Contain("影響範囲"));
+        }
         [TestCase(-.1f, 0)]
         [TestCase(1.1f, 0)]
         [TestCase(float.NaN, 0)]

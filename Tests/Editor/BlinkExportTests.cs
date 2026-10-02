@@ -552,6 +552,83 @@ namespace VRVlog.LilToonExporter.Tests
             finally { Object.DestroyImmediate(window); }
         }
 
+        [Test] public void PreviewRendersOpenClosedAndOpenWithinOneUpdateWithoutChangingSource()
+        {
+            if (SystemInfo.graphicsDeviceType == UnityEngine.Rendering.GraphicsDeviceType.Null)
+                Assert.Ignore("Blink preview pixel regression requires a graphics device.");
+            var skin = Skin("Blink");
+            var mesh = skin.sharedMesh;
+            // Both windings make the fixture visible from the preview camera;
+            // one real bone exercises native skinned-renderer caching.
+            mesh.triangles = new[] { 0, 1, 2, 2, 1, 0 };
+            var bone = new GameObject("preview bone").transform;
+            bone.SetParent(root.transform, false);
+            skin.bones = new[] { bone }; skin.rootBone = bone;
+            mesh.bindposes = new[] { bone.worldToLocalMatrix * skin.transform.localToWorldMatrix };
+            mesh.boneWeights = Enumerable.Repeat(new BoneWeight { boneIndex0 = 0, weight0 = 1 }, mesh.vertexCount).ToArray();
+            mesh.RecalculateBounds();
+            var shader = Shader.Find("Unlit/Color");
+            Assert.That(shader, Is.Not.Null, "The GPU fixture requires Unity's built-in unlit color shader.");
+            var material = new Material(shader) { color = Color.white }; owned.Add(material); skin.sharedMaterial = material;
+            skin.SetBlendShapeWeight(0, 15);
+            var originalVertices = mesh.vertices;
+            var originalMatrixFlag = skin.forceMatrixRecalculationPerRender;
+            var window = ScriptableObject.CreateInstance<BlinkPreviewWindow>();
+            try
+            {
+                window.Prepare(root, new BlinkExportOptions(), Array.Empty<GameObject>(), new ExportGimmickOptions { AutoExclude = false });
+                // No player-loop tick or yielding between captures: this is the
+                // repeated manual rendering case that formerly showed stale eyes.
+                var open = RenderPreviewPose(window, 0);
+                var closed = RenderPreviewPose(window, 1);
+                var reopened = RenderPreviewPose(window, 0);
+                Assert.That(open.Distinct().Count(), Is.GreaterThan(1), "The fixture must render a visible triangle.");
+                Assert.That(closed.Where((pixel, index) => !pixel.Equals(open[index])).Count(), Is.GreaterThan(0),
+                    "Closing the eyes must change actual rendered pixels in the same update.");
+                Assert.That(reopened, Is.EqualTo(open), "Reopening must restore the original rendered pose.");
+                Assert.That(skin.sharedMesh, Is.SameAs(mesh));
+                Assert.That(mesh.vertices, Is.EqualTo(originalVertices));
+                Assert.That(skin.GetBlendShapeWeight(0), Is.EqualTo(15));
+                Assert.That(skin.forceMatrixRecalculationPerRender, Is.EqualTo(originalMatrixFlag));
+            }
+            finally { window.Cleanup(); Object.DestroyImmediate(window); }
+        }
+
+        static Color32[] RenderPreviewPose(BlinkPreviewWindow window, float closure)
+        {
+            const BindingFlags flags = BindingFlags.Instance | BindingFlags.NonPublic;
+            var type = typeof(BlinkPreviewWindow);
+            type.GetField("closure", flags).SetValue(window, closure);
+            type.GetMethod("ApplyPose", flags).Invoke(window, null);
+            var utility = (UnityEditor.PreviewRenderUtility)type.GetField("preview", flags).GetValue(window);
+            var previewOpen = false;
+            try
+            {
+                utility.BeginPreview(new Rect(0, 0, 128, 128), GUIStyle.none); previewOpen = true;
+                utility.camera.transform.position = new Vector3(.5f, .5f, 3f);
+                utility.camera.transform.LookAt(new Vector3(.5f, .5f, 0), Vector3.up);
+                var pixels = 128 * UnityEditor.EditorGUIUtility.pixelsPerPoint;
+                utility.camera.pixelRect = new Rect(0, 0, pixels, pixels);
+                utility.Render(); var texture = utility.EndPreview(); previewOpen = false;
+                var temporary = RenderTexture.GetTemporary(texture.width, texture.height, 0, RenderTextureFormat.ARGB32);
+                var previous = RenderTexture.active;
+                Texture2D snapshot = null;
+                try
+                {
+                    Graphics.Blit(texture, temporary); RenderTexture.active = temporary;
+                    snapshot = new Texture2D(texture.width, texture.height, TextureFormat.RGBA32, false);
+                    snapshot.ReadPixels(new Rect(0, 0, texture.width, texture.height), 0, 0); snapshot.Apply();
+                    return snapshot.GetPixels32();
+                }
+                finally
+                {
+                    RenderTexture.active = previous;
+                    if (snapshot != null) Object.DestroyImmediate(snapshot);
+                    RenderTexture.ReleaseTemporary(temporary);
+                }
+            }
+            finally { if (previewOpen) utility.EndPreview(); }
+        }
         [TestCase(false)][TestCase(true)]
         public void PreviewUsesTheBilateralPresetAndFallsBackOnlyWhenItIsAbsent(bool bilateral)
         {

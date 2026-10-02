@@ -25,6 +25,8 @@ namespace VRVlog.LilToonExporter
         {
             internal string Location, Error;
             internal bool LocalOnly;
+            internal bool FxControl;
+            internal float FxWeight;
             internal readonly List<Operation> Operations = new List<Operation>();
         }
 
@@ -45,29 +47,68 @@ namespace VRVlog.LilToonExporter
             (value.GetType().FullName == "VRC.SDK3.Avatars.Components.VRCAnimatorTrackingControl" ||
              value.GetType().FullName == "VRC.SDKBase.VRC_AnimatorTrackingControl");
 
-        // These SDK behaviours only blend the named playable layer. Body
-        // playable weights do not change the FX controller sampled here. Read
-        // the serialized SDK fields, and fail closed for unknown or malformed
-        // settings; an FX target must still be rejected even at weight 1.
-        internal static bool IsNonFxPlayableControl(StateMachineBehaviour value)
+        // Known SDK controls are data only. The body targets cannot change the
+        // sampled FX morphs; FX commands require a separate neutral-gate proof.
+        private static bool ReadPlayableControl(StateMachineBehaviour value, out string target, out float weight, out float duration)
         {
+            target = null; weight = duration = 0;
             if (value == null || (value.GetType().FullName != "VRC.SDK3.Avatars.Components.VRCPlayableLayerControl" &&
                 value.GetType().FullName != "VRC.SDKBase.VRC_PlayableLayerControl")) return false;
             using (var data = new SerializedObject(value))
             {
                 var layer = data.FindProperty("layer");
-                var weight = data.FindProperty("goalWeight");
-                var duration = data.FindProperty("blendDuration");
+                var goal = data.FindProperty("goalWeight");
+                var blend = data.FindProperty("blendDuration");
                 if (layer == null || layer.propertyType != SerializedPropertyType.Enum ||
-                    weight == null || weight.propertyType != SerializedPropertyType.Float ||
-                    duration == null || duration.propertyType != SerializedPropertyType.Float) return false;
+                    goal == null || goal.propertyType != SerializedPropertyType.Float ||
+                    blend == null || blend.propertyType != SerializedPropertyType.Float) return false;
                 var index = layer.enumValueIndex;
                 if (index < 0 || index >= layer.enumNames.Length) return false;
-                var target = layer.enumNames[index];
-                if (target != "Action" && target != "Gesture" && target != "Additive") return false;
-                return !float.IsNaN(weight.floatValue) && !float.IsInfinity(weight.floatValue) &&
-                    weight.floatValue >= 0 && weight.floatValue <= 1 &&
-                    !float.IsNaN(duration.floatValue) && !float.IsInfinity(duration.floatValue) && duration.floatValue >= 0;
+                target = layer.enumNames[index]; weight = goal.floatValue; duration = blend.floatValue;
+                return (target == "Action" || target == "Gesture" || target == "Additive" || target == "FX") &&
+                    !float.IsNaN(weight) && !float.IsInfinity(weight) && weight >= 0 && weight <= 1 &&
+                    !float.IsNaN(duration) && !float.IsInfinity(duration) && duration >= 0;
+            }
+        }
+
+        internal static bool IsNonFxPlayableControl(StateMachineBehaviour value) =>
+            ReadPlayableControl(value, out var target, out _, out _) && target != "FX";
+
+        internal static bool ReadInstantFxControl(StateMachineBehaviour value, string location, out Program program)
+        {
+            program = null;
+            if (!ReadPlayableControl(value, out var target, out var weight, out var duration) || target != "FX" || duration != 0) return false;
+            program = new Program { Location = location, FxControl = true, FxWeight = weight };
+            return true;
+        }
+
+        // VRChat's locomotion/capsule/IK control does not write the FX graph
+        // or its parameters. Keep the separate body-pose restrictions intact.
+        internal static bool IsLocomotionControl(StateMachineBehaviour value)
+        {
+            if (value == null || (value.GetType().FullName != "VRC.SDK3.Avatars.Components.VRCAnimatorLocomotionControl" &&
+                value.GetType().FullName != "VRC.SDKBase.VRC_AnimatorLocomotionControl")) return false;
+            using (var data = new SerializedObject(value))
+            {
+                var disabled = data.FindProperty("disableLocomotion");
+                return disabled != null && disabled.propertyType == SerializedPropertyType.Boolean;
+            }
+        }
+        // The documented SDK effect changes the wearer's viewpoint, not the
+        // facial graph. Do not invoke the SDK timing callbacks/runtime delegates.
+        internal static bool IsTemporaryPoseSpace(StateMachineBehaviour value)
+        {
+            if (value == null || (value.GetType().FullName != "VRC.SDK3.Avatars.Components.VRCAnimatorTemporaryPoseSpace" &&
+                value.GetType().FullName != "VRC.SDKBase.VRC_AnimatorTemporaryPoseSpace")) return false;
+            using (var data = new SerializedObject(value))
+            {
+                var enter = data.FindProperty("enterPoseSpace");
+                var fixedDelay = data.FindProperty("fixedDelay");
+                var delay = data.FindProperty("delayTime");
+                return enter != null && enter.propertyType == SerializedPropertyType.Boolean &&
+                    fixedDelay != null && fixedDelay.propertyType == SerializedPropertyType.Boolean &&
+                    delay != null && delay.propertyType == SerializedPropertyType.Float &&
+                    !float.IsNaN(delay.floatValue) && !float.IsInfinity(delay.floatValue) && delay.floatValue >= 0;
             }
         }
 
