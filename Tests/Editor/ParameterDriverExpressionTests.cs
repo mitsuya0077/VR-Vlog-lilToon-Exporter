@@ -119,7 +119,10 @@ namespace VRVlog.LilToonExporter.Tests
         {
             var type = AppDomain.CurrentDomain.GetAssemblies().Select(a => a.GetType(name)).FirstOrDefault(t => t != null);
             if (type == null) Assert.Ignore("Install the real VRChat SDK to run playable-control integration tests.");
-            return state.AddStateMachineBehaviour(type);
+            Assert.That(type.IsAbstract, Is.False, "Only concrete SDK behaviours can be attached: " + name);
+            var behaviour = state.AddStateMachineBehaviour(type);
+            Assert.That(behaviour, Is.Not.Null, "The SDK behaviour could not be attached: " + name);
+            return behaviour;
         }
 
         private static StateMachineBehaviour PlayableControl(AnimatorState state, string target, float weight = .5f, float duration = 2,
@@ -140,7 +143,6 @@ namespace VRVlog.LilToonExporter.Tests
         [TestCase("Action", "VRC.SDK3.Avatars.Components.VRCPlayableLayerControl")]
         [TestCase("Gesture", "VRC.SDK3.Avatars.Components.VRCPlayableLayerControl")]
         [TestCase("Additive", "VRC.SDK3.Avatars.Components.VRCPlayableLayerControl")]
-        [TestCase("Action", "VRC.SDKBase.VRC_PlayableLayerControl")]
         public void BodyPlayableControlAndTrackedHandDoNotBlockFixedFacialSampler(string target, string type)
         {
             var face = Gate(); face.motion = Clip("Menu face", 75);
