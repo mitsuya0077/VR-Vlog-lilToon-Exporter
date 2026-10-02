@@ -17,11 +17,13 @@ namespace VRVlog.LilToonExporter
         internal readonly List<PoseCandidate> Entries = new List<PoseCandidate>();
         readonly List<Object> owned = new List<Object>();
         readonly PoseExportOptions options;
+        readonly VrChatMenuImportPolicy menuPolicy;
         GameObject prepared;
 
-        internal PoseExportSession(GameObject source, PoseExportOptions options, Func<Transform, bool> excluded = null)
+        internal PoseExportSession(GameObject source, PoseExportOptions options, Func<Transform, bool> excluded = null, VrChatMenuImportPolicy menuPolicy = null)
         {
             this.options = options ?? new PoseExportOptions();
+            this.menuPolicy = menuPolicy;
             foreach (var component in source.GetComponentsInChildren<Component>(false))
             {
                 if (component == null || component.GetType().FullName != AplType || excluded?.Invoke(component.transform) == true) continue;
@@ -96,7 +98,7 @@ namespace VRVlog.LilToonExporter
         internal IEnumerable<PoseCandidate> CollectPreparedIncrementally(GameObject copy, ICollection<string> warnings = null)
         {
             prepared = copy;
-            Entries.AddRange(PoseMenuResolver.Read(copy));
+            Entries.AddRange(PoseMenuResolver.Read(copy, menuPolicy));
             var seen = new Dictionary<string, PoseCandidate>();
             foreach (var row in Entries.ToArray())
             {

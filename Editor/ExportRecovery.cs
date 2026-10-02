@@ -10,7 +10,7 @@ using Object = UnityEngine.Object;
 
 namespace VRVlog.LilToonExporter
 {
-    internal enum ExportRecoveryActionKind { DisableAudioLink, OmitSecondLayer, OmitThirdLayer, ExcludeHiddenRenderer }
+    internal enum ExportRecoveryActionKind { DisableAudioLink, OmitSecondLayer, OmitThirdLayer, ExcludeHiddenRenderer, SkipVrChatMenus, ExcludeMenuBranch }
 
     internal sealed class ExportRecoveryAction
     {
@@ -18,6 +18,9 @@ namespace VRVlog.LilToonExporter
         internal ExportRecoveryActionKind Kind;
         internal Material Material;
         internal Renderer Renderer;
+        internal Object MenuRoot;
+        internal GameObject MenuOwner;
+        internal string MenuPath;
     }
 
     internal sealed class ExportRecoveryOptions
@@ -95,7 +98,22 @@ namespace VRVlog.LilToonExporter
             var code = rawCode == "audio-link" || rawCode == "material-layer" || rawCode == "outside-reference" || rawCode == "physbone" ? rawCode : null;
             var target = error.Data[ExportRecoveryFailure.TargetKey] as Object;
             if (target is Material material) target = SourceMaterial(material);
-            if (error is MaterialBakeException bake)
+            if (error is VrChatMenuImportLimitException menuLimit)
+            {
+                Stage = "表情メニュー読込";
+                AddMenuLimit(source, menuLimit.Summary);
+            }
+            else if (error is VrChatMenuImportPolicyException)
+            {
+                Stage = "表情メニュー読込";
+                var root = source != null ? VrChatExpressionMenu.Root(source) as Object : null;
+                Add("menu-import-changed", root != null ? root : source, ExporterLocalization.T("VRChatメニュー全体"), error.Message,
+                    "メニュー由来の表情・ポーズの取り込みをすべて省略して試せます。ジェスチャー・FaceEmo・APL・手動追加・既存VRM表情は保持します。",
+                    "VRChatメニュー由来の表情・ポーズが取り込まれなくなります。衣装・髪・骨格のオブジェクト自体は削除しません。",
+                    source == null ? null : new ExportRecoveryAction { Kind = ExportRecoveryActionKind.SkipVrChatMenus,
+                        Id = "menu:" + source.GetInstanceID() + ":skip", MenuOwner = source, MenuRoot = root });
+            }
+            else if (error is MaterialBakeException bake)
             {
                 foreach (var issue in bake.Issues)
                 {
@@ -141,6 +159,62 @@ namespace VRVlog.LilToonExporter
                     safe ? "このRendererの補助表示が失われます。子オブジェクトと骨格は保持します。" : "自動対策はありません。", action);
             }
             AddOutsideReferences(source);
+        }
+
+        void AddMenuLimit(GameObject source, VrChatMenuImportSummary summary)
+        {
+            var root = source != null ? VrChatExpressionMenu.Root(source) as Object : null;
+            var count = summary.IsComplete ? string.Format(ExporterLocalization.T("{0}候補"), summary.CandidateCount) :
+                string.Format(ExporterLocalization.T("少なくとも{0}候補（省略された参照があり、件数は未確定）"), summary.CandidateCount);
+            var reason = string.Format(ExporterLocalization.T("VRChatメニュー全体の取り込み対象は{0}です。上限は256候補です。顔表情以外の衣装Toggle・Puppet・無効な操作も数え、共有サブメニューは参照経路ごとに数えます。メニューを分割するだけでは合計は減りません。"), count);
+            if (!summary.IsComplete)
+                reason += " " + ExporterLocalization.T("メニューの参照数・操作数・深さの検査上限、または循環参照により、全体の件数を確定できませんでした。表示件数は下限で、省略後にも再検査します。");
+            var skip = source != null ? new ExportRecoveryAction { Kind = ExportRecoveryActionKind.SkipVrChatMenus,
+                Id = "menu:" + source.GetInstanceID() + ":skip", MenuOwner = source, MenuRoot = root } : null;
+            Add("menu-import-limit", root != null ? root : source, ExporterLocalization.T("VRChatメニュー全体"), reason,
+                "メニュー由来の表情・ポーズの取り込みをすべて省略して試せます。ジェスチャー・FaceEmo・APL・手動追加・既存VRM表情は保持します。",
+                "VRChatメニュー由来の表情・ポーズが取り込まれなくなります。衣装・髪・骨格のオブジェクト自体は削除しません。", skip);
+            // A preparation pass may generate a different menu. Index routes
+            // on that generated tree must never select a branch in the source.
+            if (source == null || !ReferenceEquals(summary.Root, root)) return;
+            foreach (var branch in summary.Branches.Where(b => b.CandidateCount > 0 || !b.IsComplete))
+            {
+                var branchCount = branch.IsComplete ? string.Format(ExporterLocalization.T("{0}候補"), branch.CandidateCount) :
+                    string.Format(ExporterLocalization.T("少なくとも{0}候補（省略された参照があり、件数は未確定）"), branch.CandidateCount);
+                var action = new ExportRecoveryAction { Kind = ExportRecoveryActionKind.ExcludeMenuBranch, MenuOwner = source,
+                    MenuRoot = root, MenuPath = branch.Path, Id = "menu:" + source.GetInstanceID() + ":" + branch.Path };
+                Add("menu-import-limit", root, branch.Label + " [" + branch.Path + "]",
+                    string.Format(ExporterLocalization.T("この枝には{0}あります。同じ名前や共有アセットでも、この参照経路だけを対象にします。"), branchCount),
+                    "このサブメニューの枝だけを取り込み対象から省略して試せます。残した範囲が上限内になるまで再検査します。",
+                    "この枝のVRChatメニュー由来の表情・ポーズが取り込まれなくなります。衣装・髪・骨格のオブジェクト自体は削除しません。", action);
+            }
+        }
+
+        internal static VrChatMenuImportPolicy MenuImportPolicy(GameObject source, ExportRecoveryOptions options)
+        {
+            var actions = (options?.Actions ?? new List<ExportRecoveryAction>()).Where(a => a != null &&
+                (a.Kind == ExportRecoveryActionKind.SkipVrChatMenus || a.Kind == ExportRecoveryActionKind.ExcludeMenuBranch)).ToArray();
+            if (actions.Length == 0) return null;
+            if (source == null) throw new InvalidOperationException("対策のVRChatメニューが選択アバターの原本と一致しません。再検査してください。");
+            var root = VrChatExpressionMenu.Root(source);
+            var policy = new VrChatMenuImportPolicy { ExpectedRoot = root };
+            foreach (var action in actions)
+            {
+                if (action.MenuOwner != source || !ReferenceEquals(action.MenuRoot, root))
+                    throw new InvalidOperationException("対策のVRChatメニューが選択アバターの原本と一致しません。再検査してください。");
+                if (action.Kind == ExportRecoveryActionKind.SkipVrChatMenus) policy.SkipAll = true;
+            }
+            // Full omission supersedes branch scope, while every action above
+            // must still belong to this source/menu. Retain the user's branch
+            // choices in the UI recipe so deselecting full omission restores them.
+            if (!policy.SkipAll)
+                foreach (var action in actions.Where(a => a.Kind == ExportRecoveryActionKind.ExcludeMenuBranch))
+                {
+                    if (!VrChatExpressionMenu.IsSubMenuPath(root, action.MenuPath))
+                        throw new InvalidOperationException("選んだVRChatメニューの枝を確認できません。再検査してください。");
+                    policy.ExcludedBranches.Add(action.MenuPath);
+                }
+            return policy;
         }
 
         void AddOutsideReferences(GameObject source)
@@ -189,6 +263,7 @@ namespace VRVlog.LilToonExporter
             {
                 case "環境確認": return "environment";
                 case "原本検査": return "source-validation";
+                case "表情メニュー読込": return "expression-menu";
                 case "コピー作成": return "copy";
                 case "ビルド処理": return "preparation";
                 case "状態確定": return "appearance";
@@ -269,6 +344,7 @@ namespace VRVlog.LilToonExporter
         internal void Apply(ICollection<string> warnings = null)
         {
             foreach (var action in options?.Actions ?? new List<ExportRecoveryAction>()) Validate(action);
+            var skipAllMenus = options?.Actions.Any(action => action.Kind == ExportRecoveryActionKind.SkipVrChatMenus) == true;
             // Copy every material in the copy, including inactive wardrobes.
             // Never change a persistent material or any shared source material.
             var replacements = new Dictionary<Material, Material>();
@@ -330,6 +406,9 @@ namespace VRVlog.LilToonExporter
                 }
             foreach (var action in options?.Actions ?? new List<ExportRecoveryAction>())
             {
+                // Full omission supersedes branch scope. Keep branch choices
+                // in the recipe, but never report them as additional changes.
+                if (skipAllMenus && action.Kind == ExportRecoveryActionKind.ExcludeMenuBranch) continue;
                 if (action.Kind == ExportRecoveryActionKind.ExcludeHiddenRenderer && renderers.TryGetValue(action.Renderer, out var renderer) && renderer != null)
                     renderer.enabled = false;
                 warnings?.Add(ExporterLocalization.T("変換用コピーに対策を適用: ") + action.Kind);
@@ -339,6 +418,11 @@ namespace VRVlog.LilToonExporter
         void Validate(ExportRecoveryAction action)
         {
             if (action == null) throw new InvalidOperationException("対策の対象を確認できません。再検査してください。");
+            if (action.Kind == ExportRecoveryActionKind.SkipVrChatMenus || action.Kind == ExportRecoveryActionKind.ExcludeMenuBranch)
+            {
+                ExportRecoveryReport.MenuImportPolicy(source, options);
+                return;
+            }
             if (action.Kind == ExportRecoveryActionKind.ExcludeHiddenRenderer)
             {
                 if (action.Renderer == null || !renderers.ContainsKey(action.Renderer) ||

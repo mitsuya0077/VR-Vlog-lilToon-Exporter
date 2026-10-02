@@ -35,13 +35,26 @@ namespace VRVlog.LilToonExporter.Tests
             bool rejected = false;
             try { Read(menu); } catch (InvalidOperationException) { rejected = true; }
             check(rejected, "Non-finite SDK values are rejected before Animator evaluation.");
+
+            var boundary = new Menu();
+            for (var i = 0; i < 256; i++) boundary.controls.Add(new Control { name = "face " + i, type = "Toggle", parameter = new Parameter { name = "Face" }, value = i });
+            check(Read(boundary).Entries.Count == 256, "The documented 256 leaf budget remains usable in full.");
+            boundary.controls.Add(new Control { name = "Empty", type = "SubMenu", subMenu = new Menu() });
+            check(Read(boundary).Entries.Count == 256, "An empty submenu following 256 leaves does not consume a candidate slot.");
+            boundary.controls.Add(new Control { name = "One more", type = "Button", parameter = new Parameter { name = "Face" }, value = 1 });
+            VrChatMenuImportLimitException limit = null;
+            try { Read(boundary); } catch (VrChatMenuImportLimitException error) { limit = error; }
+            check(limit != null && limit.Summary.CandidateCount == 257 && limit.Summary.IsComplete,
+                "An oversized menu has a typed, complete 257-candidate diagnostic instead of an opaque failure.");
+            var skip = new VrChatMenuImportPolicy { ExpectedRoot = boundary, SkipAll = true };
+            check(VrChatExpressionMenu.ReadMenu(boundary, skip).Entries.Count == 0,
+                "An explicitly chosen whole-menu omission does not truncate or mutate the source menu.");
+            check(boundary.controls.Count == 258, "Omission leaves the original controls and empty submenu intact.");
         }
 
         private static VrChatExpressionMenu.Source Read(Menu menu)
         {
-            var source = new VrChatExpressionMenu.Source();
-            VrChatExpressionMenu.Walk(menu, "", "", new Dictionary<string, float>(), new HashSet<object>(), source, 0);
-            return source;
+            return VrChatExpressionMenu.ReadMenu(menu);
         }
         private sealed class Menu { public List<Control> controls = new List<Control>(); }
         private sealed class Parameter { public string name; }

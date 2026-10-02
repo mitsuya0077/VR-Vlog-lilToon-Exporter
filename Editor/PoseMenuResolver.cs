@@ -16,13 +16,13 @@ namespace VRVlog.LilToonExporter
         static bool TrackingControl(StateMachineBehaviour b) => b != null && b.GetType().Name == "VRCAnimatorTrackingControl";
         internal static object Member(object value, string name) => VrChatExpressionMenu.Member(value, name);
         internal static IEnumerable<object> Items(object value) => value is IEnumerable e ? e.Cast<object>() : Enumerable.Empty<object>();
-        internal static List<PoseCandidate> Read(GameObject avatar)
+        internal static List<PoseCandidate> Read(GameObject avatar, VrChatMenuImportPolicy menuPolicy = null)
         {
             var result = new List<PoseCandidate>();
             var descriptor = avatar.GetComponents<Component>().FirstOrDefault(c => c != null && c.GetType().FullName == "VRC.SDK3.Avatars.Components.VRCAvatarDescriptor");
             if (descriptor == null) return result;
             var bodyPaths = PoseSampling.BodyPaths(avatar);
-            var menu = VrChatExpressionMenu.Read(avatar);
+            var menu = VrChatExpressionMenu.Read(avatar, menuPolicy);
             var expressionDefinitions = Items(Member(Member(descriptor, "expressionParameters"), "parameters"))
                 .ToLookup(p => Member(p, "name") as string ?? "", StringComparer.Ordinal);
             menu.ExternalParameters.UnionWith(VrChatParameterDriver.BuiltIn);

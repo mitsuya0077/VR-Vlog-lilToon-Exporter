@@ -68,10 +68,12 @@ namespace VRVlog.LilToonExporter
             NdmfExportPreparation.ValidateSource(source, exclusions.Contains);
             // Re-read the live assets on every export; a preview is never a stale
             // cached source of expression weights after the user edits a clip.
-            var menu = VrChatExpressionSampler.Analyze(source, exclusions.ContainsPath);
+            var menuPolicy = ExportRecoveryReport.MenuImportPolicy(source, recoveryOptions);
+            recoveryReport.Stage = "表情メニュー読込";
+            var menu = VrChatExpressionSampler.Analyze(source, exclusions.ContainsPath, menuPolicy);
             exclusions.FilterExpressions(menu, warnings);
             var sourceBlink = BlinkExportSession.Resolve(source, blinkOptions, exclusions.Contains, suppressSharedTextureEmission, suppressHdrTextureEmission);
-            using var poses = new PoseExportSession(source, poseOptions, exclusions.Contains);
+            using var poses = new PoseExportSession(source, poseOptions, exclusions.Contains, menuPolicy);
             recoveryReport.Stage = "コピー作成";
             var clone = UnityEngine.Object.Instantiate(source);
             clone.name = source.name;
