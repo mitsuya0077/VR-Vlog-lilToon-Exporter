@@ -60,7 +60,7 @@ namespace VRVlog.LilToonExporter
                 if (declaration.EndsWith(":external", StringComparison.Ordinal))
                 {
                     if (name == "_UseAudioLink" && source.GetFloat(name) != 0)
-                        throw new NotSupportedException(source.name + ": AudioLinkは外部連携のため今回の再現対象外です。");
+                        throw ExportRecoveryFailure.At(new NotSupportedException(source.name + ": AudioLinkは外部連携のため今回の再現対象外です。"), "audio-link", source);
                     continue;
                 }
                 var type = shader.GetPropertyType(i);
@@ -72,7 +72,17 @@ namespace VRVlog.LilToonExporter
                     // Export that default too, so the canonical decoder never
                     // interprets an app-platform-specific bump texture as RG.
                     if(texture==null && normal)texture=Texture2D.normalTexture;
-                    var id = texture == null ? -1 : Texture(texture, normal);
+                    int id;
+                    try { id = texture == null ? -1 : Texture(texture, normal); }
+                    catch (NotSupportedException error) when (texture != null && !(texture is Texture2D) && !(texture is Cubemap) &&
+                        (name.StartsWith("_Main2nd", StringComparison.Ordinal) || name.StartsWith("_Main3rd", StringComparison.Ordinal)))
+                    {
+                        // Keep the original error type and attribute only an
+                        // actual failure in a known optional main-color layer.
+                        ExportRecoveryFailure.At(error, "material-layer", source);
+                        error.Data[ExportRecoveryFailure.LayerKey] = name.StartsWith("_Main2nd", StringComparison.Ordinal) ? "2nd" : "3rd";
+                        throw;
+                    }
                     var scale = source.GetTextureScale(name); var offset = source.GetTextureOffset(name);
                     textureProperties.Add(new Dictionary<string, object> { {"name", name}, {"texture", id}, {"st", new List<object> {scale.x, scale.y, offset.x, offset.y}} });
                 }

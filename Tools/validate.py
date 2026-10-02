@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 import json
+import re
 from pathlib import Path
 
 root = Path(__file__).resolve().parents[1]
@@ -14,11 +15,15 @@ injector = (root / "Editor/LilToonGlbExtension.cs").read_text(encoding="utf-8")
 reader = (root / "Editor/LilToonMaterialReader.cs").read_text(encoding="utf-8")
 window = (root / "Editor/LilToonExporterWindow.cs").read_text(encoding="utf-8")
 one_click = (root / "Editor/UniVrmOneClickExporter.cs").read_text(encoding="utf-8")
+recovery = (root / "Editor/ExportRecovery.cs").read_text(encoding="utf-8")
+recovery_session = (root / "Editor/ExportRecoverySession.cs").read_text(encoding="utf-8")
+recovery_comparison = (root / "Editor/ExportRecoveryComparisonWindow.cs").read_text(encoding="utf-8")
+failure_window = (root / "Editor/ExportFailureWindow.cs").read_text(encoding="utf-8")
 listing = json.loads((root / "source.json").read_text(encoding="utf-8"))
 
 assert package["name"] == "com.vrvlog.liltoon-vrm-exporter"
 assert package["unity"] == "2022.3"
-assert package["version"] == "0.11.5"
+assert package["version"] == "0.11.6"
 assert one_click.index("AvatarBaseShape.Preserve(clone, clone,") < one_click.index("Vrm10AppearanceExporter.Export(")
 assert "foreach (var mesh in temporaryMeshes) UnityEngine.Object.DestroyImmediate(mesh);" in one_click
 assert package["vpmDependencies"] == {
@@ -171,9 +176,10 @@ assert "RequireEnum" in injector
 assert "does not declare VRMC_materials_mtoon in extensionsUsed" in injector
 assert "ValidateEncodedTexture(glb, texture.textureIndex, textureSources)" in injector
 assert "Unexpected extension property" in injector
-assert 'Guid.NewGuid().ToString("N")' in window
-assert "File.Replace(temporary, destination, null)" in window
-assert "finally { if (File.Exists(temporary)) File.Delete(temporary); }" in window
+assert 'Guid.NewGuid().ToString("N")' in recovery_session
+assert "File.Replace(temporary, destination, null)" in recovery_session
+assert "finally { if (File.Exists(temporary)) File.Delete(temporary); }" in recovery_session
+assert recovery_session.index("LilToonGlbExtension.Validate(bytes)") < recovery_session.index("Directory.CreateDirectory(directory)")
 assert "UniVrmOneClickExporter.Export" in window
 assert 'SupportedLilToonVersion = Compatibility.DependencyPolicy.LilToonVersion' in window
 assert 'package.name, "jp.lilxyzw.liltoon"' in window
@@ -261,10 +267,23 @@ assert 'OutlineWidthMultiplyTexture = outlineEnabled ? Texture(source, "_Outline
 assert 'private string author = "";' in window
 assert 'private string avatarName = "";' not in window
 assert 'UniVrmOneClickExporter.Export(targetAvatar, targetName, targetAuthor, warnings, false,' in window
-assert 'PackageVersion(), RequireSupportedLilToon(), false, targetExclusions, bakeOptions, targetGimmicks, targetBlink, targetPoses);' in window
+assert 'PackageVersion(), RequireSupportedLilToon(), false, targetExclusions, null, targetGimmicks, targetBlink, targetPoses,' in window
 assert 'var targetOutput = outputPath;' in window
 assert 'var targetExclusions = excludedObjects.ToArray();' in window
-assert 'ExportFailureWindow.Show(exception, omitAndRetry)' in window
+assert 'ExportFailureWindow.Show(session, Completed)' in window
+assert 'new ExportRecoverySession(targetAvatar, targetOutput,' in window
+assert 'recoveryOptions: options, recoveryReport: report' in window
+assert 'ExcludeHiddenRenderer' in recovery and 'ExportGimmickDetection.Inspect(action.Renderer)?.Unit' in recovery
+assert 'code == "audio-link"' in recovery and 'Official(audio)' in recovery
+assert 'Hash128.Compute(text.ToString())' in recovery
+assert 'LastSuccess = new SuccessfulAttempt' in recovery_session
+assert 'item.Action.Id == diagnostic.Action.Id' in recovery_session
+assert 'session.CreatePreview(attempt.Options)' in recovery_comparison
+assert 'controlRigGenerationOption: ControlRigGenerationOption.None' in recovery_comparison
+assert '!HasVrmPreview || !session.CanSave' in recovery_comparison
+assert 'BuildSupportText()' in failure_window
+assert (root / "Tests/Editor/ExportRecoveryTests.cs").is_file()
+assert (root / "Tests/Editor/ExportRecoverySessionTests.cs").is_file()
 assert one_click.index('MaAppearanceSnapshot.Apply(source, clone,') < one_click.index('LilToonMainTextureBaker.ValidateAvatar(clone,') < one_click.index('NdmfExportPreparation.Prepare(source, clone,')
 assert 'LilToonMainTextureBaker.ApplyOmissions(clone, temporaryMaterials, warnings, bakeOptions);' in one_click
 assert 'fullSnapshot.Inject(exported, exporterVersion, lilToonVersion)' in one_click
@@ -295,14 +314,23 @@ unified_failure_sources = (
     "Unified Expressions の出力 mesh に primitive がありません: ",
     "Unified Expressions の morph target 参照が不正です: ",
 ) + tuple("Invalid Unified Expressions " + index + " index." for index in ("node", "mesh", "morph", "material"))
+recovery_sources = set()
+for source_text in (recovery, recovery_session, recovery_comparison, failure_window):
+    for literal in re.findall(r'"((?:\\.|[^"\\])*)"', source_text):
+        source = json.loads('"' + literal + '"')
+        if re.search('[ぁ-んァ-ヶ一-龠]', source):
+            recovery_sources.add(source)
 for locale in ("en", "ko", "zh-Hans", "zh-Hant"):
     entries = json.loads((root / ("Editor/Locales/ExporterLocale_" + locale + ".json")).read_text(encoding="utf-8"))["entries"]
     translations = {entry["source"]: entry["translated"] for entry in entries}
     assert len(translations) == len(entries), locale + ": duplicate locale source"
     for source in unified_failure_sources:
         assert translations.get(source) and translations[source] != source, locale + ": missing UE failure translation"
+    for source in recovery_sources:
+        # Some short Chinese labels (for example 正面) are also valid Japanese.
+        assert translations.get(source), locale + ": missing recovery translation"
 
-print("Exporter implementation, package, schema, and UE locale checks passed.")
+print("Exporter implementation, package, schema, UE and recovery locale checks passed.")
 
 # A name inventory alone must not hide an unclassified rendering property.
 catalogue = json.loads((root / "Schema/LilToon234Catalogue.json").read_text(encoding="utf-8"))
