@@ -1,5 +1,8 @@
 using System;
 using System.Linq;
+using System.Diagnostics;
+using System.IO;
+using System.Security.Cryptography;
 using NUnit.Framework;
 using Unity.Collections;
 using UnityEditor;
@@ -90,7 +93,7 @@ namespace VRVlog.LilToonExporter.Tests
         [TestCase("tailWeight")][TestCase("tailIndex")][TestCase("influenceCount")]
         public void BoneInfluencesBeyondTheFirstFourRemainTracked(string change)
         {
-            using var fixture = new MeshFixture(3, 0);
+            using var fixture = new MeshFixture(3, 0, false);
             var bones = new Transform[6];
             for (var i = 0; i < bones.Length; i++)
             {
@@ -104,6 +107,42 @@ namespace VRVlog.LilToonExporter.Tests
             var changed = fixture.Mesh.GetAllBoneWeights().ToArray();
             for (var i = 0; i < 4; i++) { Assert.That(changed[i].boneIndex, Is.EqualTo(initial[i].boneIndex)); Assert.That(changed[i].weight, Is.EqualTo(initial[i].weight)); }
             Assert.That(stamp.Matches(fixture.Source), Is.False, "A lower influence must not be lost by a four-weight-only fingerprint.");
+        }
+
+        [Test]
+        public void BulkMorphBytesPreserveFloatPayloadBitsAndLengthFraming()
+        {
+            // Include signed zero, distinct NaN payloads and infinities without
+            // asking Mesh to validate those artificial geometry values.
+            var values = new[] { new Vector3(BitConverter.Int32BitsToSingle(unchecked((int)0x80000000)),
+                BitConverter.Int32BitsToSingle(0x7fc00001), float.PositiveInfinity), new Vector3(1, -1, float.NegativeInfinity) };
+            using var serialized = new MemoryStream();
+            using (var writer = new BinaryWriter(serialized, System.Text.Encoding.UTF8, true))
+            {
+                writer.Write(values.Length * 12);
+                foreach (var value in values) { writer.Write(value.x); writer.Write(value.y); writer.Write(value.z); }
+            }
+            using var sha = SHA256.Create(); var expected = sha.ComputeHash(serialized.ToArray());
+            using var pinned = new ExportSourceFingerprint.PinnedVectors(values);
+            using var hash = new ExportSourceFingerprint.Digest(); hash.Vectors(pinned);
+            Assert.That(hash.Finish(), Is.EqualTo(new Hash128(BitConverter.ToUInt32(expected, 0), BitConverter.ToUInt32(expected, 4),
+                BitConverter.ToUInt32(expected, 8), BitConverter.ToUInt32(expected, 12))));
+        }
+
+        [Test]
+        public void HundredMorphsAtHundredThousandVerticesRemainCorrectAndReportNativeTiming()
+        {
+            // Sparse native targets bound fixture storage; the API still fills
+            // and hashes every vertex/normal/tangent slot of every frame.
+            using var fixture = new MeshFixture(100000, 100);
+            var watch = Stopwatch.StartNew(); var stamp = ExportRecoverySourceStamp.Capture(fixture.Source);
+            watch.Stop(); var capture = watch.Elapsed;
+            watch.Restart(); Assert.That(stamp.Matches(fixture.Source), Is.True); watch.Stop();
+            TestContext.WriteLine("Native 100,000-vertex / 100-morph source: Capture=" + capture.TotalMilliseconds.ToString("F1")
+                + " ms; Matches=" + watch.Elapsed.TotalMilliseconds.ToString("F1") + " ms. Timings are observed, not a platform-independent bound.");
+            Assert.That(fixture.Skin.sharedMesh, Is.SameAs(fixture.Mesh)); Assert.That(fixture.Mesh.blendShapeCount, Is.EqualTo(100));
+            fixture.SetShapes(100, "morphNormal");
+            Assert.That(stamp.Matches(fixture.Source), Is.False, "Bulk bytes preserve normal-only target changes at realistic scale.");
         }
 
         static void SetManyWeights(Mesh mesh, string change)
@@ -187,7 +226,7 @@ namespace VRVlog.LilToonExporter.Tests
             internal readonly GameObject Source = new GameObject("Fingerprint source");
             internal readonly Mesh Mesh = new Mesh { name = "Unsaved tracking mesh" };
             internal readonly SkinnedMeshRenderer Skin;
-            internal MeshFixture(int vertices, int shapes)
+            internal MeshFixture(int vertices, int shapes, bool initializeSkinning = true)
             {
                 Mesh.vertices = Enumerable.Range(0, vertices).Select(i => new Vector3(i * .00001f, 0, 0)).ToArray();
                 Mesh.normals = Enumerable.Repeat(Vector3.forward, vertices).ToArray(); Mesh.tangents = Enumerable.Repeat(new Vector4(1, 0, 0, 1), vertices).ToArray();
@@ -197,7 +236,7 @@ namespace VRVlog.LilToonExporter.Tests
                 var boneA = new GameObject("Bone A").transform; boneA.SetParent(Source.transform, false);
                 var boneB = new GameObject("Bone B").transform; boneB.SetParent(Source.transform, false);
                 Skin.bones = new[] { boneA, boneB }; Skin.rootBone = boneA; Skin.sharedMesh = Mesh;
-                SetSkinning(false, false); SetShapes(shapes);
+                if (initializeSkinning) SetSkinning(false, false); SetShapes(shapes);
             }
             internal void SetSkinning(bool index, bool weight)
             {

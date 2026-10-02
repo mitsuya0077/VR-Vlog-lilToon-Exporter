@@ -2,6 +2,7 @@ using System;
 using System.Collections.Generic;
 using System.IO;
 using System.Linq;
+using System.Runtime.InteropServices;
 using System.Security.Cryptography;
 using System.Text;
 using Unity.Collections;
@@ -81,6 +82,9 @@ namespace VRVlog.LilToonExporter
             hash.Integer(mesh.blendShapeCount);
             if (mesh.blendShapeCount == 0) return;
             var vertices = new Vector3[mesh.vertexCount]; var normals = new Vector3[mesh.vertexCount]; var tangents = new Vector3[mesh.vertexCount];
+            using var vertexBytes = new PinnedVectors(vertices);
+            using var normalBytes = new PinnedVectors(normals);
+            using var tangentBytes = new PinnedVectors(tangents);
             for (var shape = 0; shape < mesh.blendShapeCount; shape++)
             {
                 hash.Text(mesh.GetBlendShapeName(shape)); var frames = mesh.GetBlendShapeFrameCount(shape); hash.Integer(frames);
@@ -88,8 +92,7 @@ namespace VRVlog.LilToonExporter
                 {
                     hash.Float(mesh.GetBlendShapeFrameWeight(shape, frame));
                     mesh.GetBlendShapeFrameVertices(shape, frame, vertices, normals, tangents);
-                    for (var vertex = 0; vertex < vertices.Length; vertex++)
-                    { hash.Vector(vertices[vertex]); hash.Vector(normals[vertex]); hash.Vector(tangents[vertex]); }
+                    hash.Vectors(vertexBytes); hash.Vectors(normalBytes); hash.Vectors(tangentBytes);
                 }
             }
         }
@@ -209,7 +212,21 @@ namespace VRVlog.LilToonExporter
             if (reference != null && !(reference is Component) && !(reference is GameObject)) queue.Enqueue(reference);
         }
 
-        sealed class Digest : IDisposable
+        internal sealed class PinnedVectors : IDisposable
+        {
+            GCHandle handle;
+            internal readonly IntPtr Data;
+            internal readonly int Length;
+            internal PinnedVectors(Vector3[] values)
+            {
+                Length = checked(values.Length * Marshal.SizeOf<Vector3>());
+                handle = GCHandle.Alloc(values, GCHandleType.Pinned);
+                Data = handle.AddrOfPinnedObject();
+            }
+            public void Dispose() { if (handle.IsAllocated) handle.Free(); }
+        }
+
+        internal sealed class Digest : IDisposable
         {
             readonly SHA256 algorithm = SHA256.Create();
             readonly byte[] bytes = new byte[8192]; readonly char[] chars = new char[1024];
@@ -250,6 +267,15 @@ namespace VRVlog.LilToonExporter
                 {
                     if (count == bytes.Length) Flush(); var length = Math.Min(bytes.Length - count, data.Length - offset);
                     NativeArray<byte>.Copy(data, offset, bytes, count, length); count += length; offset += length;
+                }
+            }
+            internal void Vectors(PinnedVectors data)
+            {
+                Integer(data.Length);
+                for (var offset = 0; offset < data.Length;)
+                {
+                    if (count == bytes.Length) Flush(); var length = Math.Min(bytes.Length - count, data.Length - offset);
+                    Marshal.Copy(IntPtr.Add(data.Data, offset), bytes, count, length); count += length; offset += length;
                 }
             }
             internal void File(string path)
