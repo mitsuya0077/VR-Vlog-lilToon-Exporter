@@ -20,11 +20,13 @@ namespace VRVlog.LilToonExporter
         readonly List<DeflatePayload> payloads = new List<DeflatePayload>();
         readonly List<object> bindings = new List<object>();
         readonly Dictionary<int, Dictionary<string, object>> indexedRecords = new Dictionary<int, Dictionary<string, object>>();
+        readonly HashSet<Texture> resizedWarnings = new HashSet<Texture>();
+        ICollection<string> warnings;
         bool suppressSharedTextureEmission, suppressHdrTextureEmission;
 
-        internal static LilToonFullSnapshot Capture(GameObject avatar, bool suppressSharedTextureEmission=false, bool suppressHdrTextureEmission=false)
+        internal static LilToonFullSnapshot Capture(GameObject avatar, bool suppressSharedTextureEmission=false, bool suppressHdrTextureEmission=false, ICollection<string> warnings=null)
         {
-            var result = new LilToonFullSnapshot {suppressSharedTextureEmission=suppressSharedTextureEmission, suppressHdrTextureEmission=suppressHdrTextureEmission};
+            var result = new LilToonFullSnapshot {suppressSharedTextureEmission=suppressSharedTextureEmission, suppressHdrTextureEmission=suppressHdrTextureEmission, warnings=warnings};
             foreach (var renderer in ExportRendererSelection.Enumerate(avatar))
             {
                 // UniVRM exports mesh primitives, not particle/trail/line systems.
@@ -123,7 +125,12 @@ namespace VRVlog.LilToonExporter
             if (textureIds.TryGetValue((source, normal), out var existing)) return existing;
             if (!(source is Texture2D) && !(source is Cubemap)) throw new NotSupportedException("動的テクスチャは保存できません: " + source.name);
             var chunks = new List<object>();
-            var count = source is Texture2D two ? two.mipmapCount : ((Cubemap)source).mipmapCount;
+            var size = TextureResizePolicy.Size(source.width, source.height);
+            var resized = size.Item1 != source.width || size.Item2 != source.height;
+            var sourceMipCount = source is Texture2D two ? two.mipmapCount : ((Cubemap)source).mipmapCount;
+            // Keep intentionally mipless inputs mipless. A resized mipmapped
+            // texture needs the chain for its new dimensions, not the old chain.
+            var count = resized && sourceMipCount > 1 ? LilToonFullTexture.MipCount(size.Item1, size.Item2) : sourceMipCount;
             var faces = source is Cubemap ? 6 : 1;
             // Gamma rendering can expose an UNorm GPU view of sRGB pixels.
             // Preserve the stored pixel encoding, independent of this Editor's
@@ -135,12 +142,16 @@ namespace VRVlog.LilToonExporter
             for (var face = 0; face < faces; face++)
                 for (var mip = 0; mip < count; mip++)
                 {
-                    var bytes = LilToonFullTexture.Read(source, mip, face, normal, srgb, hdr, half);
+                    var bytes = resized
+                        ? LilToonFullTexture.ReadResized(source, Math.Max(1, size.Item1 >> mip), Math.Max(1, size.Item2 >> mip), face, normal, srgb, hdr, half)
+                        : LilToonFullTexture.Read(source, mip, face, normal, srgb, hdr, half);
                     chunks.Add(payloads.Count); payloads.Add(new DeflatePayload(bytes));
                 }
+            if (resized && resizedWarnings.Add(source))
+                warnings?.Add($"lilToon画像「{source.name}」を{source.width}×{source.height}から{size.Item1}×{size.Item2}に縮小しました（読み込み時のメモリ使用量を軽減）。");
             var index = textures.Count;
             textures.Add(new Dictionary<string, object> {
-                {"name", source.name}, {"width", source.width}, {"height", source.height}, {"mips", count}, {"faces", faces},
+                {"name", source.name}, {"width", size.Item1}, {"height", size.Item2}, {"mips", count}, {"faces", faces},
                 {"format", half ? "rgbaHalf" : hdr ? "rgbaFloat" : "rgba32"}, {"srgb", srgb}, {"normal", normal},
                 {"filter", (int)source.filterMode}, {"wrapU", (int)source.wrapModeU}, {"wrapV", (int)source.wrapModeV}, {"wrapW", (int)source.wrapModeW},
                 {"aniso", source.anisoLevel}, {"mipBias", source.mipMapBias}, {"chunks", chunks}
