@@ -2,7 +2,6 @@ using System;
 using System.Linq;
 using System.Diagnostics;
 using System.IO;
-using System.Security.Cryptography;
 using NUnit.Framework;
 using Unity.Collections;
 using UnityEditor;
@@ -109,24 +108,26 @@ namespace VRVlog.LilToonExporter.Tests
             Assert.That(stamp.Matches(fixture.Source), Is.False, "A lower influence must not be lost by a four-weight-only fingerprint.");
         }
 
-        [Test]
-        public void BulkMorphBytesPreserveFloatPayloadBitsAndLengthFraming()
+        [TestCase(2)][TestCase(1000)]
+        public void BulkMorphBytesPreserveFloatPayloadBitsAndLengthFraming(int count)
         {
             // Include signed zero, distinct NaN payloads and infinities without
             // asking Mesh to validate those artificial geometry values.
-            var values = new[] { new Vector3(BitConverter.Int32BitsToSingle(unchecked((int)0x80000000)),
-                BitConverter.Int32BitsToSingle(0x7fc00001), float.PositiveInfinity), new Vector3(1, -1, float.NegativeInfinity) };
+            var values = Enumerable.Range(0, count).Select(index => index % 2 == 0
+                ? new Vector3(BitConverter.Int32BitsToSingle(unchecked((int)0x80000000)),
+                    BitConverter.Int32BitsToSingle(0x7fc00001), float.PositiveInfinity)
+                : new Vector3(1, -1, float.NegativeInfinity)).ToArray();
             using var serialized = new MemoryStream();
             using (var writer = new BinaryWriter(serialized, System.Text.Encoding.UTF8, true))
             {
                 writer.Write(values.Length * 12);
                 foreach (var value in values) { writer.Write(value.x); writer.Write(value.y); writer.Write(value.z); }
             }
-            using var sha = SHA256.Create(); var expected = sha.ComputeHash(serialized.ToArray());
+            var expected = new Hash128(); var payload = serialized.ToArray();
+            for (var offset = 0; offset < payload.Length; offset += 8192) expected.Append(payload, offset, Math.Min(8192, payload.Length - offset));
             using var pinned = new ExportSourceFingerprint.PinnedVectors(values);
             using var hash = new ExportSourceFingerprint.Digest(); hash.Vectors(pinned);
-            Assert.That(hash.Finish(), Is.EqualTo(new Hash128(BitConverter.ToUInt32(expected, 0), BitConverter.ToUInt32(expected, 4),
-                BitConverter.ToUInt32(expected, 8), BitConverter.ToUInt32(expected, 12))));
+            Assert.That(hash.Finish(), Is.EqualTo(expected));
         }
 
         [Test]

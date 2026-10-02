@@ -3,7 +3,6 @@ using System.Collections.Generic;
 using System.IO;
 using System.Linq;
 using System.Runtime.InteropServices;
-using System.Security.Cryptography;
 using System.Text;
 using Unity.Collections;
 using UnityEditor;
@@ -13,7 +12,7 @@ using Object = UnityEngine.Object;
 namespace VRVlog.LilToonExporter
 {
     // Source validity must not depend on a JSON dump of all referenced assets.
-    // The digest consumes bounded chunks; meshes use native binary data and one
+    // The native Hash128 digest consumes deterministic bounded chunks; meshes use native binary data and one
     // reusable set of delta arrays, independent of the number of blendshapes.
     internal static class ExportSourceFingerprint
     {
@@ -228,10 +227,10 @@ namespace VRVlog.LilToonExporter
 
         internal sealed class Digest : IDisposable
         {
-            readonly SHA256 algorithm = SHA256.Create();
+            Hash128 algorithm;
             readonly byte[] bytes = new byte[8192]; readonly char[] chars = new char[1024];
             readonly Encoder encoder = Encoding.UTF8.GetEncoder(); int count;
-            void Flush() { if (count == 0) return; algorithm.TransformBlock(bytes, 0, count, bytes, 0); count = 0; }
+            void Flush() { if (count == 0) return; algorithm.Append(bytes, 0, count); count = 0; }
             void Byte(byte value) { if (count == bytes.Length) Flush(); bytes[count++] = value; }
             internal void Boolean(bool value) => Byte(value ? (byte)1 : (byte)0);
             internal void Integer(int value) => Unsigned(unchecked((uint)value));
@@ -281,14 +280,21 @@ namespace VRVlog.LilToonExporter
             internal void File(string path)
             {
                 using var stream = System.IO.File.OpenRead(path); Long(stream.Length); Flush();
-                int read; while ((read = stream.Read(bytes, 0, bytes.Length)) != 0) algorithm.TransformBlock(bytes, 0, read, bytes, 0);
+                // Native Append is seeded per block. Fill each block even if
+                // Read returns short, so identical files have identical framing.
+                while (true)
+                {
+                    var filled = 0; int read;
+                    while (filled < bytes.Length && (read = stream.Read(bytes, filled, bytes.Length - filled)) != 0) filled += read;
+                    if (filled == 0) break;
+                    algorithm.Append(bytes, 0, filled);
+                }
             }
             internal Hash128 Finish()
             {
-                Flush(); algorithm.TransformFinalBlock(Array.Empty<byte>(), 0, 0); var result = algorithm.Hash;
-                return new Hash128(BitConverter.ToUInt32(result, 0), BitConverter.ToUInt32(result, 4), BitConverter.ToUInt32(result, 8), BitConverter.ToUInt32(result, 12));
+                Flush(); return algorithm;
             }
-            public void Dispose() => algorithm.Dispose();
+            public void Dispose() { }
         }
     }
 }
