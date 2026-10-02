@@ -22,6 +22,7 @@ namespace VRVlog.LilToonExporter
         private readonly bool defaultLocal;
         private InvalidOperationException failure;
         private int entries;
+        private bool neutralFxObserved;
 
         internal Animator Animator;
         internal AnimatorController Controller { get; private set; }
@@ -57,7 +58,8 @@ namespace VRVlog.LilToonExporter
                 var result = new List<StateMachineBehaviour>();
                 foreach (var behaviour in values)
                 {
-                    if (VrChatParameterDriver.IsTracking(behaviour)) continue;
+                    if (VrChatParameterDriver.IsTracking(behaviour) || VrChatParameterDriver.IsNonFxPlayableControl(behaviour) ||
+                        VrChatParameterDriver.IsTemporaryPoseSpace(behaviour) || VrChatParameterDriver.IsLocomotionControl(behaviour)) continue;
                     if (!dependencies.Drivers.TryGetValue(behaviour, out var program))
                         throw new InvalidOperationException("評価用Controllerに未解決のState Behaviourがあります。");
                     var adapter = (ExpressionDriverBehaviour)Own(ScriptableObject.CreateInstance<ExpressionDriverBehaviour>());
@@ -167,6 +169,15 @@ namespace VRVlog.LilToonExporter
             {
                 if (++session.entries > 4096) throw new InvalidOperationException("Parameter Driverの進入回数が上限を超えました。循環する表情は変換できません。");
                 var program = session.programs[programIndex];
+                if (program.FxControl)
+                {
+                    // Every observed command must preserve full FX weight.
+                    // A transient disable cannot be safely sampled and reset.
+                    if (program.FxWeight != 1)
+                        throw new InvalidOperationException(program.Location + " / VRCPlayableLayerControl: FXの重みを変更する状態は固定表情に変換できません。");
+                    session.neutralFxObserved = true;
+                    return;
+                }
                 double Read(string name)
                 {
                     switch (session.types[name])
@@ -198,6 +209,13 @@ namespace VRVlog.LilToonExporter
         }
 
         internal void Check() { if (failure != null) throw failure; }
+
+        internal void CheckNeutralFx()
+        {
+            Check();
+            if (dependencies.HasFxControls && !neutralFxObserved)
+                throw new InvalidOperationException("FXの初期状態に重み1を指定するVRCPlayableLayerControlがなく、表情への影響を確定できません。");
+        }
 
         public void Dispose()
         {

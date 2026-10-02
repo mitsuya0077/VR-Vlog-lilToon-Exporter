@@ -27,11 +27,11 @@ namespace VRVlog.LilToonExporter
         internal static bool CompatiblePartials(string left, string right) =>
             PartialFamily(left, true) >= 0 && PartialFamily(left, true) == PartialFamily(right, false);
 
-        internal static int Unique(IReadOnlyList<string> names, string name)
+        internal static int Unique(IReadOnlyList<string> names, string name, StringComparison comparison = StringComparison.OrdinalIgnoreCase)
         {
             var result = -1;
             for (var i = 0; i < names.Count; i++)
-                if (string.Equals(names[i], name, StringComparison.OrdinalIgnoreCase))
+                if (string.Equals(names[i], name, comparison))
                 {
                     if (result >= 0) return -2;
                     result = i;

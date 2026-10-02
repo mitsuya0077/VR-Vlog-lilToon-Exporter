@@ -3,6 +3,7 @@ using System.Collections;
 using System.Collections.Generic;
 using System.Globalization;
 using System.Linq;
+using UnityEditor;
 using UnityEngine;
 using UnityEngine.Animations;
 
@@ -24,6 +25,8 @@ namespace VRVlog.LilToonExporter
         {
             internal string Location, Error;
             internal bool LocalOnly;
+            internal bool FxControl;
+            internal float FxWeight;
             internal readonly List<Operation> Operations = new List<Operation>();
         }
 
@@ -43,6 +46,71 @@ namespace VRVlog.LilToonExporter
         internal static bool IsTracking(StateMachineBehaviour value) => value != null &&
             (value.GetType().FullName == "VRC.SDK3.Avatars.Components.VRCAnimatorTrackingControl" ||
              value.GetType().FullName == "VRC.SDKBase.VRC_AnimatorTrackingControl");
+
+        // Known SDK controls are data only. The body targets cannot change the
+        // sampled FX morphs; FX commands require a separate neutral-gate proof.
+        private static bool ReadPlayableControl(StateMachineBehaviour value, out string target, out float weight, out float duration)
+        {
+            target = null; weight = duration = 0;
+            if (value == null || (value.GetType().FullName != "VRC.SDK3.Avatars.Components.VRCPlayableLayerControl" &&
+                value.GetType().FullName != "VRC.SDKBase.VRC_PlayableLayerControl")) return false;
+            using (var data = new SerializedObject(value))
+            {
+                var layer = data.FindProperty("layer");
+                var goal = data.FindProperty("goalWeight");
+                var blend = data.FindProperty("blendDuration");
+                if (layer == null || layer.propertyType != SerializedPropertyType.Enum ||
+                    goal == null || goal.propertyType != SerializedPropertyType.Float ||
+                    blend == null || blend.propertyType != SerializedPropertyType.Float) return false;
+                var index = layer.enumValueIndex;
+                if (index < 0 || index >= layer.enumNames.Length) return false;
+                target = layer.enumNames[index]; weight = goal.floatValue; duration = blend.floatValue;
+                return (target == "Action" || target == "Gesture" || target == "Additive" || target == "FX") &&
+                    !float.IsNaN(weight) && !float.IsInfinity(weight) && weight >= 0 && weight <= 1 &&
+                    !float.IsNaN(duration) && !float.IsInfinity(duration) && duration >= 0;
+            }
+        }
+
+        internal static bool IsNonFxPlayableControl(StateMachineBehaviour value) =>
+            ReadPlayableControl(value, out var target, out _, out _) && target != "FX";
+
+        internal static bool ReadInstantFxControl(StateMachineBehaviour value, string location, out Program program)
+        {
+            program = null;
+            if (!ReadPlayableControl(value, out var target, out var weight, out var duration) || target != "FX" || duration != 0) return false;
+            program = new Program { Location = location, FxControl = true, FxWeight = weight };
+            return true;
+        }
+
+        // VRChat's locomotion/capsule/IK control does not write the FX graph
+        // or its parameters. Keep the separate body-pose restrictions intact.
+        internal static bool IsLocomotionControl(StateMachineBehaviour value)
+        {
+            if (value == null || (value.GetType().FullName != "VRC.SDK3.Avatars.Components.VRCAnimatorLocomotionControl" &&
+                value.GetType().FullName != "VRC.SDKBase.VRC_AnimatorLocomotionControl")) return false;
+            using (var data = new SerializedObject(value))
+            {
+                var disabled = data.FindProperty("disableLocomotion");
+                return disabled != null && disabled.propertyType == SerializedPropertyType.Boolean;
+            }
+        }
+        // The documented SDK effect changes the wearer's viewpoint, not the
+        // facial graph. Do not invoke the SDK timing callbacks/runtime delegates.
+        internal static bool IsTemporaryPoseSpace(StateMachineBehaviour value)
+        {
+            if (value == null || (value.GetType().FullName != "VRC.SDK3.Avatars.Components.VRCAnimatorTemporaryPoseSpace" &&
+                value.GetType().FullName != "VRC.SDKBase.VRC_AnimatorTemporaryPoseSpace")) return false;
+            using (var data = new SerializedObject(value))
+            {
+                var enter = data.FindProperty("enterPoseSpace");
+                var fixedDelay = data.FindProperty("fixedDelay");
+                var delay = data.FindProperty("delayTime");
+                return enter != null && enter.propertyType == SerializedPropertyType.Boolean &&
+                    fixedDelay != null && fixedDelay.propertyType == SerializedPropertyType.Boolean &&
+                    delay != null && delay.propertyType == SerializedPropertyType.Float &&
+                    !float.IsNaN(delay.floatValue) && !float.IsInfinity(delay.floatValue) && delay.floatValue >= 0;
+            }
+        }
 
         internal static Program Read(StateMachineBehaviour behaviour, string location)
         {

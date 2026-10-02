@@ -57,8 +57,12 @@ namespace VRVlog.LilToonExporter
             blink.Validate(copy);
             foreach (var behaviour in copy.GetComponentsInChildren<Behaviour>(true)) behaviour.enabled = false;
             foreach (var renderer in copy.GetComponentsInChildren<SkinnedMeshRenderer>(true))
+            {
+                // Manual preview renders must update skinning after blend-shape changes.
+                renderer.forceMatrixRecalculationPerRender = true;
                 if (renderer.sharedMesh != null)
                     rest.Add(renderer, Enumerable.Range(0, renderer.sharedMesh.blendShapeCount).Select(renderer.GetBlendShapeWeight).ToArray());
+            }
             preview = new PreviewRenderUtility();
             preview.AddSingleGO(copy);
             var renderers = ExportRendererSelection.Enumerate(copy).ToArray();
