@@ -72,7 +72,7 @@ namespace VRVlog.LilToonExporter
 
         private void RefreshSession()
         {
-            message = session.Failure?.Message;
+            message = session.WasCanceled ? ExporterLocalization.T("キャンセル") : session.Failure?.Message;
             technicalDetails = session.Failure?.ToString();
             supportText = session.Report?.BuildSupportText() ?? "";
             selected.Clear();
@@ -129,7 +129,7 @@ namespace VRVlog.LilToonExporter
                 }
                 else
                 {
-                    if (!string.IsNullOrEmpty(message)) EditorGUILayout.HelpBox(ExporterLocalization.T(message), MessageType.Error);
+                    if (!string.IsNullOrEmpty(message)) EditorGUILayout.HelpBox(ExporterLocalization.T(message), session?.WasCanceled == true ? MessageType.Info : MessageType.Error);
                     if (session != null)
                         EditorGUILayout.HelpBox(ExporterLocalization.T("対策は新しい変換用コピーに適用します。元のアバターと共有マテリアルは変更しません。未知の仕組みという理由だけでは除外しません。"), MessageType.Info);
                     using (new EditorGUI.DisabledScope(busy))
@@ -149,7 +149,7 @@ namespace VRVlog.LilToonExporter
                     else
                     {
                         var count = session.AvailableDiagnostics.Count(issue => issue.Action != null && selected.Contains(issue.Action.Id));
-                        using (new EditorGUI.DisabledScope(count == 0 && session.SelectedOptions.Actions.Count == 0))
+                        using (new EditorGUI.DisabledScope(count == 0 && session.SelectedOptions.Actions.Count == 0 && !session.WasCanceled))
                             if (GUILayout.Button(ExporterLocalization.T("コピーで対策を適用して試す"), GUILayout.Height(32))) Schedule(false);
                         EditorGUILayout.LabelField(ExporterLocalization.T("チェックを外して再試行すると、その対策を解除した新しいコピーで確認します。"), EditorStyles.wordWrappedMiniLabel);
                     }

@@ -39,6 +39,7 @@ namespace VRVlog.LilToonExporter
         internal IReadOnlyList<ExportRecoveryDiagnostic> AvailableDiagnostics => availableDiagnostics;
         internal SuccessfulAttempt LastSuccess { get; private set; }
         internal bool IsInvalidated { get; private set; }
+        internal bool WasCanceled { get; private set; }
         internal bool HasPendingSave { get; private set; }
         // IMGUI queries this several times for layout and repaint. The update
         // loop refreshes source validity; mutations and saving force a fresh
@@ -75,6 +76,7 @@ namespace VRVlog.LilToonExporter
             if (!IsInvalidated && (Source == null || stamp == null || !stamp.Matches(Source)))
             {
                 IsInvalidated = true;
+                WasCanceled = false;
                 availableDiagnostics.Clear();
                 SelectedOptions = new ExportRecoveryOptions();
             }
@@ -83,6 +85,7 @@ namespace VRVlog.LilToonExporter
 
         internal bool Attempt(ExportRecoveryOptions options)
         {
+            WasCanceled = false;
             if (CheckForChanges()) return false;
             SelectedOptions = CopyOptions(options);
             var warnings = new List<string>();
@@ -104,6 +107,11 @@ namespace VRVlog.LilToonExporter
                 // A canceled attempt must not discard the last good output.
                 Failure = null;
                 Report = report;
+                Report.Diagnostics.Clear();
+                WasCanceled = true;
+                // Source invalidation takes priority over a cancellation, so
+                // the caller still offers reinspection when the input changed.
+                CheckForChanges();
                 return false;
             }
             catch (Exception exception)
@@ -118,6 +126,7 @@ namespace VRVlog.LilToonExporter
 
         internal bool Reinspect()
         {
+            WasCanceled = false;
             availableDiagnostics.Clear();
             SelectedOptions = new ExportRecoveryOptions();
             if (Source == null)

@@ -405,11 +405,17 @@ namespace VRVlog.LilToonExporter
             }, targetExclusions, targetGimmicks);
             if (!session.Attempt(new ExportRecoveryOptions()))
             {
-                ExportFailureWindow.Show(session, Completed);
+                if (ShouldShowFailureAfterFailedAttempt(session)) ExportFailureWindow.Show(session, Completed);
                 return;
             }
             try { session.SavePending(); Completed(); }
             catch (Exception exception) { Debug.LogException(exception); ExportFailureWindow.Show(exception); }
+        }
+
+        internal static bool ShouldShowFailureAfterFailedAttempt(ExportRecoverySession session)
+        {
+            if (session == null) throw new ArgumentNullException(nameof(session));
+            return session.IsInvalidated || !session.WasCanceled;
         }
 
         private string AvatarName()

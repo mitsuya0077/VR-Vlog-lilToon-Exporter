@@ -455,7 +455,10 @@ namespace VRVlog.LilToonExporter
                 var value = queue.Dequeue();
                 if (value == null) { text.Append("null;"); continue; }
                 if (!visited.Add(value)) continue;
-                text.Append(value.GetInstanceID()).Append(':').Append(EditorUtility.IsDirty(value)).Append(':').Append(EditorJsonUtility.ToJson(value)).Append(';');
+                // Saving clears Editor dirty bookkeeping without changing the
+                // export inputs. The serialized state, references and asset
+                // hashes below detect the actual changes instead.
+                text.Append(value.GetInstanceID()).Append(':').Append(EditorJsonUtility.ToJson(value)).Append(';');
                 // Dynamic outputs cannot be serialized and may change every
                 // frame while their configuration remains the same. Track their
                 // descriptor/references above; track pixels for saved images.
