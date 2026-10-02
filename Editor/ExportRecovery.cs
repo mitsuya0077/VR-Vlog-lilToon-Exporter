@@ -524,51 +524,7 @@ namespace VRVlog.LilToonExporter
         }
         internal bool Matches(GameObject source) => source != null && source.GetInstanceID() == sourceId && hash == Fingerprint(source);
 
-        static Hash128 Fingerprint(GameObject source)
-        {
-            var text = new StringBuilder(); var visited = new HashSet<Object>(); var assets = new HashSet<string>();
-            // A parent can change export input without changing the avatar's
-            // serialized local transform. Track the resulting world state only.
-            text.Append(source.activeInHierarchy ? "active;" : "inactive;");
-            var world = source.transform.localToWorldMatrix;
-            for (var element = 0; element < 16; element++)
-                text.Append(world[element].ToString("R", System.Globalization.CultureInfo.InvariantCulture)).Append(';');
-            var queue = new Queue<Object>(source.GetComponentsInChildren<Component>(true).Cast<Object>());
-            foreach (var transform in source.GetComponentsInChildren<Transform>(true)) queue.Enqueue(transform.gameObject);
-            while (queue.Count != 0)
-            {
-                var value = queue.Dequeue();
-                if (value == null) { text.Append("null;"); continue; }
-                if (!visited.Add(value)) continue;
-                // Saving clears Editor dirty bookkeeping without changing the
-                // export inputs. The serialized state, references and asset
-                // hashes below detect the actual changes instead.
-                text.Append(value.GetInstanceID()).Append(':').Append(EditorJsonUtility.ToJson(value)).Append(';');
-                // Dynamic outputs cannot be serialized and may change every
-                // frame while their configuration remains the same. Track their
-                // descriptor/references above; track pixels for saved images.
-                if (value is Texture texture && (value is Texture2D || value is Cubemap))
-                    text.Append(texture.imageContentsHash).Append(':').Append(texture.updateCount).Append(';');
-                var path = AssetDatabase.GetAssetPath(value);
-                if (!string.IsNullOrEmpty(path)) assets.Add(path);
-                if (value is Texture || value is Shader || value is MonoScript) continue;
-                using var serialized = new SerializedObject(value);
-                var property = serialized.GetIterator();
-                while (property.Next(true))
-                {
-                    if (property.propertyType != SerializedPropertyType.ObjectReference) continue;
-                    var reference = property.objectReferenceValue;
-                    if (reference == null || reference is Component || reference is GameObject) continue;
-                    queue.Enqueue(reference);
-                }
-            }
-            foreach (var path in assets.OrderBy(p => p, StringComparer.Ordinal)) text.Append(path).Append(':').Append(AssetDatabase.GetAssetDependencyHash(path)).Append(';');
-            foreach (var path in new[] { "ProjectSettings/lilToonSetting.json", "Packages/manifest.json", "Packages/packages-lock.json" })
-            {
-                var fullPath = Path.Combine(Application.dataPath, "..", path);
-                text.Append(path).Append(':').Append(File.Exists(fullPath) ? File.ReadAllText(fullPath) : "absent").Append(';');
-            }
-            return Hash128.Compute(text.ToString());
-        }
+        static Hash128 Fingerprint(GameObject source) => ExportSourceFingerprint.Compute(source);
+
     }
 }

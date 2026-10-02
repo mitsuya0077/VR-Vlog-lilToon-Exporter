@@ -16,6 +16,7 @@ reader = (root / "Editor/LilToonMaterialReader.cs").read_text(encoding="utf-8")
 window = (root / "Editor/LilToonExporterWindow.cs").read_text(encoding="utf-8")
 one_click = (root / "Editor/UniVrmOneClickExporter.cs").read_text(encoding="utf-8")
 recovery = (root / "Editor/ExportRecovery.cs").read_text(encoding="utf-8")
+fingerprint = (root / "Editor/ExportSourceFingerprint.cs").read_text(encoding="utf-8")
 recovery_session = (root / "Editor/ExportRecoverySession.cs").read_text(encoding="utf-8")
 recovery_comparison = (root / "Editor/ExportRecoveryComparisonWindow.cs").read_text(encoding="utf-8")
 failure_window = (root / "Editor/ExportFailureWindow.cs").read_text(encoding="utf-8")
@@ -23,7 +24,7 @@ listing = json.loads((root / "source.json").read_text(encoding="utf-8"))
 
 assert package["name"] == "com.vrvlog.liltoon-vrm-exporter"
 assert package["unity"] == "2022.3"
-assert package["version"] == "0.11.7"
+assert package["version"] == "0.11.8"
 assert one_click.index("AvatarBaseShape.Preserve(clone, clone,") < one_click.index("Vrm10AppearanceExporter.Export(")
 assert "foreach (var mesh in temporaryMeshes) UnityEngine.Object.DestroyImmediate(mesh);" in one_click
 assert package["vpmDependencies"] == {
@@ -275,7 +276,9 @@ assert 'new ExportRecoverySession(targetAvatar, targetOutput,' in window
 assert 'recoveryOptions: options, recoveryReport: report' in window
 assert 'ExcludeHiddenRenderer' in recovery and 'ExportGimmickDetection.Inspect(action.Renderer)?.Unit' in recovery
 assert 'code == "audio-link"' in recovery and 'Official(audio)' in recovery
-assert 'Hash128.Compute(text.ToString())' in recovery
+assert 'ExportSourceFingerprint.Compute(source)' in recovery
+assert 'EditorJsonUtility.ToJson(' not in fingerprint
+assert 'new StringBuilder' not in fingerprint
 assert 'LastSuccess = new SuccessfulAttempt' in recovery_session
 assert 'item.Action.Id == diagnostic.Action.Id' in recovery_session
 assert 'session.CreatePreview(attempt.Options)' in recovery_comparison

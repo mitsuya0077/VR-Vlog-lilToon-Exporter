@@ -236,32 +236,35 @@ namespace VRVlog.LilToonExporter
             var error = blinkStatus.Error;
             EditorGUILayout.BeginHorizontal();
             EditorGUILayout.LabelField(ExporterLocalization.T("瞬き"), ExporterLocalization.T(resolved?.Description) ?? ExporterLocalization.T("設定が必要です"));
-            if (GUILayout.Button(showBlink ? ExporterLocalization.T("調整を閉じる") : ExporterLocalization.T("確認・調整"), GUILayout.Width(100))) showBlink = !showBlink;
+            if (GUILayout.Button(showBlink ? ExporterLocalization.T("設定を閉じる") : ExporterLocalization.T("確認・調整"), GUILayout.Width(100))) showBlink = !showBlink;
             EditorGUILayout.EndHorizontal();
             if (!showBlink && error == null) return;
             using (new EditorGUILayout.VerticalScope(EditorStyles.helpBox))
             {
+                EditorGUILayout.LabelField(ExporterLocalization.T("瞬きはこの欄で設定します。設定後、「開閉をプレビュー」で確認できます。"), EditorStyles.wordWrappedLabel);
                 var mode = (BlinkExportMode)EditorGUILayout.Popup(ExporterLocalization.T("設定"), (int)blinkOptions.Mode,
                     new[] { ExporterLocalization.T("自動"), ExporterLocalization.T("手動"), ExporterLocalization.T("瞬きなし") });
                 if (mode != blinkOptions.Mode)
                 {
-                    if (mode == BlinkExportMode.Manual && blinkOptions.Both.Count == 0 && blinkOptions.Left.Count == 0 && blinkOptions.Right.Count == 0)
-                    {
-                        if (resolved != null)
-                        {
-                            blinkOptions.Both.AddRange(resolved.Slots[0].Select(b => b.Copy()));
-                            blinkOptions.Left.AddRange(resolved.Slots[1].Select(b => b.Copy()));
-                            blinkOptions.Right.AddRange(resolved.Slots[2].Select(b => b.Copy()));
-                        }
-                        if (blinkOptions.Both.Count == 0 && blinkOptions.Left.Count == 0)
-                            blinkOptions.Both.Add(new BlinkShapeBinding());
-                    }
-                    blinkOptions.Mode = mode;
+                    blinkOptions.SelectMode(mode, resolved);
                     blinkStatus.Invalidate();
                     Repaint();
                 }
+                if (blinkOptions.Mode == BlinkExportMode.Auto && error != null)
+                {
+                    EditorGUILayout.HelpBox(ExporterLocalization.T(error), MessageType.Warning);
+                    EditorGUILayout.LabelField(ExporterLocalization.T("自動では閉眼用の変形を確定できません。手動でメッシュと変形を選択してください。"), EditorStyles.wordWrappedLabel);
+                    if (GUILayout.Button(ExporterLocalization.T("手動で閉眼を設定")))
+                    {
+                        blinkOptions.SelectMode(BlinkExportMode.Manual);
+                        showBlink = true;
+                        blinkStatus.Invalidate();
+                        Repaint();
+                    }
+                }
                 if (blinkOptions.Mode == BlinkExportMode.Manual)
                 {
+                    EditorGUILayout.LabelField(ExporterLocalization.T("メッシュと閉眼用の変形を選び、適用量を調整してください。"), EditorStyles.wordWrappedLabel);
                     DrawBlinkBindings(ExporterLocalization.T("両目"), blinkOptions.Both);
                     var individual = blinkOptions.Left.Count > 0 || blinkOptions.Right.Count > 0;
                     var next = EditorGUILayout.ToggleLeft(ExporterLocalization.T("左右を個別に設定"), individual);
@@ -269,7 +272,7 @@ namespace VRVlog.LilToonExporter
                     if (!next && individual) { blinkOptions.Left.Clear(); blinkOptions.Right.Clear(); blinkStatus.Invalidate(); }
                     if (next) { DrawBlinkBindings(ExporterLocalization.T("左目"), blinkOptions.Left); DrawBlinkBindings(ExporterLocalization.T("右目"), blinkOptions.Right); }
                 }
-                if (error != null) EditorGUILayout.HelpBox(ExporterLocalization.T(error), MessageType.Warning);
+                if (error != null && blinkOptions.Mode != BlinkExportMode.Auto) EditorGUILayout.HelpBox(ExporterLocalization.T(error), MessageType.Warning);
                 using (new EditorGUI.DisabledScope(error != null))
                     if (GUILayout.Button(ExporterLocalization.T("開閉をプレビュー")))
                         try
@@ -285,6 +288,10 @@ namespace VRVlog.LilToonExporter
         {
             EditorGUI.BeginChangeCheck();
             EditorGUILayout.LabelField(label, EditorStyles.boldLabel);
+            var renderers = ExportRendererSelection.Enumerate(avatar).OfType<SkinnedMeshRenderer>()
+                .Where(renderer => renderer.sharedMesh != null && renderer.sharedMesh.blendShapeCount > 0).ToArray();
+            var rendererChoices = new[] { ExporterLocalization.T("メッシュを選択") }.Concat(renderers.Select(renderer =>
+                AnimationUtility.CalculateTransformPath(renderer.transform, avatar.transform))).ToArray();
             for (var i = 0; i < bindings.Count; i++)
             {
                 var binding = bindings[i];
@@ -293,6 +300,13 @@ namespace VRVlog.LilToonExporter
                     var renderer = (SkinnedMeshRenderer)EditorGUILayout.ObjectField(ExporterLocalization.T("メッシュ"), binding.Renderer, typeof(SkinnedMeshRenderer), true);
                     if (renderer != binding.Renderer) { binding.Renderer = renderer; binding.Shape = ""; }
                     if (GUILayout.Button(ExporterLocalization.T("削除"), GUILayout.Width(48))) { bindings.RemoveAt(i--); blinkStatus.Invalidate(); continue; }
+                }
+                var selectedRenderer = Array.IndexOf(renderers, binding.Renderer);
+                var nextRenderer = EditorGUILayout.Popup(ExporterLocalization.T("アバター内のメッシュ"), selectedRenderer + 1, rendererChoices);
+                if (nextRenderer > 0 && renderers[nextRenderer - 1] != binding.Renderer)
+                {
+                    binding.Renderer = renderers[nextRenderer - 1];
+                    binding.Shape = "";
                 }
                 var mesh = binding.Renderer != null ? binding.Renderer.sharedMesh : null;
                 if (mesh == null) continue;
@@ -450,7 +464,7 @@ namespace VRVlog.LilToonExporter
         private static string PackageVersion()
         {
             var info = PackageManagerPackageInfo.FindForAssembly(typeof(LilToonExporterWindow).Assembly);
-            return info != null && !string.IsNullOrWhiteSpace(info.version) ? info.version : "0.11.7";
+            return info != null && !string.IsNullOrWhiteSpace(info.version) ? info.version : "0.11.8";
         }
 
         private static string InstalledLilToonStatus()

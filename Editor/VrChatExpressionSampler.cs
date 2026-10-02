@@ -42,7 +42,7 @@ namespace VRVlog.LilToonExporter
             VrChatExpressionMenu.Source metadata = null, IList<MorphValue> unevaluated = null)
         {
             var originalController = ExpressionDependencies.Controller(runtime);
-            var dependencies = ExpressionDependencies.Analyze(runtime, selected.Keys, excludedPath, metadata);
+            var dependencies = ExpressionDependencies.Analyze(runtime, selected.Keys, excludedPath, metadata, defaults, selected);
             dependencies.Layers.ExceptWith(FindExcludedLayers(originalController, runtime, excludedPath, dependencies.Parameters));
             var affected = dependencies.Layers.OrderBy(i => i).ToArray();
             if (affected.Length == 0) throw new InvalidOperationException("このメニューに対応するFXの表情がありません。");
@@ -81,6 +81,7 @@ namespace VRVlog.LilToonExporter
                 var visitedClips = new HashSet<AnimationClip>();
                 Action remember = () => { evaluation.Check(); RememberBindings(playable, affected, history, visitedClips, excludedPath); };
                 Advance(graph, 120, remember);
+                evaluation.CheckNeutralFx();
                 SetParameters(playable, controller, selected);
                 Advance(graph, 120, remember);
                 ValidateFixedPose(avatar, playable, controller, excludedPath, excludedLayers);
@@ -161,7 +162,7 @@ namespace VRVlog.LilToonExporter
                     try
                     {
                         bool HasEffect(IEnumerable<StateMachineBehaviour> behaviours) => behaviours.Any(b =>
-                            !VrChatParameterDriver.IsTracking(b) && (!VrChatParameterDriver.IsDriver(b) ||
+                            !VrChatParameterDriver.IsTracking(b) && !VrChatParameterDriver.IsNonFxPlayableControl(b) && !VrChatParameterDriver.IsTemporaryPoseSpace(b) && !VrChatParameterDriver.IsLocomotionControl(b) && (!VrChatParameterDriver.IsDriver(b) ||
                             requiredParameters == null || VrChatParameterDriver.Read(b, machine.name).Operations.Any(op => requiredParameters.Contains(op.Destination))));
                         return machine.states.Length + machine.stateMachines.Length > 0 && !HasEffect(machine.behaviours) &&
                             machine.states.All(child => !child.state.writeDefaultValues && !child.state.iKOnFeet && !HasEffect(child.state.behaviours) && MotionIsExcluded(child.state.motion)) &&
