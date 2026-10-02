@@ -22,7 +22,7 @@ namespace VRVlog.LilToonExporter
             internal readonly string Name, Type, Parameter;
             internal readonly object Value, SubMenu;
             internal BranchStep(string name, string type, string parameter, object value, object subMenu)
-            { Name = name; Type = type; Parameter = parameter; Value = value; SubMenu = subMenu; }
+            { Name = name; Type = type; Parameter = parameter ?? ""; Value = value; SubMenu = subMenu; }
         }
 
         internal void CaptureBranchReferences()
