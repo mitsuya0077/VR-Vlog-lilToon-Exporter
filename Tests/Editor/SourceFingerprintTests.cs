@@ -13,6 +13,78 @@ namespace VRVlog.LilToonExporter.Tests
 {
     public sealed class SourceFingerprintTests
     {
+        [Test]
+        public void FreshImplicitSkinnedBoundsStayCurrentThroughActualPreviewRendering()
+        {
+            using var fixture = new MeshFixture(3, 2);
+            fixture.Mesh.vertices = new[] { new Vector3(-1, 0, 0), new Vector3(1, 0, 0), new Vector3(0, 2, 0) };
+            fixture.Mesh.RecalculateBounds();
+            var material = new Material(Shader.Find("Standard"));
+            var preview = new PreviewRenderUtility(); GameObject copy = null; Texture2D image = null;
+            try
+            {
+                fixture.Skin.sharedMaterial = material;
+                using (var serialized = new SerializedObject(fixture.Skin))
+                    Assert.That(serialized.FindProperty("m_DirtyAABB").boolValue, Is.True, "The regression begins with Unity's uncomputed native bounds.");
+                var vertices = fixture.Mesh.vertices;
+                var transform = fixture.Source.transform.localToWorldMatrix;
+                var stamp = ExportRecoverySourceStamp.Capture(fixture.Source);
+                var effectiveBounds = fixture.Skin.localBounds;
+                using (var serialized = new SerializedObject(fixture.Skin))
+                {
+                    Assert.That(serialized.FindProperty("m_DirtyAABB").boolValue, Is.False);
+                    Assert.That(serialized.FindProperty("m_AABB").boundsValue, Is.EqualTo(effectiveBounds));
+                }
+                copy = Object.Instantiate(fixture.Source);
+                preview.AddSingleGO(copy);
+                preview.camera.transform.position = new Vector3(0, 1, 5);
+                preview.camera.transform.LookAt(new Vector3(0, 1, 0));
+                preview.camera.nearClipPlane = .01f; preview.camera.farClipPlane = 100;
+                preview.BeginStaticPreview(new Rect(0, 0, 64, 64));
+                preview.Render(); image = preview.EndStaticPreview();
+                Assert.That(image, Is.Not.Null);
+                Assert.That(stamp.Matches(fixture.Source), Is.True, "The first native preview render must not invalidate unchanged inputs.");
+                Assert.That(fixture.Skin.localBounds, Is.EqualTo(effectiveBounds));
+                Assert.That(fixture.Mesh.vertices, Is.EqualTo(vertices));
+                Assert.That(fixture.Source.transform.localToWorldMatrix, Is.EqualTo(transform));
+                Assert.That(fixture.Skin.sharedMesh, Is.SameAs(fixture.Mesh)); Assert.That(fixture.Skin.sharedMaterial, Is.SameAs(material));
+            }
+            finally
+            {
+                if (image != null) Object.DestroyImmediate(image);
+                preview.Cleanup();
+                if (copy != null) Object.DestroyImmediate(copy);
+                Object.DestroyImmediate(material);
+            }
+        }
+
+        [TestCase("center")][TestCase("size")][TestCase("reset")]
+        [TestCase("bones")][TestCase("mesh")]
+        public void EffectiveSkinnedBoundsAndTheirAuthoredInputsRemainGuarded(string change)
+        {
+            using var fixture = new MeshFixture(3, 2);
+            fixture.Skin.localBounds = new Bounds(new Vector3(1, 2, 3), new Vector3(4, 5, 6));
+            Mesh replacement = null;
+            try
+            {
+                var bounds = fixture.Skin.localBounds;
+                var stamp = ExportRecoverySourceStamp.Capture(fixture.Source);
+                Assert.That(stamp.Matches(fixture.Source), Is.True);
+                Assert.That(fixture.Skin.localBounds, Is.EqualTo(bounds), "Capturing must preserve explicitly authored bounds.");
+                switch (change)
+                {
+                    case "center": bounds.center += Vector3.right; fixture.Skin.localBounds = bounds; break;
+                    case "size": bounds.size += Vector3.up; fixture.Skin.localBounds = bounds; break;
+                    case "reset": fixture.Skin.ResetLocalBounds(); break;
+                    case "bones": fixture.Skin.bones = fixture.Skin.bones.Reverse().ToArray(); break;
+                    case "mesh": replacement = Object.Instantiate(fixture.Mesh); fixture.Skin.sharedMesh = replacement; break;
+                }
+                Assert.That(stamp.Matches(fixture.Source), Is.False, "An effective renderer/input change must still require reinspection: " + change);
+                Assert.That(ExportRecoverySourceStamp.Capture(fixture.Source).Matches(fixture.Source), Is.True);
+            }
+            finally { if (replacement != null) Object.DestroyImmediate(replacement); }
+        }
+
         [TestCase("vertices")][TestCase("normals")][TestCase("tangents")][TestCase("colors")]
         [TestCase("uv0")][TestCase("uv7")][TestCase("layout")][TestCase("indices")]
         [TestCase("submesh")][TestCase("bounds")][TestCase("bindpose")][TestCase("boneIndex")][TestCase("boneWeight")]
