@@ -247,6 +247,55 @@ namespace VRVlog.LilToonExporter.Tests
             finally { Object.DestroyImmediate(source); Object.DestroyImmediate(camera); }
         }
 
+        [TestCase("frame")][TestCase("initColor")][TestCase("material")][TestCase("materialColor")]
+        [TestCase("initMaterial")][TestCase("initMaterialColor")][TestCase("source")][TestCase("initMode")]
+        [TestCase("updateMode")][TestCase("updatePeriod")][TestCase("zoneSpace")][TestCase("zones")]
+        [TestCase("doubleBuffered")][TestCase("initTexture")][TestCase("initPixels")]
+        public void CustomRenderTextureAuthoredSettingsAndReferencesRemainTrackedWithoutGpuUpdates(string change)
+        {
+            var source = new GameObject("Custom render input");
+            var custom = new CustomRenderTexture(4, 4, RenderTextureFormat.ARGB32)
+            { updateMode = CustomRenderTextureUpdateMode.OnDemand, initializationMode = CustomRenderTextureUpdateMode.OnDemand };
+            var material = new Material(Shader.Find("Standard")); var replacement = new Material(material);
+            var initial = new Texture2D(2, 2, TextureFormat.RGBA32, false); var replacementTexture = new Texture2D(2, 2, TextureFormat.RGBA32, false);
+            try
+            {
+                source.AddComponent<SourceFingerprintTextureProbe>().Texture = custom;
+                custom.material = material; custom.initializationMaterial = material; custom.initializationTexture = initial;
+                custom.initializationSource = CustomRenderTextureInitializationSource.TextureAndColor;
+                var zone = new CustomRenderTextureUpdateZone { updateZoneCenter = Vector3.one * .5f, updateZoneSize = Vector3.one };
+                custom.SetUpdateZones(new[] { zone });
+                Assert.That(custom.IsCreated(), Is.False, "The fixture never creates or updates GPU output.");
+                var stamp = ExportRecoverySourceStamp.Capture(source); Assert.That(stamp.Matches(source), Is.True);
+                switch (change)
+                {
+                    case "frame": var count = custom.updateCount; custom.IncrementUpdateCount(); Assert.That(custom.updateCount, Is.Not.EqualTo(count)); break;
+                    case "initColor": custom.initializationColor = Color.red; break;
+                    case "material": custom.material = replacement; break;
+                    case "materialColor": material.color = Color.red; break;
+                    case "initMaterial": custom.initializationMaterial = replacement; break;
+                    case "initMaterialColor": material.SetFloat("_Glossiness", .17f); break;
+                    case "source": custom.initializationSource = CustomRenderTextureInitializationSource.Material; break;
+                    case "initMode": custom.initializationMode = CustomRenderTextureUpdateMode.OnLoad; break;
+                    case "updateMode": custom.updateMode = CustomRenderTextureUpdateMode.Realtime; break;
+                    case "updatePeriod": custom.updatePeriod = .25f; break;
+                    case "zoneSpace": custom.updateZoneSpace = CustomRenderTextureUpdateZoneSpace.Pixel; break;
+                    case "zones": zone.rotation = 45; zone.updateZoneCenter = Vector3.one * .25f; custom.SetUpdateZones(new[] { zone }); break;
+                    case "doubleBuffered": custom.doubleBuffered = true; break;
+                    case "initTexture": custom.initializationTexture = replacementTexture; break;
+                    case "initPixels": var pixels = initial.GetRawTextureData<byte>(); pixels[0] ^= 255; break;
+                }
+                Assert.That(stamp.Matches(source), Is.EqualTo(change == "frame"));
+                Assert.That(ExportRecoverySourceStamp.Capture(source).Matches(source), Is.True);
+                Assert.That(custom.IsCreated(), Is.False);
+            }
+            finally
+            {
+                Object.DestroyImmediate(source); Object.DestroyImmediate(custom); Object.DestroyImmediate(material); Object.DestroyImmediate(replacement);
+                Object.DestroyImmediate(initial); Object.DestroyImmediate(replacementTexture);
+            }
+        }
+
         sealed class MeshFixture : IDisposable
         {
             internal readonly GameObject Source = new GameObject("Fingerprint source");

@@ -35,7 +35,7 @@ namespace VRVlog.LilToonExporter
                 var path = AssetDatabase.GetAssetPath(value);
                 if (!string.IsNullOrEmpty(path)) assets.Add(path);
                 if (value is Mesh mesh) { MeshData(hash, mesh); continue; }
-                if (value is Texture texture) { TextureData(hash, texture); continue; }
+                if (value is Texture texture) { TextureData(hash, texture, queue); continue; }
                 // Shader/script bytes belong to their dependency hash. Their
                 // compiled payload is not an editable serialized avatar input.
                 if (value is Shader || value is MonoScript) continue;
@@ -96,7 +96,7 @@ namespace VRVlog.LilToonExporter
             }
         }
 
-        static void TextureData(Digest hash, Texture texture)
+        static void TextureData(Digest hash, Texture texture, Queue<Object> queue)
         {
             hash.Integer(texture.width); hash.Integer(texture.height); hash.Integer((int)texture.dimension);
             hash.Integer((int)texture.graphicsFormat); hash.Integer((int)texture.filterMode);
@@ -125,6 +125,9 @@ namespace VRVlog.LilToonExporter
                 hash.Boolean(descriptor.sRGB); hash.Boolean(descriptor.useMipMap); hash.Boolean(descriptor.autoGenerateMips);
                 hash.Boolean(descriptor.enableRandomWrite); hash.Boolean(descriptor.bindMS); hash.Boolean(descriptor.useDynamicScale);
             }
+            // Custom RT serialization contains authored initialization/update
+            // settings and references, without live frame or image payloads.
+            if (texture is CustomRenderTexture custom) SerializedData(hash, custom, queue);
             // Preserve the existing distinction: live camera/render outputs can change
             // frame-by-frame, whereas static image changes invalidate a preview.
             if (texture is Texture2D || texture is Cubemap || texture is Texture3D || texture is Texture2DArray || texture is CubemapArray)
