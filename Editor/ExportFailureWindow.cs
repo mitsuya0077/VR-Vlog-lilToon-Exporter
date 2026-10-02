@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.IO;
 using System.Linq;
 using UnityEditor;
 using UnityEngine;
@@ -226,15 +227,25 @@ namespace VRVlog.LilToonExporter
             }
         }
 
-        internal static bool SaveUnmodifiedResult(ExportRecoverySession session, Action saved = null)
+        internal static bool SaveUnmodifiedResult(ExportRecoverySession session, Action saved = null,
+            Func<string, bool> confirmOverwrite = null)
         {
             if (session == null || !session.HasCurrentSuccess) throw new ArgumentException(nameof(session));
             if (session.LastSuccess.Options.Actions.Count != 0) return false;
+            if (session.CheckForChanges())
+                throw new InvalidOperationException(ExporterLocalization.T("アバターまたは関連アセットが変わりました。再検査してから保存してください。"));
+            // A recovery window can outlive the initial file selection. Confirm
+            // the file that exists now, even when this retry needed no remedy.
+            if (File.Exists(session.Destination) && !(confirmOverwrite ?? ConfirmOverwrite)(session.Destination)) return false;
             session.SavePending();
             CloseSessionWindows(session);
             saved?.Invoke();
             return true;
         }
+
+        private static bool ConfirmOverwrite(string destination) => EditorUtility.DisplayDialog(
+            ExporterLocalization.T("ファイルを上書きしますか？"), destination,
+            ExporterLocalization.T("上書き"), ExporterLocalization.T("キャンセル"));
 
         internal static void CloseSessionWindows(ExportRecoverySession session)
         {
@@ -258,7 +269,7 @@ namespace VRVlog.LilToonExporter
                     RefreshSession();
                     if (success)
                     {
-                        if (!SaveUnmodifiedResult(session, saved))
+                        if (!SaveUnmodifiedResult(session, saved) && session.LastSuccess.Options.Actions.Count != 0)
                         {
                             ExportRecoveryComparisonWindow.Show(session, saved);
                             Close();

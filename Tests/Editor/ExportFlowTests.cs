@@ -139,15 +139,76 @@ namespace VRVlog.LilToonExporter.Tests
                 if (changeBeforeSave)
                 {
                     fixture.Material.SetColor("_Color", Color.red);
-                    Assert.Throws<InvalidOperationException>(() => ExportFailureWindow.SaveUnmodifiedResult(session, () => completed++));
+                    Assert.Throws<InvalidOperationException>(() => ExportFailureWindow.SaveUnmodifiedResult(session, () => completed++, path =>
+                    {
+                        Assert.Fail("Changed inputs must be rejected before asking to overwrite.");
+                        return true;
+                    }));
                     Assert.That(File.ReadAllBytes(destination), Is.EqualTo(existing)); Assert.That(completed, Is.Zero);
                 }
                 else
                 {
-                    Assert.That(ExportFailureWindow.SaveUnmodifiedResult(session, () => completed++), Is.True);
+                    Assert.That(ExportFailureWindow.SaveUnmodifiedResult(session, () => completed++, path => true), Is.True);
                     Assert.That(File.ReadAllBytes(destination), Is.EqualTo(bytes)); Assert.That(completed, Is.EqualTo(1));
                     Assert.That(session.HasPendingSave, Is.False);
                 }
+            }
+            finally { if (File.Exists(destination)) File.Delete(destination); }
+        }
+
+        [TestCase(false, false)][TestCase(false, true)]
+        [TestCase(true, false)][TestCase(true, true)]
+        public void UnmodifiedRecoveryReconfirmsAFileCreatedOrReplacedWhileRecoveryWasOpen(bool existedInitially, bool approve)
+        {
+            using var fixture = new ExportRecoveryTests.RecoveryFixture();
+            var directory = Path.Combine(Path.GetTempPath(), "vrvlog-recovery-overwrite-" + Guid.NewGuid().ToString("N"));
+            var destination = Path.Combine(directory, "avatar.vrm");
+            var replacement = new byte[] { 91, 92, 93 }; var completed = 0; var prompts = 0;
+            var bytes = LilToonGlbExtension.Inject(MaterialBindingFixture.Build(fixture.Material.name), fixture.Source, "0.11.9", "2.3.4");
+            try
+            {
+                Directory.CreateDirectory(directory);
+                if (existedInitially) File.WriteAllBytes(destination, new byte[] { 81, 82 });
+                var session = ExportRecoverySession.FromFailedExport(fixture.Source, destination, (options, report, warnings) => bytes,
+                    new InvalidOperationException("First failure"), null);
+                Assert.That(session.Attempt(new ExportRecoveryOptions()), Is.True);
+                File.WriteAllBytes(destination, replacement);
+                Assert.That(ExportFailureWindow.SaveUnmodifiedResult(session, () => completed++, path =>
+                {
+                    prompts++;
+                    Assert.That(path, Is.EqualTo(destination));
+                    Assert.That(File.ReadAllBytes(path), Is.EqualTo(replacement));
+                    return approve;
+                }), Is.EqualTo(approve));
+                Assert.That(prompts, Is.EqualTo(1)); Assert.That(completed, Is.EqualTo(approve ? 1 : 0));
+                Assert.That(File.ReadAllBytes(destination), Is.EqualTo(approve ? bytes : replacement));
+                Assert.That(session.CanSave, Is.EqualTo(!approve), "Cancel must retain the pending result for an explicit later save.");
+                Assert.That(session.IsInvalidated, Is.False);
+                Assert.That(Directory.GetFiles(directory), Is.EqualTo(new[] { destination }));
+            }
+            finally { if (Directory.Exists(directory)) Directory.Delete(directory, true); }
+        }
+
+        [Test]
+        public void SourceChangesDuringOverwriteConfirmationStillRejectTheRecoverySave()
+        {
+            using var fixture = new ExportRecoveryTests.RecoveryFixture();
+            var destination = Path.Combine(Path.GetTempPath(), "vrvlog-recovery-confirm-" + Guid.NewGuid().ToString("N") + ".vrm");
+            var existing = new byte[] { 101, 102 }; var completed = 0;
+            var bytes = LilToonGlbExtension.Inject(MaterialBindingFixture.Build(fixture.Material.name), fixture.Source, "0.11.9", "2.3.4");
+            try
+            {
+                File.WriteAllBytes(destination, existing);
+                var session = ExportRecoverySession.FromFailedExport(fixture.Source, destination, (options, report, warnings) => bytes,
+                    new InvalidOperationException("First failure"), null);
+                Assert.That(session.Attempt(new ExportRecoveryOptions()), Is.True);
+                Assert.Throws<InvalidOperationException>(() => ExportFailureWindow.SaveUnmodifiedResult(session, () => completed++, path =>
+                {
+                    fixture.Material.SetColor("_Color", Color.blue);
+                    return true;
+                }));
+                Assert.That(File.ReadAllBytes(destination), Is.EqualTo(existing)); Assert.That(completed, Is.Zero);
+                Assert.That(session.IsInvalidated, Is.True); Assert.That(session.CanSave, Is.False);
             }
             finally { if (File.Exists(destination)) File.Delete(destination); }
         }
