@@ -15,12 +15,18 @@ namespace VRVlog.LilToonExporter
     internal sealed class NdmfExportPreparation : IDisposable
     {
         private readonly HashSet<Object> generated = new HashSet<Object>();
+        // Provenance only for copies made by our own isolation pass. Assets
+        // created or replaced by NDMF plugins never enter this identity map.
+        private readonly Dictionary<Object, Object> isolatedAssets = new Dictionary<Object, Object>();
         private string temporaryAssetPath, temporaryAssetGuid;
         private const string MaNamespace = "nadena.dev.modular_avatar.core.";
         private const string CompatibilityMessage =
             "Modular Avatar の準備に必要な NDMF API を利用できません。NDMF " + DependencyPolicy.NdmfMinimum + " 以降の 1.x が必要です。確認済み構成: MA " + DependencyPolicy.ModularAvatarReference + " / NDMF " + DependencyPolicy.NdmfReference + "。" + DependencyPolicy.Recovery;
 
         internal static bool NeedsProcessing(GameObject avatar) => avatar != null && RelevantAuthoring(avatar).Count != 0;
+
+        internal Object IsolatedCopyOf(Object original) => original != null && isolatedAssets.TryGetValue(original, out var copy)
+            ? copy : original;
 
         private static bool IsAuthoringTag(Type type)
         {
@@ -336,6 +342,7 @@ namespace VRVlog.LilToonExporter
                 generated.Add(copy);
                 copy.name = value.name;
                 replacements.Add(value, copy);
+                isolatedAssets.Add(value, copy);
                 if (copy is Material material && value is Material original) materialCopyObserver?.Invoke(material, original);
             }
             var copiedDependencies = Dependencies(replacements.Values)
@@ -398,6 +405,7 @@ namespace VRVlog.LilToonExporter
                 foreach (var value in generated)
                     if (value != null && !EditorUtility.IsPersistent(value)) Object.DestroyImmediate(value);
                 generated.Clear();
+                isolatedAssets.Clear();
             }
             finally
             {

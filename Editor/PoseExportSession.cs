@@ -88,17 +88,17 @@ namespace VRVlog.LilToonExporter
                 if (c != null && c.GetType().FullName == AplType) Object.DestroyImmediate(c);
         }
 
-        internal void CollectPrepared(GameObject copy, ICollection<string> warnings = null)
+        internal void CollectPrepared(GameObject copy, ICollection<string> warnings = null, VrChatMenuImportPolicy preparedMenuPolicy = null)
         {
-            foreach (var row in CollectPreparedIncrementally(copy, warnings)) { }
+            foreach (var row in CollectPreparedIncrementally(copy, warnings, preparedMenuPolicy)) { }
         }
 
         // Export keeps the synchronous path; the review window yields between
         // candidates while sharing exactly the same validation/deduplication.
-        internal IEnumerable<PoseCandidate> CollectPreparedIncrementally(GameObject copy, ICollection<string> warnings = null)
+        internal IEnumerable<PoseCandidate> CollectPreparedIncrementally(GameObject copy, ICollection<string> warnings = null, VrChatMenuImportPolicy preparedMenuPolicy = null)
         {
             prepared = copy;
-            Entries.AddRange(PoseMenuResolver.Read(copy, menuPolicy));
+            Entries.AddRange(PoseMenuResolver.Read(copy, preparedMenuPolicy ?? menuPolicy));
             var seen = new Dictionary<string, PoseCandidate>();
             foreach (var row in Entries.ToArray())
             {

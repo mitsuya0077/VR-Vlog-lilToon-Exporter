@@ -111,7 +111,11 @@ namespace VRVlog.LilToonExporter
                 gimmicks.Apply(expressionBindings, menu, warnings);
                 unifiedPreparation?.Verify(blink.RequiresUnifiedEvidence);
                 recoveryReport.Stage = "状態確定";
-                poses.CollectPrepared(clone, warnings);
+                // Unsaved menu assets are deliberately isolated before NDMF
+                // runs. Preserve branch identity through those exact copies,
+                // while still rejecting a menu replaced by a plugin.
+                var preparedMenuPolicy = menuPolicy?.WithOwnedCopies(value => preparation.IsolatedCopyOf(value as UnityEngine.Object));
+                poses.CollectPrepared(clone, warnings, preparedMenuPolicy);
                 expressionBindings.Capture(menu);
                 blink.Bake(clone, temporaryMeshes);
                 AvatarBaseShape.Preserve(clone, clone, temporaryMeshes, warnings);

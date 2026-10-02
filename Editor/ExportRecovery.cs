@@ -214,6 +214,7 @@ namespace VRVlog.LilToonExporter
                         throw new InvalidOperationException("選んだVRChatメニューの枝を確認できません。再検査してください。");
                     policy.ExcludedBranches.Add(action.MenuPath);
                 }
+            policy.CaptureBranchReferences();
             return policy;
         }
 

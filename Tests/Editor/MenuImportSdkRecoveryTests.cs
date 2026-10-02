@@ -3,6 +3,7 @@ using System.Collections;
 using System.Collections.Generic;
 using System.IO;
 using System.Linq;
+using System.Reflection;
 using System.Threading.Tasks;
 using NUnit.Framework;
 using UniGLTF;
@@ -302,6 +303,180 @@ namespace VRVlog.LilToonExporter.Tests
             Assert.That(captured.Action.MenuPath, Is.EqualTo("/1"));
         }
 
+        [TestCase(false)]
+        [TestCase(true)]
+        public void ExporterOwnedIsolationTranslatesTheRootAndChildScopeWithoutChangingTheSource(bool persistentRoot)
+        {
+            using var f = new AttachmentConnectionTests.Fixture(); using var menus = new SdkFixture(f.Source, persistMenus: false, persistentRootOnly: persistentRoot);
+            var options = ScopeOptions(f.Source, menus.Root, "/1");
+            var policy = ExportRecoveryReport.MenuImportPolicy(f.Source, options);
+            var originalChild = (Object)VrChatExpressionMenu.Member(((IList)VrChatExpressionMenu.Member(menus.Root, "controls"))[1], "subMenu");
+            var before = menus.MenuJson();
+            var clone = Object.Instantiate(f.Source);
+            try
+            {
+                using var lease = IsolateWithProductionCode(f.Source, clone);
+                var root = VrChatExpressionMenu.Root(clone) as Object;
+                var ownedChild = (Object)VrChatExpressionMenu.Member(((IList)VrChatExpressionMenu.Member(root, "controls"))[1], "subMenu");
+                Assert.That(root, Is.Not.SameAs(menus.Root)); Assert.That(ownedChild, Is.Not.SameAs(originalChild));
+                Assert.That(lease.IsolatedCopyOf(menus.Root), Is.SameAs(root));
+                Assert.That(lease.IsolatedCopyOf(originalChild), Is.SameAs(ownedChild));
+                Assert.That(lease.IsolatedCopyOf(menus.Descriptor), Is.SameAs(menus.Descriptor), "Only assets actually isolated by this lease have provenance.");
+                var prepared = policy.WithOwnedCopies(value => lease.IsolatedCopyOf(value as Object));
+                Assert.That(prepared.ExpectedRoot, Is.SameAs(root)); Assert.That(policy.ExpectedRoot, Is.SameAs(menus.Root));
+                Assert.That(VrChatExpressionMenu.Read(clone, prepared).Entries.Single().Name, Does.Contain("Menu face"));
+                Assert.That(PoseMenuResolver.Read(clone, prepared).Count, Is.EqualTo(1));
+                using (var poses = new PoseExportSession(f.Source, null, menuPolicy: policy))
+                {
+                    Assert.DoesNotThrow(() => poses.CollectPrepared(clone, preparedMenuPolicy: prepared));
+                    Assert.That(poses.Entries.Count, Is.EqualTo(1), "Prepared pose collection receives the translated policy rather than reading the whole 257-candidate menu again.");
+                }
+                Assert.That(VrChatExpressionMenu.Root(f.Source), Is.SameAs(menus.Root));
+                Assert.That(menus.MenuJson(), Is.EqualTo(before));
+                Assert.Throws<VrChatMenuImportLimitException>(() => VrChatExpressionMenu.Read(f.Source));
+            }
+            finally { Object.DestroyImmediate(clone); }
+        }
+
+        [TestCase("root")]
+        [TestCase("child")]
+        [TestCase("order")]
+        [TestCase("name")]
+        [TestCase("parameter")]
+        [TestCase("value")]
+        [TestCase("shared-gate")]
+        [TestCase("ancestor-gate")]
+        public void OwnedCopyProvenanceCannotAuthorizeAnUnrelatedRootOrChangedSelectedRoute(string change)
+        {
+            using var f = new AttachmentConnectionTests.Fixture(); using var menus = new SdkFixture(f.Source, persistMenus: false);
+            var sourceControls = (IList)VrChatExpressionMenu.Member(menus.Root, "controls");
+            var route = change == "ancestor-gate" ? "/1/0" : "/1";
+            if (change == "shared-gate")
+            {
+                var sharedChild = VrChatExpressionMenu.Member(sourceControls[1], "subMenu");
+                SdkFixture.Set(sourceControls[0], "subMenu", sharedChild);
+                SdkFixture.Set(sourceControls[0], "name", "Same label"); SdkFixture.Set(sourceControls[1], "name", "Same label");
+                SetControlParameter(sourceControls[0], "Gate", 1); SetControlParameter(sourceControls[1], "Gate", 2);
+            }
+            if (change == "ancestor-gate") SetControlParameter(sourceControls[1], "AncestorGate", 3);
+            var policy = ExportRecoveryReport.MenuImportPolicy(f.Source, ScopeOptions(f.Source, menus.Root, route));
+            var before = menus.MenuJson(); var clone = Object.Instantiate(f.Source); Object unrelated = null;
+            try
+            {
+                using var lease = IsolateWithProductionCode(f.Source, clone);
+                var prepared = policy.WithOwnedCopies(value => lease.IsolatedCopyOf(value as Object));
+                Assert.DoesNotThrow(() => VrChatExpressionMenu.Read(clone, prepared));
+                var descriptor = clone.GetComponents<Component>().Single(c => c.GetType() == menus.Descriptor.GetType());
+                var root = VrChatExpressionMenu.Root(clone) as Object;
+                var controls = (IList)VrChatExpressionMenu.Member(root, "controls"); var selected = controls[1];
+                if (change == "root") { unrelated = Object.Instantiate(root); SdkFixture.Set(descriptor, "expressionsMenu", unrelated); }
+                else if (change == "child")
+                { unrelated = Object.Instantiate((Object)VrChatExpressionMenu.Member(selected, "subMenu")); SdkFixture.Set(selected, "subMenu", unrelated); }
+                else if (change == "order") { var first = controls[0]; controls[0] = controls[1]; controls[1] = first; }
+                else if (change == "name") SdkFixture.Set(selected, "name", "Different affected branch");
+                else if (change == "parameter") SetControlParameter(selected, "ChangedGate", 0);
+                else if (change == "value") SdkFixture.Set(selected, "value", 1f);
+                else if (change == "shared-gate") SdkFixture.Set(selected, "value", 1f);
+                else if (change == "ancestor-gate") SdkFixture.Set(selected, "value", 4f);
+                Assert.Throws<VrChatMenuImportPolicyException>(() => VrChatExpressionMenu.Read(clone, prepared));
+                Assert.Throws<VrChatMenuImportPolicyException>(() => PoseMenuResolver.Read(clone, prepared));
+                Assert.That(policy.ExpectedRoot, Is.SameAs(menus.Root)); Assert.That(menus.MenuJson(), Is.EqualTo(before));
+                prepared.SkipAll = true;
+                Assert.That(VrChatExpressionMenu.Read(clone, prepared).Entries, Is.Empty, "Explicit whole-menu consent is still safe after a preparation pass changes a scoped branch.");
+            }
+            finally { Object.DestroyImmediate(clone); Object.DestroyImmediate(unrelated); }
+        }
+
+        [TestCase("descriptor-removed")]
+        [TestCase("custom-expressions-disabled")]
+        [TestCase("root-destroyed")]
+        [TestCase("ancestor-menu-destroyed")]
+        [TestCase("selected-menu-destroyed")]
+        public void PreparedMenuDisappearanceCannotSilentlyBypassSelectedBranchConsent(string change)
+        {
+            using var f = new AttachmentConnectionTests.Fixture(); using var menus = new SdkFixture(f.Source, persistMenus: false);
+            var route = change == "ancestor-menu-destroyed" ? "/1/0" : "/1";
+            var expectedCount = change == "ancestor-menu-destroyed" ? 193 : 1;
+            var policy = ExportRecoveryReport.MenuImportPolicy(f.Source, ScopeOptions(f.Source, menus.Root, route));
+            var before = menus.MenuJson(); var clone = Object.Instantiate(f.Source);
+            try
+            {
+                using var lease = IsolateWithProductionCode(f.Source, clone);
+                var prepared = policy.WithOwnedCopies(value => lease.IsolatedCopyOf(value as Object));
+                var descriptor = clone.GetComponents<Component>().Single(c => c.GetType() == menus.Descriptor.GetType());
+                var root = VrChatExpressionMenu.Root(clone) as Object;
+                Assert.That(VrChatExpressionMenu.Read(clone, prepared).Entries.Count, Is.EqualTo(expectedCount));
+                if (change == "descriptor-removed") Object.DestroyImmediate(descriptor);
+                else if (change == "custom-expressions-disabled") SdkFixture.Set(descriptor, "customExpressions", false);
+                else if (change == "ancestor-menu-destroyed" || change == "selected-menu-destroyed")
+                {
+                    var ancestor = ((IList)VrChatExpressionMenu.Member(root, "controls"))[1];
+                    var child = (Object)VrChatExpressionMenu.Member(ancestor, "subMenu");
+                    Object.DestroyImmediate(child);
+                    Assert.That(child == null, Is.True);
+                    Assert.That(ReferenceEquals(VrChatExpressionMenu.Member(ancestor, "subMenu"), child), Is.True,
+                        "A destroyed selected or intermediate menu can still have the same managed reference as the consent snapshot.");
+                }
+                else
+                {
+                    Object.DestroyImmediate(root);
+                    Assert.That(root == null, Is.True, "Destroyed Unity objects retain their CLR wrapper but are unavailable to the reader.");
+                    Assert.That(ReferenceEquals(prepared.ExpectedRoot, root), Is.True);
+                }
+                Assert.Throws<VrChatMenuImportPolicyException>(() => VrChatExpressionMenu.Read(clone, prepared));
+                Assert.Throws<VrChatMenuImportPolicyException>(() => PoseMenuResolver.Read(clone, prepared));
+                prepared.SkipAll = true;
+                Assert.That(VrChatExpressionMenu.Read(clone, prepared).Entries, Is.Empty);
+                Assert.That(PoseMenuResolver.Read(clone, prepared), Is.Empty);
+                Assert.That(VrChatExpressionMenu.Read(f.Source, policy).Entries.Count, Is.EqualTo(expectedCount));
+                Assert.That(menus.MenuJson(), Is.EqualTo(before));
+            }
+            finally { Object.DestroyImmediate(clone); }
+        }
+
+        [Test]
+        public void DirectMenuReadRejectsADestroyedUnityRootWithTheSameClrIdentity()
+        {
+            using var f = new AttachmentConnectionTests.Fixture(); using var menus = new SdkFixture(f.Source, persistMenus: false);
+            var policy = ExportRecoveryReport.MenuImportPolicy(f.Source, ScopeOptions(f.Source, menus.Root, "/1"));
+            var root = menus.Root;
+            Object.DestroyImmediate(root);
+            Assert.That(root == null, Is.True);
+            Assert.That(ReferenceEquals(policy.ExpectedRoot, root), Is.True);
+            Assert.Throws<VrChatMenuImportPolicyException>(() => VrChatExpressionMenu.ReadMenu(root, policy));
+            policy.SkipAll = true;
+            Assert.That(VrChatExpressionMenu.ReadMenu(root, policy).Entries, Is.Empty);
+        }
+
+        static ExportRecoveryOptions ScopeOptions(GameObject source, Object root, string route)
+        {
+            var options = new ExportRecoveryOptions(); options.Actions.Add(new ExportRecoveryAction { Id = "scope:" + route,
+                Kind = ExportRecoveryActionKind.ExcludeMenuBranch, MenuOwner = source, MenuRoot = root, MenuPath = route }); return options;
+        }
+        static void SetControlParameter(object control, string name, float value)
+        {
+            var parameter = Activator.CreateInstance(control.GetType().GetField("parameter").FieldType);
+            SdkFixture.Set(parameter, "name", name); SdkFixture.Set(control, "parameter", parameter); SdkFixture.Set(control, "value", value);
+        }
+        static NdmfExportPreparation IsolateWithProductionCode(GameObject source, GameObject clone)
+        {
+            // Run the actual native serialized-asset isolation independently of
+            // optional NDMF plugins. This verifies exporter ownership/provenance,
+            // not MA/NDMF's installed canonical processing pipeline.
+            var type = typeof(NdmfExportPreparation); var flags = BindingFlags.NonPublic | BindingFlags.Static;
+            var dependencies = type.GetMethod("Dependencies", flags, null, new[] { typeof(GameObject) }, null);
+            var sourceAssets = (HashSet<Object>)dependencies.Invoke(null, new object[] { source });
+            var cloneAssets = (HashSet<Object>)dependencies.Invoke(null, new object[] { clone });
+            var lease = new NdmfExportPreparation();
+            try
+            {
+                type.GetMethod("IsolateSharedAssets", BindingFlags.NonPublic | BindingFlags.Instance).Invoke(lease,
+                    new object[] { clone, sourceAssets, cloneAssets, null });
+                return lease;
+            }
+            catch { lease.Dispose(); throw; }
+        }
+
         internal sealed class SdkFixture : IDisposable
         {
             internal readonly Component Descriptor;
@@ -309,9 +484,12 @@ namespace VRVlog.LilToonExporter.Tests
             readonly List<Object> owned = new List<Object>();
             readonly Type menuType;
             readonly string directory;
+            readonly bool persistMenus;
             int menuSerial, clipSerial;
-            internal SdkFixture(GameObject avatar)
+            internal SdkFixture(GameObject avatar) : this(avatar, true) { }
+            internal SdkFixture(GameObject avatar, bool persistMenus, bool persistentRootOnly = false)
             {
+                this.persistMenus = persistMenus;
                 var descriptorType = Find("VRC.SDK3.Avatars.Components.VRCAvatarDescriptor");
                 menuType = Find("VRC.SDK3.Avatars.ScriptableObjects.VRCExpressionsMenu");
                 var parameterType = Find("VRC.SDK3.Avatars.ScriptableObjects.VRCExpressionParameters");
@@ -320,7 +498,7 @@ namespace VRVlog.LilToonExporter.Tests
                 var folderName = "__MenuRecoverySdk_" + Guid.NewGuid().ToString("N");
                 AssetDatabase.CreateFolder("Assets", folderName); directory = "Assets/" + folderName;
                 Descriptor = avatar.AddComponent(descriptorType); Set(Descriptor, "customExpressions", true); Set(Descriptor, "customizeAnimationLayers", true);
-                Root = NewMenu(); var face = NewMenu(); AddControl(face, "Menu face", "Toggle", "Face", 1);
+                Root = NewMenu(forcePersistent: persistentRootOnly); var face = NewMenu(); AddControl(face, "Menu face", "Toggle", "Face", 1);
                 AddControl(Root, "Faces", "SubMenu", subMenu: face);
                 AddControl(Root, "Clothes", "SubMenu", subMenu: EightControlTree(256));
                 Set(Descriptor, "expressionsMenu", Root);
@@ -352,7 +530,13 @@ namespace VRVlog.LilToonExporter.Tests
                 // Save only assets owned by this fixture; never flush unrelated
                 // dirty assets or the user's scene during a test.
                 foreach (var asset in owned.Where(EditorUtility.IsPersistent))
-                { EditorUtility.SetDirty(asset); AssetDatabase.SaveAssetIfDirty(asset); }
+                {
+                    // The persistent-container case intentionally has live,
+                    // unsaved child references, just like existing ownership
+                    // regressions. Do not serialize those transient children.
+                    if (persistentRootOnly && !persistMenus && asset == Root) continue;
+                    EditorUtility.SetDirty(asset); AssetDatabase.SaveAssetIfDirty(asset);
+                }
             }
             static Type Find(string name) => AppDomain.CurrentDomain.GetAssemblies().Select(a => a.GetType(name)).FirstOrDefault(t => t != null);
             internal static void Set(object target, string name, object value)
@@ -360,10 +544,11 @@ namespace VRVlog.LilToonExporter.Tests
                 var field = target.GetType().GetField(name); Assert.That(field, Is.Not.Null, name);
                 field.SetValue(target, field.FieldType.IsEnum ? Enum.Parse(field.FieldType, value.ToString()) : value);
             }
-            internal ScriptableObject NewMenu()
+            internal ScriptableObject NewMenu(bool forcePersistent = false)
             {
                 var menu = ScriptableObject.CreateInstance(menuType); owned.Add(menu);
-                AssetDatabase.CreateAsset(menu, directory + "/Menu" + menuSerial++ + ".asset"); return menu;
+                if (persistMenus || forcePersistent) AssetDatabase.CreateAsset(menu, directory + "/Menu" + menuSerial++ + ".asset");
+                return menu;
             }
             internal AnimationClip FaceClip(string name, float weight, bool persist = true)
             {
