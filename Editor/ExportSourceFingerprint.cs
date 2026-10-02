@@ -111,6 +111,11 @@ namespace VRVlog.LilToonExporter
             { hash.Integer(array.depth); hash.Integer(array.mipmapCount); hash.Boolean(array.isReadable); }
             if (texture is CubemapArray cubes)
             { hash.Integer(cubes.cubemapCount); hash.Integer(cubes.mipmapCount); hash.Boolean(cubes.isReadable); }
+            if (texture is WebCamTexture camera)
+            {
+                hash.Text(camera.deviceName); hash.Integer(camera.requestedWidth); hash.Integer(camera.requestedHeight);
+                hash.Float(camera.requestedFPS);
+            }
             if (texture is RenderTexture render)
             {
                 var descriptor = render.descriptor;
@@ -120,9 +125,9 @@ namespace VRVlog.LilToonExporter
                 hash.Boolean(descriptor.sRGB); hash.Boolean(descriptor.useMipMap); hash.Boolean(descriptor.autoGenerateMips);
                 hash.Boolean(descriptor.enableRandomWrite); hash.Boolean(descriptor.bindMS); hash.Boolean(descriptor.useDynamicScale);
             }
-            // Preserve the existing distinction: live render outputs can change
+            // Preserve the existing distinction: live camera/render outputs can change
             // frame-by-frame, whereas static image changes invalidate a preview.
-            if (!(texture is RenderTexture))
+            if (texture is Texture2D || texture is Cubemap || texture is Texture3D || texture is Texture2DArray || texture is CubemapArray)
             {
                 hash.Text(texture.imageContentsHash.ToString()); hash.Unsigned(texture.updateCount);
                 // Writable native CPU views can change before Apply without

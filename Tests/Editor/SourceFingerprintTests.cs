@@ -222,6 +222,31 @@ namespace VRVlog.LilToonExporter.Tests
             finally { Object.DestroyImmediate(source); Object.DestroyImmediate(texture); }
         }
 
+        [TestCase("frame")][TestCase("width")][TestCase("height")][TestCase("fps")][TestCase("device")]
+        public void WebCameraFrameSignalsAreLiveWhileConfigurationRemainsTracked(string change)
+        {
+            var source = new GameObject("Live texture input");
+            var camera = new WebCamTexture(320, 240, 30);
+            try
+            {
+                source.AddComponent<SourceFingerprintTextureProbe>().Texture = camera;
+                Assert.That(camera.isPlaying, Is.False, "This fixture never opens camera hardware.");
+                var stamp = ExportRecoverySourceStamp.Capture(source); Assert.That(stamp.Matches(source), Is.True);
+                switch (change)
+                {
+                    case "frame": var count = camera.updateCount; camera.IncrementUpdateCount(); Assert.That(camera.updateCount, Is.Not.EqualTo(count)); break;
+                    case "width": camera.requestedWidth = 640; break;
+                    case "height": camera.requestedHeight = 480; break;
+                    case "fps": camera.requestedFPS = 60; break;
+                    case "device": camera.deviceName = "Fingerprint test camera"; break;
+                }
+                Assert.That(stamp.Matches(source), Is.EqualTo(change == "frame"));
+                Assert.That(ExportRecoverySourceStamp.Capture(source).Matches(source), Is.True);
+                Assert.That(camera.isPlaying, Is.False);
+            }
+            finally { Object.DestroyImmediate(source); Object.DestroyImmediate(camera); }
+        }
+
         sealed class MeshFixture : IDisposable
         {
             internal readonly GameObject Source = new GameObject("Fingerprint source");
