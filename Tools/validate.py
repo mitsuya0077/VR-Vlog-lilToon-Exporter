@@ -24,7 +24,7 @@ listing = json.loads((root / "source.json").read_text(encoding="utf-8"))
 
 assert package["name"] == "com.vrvlog.liltoon-vrm-exporter"
 assert package["unity"] == "2022.3"
-assert package["version"] == "0.11.8"
+assert package["version"] == "0.11.9"
 assert one_click.index("AvatarBaseShape.Preserve(clone, clone,") < one_click.index("Vrm10AppearanceExporter.Export(")
 assert "foreach (var mesh in temporaryMeshes) UnityEngine.Object.DestroyImmediate(mesh);" in one_click
 assert package["vpmDependencies"] == {
@@ -272,7 +272,22 @@ assert 'PackageVersion(), RequireSupportedLilToon(), false, targetExclusions, nu
 assert 'var targetOutput = outputPath;' in window
 assert 'var targetExclusions = excludedObjects.ToArray();' in window
 assert 'ExportFailureWindow.Show(session, Completed)' in window
-assert 'new ExportRecoverySession(targetAvatar, targetOutput,' in window
+assert 'session = ExportAndSaveNormally(targetAvatar, targetOutput,' in window
+normal_export = window.split('internal static ExportRecoverySession ExportAndSaveNormally(', 1)[1].split(
+    'internal static bool ShouldShowFailureAfterFailedAttempt(', 1
+)[0]
+assert 'bytes = create(new ExportRecoveryOptions(), report, warnings);' in normal_export
+assert 'ExportOutputWriter.Write(destination, bytes);' in normal_export
+assert 'catch (OperationCanceledException)' in normal_export
+assert 'ExportRecoverySession.FromFailedExport(source, destination, create, exception, report,' in normal_export
+assert normal_export.index('bytes = create(') < normal_export.index('ExportOutputWriter.Write(')
+# A healthy export has no previous diagnosis/draft to invalidate. The new
+# behavior tests execute this route; it must not construct or retry recovery.
+assert 'new ExportRecoverySession(' not in normal_export
+assert '.Attempt(' not in normal_export and '.SavePending(' not in normal_export
+assert 'ExportRecoverySourceStamp' not in normal_export
+assert (root / 'Tests/Editor/ExportFlowTests.cs').is_file()
+assert 'ExportAndSaveNormally(' in (root / 'Tests/Editor/ExportFlowTests.cs').read_text(encoding='utf-8')
 assert 'recoveryOptions: options, recoveryReport: report' in window
 assert 'ExcludeHiddenRenderer' in recovery and 'ExportGimmickDetection.Inspect(action.Renderer)?.Unit' in recovery
 assert 'code == "audio-link"' in recovery and 'Official(audio)' in recovery
@@ -281,6 +296,20 @@ assert 'EditorJsonUtility.ToJson(' not in fingerprint
 assert 'new StringBuilder' not in fingerprint
 assert 'LastSuccess = new SuccessfulAttempt' in recovery_session
 assert 'item.Action.Id == diagnostic.Action.Id' in recovery_session
+assert 'internal static ExportRecoverySession FromFailedExport(' in recovery_session
+recovery_save = recovery_session.split('internal void SavePending()', 1)[1].split(
+    'internal static ExportRecoveryOptions CopyOptions(', 1
+)[0]
+assert 'CheckForChanges() || !CanSave' in recovery_save
+assert 'ExportOutputWriter.Write(Destination, LastSuccess.Bytes);' in recovery_save
+assert 'HasPendingSave = false;' in recovery_save
+output_writer = recovery_session.split('internal static class ExportOutputWriter', 1)[1]
+assert output_writer.index('LilToonGlbExtension.Validate(bytes);') < output_writer.index('Directory.CreateDirectory(directory);')
+assert 'File.WriteAllBytes(temporary, bytes);' in output_writer
+assert 'LilToonGlbExtension.Validate(File.ReadAllBytes(temporary));' in output_writer
+assert 'File.Replace(temporary, destination, null)' in output_writer
+assert 'File.Move(temporary, destination)' in output_writer
+assert 'finally { if (File.Exists(temporary)) File.Delete(temporary); }' in output_writer
 assert 'session.CreatePreview(attempt.Options)' in recovery_comparison
 assert 'controlRigGenerationOption: ControlRigGenerationOption.None' in recovery_comparison
 assert '!HasVrmPreview || !session.CanSave' in recovery_comparison

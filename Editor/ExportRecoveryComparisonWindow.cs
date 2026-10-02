@@ -22,7 +22,8 @@ namespace VRVlog.LilToonExporter
         private float distance = 3, vrmDistance = 3, yaw;
         private int tab;
         private bool preparing;
-        private bool showAppliedRemedies;
+        private bool showAppliedRemedies = true;
+        private bool showDisplayExplanation;
         private Vector2 remediesScroll, contentScroll;
         private int previewRevision;
         private string error;
@@ -37,7 +38,8 @@ namespace VRVlog.LilToonExporter
                 .FirstOrDefault(item => item.session == session) ?? CreateInstance<ExportRecoveryComparisonWindow>();
             window.session = session;
             window.saved = saved;
-            window.titleContent = new GUIContent(ExporterLocalization.T("対策後の見た目を確認"));
+            window.tab = 0;
+            window.titleContent = new GUIContent(ExporterLocalization.T("書き出すVRMを確認"));
             window.minSize = new Vector2(780, 580);
             window.ShowUtility();
             EditorApplication.delayCall += () => { if (window != null) window.StartRebuild(); };
@@ -185,14 +187,16 @@ namespace VRVlog.LilToonExporter
             }
             if (session.IsInvalidated || !session.HasCurrentSuccess)
             {
-                EditorGUILayout.HelpBox(ExporterLocalization.T("アバターまたは関連アセットが変わりました。古い診断とプレビューは無効です。再検査してください。"), MessageType.Warning);
-                if (GUILayout.Button(ExporterLocalization.T("再検査する"))) Reinspect();
+                EditorGUILayout.HelpBox(ExporterLocalization.T("アバターの設定が変わったため、前の結果は保存できません。今のアバターから書き出し直してください。"), MessageType.Warning);
+                if (GUILayout.Button(ExporterLocalization.T("今のアバターで書き出し直す"))) Reinspect();
                 return;
             }
             using (var content = new EditorGUILayout.ScrollViewScope(contentScroll))
             {
             contentScroll = content.scrollPosition;
-            EditorGUILayout.HelpBox(ExporterLocalization.T("この設定を変更したコピーでは書き出せました。見た目を確認してから保存してください。"), MessageType.Info);
+            EditorGUILayout.LabelField(ExporterLocalization.T("書き出せました。まだ保存していません。"), EditorStyles.boldLabel);
+            EditorGUILayout.LabelField(ExporterLocalization.T("見た目と変更点を確認し、下の「このVRMを保存する」で保存してください。"), EditorStyles.wordWrappedLabel);
+            EditorGUILayout.LabelField(ExporterLocalization.T("保存するファイル: ") + System.IO.Path.GetFileName(session.Destination), EditorStyles.wordWrappedMiniLabel);
             var skipAllMenus = session.LastSuccess.Options.Actions.Any(action => action.Kind == ExportRecoveryActionKind.SkipVrChatMenus);
             var appliedActions = session.LastSuccess.Options.Actions.Where(action =>
                 !skipAllMenus || action.Kind != ExportRecoveryActionKind.ExcludeMenuBranch).ToArray();
@@ -200,7 +204,7 @@ namespace VRVlog.LilToonExporter
             if (appliedActions.Length > 0)
             {
                 showAppliedRemedies = EditorGUILayout.Foldout(showAppliedRemedies,
-                    ExporterLocalization.T("適用した対策: ") + appliedActions.Length, true);
+                    ExporterLocalization.T("このVRMで変わる点: ") + appliedActions.Length, true);
                 if (showAppliedRemedies)
                 {
                     using (var view = new EditorGUILayout.ScrollViewScope(remediesScroll, GUILayout.MaxHeight(120)))
@@ -210,17 +214,20 @@ namespace VRVlog.LilToonExporter
                         {
                             var diagnostic = AppliedDiagnostic(action);
                             if (diagnostic == null) continue;
-                            EditorGUILayout.LabelField(diagnostic.Target + " / " + ExporterLocalization.T(diagnostic.Remedy), EditorStyles.wordWrappedLabel);
-                            EditorGUILayout.LabelField(ExporterLocalization.T("失われる効果: ") + ExporterLocalization.T(diagnostic.LostEffect), EditorStyles.wordWrappedMiniLabel);
+                            EditorGUILayout.LabelField(diagnostic.Target + " / " + ExporterLocalization.T(ExportFailureWindow.ActionLabel(action.Kind)), EditorStyles.wordWrappedLabel);
+                            EditorGUILayout.LabelField(ExporterLocalization.T("変わる点: ") + ExporterLocalization.T(diagnostic.LostEffect), EditorStyles.wordWrappedMiniLabel);
                         }
                     }
                 }
             }
-            tab = GUILayout.Toolbar(tab, new[] { ExporterLocalization.T("対策前後の入力コピー"), ExporterLocalization.T("再読み込みしたVRM（標準MToon）") });
+            tab = GUILayout.Toolbar(tab, new[] { ExporterLocalization.T("書き出すVRM"), ExporterLocalization.T("変更前と比べる") });
             if (tab == 0)
-                EditorGUILayout.LabelField(ExporterLocalization.T("同じカメラ・照明・姿勢で対策の影響を比較します。ビルド処理後の結果はVRMタブで確認してください。"), EditorStyles.wordWrappedLabel);
-            else
-                EditorGUILayout.LabelField(ExporterLocalization.T("標準MToonによるVRMの表示です。VR Vlogの専用lilToon表示とは見た目が異なる場合があります。"), EditorStyles.wordWrappedLabel);
+            {
+                EditorGUILayout.LabelField(ExporterLocalization.T("保存するVRMファイルの見た目を確認しています。"), EditorStyles.wordWrappedLabel);
+                showDisplayExplanation = EditorGUILayout.Foldout(showDisplayExplanation, ExporterLocalization.T("表示について"));
+                if (showDisplayExplanation) EditorGUILayout.LabelField(ExporterLocalization.T("保存するVRMをUnityで読み込み、標準MToonで表示しています。VR Vlogの専用lilToon表示では質感が異なる場合があります。"), EditorStyles.wordWrappedLabel);
+            }
+            else EditorGUILayout.LabelField(ExporterLocalization.T("対処によって変わる箇所を比較します。保存するファイルの確認は「書き出すVRM」で行えます。"), EditorStyles.wordWrappedLabel);
             yaw = EditorGUILayout.Slider(ExporterLocalization.T("向き"), yaw, -180, 180);
             using (new EditorGUILayout.HorizontalScope())
             {
@@ -228,17 +235,17 @@ namespace VRVlog.LilToonExporter
                 if (GUILayout.Button(ExporterLocalization.T("斜め"))) yaw = 45;
                 if (GUILayout.Button(ExporterLocalization.T("横"))) yaw = 90;
             }
-            if (preparing) EditorGUILayout.HelpBox(ExporterLocalization.T("比較用のコピーとVRMを準備しています…"), MessageType.Info);
+            if (preparing) EditorGUILayout.HelpBox(ExporterLocalization.T("書き出すVRMを準備しています…"), MessageType.Info);
             if (error != null) EditorGUILayout.HelpBox(ExporterLocalization.T(error), MessageType.Error);
-            if (tab == 0)
+            if (tab == 1)
             {
                 using (new EditorGUILayout.HorizontalScope())
                 {
-                    DrawPreview(beforeRender, ExporterLocalization.T("対策前"));
-                    DrawPreview(afterRender, ExporterLocalization.T("対策後"));
+                    DrawPreview(beforeRender, ExporterLocalization.T("変更前"));
+                    DrawPreview(afterRender, ExporterLocalization.T("変更後"));
                 }
             }
-            else DrawPreview(vrmRender, ExporterLocalization.T("再読み込みしたVRM（標準MToon）"));
+            else DrawPreview(vrmRender, ExporterLocalization.T("書き出すVRM"));
             var changes = ExportAppearanceReport.Changes(session.LastSuccess.Warnings);
             if (changes.Length > 0)
                 EditorGUILayout.HelpBox(ExporterLocalization.T("見た目の変更: ") + ExportAppearanceReport.Summary(changes), MessageType.Warning);
@@ -246,11 +253,11 @@ namespace VRVlog.LilToonExporter
             using (new EditorGUILayout.HorizontalScope())
             {
                 using (new EditorGUI.DisabledScope(preparing))
-                    if (GUILayout.Button(ExporterLocalization.T("対策を選び直す"), GUILayout.Height(32)))
+                    if (GUILayout.Button(ExporterLocalization.T("対処を変更する"), GUILayout.Height(32)))
                         ExportFailureWindow.Show(session, saved);
                 using (new EditorGUI.DisabledScope(preparing || !HasVrmPreview || !session.CanSave))
-                    if (GUILayout.Button(ExporterLocalization.T("確認して保存"), GUILayout.Height(32))) Save();
-                if (GUILayout.Button(ExporterLocalization.T("保存しないで閉じる"), GUILayout.Height(32))) Close();
+                    if (GUILayout.Button(ExporterLocalization.T("このVRMを保存する"), GUILayout.Height(32))) Save();
+                if (GUILayout.Button(ExporterLocalization.T("保存せずに戻る"), GUILayout.Height(32))) Close();
             }
         }
 
@@ -261,8 +268,8 @@ namespace VRVlog.LilToonExporter
             if (omissions.Length == 0) return;
             // A still image cannot reveal that expression and pose entries were
             // not imported. Keep their selected scope visible outside a foldout.
-            EditorGUILayout.LabelField(ExporterLocalization.T("メニュー取り込みを省略した範囲"), EditorStyles.boldLabel);
-            EditorGUILayout.HelpBox(ExporterLocalization.T("入力コピーの静止画像では、取り込まれなくなった表情・ポーズは確認できません。以下の範囲と失われる効果も確認してください。"), MessageType.Warning);
+            EditorGUILayout.LabelField(ExporterLocalization.T("取り込まない表情・ポーズ"), EditorStyles.boldLabel);
+            EditorGUILayout.HelpBox(ExporterLocalization.T("以下のメニュー由来の表情・ポーズは、このVRMには入りません。静止画像では確認できないため、範囲を確認してください。"), MessageType.Warning);
             foreach (var action in omissions)
             {
                 var diagnostic = AppliedDiagnostic(action);
@@ -270,7 +277,7 @@ namespace VRVlog.LilToonExporter
                     ? ExporterLocalization.T("すべてのVRChatメニュー") : action.MenuPath);
                 var lost = diagnostic?.LostEffect ?? "指定した範囲のメニュー由来の表情・ポーズは取り込まれません。";
                 EditorGUILayout.LabelField(ExporterLocalization.T("対象: ") + target, EditorStyles.wordWrappedLabel);
-                EditorGUILayout.LabelField(ExporterLocalization.T("失われる効果: ") + ExporterLocalization.T(lost), EditorStyles.wordWrappedLabel);
+                EditorGUILayout.LabelField(ExporterLocalization.T("変わる点: ") + ExporterLocalization.T(lost), EditorStyles.wordWrappedLabel);
             }
             EditorGUILayout.LabelField(ExporterLocalization.T("この対策はメニュー由来の表情・ポーズの取り込みだけを変えます。衣装・髪・骨格のオブジェクト自体は削除しません。"), EditorStyles.wordWrappedMiniLabel);
         }
@@ -322,9 +329,20 @@ namespace VRVlog.LilToonExporter
             EditorApplication.delayCall += () =>
             {
                 if (this == null) return;
-                if (session.Reinspect()) StartRebuild();
-                else ExportFailureWindow.Show(session, saved);
-                Repaint();
+                try
+                {
+                    if (session.Reinspect())
+                    {
+                        if (!ExportFailureWindow.SaveUnmodifiedResult(session, saved)) StartRebuild();
+                    }
+                    else { ExportFailureWindow.Show(session, saved); Close(); }
+                }
+                catch (Exception exception)
+                {
+                    if (session.IsInvalidated) { ExportFailureWindow.Show(session, saved); Close(); }
+                    else ExportFailureWindow.Show(exception);
+                }
+                if (this != null) Repaint();
             };
         }
 
@@ -337,10 +355,14 @@ namespace VRVlog.LilToonExporter
             try
             {
                 session.SavePending();
+                ExportFailureWindow.CloseSessionWindows(session);
                 saved?.Invoke();
-                Close();
             }
-            catch (Exception exception) { ExportFailureWindow.Show(exception); }
+            catch (Exception exception)
+            {
+                if (session.IsInvalidated) { ExportFailureWindow.Show(session, saved); Close(); }
+                else ExportFailureWindow.Show(exception);
+            }
         }
 
         private void OnDisable()

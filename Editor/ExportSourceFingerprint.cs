@@ -39,6 +39,11 @@ namespace VRVlog.LilToonExporter
                 // Shader/script bytes belong to their dependency hash. Their
                 // compiled payload is not an editable serialized avatar input.
                 if (value is Shader || value is MonoScript) continue;
+                // The getter settles Unity's lazy skinned bounds before their
+                // serialized cache is hashed, just as the first render does.
+                // Explicitly authored bounds and every serialized field remain
+                // part of the source stamp.
+                if (value is SkinnedMeshRenderer skin) hash.Bounds(skin.localBounds);
                 SerializedData(hash, value, queue);
             }
             foreach (var path in assets.OrderBy(path => path, StringComparer.Ordinal))
