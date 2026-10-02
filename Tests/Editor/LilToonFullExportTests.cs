@@ -389,7 +389,7 @@ namespace VRVlog.LilToonExporter.Tests
                 var animated = materials.Single(m=>F.List(m,"values").Select(F.Object).Any(v=>F.Text(v,"name")=="_UseEmission2nd" && F.Vector(F.Get(v,"value"))[0]==1));
                 var scroll = F.List(animated,"values").Select(F.Object).Single(v=>F.Text(v,"name")=="_Main2ndTex_ScrollRotate");
                 Assert.That(F.Vector(F.Get(scroll,"value")), Is.EqualTo(new[] {.2f,.3f,0,.4f}));
-                Assert.That(F.List(root,"textures").Select(F.Object).Any(t=>F.Int(t,"width")==4096 && F.Int(t,"mips")==13), Is.True);
+                Assert.That(F.List(root,"textures").Select(F.Object).Any(t=>F.Int(t,"width")==1024 && F.Int(t,"height")==1 && F.Int(t,"mips")==11), Is.True);
                 Assert.That(F.List(root,"bindings").Select(F.Object).All(b=>F.List(b,"uv").Select(F.Object).Any(u=>F.Int(u,"channel")==7)), Is.True);
                 Assert.That(source.GetFloat("_UseMain2ndTex"), Is.EqualTo(1)); Assert.That(source.GetTexture("_MainTex"), Is.SameAs(texture));
                 Assert.That(texture.width, Is.EqualTo(4096)); Assert.That(skins[0].sharedMaterial, Is.SameAs(source));
