@@ -58,7 +58,7 @@ namespace VRVlog.LilToonExporter.Tests
             }
         }
 
-        [TestCase("center")][TestCase("size")][TestCase("reset")]
+        [TestCase("center")][TestCase("size")]
         [TestCase("bones")][TestCase("mesh")]
         public void EffectiveSkinnedBoundsAndTheirAuthoredInputsRemainGuarded(string change)
         {
@@ -75,7 +75,6 @@ namespace VRVlog.LilToonExporter.Tests
                 {
                     case "center": bounds.center += Vector3.right; fixture.Skin.localBounds = bounds; break;
                     case "size": bounds.size += Vector3.up; fixture.Skin.localBounds = bounds; break;
-                    case "reset": fixture.Skin.ResetLocalBounds(); break;
                     case "bones": fixture.Skin.bones = fixture.Skin.bones.Reverse().ToArray(); break;
                     case "mesh": replacement = Object.Instantiate(fixture.Mesh); fixture.Skin.sharedMesh = replacement; break;
                 }
@@ -83,6 +82,22 @@ namespace VRVlog.LilToonExporter.Tests
                 Assert.That(ExportRecoverySourceStamp.Capture(fixture.Source).Matches(fixture.Source), Is.True);
             }
             finally { if (replacement != null) Object.DestroyImmediate(replacement); }
+        }
+
+        [Test]
+        public void RendererBoundsResetKeepsUnchangedAuthoredSkinnedBoundsCurrent()
+        {
+            using var fixture = new MeshFixture(3, 2);
+            fixture.Skin.localBounds = new Bounds(new Vector3(1, 2, 3), new Vector3(4, 5, 6));
+            var stamp = ExportRecoverySourceStamp.Capture(fixture.Source);
+            var bounds = fixture.Skin.localBounds;
+            var state = EditorJsonUtility.ToJson(fixture.Skin);
+            fixture.Skin.ResetLocalBounds();
+            // Renderer.ResetLocalBounds does not reset the separate skinned
+            // localBounds property consumed by this exporter on Unity2022.3.
+            Assert.That(fixture.Skin.localBounds, Is.EqualTo(bounds));
+            Assert.That(EditorJsonUtility.ToJson(fixture.Skin), Is.EqualTo(state));
+            Assert.That(stamp.Matches(fixture.Source), Is.True, "An unchanged exported bound is not a stale recovery input.");
         }
 
         [TestCase("vertices")][TestCase("normals")][TestCase("tangents")][TestCase("colors")]
