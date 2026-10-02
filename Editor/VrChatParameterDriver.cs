@@ -3,6 +3,7 @@ using System.Collections;
 using System.Collections.Generic;
 using System.Globalization;
 using System.Linq;
+using UnityEditor;
 using UnityEngine;
 using UnityEngine.Animations;
 
@@ -43,6 +44,32 @@ namespace VRVlog.LilToonExporter
         internal static bool IsTracking(StateMachineBehaviour value) => value != null &&
             (value.GetType().FullName == "VRC.SDK3.Avatars.Components.VRCAnimatorTrackingControl" ||
              value.GetType().FullName == "VRC.SDKBase.VRC_AnimatorTrackingControl");
+
+        // These SDK behaviours only blend the named playable layer. Body
+        // playable weights do not change the FX controller sampled here. Read
+        // the serialized SDK fields, and fail closed for unknown or malformed
+        // settings; an FX target must still be rejected even at weight 1.
+        internal static bool IsNonFxPlayableControl(StateMachineBehaviour value)
+        {
+            if (value == null || (value.GetType().FullName != "VRC.SDK3.Avatars.Components.VRCPlayableLayerControl" &&
+                value.GetType().FullName != "VRC.SDKBase.VRC_PlayableLayerControl")) return false;
+            using (var data = new SerializedObject(value))
+            {
+                var layer = data.FindProperty("layer");
+                var weight = data.FindProperty("goalWeight");
+                var duration = data.FindProperty("blendDuration");
+                if (layer == null || layer.propertyType != SerializedPropertyType.Enum ||
+                    weight == null || weight.propertyType != SerializedPropertyType.Float ||
+                    duration == null || duration.propertyType != SerializedPropertyType.Float) return false;
+                var index = layer.enumValueIndex;
+                if (index < 0 || index >= layer.enumNames.Length) return false;
+                var target = layer.enumNames[index];
+                if (target != "Action" && target != "Gesture" && target != "Additive") return false;
+                return !float.IsNaN(weight.floatValue) && !float.IsInfinity(weight.floatValue) &&
+                    weight.floatValue >= 0 && weight.floatValue <= 1 &&
+                    !float.IsNaN(duration.floatValue) && !float.IsInfinity(duration.floatValue) && duration.floatValue >= 0;
+            }
+        }
 
         internal static Program Read(StateMachineBehaviour behaviour, string location)
         {

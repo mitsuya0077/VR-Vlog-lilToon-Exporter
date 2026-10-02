@@ -161,7 +161,7 @@ namespace VRVlog.LilToonExporter
                     try
                     {
                         bool HasEffect(IEnumerable<StateMachineBehaviour> behaviours) => behaviours.Any(b =>
-                            !VrChatParameterDriver.IsTracking(b) && (!VrChatParameterDriver.IsDriver(b) ||
+                            !VrChatParameterDriver.IsTracking(b) && !VrChatParameterDriver.IsNonFxPlayableControl(b) && (!VrChatParameterDriver.IsDriver(b) ||
                             requiredParameters == null || VrChatParameterDriver.Read(b, machine.name).Operations.Any(op => requiredParameters.Contains(op.Destination))));
                         return machine.states.Length + machine.stateMachines.Length > 0 && !HasEffect(machine.behaviours) &&
                             machine.states.All(child => !child.state.writeDefaultValues && !child.state.iKOnFeet && !HasEffect(child.state.behaviours) && MotionIsExcluded(child.state.motion)) &&

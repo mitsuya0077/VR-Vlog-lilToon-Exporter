@@ -115,6 +115,128 @@ namespace VRVlog.LilToonExporter.Tests
             return driver;
         }
 
+        private static StateMachineBehaviour SdkBehaviour(AnimatorState state, string name)
+        {
+            var type = AppDomain.CurrentDomain.GetAssemblies().Select(a => a.GetType(name)).FirstOrDefault(t => t != null);
+            if (type == null) Assert.Ignore("Install the real VRChat SDK to run playable-control integration tests.");
+            return state.AddStateMachineBehaviour(type);
+        }
+
+        private static StateMachineBehaviour PlayableControl(AnimatorState state, string target, float weight = .5f, float duration = 2,
+            string type = "VRC.SDK3.Avatars.Components.VRCPlayableLayerControl")
+        {
+            var control = SdkBehaviour(state, type);
+            using (var data = new SerializedObject(control))
+            {
+                var layer = data.FindProperty("layer");
+                layer.enumValueIndex = Array.IndexOf(layer.enumNames, target);
+                data.FindProperty("goalWeight").floatValue = weight;
+                data.FindProperty("blendDuration").floatValue = duration;
+                data.ApplyModifiedPropertiesWithoutUndo();
+            }
+            return control;
+        }
+
+        [TestCase("Action", "VRC.SDK3.Avatars.Components.VRCPlayableLayerControl")]
+        [TestCase("Gesture", "VRC.SDK3.Avatars.Components.VRCPlayableLayerControl")]
+        [TestCase("Additive", "VRC.SDK3.Avatars.Components.VRCPlayableLayerControl")]
+        [TestCase("Action", "VRC.SDKBase.VRC_PlayableLayerControl")]
+        public void BodyPlayableControlAndTrackedHandDoNotBlockFixedFacialSampler(string target, string type)
+        {
+            var face = Gate(); face.motion = Clip("Menu face", 75);
+            var dance = Layer("Dance"); var idle = State(dance, "0"); dance.defaultState = idle;
+            var selected = State(dance, "1"); Transition(idle, selected, "Menu", 1);
+            var off = PlayableControl(idle, target, 0, type: type);
+            var on = PlayableControl(selected, target, 1, type: type);
+            var tracking = SdkBehaviour(selected, "VRC.SDK3.Avatars.Components.VRCAnimatorTrackingControl");
+            using (var data = new SerializedObject(tracking))
+            {
+                var hand = data.FindProperty("trackingLeftHand");
+                hand.enumValueIndex = Array.IndexOf(hand.enumNames, "Tracking");
+                data.ApplyModifiedPropertiesWithoutUndo();
+            }
+            var assets = AssetDatabase.LoadAllAssetsAtPath(folder + "/FX.controller");
+            var before = assets.ToDictionary(a => a, a => EditorJsonUtility.ToJson(a));
+            Assert.That(VrChatParameterDriver.IsNonFxPlayableControl(off), Is.True);
+            Assert.That(VrChatParameterDriver.IsNonFxPlayableControl(on), Is.True);
+            Assert.That(Sample().Single(v => v.Shape == "Face size").Weight, Is.EqualTo(75).Within(.01));
+            foreach (var asset in assets) Assert.That(EditorJsonUtility.ToJson(asset), Is.EqualTo(before[asset]), asset.name);
+            Assert.That(avatar.GetComponentInChildren<SkinnedMeshRenderer>().GetBlendShapeWeight(0), Is.EqualTo(25));
+        }
+
+        [TestCase(0)]
+        [TestCase(1)]
+        public void FxPlayableControlStillRejectsFaceEvenOnUnselectedDanceState(float weight)
+        {
+            Gate().motion = Clip("Menu face", 75);
+            var dance = Layer("Dance"); var idle = State(dance, "0"); dance.defaultState = idle;
+            var selected = State(dance, "1");
+            var control = PlayableControl(selected, "FX", weight, 0);
+            Assert.That(VrChatParameterDriver.IsNonFxPlayableControl(control), Is.False);
+            Assert.That(Assert.Throws<InvalidOperationException>(() => Sample()).Message,
+                Does.Contain("Dance/1").And.Contain("VRCPlayableLayerControl").And.Contain("影響範囲"));
+        }
+
+        [TestCase(-.1f, 0)]
+        [TestCase(1.1f, 0)]
+        [TestCase(float.NaN, 0)]
+        [TestCase(float.PositiveInfinity, 0)]
+        [TestCase(.5f, -1)]
+        [TestCase(.5f, float.NaN)]
+        [TestCase(.5f, float.PositiveInfinity)]
+        public void MalformedBodyPlayableControlIsNotIgnored(float weight, float duration)
+        {
+            var gate = Gate(); gate.motion = Clip("Menu face", 75);
+            var control = PlayableControl(gate, "Action", weight, duration);
+            Assert.That(VrChatParameterDriver.IsNonFxPlayableControl(control), Is.False);
+            Assert.That(Assert.Throws<InvalidOperationException>(() => Sample()).Message,
+                Does.Contain("Select face").And.Contain("VRCPlayableLayerControl"));
+        }
+
+        [Test]
+        public void UnknownPlayableTargetIsNotIgnored()
+        {
+            var gate = Gate(); gate.motion = Clip("Menu face", 75);
+            var control = PlayableControl(gate, "Action");
+            using (var data = new SerializedObject(control))
+            {
+                data.FindProperty("layer").intValue = int.MaxValue;
+                data.ApplyModifiedPropertiesWithoutUndo();
+            }
+            Assert.That(VrChatParameterDriver.IsNonFxPlayableControl(control), Is.False);
+            Assert.Throws<InvalidOperationException>(() => Sample());
+        }
+
+        [TestCase("Action", true)]
+        [TestCase("FX", false)]
+        public void OtherPlayableControlUsesTheSameFxBoundary(string target, bool supported)
+        {
+            Gate().motion = Clip("Menu face", 75);
+            var other = AnimatorController.CreateAnimatorControllerAtPath(folder + "/Other.controller");
+            var state = State(other.layers[0].stateMachine, "Other control"); other.layers[0].stateMachine.defaultState = state;
+            PlayableControl(state, target); metadata.OtherControllers.Add(other);
+            if (supported) Assert.That(Sample().Single(v => v.Shape == "Face size").Weight, Is.EqualTo(75).Within(.01));
+            else Assert.That(Assert.Throws<InvalidOperationException>(() => Sample()).Message,
+                Does.Contain("FX以外").And.Contain("Other control").And.Contain("VRCPlayableLayerControl"));
+        }
+
+        [Test]
+        public void BodyControlDoesNotMakeAnExcludedOnlyLayerLookLikeAFace()
+        {
+            var gate = Gate(); gate.motion = Clip("Menu face", 75);
+            var machine = Layer("Excluded decoration");
+            var clip = new AnimationClip { name = "Decoration" };
+            AnimationUtility.SetEditorCurve(clip, EditorCurveBinding.FloatCurve("Decoration", typeof(GameObject), "m_IsActive"), AnimationCurve.Constant(0, 1, 1));
+            AssetDatabase.AddObjectToAsset(clip, controller);
+            var state = State(machine, "Decoration", clip); machine.defaultState = state;
+            PlayableControl(state, "Action");
+            var excluded = VrChatExpressionSampler.FindExcludedLayers(controller, controller, path => path == "Decoration");
+            Assert.That(excluded, Does.Contain(controller.layers.Length - 1));
+            var values = VrChatExpressionSampler.Sample(avatar, controller, metadata.Defaults,
+                new Dictionary<string, float> { ["Menu"] = 1 }, path => path == "Decoration", metadata);
+            Assert.That(values.Single(v => v.Shape == "Face size").Weight, Is.EqualTo(75).Within(.01));
+        }
+
         [Test]
         public void MenuDriverChainReachesAnotherLayerWithoutEditingAnySourceAsset()
         {

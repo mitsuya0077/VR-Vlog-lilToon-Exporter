@@ -176,11 +176,14 @@ namespace VRVlog.LilToonExporter
                         !renderer.gameObject.activeInHierarchy || renderer.sharedMesh == null || excluded?.Invoke(renderer.transform) == true)
                         throw new InvalidOperationException("瞬きの対象が書き出しに含まれていません。「確認・調整」で指定し直してください。");
                     var names = Enumerable.Range(0, renderer.sharedMesh.blendShapeCount).Select(renderer.sharedMesh.GetBlendShapeName).ToArray();
-                    if (string.IsNullOrEmpty(binding.Shape) || BlinkShapeNames.Unique(names, binding.Shape) < 0)
+                    // A selected binding identifies the exact mesh channel. The
+                    // automatic semantic lookup remains case insensitive and
+                    // rejects aliases such as Blink / BLINK before this point.
+                    if (string.IsNullOrEmpty(binding.Shape) || BlinkShapeNames.Unique(names, binding.Shape, StringComparison.Ordinal) < 0)
                         throw new InvalidOperationException("瞬きの変形が見つからないか重複しています: " + binding.Shape);
                     if (float.IsNaN(binding.Weight) || float.IsInfinity(binding.Weight) || binding.Weight < 0 || binding.Weight > 100)
                         throw new InvalidOperationException("瞬きの適用量は0〜100%で指定してください。");
-                    if (!seen.Add((renderer, binding.Shape.ToLowerInvariant())))
+                    if (!seen.Add((renderer, binding.Shape)))
                         throw new InvalidOperationException("同じ瞬きの変形を重複して指定できません。");
                 }
             }
@@ -190,7 +193,7 @@ namespace VRVlog.LilToonExporter
             if (Slots[0].Count == 0 && Slots[1].Count == 0 && !allowMissingAutomaticBlink)
                 throw new InvalidOperationException("閉眼用の変形を特定できません。「確認・調整」で選択するか「瞬きなし」を指定してください。");
             if (Slots[1].Any(left => Slots[2].Any(right => left.Renderer == right.Renderer &&
-                string.Equals(left.Shape, right.Shape, StringComparison.OrdinalIgnoreCase))))
+                string.Equals(left.Shape, right.Shape, StringComparison.Ordinal))))
                 throw new InvalidOperationException("左右別には異なる閉眼用の変形を指定してください。");
         }
 
@@ -238,7 +241,7 @@ namespace VRVlog.LilToonExporter
                 foreach (var binding in group)
                 {
                     var index = BlinkShapeNames.Unique(Enumerable.Range(0, original.blendShapeCount)
-                        .Select(original.GetBlendShapeName).ToArray(), binding.Shape);
+                        .Select(original.GetBlendShapeName).ToArray(), binding.Shape, StringComparison.Ordinal);
                     var name = "__VRVlog_Blink_" + Guid.NewGuid().ToString("N");
                     AvatarBaseShape.AppendAnimatedShape(original, generated, name, index,
                         renderer.GetBlendShapeWeight(index), binding.Weight);

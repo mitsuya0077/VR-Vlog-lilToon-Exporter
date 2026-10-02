@@ -269,6 +269,75 @@ namespace VRVlog.LilToonExporter.Tests
             Skin("Blink", "BLINK");
             Assert.Throws<InvalidOperationException>(() => BlinkExportSession.Resolve(root));
         }
+        [TestCase("Blink", .2f)][TestCase("BLINK", .6f)]
+        public void ExplicitManualChoiceResolvesCaseDistinctAliasesAndBakesTheSelectedChannel(string selected, float expected)
+        {
+            var skin = Skin("Blink", "BLINK");
+            skin.sharedMesh.ClearBlendShapes();
+            skin.sharedMesh.AddBlendShapeFrame("Blink", 100, new[] { Vector3.up * .2f, Vector3.zero, Vector3.zero }, new Vector3[3], new Vector3[3]);
+            skin.sharedMesh.AddBlendShapeFrame("BLINK", 100, new[] { Vector3.up * .6f, Vector3.zero, Vector3.zero }, new Vector3[3], new Vector3[3]);
+            Assert.Throws<InvalidOperationException>(() => BlinkExportSession.Resolve(root));
+            var options = new BlinkExportOptions { Mode = BlinkExportMode.Manual };
+            options.Both.Add(new BlinkShapeBinding { Renderer = skin, Shape = selected });
+            using var resolved = BlinkExportSession.Resolve(root, options);
+            Assert.That(resolved.Slots[0].Single().Shape, Is.EqualTo(selected));
+            copy = Object.Instantiate(root);
+            using var prepared = resolved.ForClone(root, copy);
+            prepared.Bake(copy, generated);
+            var binding = prepared.Slots[0].Single();
+            var vertices = new Vector3[3];
+            binding.Renderer.sharedMesh.GetBlendShapeFrameVertices(binding.Renderer.sharedMesh.GetBlendShapeIndex(binding.Shape), 0, vertices, null, null);
+            Assert.That(vertices[0].y, Is.EqualTo(expected).Within(.00001));
+            Assert.That(skin.sharedMesh.blendShapeCount, Is.EqualTo(2), "The source mesh is unchanged.");
+        }
+
+        [Test] public void ExplicitBindingsRequireExactNamesAndRejectRepeatedChannels()
+        {
+            var skin = Skin("Blink", "BLINK");
+            var options = new BlinkExportOptions { Mode = BlinkExportMode.Manual };
+            options.Both.Add(new BlinkShapeBinding { Renderer = skin, Shape = "blink" });
+            Assert.Throws<InvalidOperationException>(() => BlinkExportSession.Resolve(root, options));
+            options.Both[0].Shape = "Blink";
+            options.Both.Add(new BlinkShapeBinding { Renderer = skin, Shape = "BLINK" });
+            Assert.That(BlinkExportSession.Resolve(root, options).Slots[0].Count, Is.EqualTo(2));
+            options.Both.Add(options.Both[0].Copy());
+            Assert.Throws<InvalidOperationException>(() => BlinkExportSession.Resolve(root, options));
+        }
+
+        [Test] public void FailedAutomaticSetupOffersAnEmptyManualRowWithoutGuessing()
+        {
+            var skin = Skin("Blink", "BLINK");
+            var options = new BlinkExportOptions();
+            Assert.Throws<InvalidOperationException>(() => BlinkExportSession.Resolve(root, options));
+            options.SelectMode(BlinkExportMode.Manual);
+            Assert.That(options.Mode, Is.EqualTo(BlinkExportMode.Manual));
+            Assert.That(options.Both.Count, Is.EqualTo(1));
+            Assert.That(options.Both[0].Renderer, Is.Null);
+            Assert.That(options.Both[0].Shape, Is.Empty);
+            Assert.That(options.Left, Is.Empty);
+            Assert.That(options.Right, Is.Empty);
+            options.Both[0].Renderer = skin;
+            options.Both[0].Shape = "BLINK";
+            Assert.DoesNotThrow(() => BlinkExportSession.Resolve(root, options));
+            options.SelectMode(BlinkExportMode.Auto);
+            options.SelectMode(BlinkExportMode.Manual);
+            Assert.That(options.Both.Count, Is.EqualTo(1), "Returning to manual must retain the explicit selection.");
+            Assert.That(options.Both[0].Shape, Is.EqualTo("BLINK"));
+        }
+
+        [Test] public void ManualAdjustmentCopiesTheResolvedBindingsWithoutChangingTheAutomaticResult()
+        {
+            Skin("Blink", "Blink_L", "Blink_R");
+            using var resolved = BlinkExportSession.Resolve(root);
+            var options = new BlinkExportOptions();
+            options.SelectMode(BlinkExportMode.Manual, resolved);
+            Assert.That(options.Both.Count, Is.EqualTo(1));
+            Assert.That(options.Left.Count, Is.EqualTo(1));
+            Assert.That(options.Right.Count, Is.EqualTo(1));
+            Assert.That(options.Both[0], Is.Not.SameAs(resolved.Slots[0][0]));
+            options.Both[0].Weight = 65;
+            Assert.That(resolved.Slots[0][0].Weight, Is.EqualTo(100));
+        }
 
         [TestCase("Blink_L")][TestCase("Blink_R")]
         public void APartialEyelashPairCannotBeHiddenByAnotherRenderersBlink(string shape)

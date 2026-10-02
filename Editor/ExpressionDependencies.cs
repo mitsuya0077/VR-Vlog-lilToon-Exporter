@@ -126,7 +126,7 @@ namespace VRVlog.LilToonExporter
                 {
                     foreach (var behaviour in behaviours)
                     {
-                        if (VrChatParameterDriver.IsTracking(behaviour)) continue;
+                        if (VrChatParameterDriver.IsTracking(behaviour) || VrChatParameterDriver.IsNonFxPlayableControl(behaviour)) continue;
                         if (!VrChatParameterDriver.IsDriver(behaviour))
                         {
                             unknown.Add(path + " / " + (behaviour == null ? "欠けたBehaviour" : behaviour.GetType().Name));

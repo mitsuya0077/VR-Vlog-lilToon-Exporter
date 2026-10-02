@@ -57,7 +57,7 @@ namespace VRVlog.LilToonExporter
                 var result = new List<StateMachineBehaviour>();
                 foreach (var behaviour in values)
                 {
-                    if (VrChatParameterDriver.IsTracking(behaviour)) continue;
+                    if (VrChatParameterDriver.IsTracking(behaviour) || VrChatParameterDriver.IsNonFxPlayableControl(behaviour)) continue;
                     if (!dependencies.Drivers.TryGetValue(behaviour, out var program))
                         throw new InvalidOperationException("評価用Controllerに未解決のState Behaviourがあります。");
                     var adapter = (ExpressionDriverBehaviour)Own(ScriptableObject.CreateInstance<ExpressionDriverBehaviour>());
