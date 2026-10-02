@@ -14,9 +14,9 @@ namespace VRVlog.LilToonExporter
 {
     internal static class VrChatExpressionSampler
     {
-        internal static VrChatExpressionMenu.Source Analyze(GameObject avatar, Func<string, bool> excludedPath = null)
+        internal static VrChatExpressionMenu.Source Analyze(GameObject avatar, Func<string, bool> excludedPath = null, VrChatMenuImportPolicy menuPolicy = null)
         {
-            var source = VrChatExpressionMenu.Read(avatar);
+            var source = VrChatExpressionMenu.Read(avatar, menuPolicy);
             try
             {
                 for (var index = 0; index < source.Entries.Count; index++)

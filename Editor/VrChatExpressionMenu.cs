@@ -7,6 +7,94 @@ using UnityEngine;
 
 namespace VRVlog.LilToonExporter
 {
+    // An export recipe, never an edit to the descriptor or shared menu asset.
+    // Routes use control indices so repeated names/shared assets remain distinct.
+    internal sealed class VrChatMenuImportPolicy
+    {
+        internal bool SkipAll;
+        internal object ExpectedRoot;
+        internal readonly HashSet<string> ExcludedBranches = new HashSet<string>(StringComparer.Ordinal);
+        readonly Dictionary<string, List<BranchStep>> branchReferences = new Dictionary<string, List<BranchStep>>(StringComparer.Ordinal);
+        internal bool Excludes(string route) => ExcludedBranches.Contains(route);
+
+        internal sealed class BranchStep
+        {
+            internal readonly string Name, Type, Parameter;
+            internal readonly object Value, SubMenu;
+            internal BranchStep(string name, string type, string parameter, object value, object subMenu)
+            { Name = name; Type = type; Parameter = parameter ?? ""; Value = value; SubMenu = subMenu; }
+        }
+
+        internal void CaptureBranchReferences()
+        {
+            branchReferences.Clear();
+            foreach (var path in ExcludedBranches)
+            {
+                var steps = VrChatExpressionMenu.BranchSteps(ExpectedRoot, path);
+                if (steps == null) throw new InvalidOperationException("選んだVRChatメニューの枝を確認できません。再検査してください。");
+                branchReferences.Add(path, steps);
+            }
+        }
+
+        internal bool BranchReferencesMatch(object root)
+        {
+            foreach (var pair in branchReferences)
+            {
+                var current = VrChatExpressionMenu.BranchSteps(root, pair.Key);
+                if (current == null || current.Count != pair.Value.Count) return false;
+                for (var i = 0; i < current.Count; i++)
+                {
+                    var expected = pair.Value[i]; var actual = current[i];
+                    if (!ReferenceEquals(expected.SubMenu, actual.SubMenu) || expected.Name != actual.Name || expected.Type != actual.Type ||
+                        expected.Parameter != actual.Parameter || !Equals(expected.Value, actual.Value)) return false;
+                }
+            }
+            return true;
+        }
+
+        internal VrChatMenuImportPolicy WithOwnedCopies(Func<object, object> ownedCopy)
+        {
+            if (ownedCopy == null) throw new ArgumentNullException(nameof(ownedCopy));
+            var prepared = new VrChatMenuImportPolicy { SkipAll = SkipAll,
+                ExpectedRoot = ExpectedRoot == null ? null : ownedCopy(ExpectedRoot) };
+            prepared.ExcludedBranches.UnionWith(ExcludedBranches);
+            foreach (var pair in branchReferences)
+                prepared.branchReferences.Add(pair.Key, pair.Value.Select(step => new BranchStep(step.Name, step.Type,
+                    step.Parameter, step.Value, step.SubMenu == null ? null : ownedCopy(step.SubMenu))).ToList());
+            return prepared;
+        }
+    }
+
+    internal sealed class VrChatMenuImportSummary
+    {
+        internal sealed class Branch
+        {
+            internal string Path, Label;
+            internal int CandidateCount;
+            internal bool IsComplete = true;
+        }
+        internal object Root;
+        internal int CandidateCount, VisitedMenus, VisitedControls;
+        internal bool IsComplete = true;
+        internal bool BudgetStopped;
+        internal string LimitReason;
+        internal readonly List<Branch> Branches = new List<Branch>();
+    }
+
+    internal sealed class VrChatMenuImportLimitException : InvalidOperationException
+    {
+        internal readonly VrChatMenuImportSummary Summary;
+        internal VrChatMenuImportLimitException(VrChatMenuImportSummary summary)
+            : base("VRChatメニューの取り込み上限を超えています。取り込まない範囲を選ぶか、メニュー由来の表情・ポーズの取り込みを省略して再試行してください。")
+        { Summary = summary; }
+    }
+
+    internal sealed class VrChatMenuImportPolicyException : InvalidOperationException
+    {
+        internal VrChatMenuImportPolicyException()
+            : base("ビルド処理でVRChatメニューが変更されたため、選んだ枝を確認できません。全省略を選ぶか、メニューを確認して再検査してください。") { }
+    }
+
     // The SDK remains optional. Read its public serialized data without taking
     // an assembly dependency or changing the user's descriptor/menu assets.
     internal static class VrChatExpressionMenu
@@ -48,18 +136,41 @@ namespace VRVlog.LilToonExporter
             internal readonly List<Entry> Entries = new List<Entry>();
             internal readonly List<string> Messages = new List<string>();
             internal int VisitedMenus;
+            internal int VisitedControls;
         }
 
-        internal static Source Read(GameObject avatar)
+        internal const int MaximumCandidates = 256, MaximumMenuVisits = 512, MaximumDepth = 16, MaximumControlVisits = 8192;
+
+        internal static object Root(GameObject avatar)
+        {
+            var descriptor = Descriptor(avatar);
+            return descriptor != null && Member(descriptor, "customExpressions") is bool enabled && enabled
+                ? Member(descriptor, "expressionsMenu") : null;
+        }
+        static Component Descriptor(GameObject avatar) => avatar.GetComponents<Component>().FirstOrDefault(c => c != null &&
+            c.GetType().FullName == "VRC.SDK3.Avatars.Components.VRCAvatarDescriptor");
+
+        internal static Source ReadMenu(object menu, VrChatMenuImportPolicy policy = null)
+        {
+            var result = new Source();
+            Walk(menu, "", "", new Dictionary<string, float>(), new HashSet<object>(), result, 0, policy);
+            return result;
+        }
+
+        internal static Source Read(GameObject avatar, VrChatMenuImportPolicy policy = null)
         {
             var result = new Source();
             result.Defaults["IsLocal"] = 1f;
             result.Defaults["TrackingType"] = 6f;
-            var descriptor = avatar.GetComponents<Component>().FirstOrDefault(c => c != null &&
-                c.GetType().FullName == "VRC.SDK3.Avatars.Components.VRCAvatarDescriptor");
+            var descriptor = Descriptor(avatar);
+            // A removed/disabled descriptor or a destroyed Unity asset must
+            // not turn branch consent into silent whole-menu omission.
+            var root = descriptor != null && Member(descriptor, "customExpressions") is bool customExpressions && customExpressions
+                ? Member(descriptor, "expressionsMenu") : null;
+            ValidatePolicyRoot(root, policy);
             if (descriptor == null) { result.Messages.Add("VRChat Avatar Descriptorがありません。既存のVRM表情はそのまま保存します。"); return result; }
             if (Member(descriptor, "customExpressions") is bool enabled && enabled)
-                Walk(Member(descriptor, "expressionsMenu"), "", "", new Dictionary<string, float>(), new HashSet<object>(), result, 0);
+                Walk(Member(descriptor, "expressionsMenu"), "", "", new Dictionary<string, float>(), new HashSet<object>(), result, 0, policy);
             else result.Messages.Add("VRChatのCustom Expressionsが無効です。FXに登録されたジェスチャー表情を確認します。");
             foreach (var parameter in Items(Member(Member(descriptor, "expressionParameters"), "parameters")))
             {
@@ -94,26 +205,58 @@ namespace VRVlog.LilToonExporter
         }
 
         internal static void Walk(object menu, string prefix, string idPrefix, Dictionary<string, float> parents,
-            HashSet<object> stack, Source result, int depth)
+            HashSet<object> stack, Source result, int depth, VrChatMenuImportPolicy policy = null)
+        {
+            if (policy?.SkipAll == true)
+            {
+                result.Messages.Add(Localize("選択した対策により、VRChatメニュー由来の表情・ポーズの取り込みをすべて省略しました。"));
+                return;
+            }
+            ValidatePolicyRoot(menu, policy);
+            if (policy != null)
+                foreach (var path in policy.ExcludedBranches)
+                    if (!IsSubMenuPath(menu, path))
+                        throw new InvalidOperationException("選んだVRChatメニューの枝を確認できません。再検査してください。");
+            WalkEntries(menu, prefix, idPrefix, parents, stack, result, depth, policy, menu);
+        }
+
+        static void ValidatePolicyRoot(object menu, VrChatMenuImportPolicy policy)
+        {
+            if (policy == null || policy.SkipAll || policy.ExcludedBranches.Count == 0) return;
+            if (menu == null || menu is UnityEngine.Object obj && obj == null ||
+                !ReferenceEquals(policy.ExpectedRoot, menu) || !policy.BranchReferencesMatch(menu))
+                throw new VrChatMenuImportPolicyException();
+        }
+
+        static void WalkEntries(object menu, string prefix, string idPrefix, Dictionary<string, float> parents,
+            HashSet<object> stack, Source result, int depth, VrChatMenuImportPolicy policy, object root)
         {
             if (menu == null || menu is UnityEngine.Object obj && obj == null) return;
-            if (++result.VisitedMenus > 512) throw new InvalidOperationException("サブメニューの参照が多すぎます（512件まで）。");
-            if (depth > 16 || !stack.Add(menu)) { result.Messages.Add(prefix + ": 循環または深すぎるサブメニューを省略しました。"); return; }
+            if (++result.VisitedMenus > MaximumMenuVisits) throw Limit(root, policy, "menu-visits");
+            if (depth > MaximumDepth || !stack.Add(menu)) { result.Messages.Add(prefix + ": 循環または深すぎるサブメニューを省略しました。"); return; }
             try
             {
                 var index = 0;
                 foreach (var control in Items(Member(menu, "controls")))
                 {
-                    if (result.Entries.Count >= 256) throw new InvalidOperationException("表情メニューが256項目を超えています。メニューを分割してください。");
+                    if (++result.VisitedControls > MaximumControlVisits) throw Limit(root, policy, "control-visits");
                     var id = idPrefix + "/" + index++;
                     var label = Member(control, "name") as string;
                     if (string.IsNullOrWhiteSpace(label)) label = "名称未設定";
                     var name = string.IsNullOrEmpty(prefix) ? label : prefix + " / " + label;
+                    var type = Member(control, "type")?.ToString();
+                    if (type == "SubMenu" && policy?.Excludes(id) == true)
+                    {
+                        result.Messages.Add(string.Format(Localize("{0}: 選択した対策により、この枝の表情・ポーズの取り込みを省略しました。"), name));
+                        continue;
+                    }
+                    // Empty submenus do not consume a candidate slot. Count a
+                    // leaf only when adding it, including unsupported controls.
+                    if (type != "SubMenu" && result.Entries.Count >= MaximumCandidates) throw Limit(root, policy, "candidates");
                     var values = new Dictionary<string, float>(parents, StringComparer.Ordinal);
                     var parameter = Member(Member(control, "parameter"), "name") as string;
                     if (!string.IsNullOrEmpty(parameter)) values[parameter] = Number(Member(control, "value"));
-                    var type = Member(control, "type")?.ToString();
-                    if (type == "SubMenu") { Walk(Member(control, "subMenu"), name, id, values, stack, result, depth + 1); continue; }
+                    if (type == "SubMenu") { WalkEntries(Member(control, "subMenu"), name, id, values, stack, result, depth + 1, policy, root); continue; }
                     var entry = new Entry { Id = id + "\n" + name + "\n" + JsonDom.Serialize(values.ToDictionary(p => p.Key, p => (object)p.Value)), Name = name,
                         ControlType = type, ControlParameter = parameter };
                     foreach (var pair in values) entry.Parameters.Add(pair.Key, pair.Value);
@@ -125,12 +268,120 @@ namespace VRVlog.LilToonExporter
             finally { stack.Remove(menu); }
         }
 
+        static VrChatMenuImportLimitException Limit(object root, VrChatMenuImportPolicy policy, string reason)
+        {
+            var summary = Discover(root, policy);
+            summary.LimitReason = reason;
+            return new VrChatMenuImportLimitException(summary);
+        }
+
+        // Discovery never samples an Animator, material or expression. Its own
+        // budget bounds hostile or highly reused menu graphs independently of
+        // the 256 candidates that may be imported. Partial counts are lower bounds.
+        internal static VrChatMenuImportSummary Discover(object root, VrChatMenuImportPolicy policy = null)
+        {
+            var summary = new VrChatMenuImportSummary { Root = root };
+            var stack = new HashSet<object>();
+            var ancestors = new List<VrChatMenuImportSummary.Branch>();
+            DiscoverMenu(root, "", "", 0, policy, summary, stack, ancestors);
+            return summary;
+        }
+
+        static void DiscoverMenu(object menu, string prefix, string route, int depth, VrChatMenuImportPolicy policy,
+            VrChatMenuImportSummary summary, HashSet<object> stack, List<VrChatMenuImportSummary.Branch> ancestors)
+        {
+            if (summary.BudgetStopped || menu == null || menu is UnityEngine.Object obj && obj == null) return;
+            if (++summary.VisitedMenus > MaximumMenuVisits) { Truncate(summary, ancestors, "menu-visits"); return; }
+            if (depth > MaximumDepth) { MarkIncomplete(summary, ancestors, "depth"); return; }
+            if (!stack.Add(menu)) { MarkIncomplete(summary, ancestors, "cycle"); return; }
+            try
+            {
+                var index = 0;
+                foreach (var control in Items(Member(menu, "controls")))
+                {
+                    if (++summary.VisitedControls > MaximumControlVisits) { Truncate(summary, ancestors, "control-visits"); return; }
+                    var path = route + "/" + index++;
+                    var label = Member(control, "name") as string;
+                    if (string.IsNullOrWhiteSpace(label)) label = "名称未設定";
+                    var name = string.IsNullOrEmpty(prefix) ? label : prefix + " / " + label;
+                    if (Member(control, "type")?.ToString() == "SubMenu")
+                    {
+                        if (policy?.Excludes(path) == true) continue;
+                        var branch = new VrChatMenuImportSummary.Branch { Path = path, Label = name };
+                        summary.Branches.Add(branch); ancestors.Add(branch);
+                        DiscoverMenu(Member(control, "subMenu"), name, path, depth + 1, policy, summary, stack, ancestors);
+                        ancestors.RemoveAt(ancestors.Count - 1);
+                        if (summary.BudgetStopped) return;
+                    }
+                    else
+                    {
+                        summary.CandidateCount++;
+                        foreach (var branch in ancestors) branch.CandidateCount++;
+                    }
+                }
+            }
+            finally { stack.Remove(menu); }
+        }
+
+        static void Truncate(VrChatMenuImportSummary summary, List<VrChatMenuImportSummary.Branch> ancestors, string reason)
+        {
+            summary.BudgetStopped = true;
+            MarkIncomplete(summary, ancestors, reason);
+            summary.LimitReason = reason;
+        }
+
+        static void MarkIncomplete(VrChatMenuImportSummary summary, List<VrChatMenuImportSummary.Branch> ancestors, string reason)
+        {
+            summary.IsComplete = false; summary.LimitReason = reason;
+            foreach (var branch in ancestors) branch.IsComplete = false;
+        }
+
+        internal static bool IsSubMenuPath(object root, string path) => BranchSteps(root, path) != null;
+
+        internal static List<VrChatMenuImportPolicy.BranchStep> BranchSteps(object root, string path)
+        {
+            // At most 17 indices, each in 0..8191, and their '/' separators.
+            // Reject forged long strings before allocating the split array.
+            if (string.IsNullOrEmpty(path) || path.Length > (MaximumDepth + 1) * 5 || path[0] != '/') return null;
+            var parts = path.Substring(1).Split('/');
+            if (parts.Length > MaximumDepth + 1) return null;
+            var current = root;
+            var result = new List<VrChatMenuImportPolicy.BranchStep>();
+            foreach (var part in parts)
+            {
+                if (current == null || current is UnityEngine.Object menuObject && menuObject == null) return null;
+                if (!int.TryParse(part, out var index) || index < 0 || index >= MaximumControlVisits || index.ToString() != part) return null;
+                object selected = null; var at = 0;
+                foreach (var control in Items(Member(current, "controls")))
+                {
+                    if (at++ == index) { selected = control; break; }
+                    if (at > MaximumControlVisits) return null;
+                }
+                if (selected == null || Member(selected, "type")?.ToString() != "SubMenu") return null;
+                current = Member(selected, "subMenu");
+                if (current is UnityEngine.Object childMenu && childMenu == null) return null;
+                result.Add(new VrChatMenuImportPolicy.BranchStep(Member(selected, "name") as string, "SubMenu",
+                    Member(Member(selected, "parameter"), "name") as string, Member(selected, "value"), current));
+            }
+            return result;
+        }
+
         internal static object Member(object value, string name)
         {
             if (value == null) return null;
             var type = value.GetType();
             const BindingFlags flags = BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic;
             return type.GetField(name, flags)?.GetValue(value) ?? type.GetProperty(name, flags)?.GetValue(value);
+        }
+
+        static string Localize(string message)
+        {
+#if EXPORTER_BEHAVIOR_TESTS
+            // Host traversal tests intentionally compile without Editor APIs.
+            return message;
+#else
+            return ExporterLocalization.T(message);
+#endif
         }
 
         private static IEnumerable<object> Items(object value) => value is IEnumerable list ? list.Cast<object>() : Enumerable.Empty<object>();
