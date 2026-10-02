@@ -369,7 +369,7 @@ namespace VRVlog.LilToonExporter
 
         private void ExportOneClick()
         {
-            try { ResolveBlink(); }
+            try { using var resolved = ResolveBlink(); }
             catch (Exception)
             {
                 blinkStatus.Invalidate();
@@ -391,30 +391,25 @@ namespace VRVlog.LilToonExporter
             var targetPoses = poseOptions.Copy();
             var targetExclusions = excludedObjects.ToArray();
             var targetGimmicks = new ExportGimmickOptions { AutoExclude = autoExcludeGimmicks, IncludedObjects = includedGimmicks.ToArray() };
-            MaterialBakeOptions bakeOptions = null;
-            void Attempt()
+            if (File.Exists(targetOutput) && !EditorUtility.DisplayDialog(
+                ExporterLocalization.T("ファイルを上書きしますか？"), targetOutput,
+                ExporterLocalization.T("上書き"), ExporterLocalization.T("キャンセル"))) return;
+            ExportRecoverySession session = null;
+            void Completed() => ShowExportCompletion(session.LastSuccess.Bytes, session.LastSuccess.Warnings, targetOutput);
+            session = new ExportRecoverySession(targetAvatar, targetOutput, (options, report, warnings) =>
             {
-                var warnings = new List<string>();
-                ExportAtomically(() =>
-                {
-                    if (targetAvatar == null) throw new InvalidOperationException(ExporterLocalization.T("この書き出しで選んだアバターが見つかりません。アバターを指定し直してください。"));
-                    return UniVrmOneClickExporter.Export(targetAvatar, targetName, targetAuthor, warnings, false,
-                        PackageVersion(), RequireSupportedLilToon(), false, targetExclusions, bakeOptions, targetGimmicks, targetBlink, targetPoses);
-                }, warnings, targetOutput, failure =>
-                {
-                    try
-                    {
-                        bakeOptions = (bakeOptions ?? new MaterialBakeOptions()).WithOmissions(failure.Issues);
-                        Attempt();
-                    }
-                    catch (Exception exception)
-                    {
-                        Debug.LogException(exception);
-                        ExportFailureWindow.Show(exception);
-                    }
-                });
+                if (targetAvatar == null) throw new InvalidOperationException(ExporterLocalization.T("この書き出しで選んだアバターが見つかりません。アバターを指定し直してください。"));
+                return UniVrmOneClickExporter.Export(targetAvatar, targetName, targetAuthor, warnings, false,
+                    PackageVersion(), RequireSupportedLilToon(), false, targetExclusions, null, targetGimmicks, targetBlink, targetPoses,
+                    recoveryOptions: options, recoveryReport: report);
+            }, targetExclusions, targetGimmicks);
+            if (!session.Attempt(new ExportRecoveryOptions()))
+            {
+                ExportFailureWindow.Show(session, Completed);
+                return;
             }
-            Attempt();
+            try { session.SavePending(); Completed(); }
+            catch (Exception exception) { Debug.LogException(exception); ExportFailureWindow.Show(exception); }
         }
 
         private string AvatarName()
@@ -429,45 +424,21 @@ namespace VRVlog.LilToonExporter
             return name + "-liltoon.vrm";
         }
 
-        private void ExportAtomically(Func<byte[]> create, ICollection<string> warnings, string destination,
-            Action<MaterialBakeException> omitAndRetry = null)
+        private static void ShowExportCompletion(byte[] bytes, IEnumerable<string> warnings, string destination)
         {
-            try
-            {
-                if (!string.Equals(Path.GetExtension(destination), ".vrm", StringComparison.OrdinalIgnoreCase))
-                    throw new InvalidOperationException(ExporterLocalization.T("保存先の拡張子は .vrm にしてください。保存先を選び直して書き出してください。"));
-                if (File.Exists(destination) && !EditorUtility.DisplayDialog(ExporterLocalization.T("ファイルを上書きしますか？"), destination, ExporterLocalization.T("上書き"), ExporterLocalization.T("キャンセル"))) return;
-                var bytes = create();
-                var directory = Path.GetDirectoryName(Path.GetFullPath(destination));
-                if (string.IsNullOrEmpty(directory)) throw new InvalidOperationException(ExporterLocalization.T("保存先フォルダーが正しくありません。"));
-                Directory.CreateDirectory(directory);
-                var temporary = Path.Combine(directory, "." + Path.GetFileName(destination) + "." + Guid.NewGuid().ToString("N") + ".tmp");
-                try
-                {
-                    File.WriteAllBytes(temporary, bytes);
-                    LilToonGlbExtension.Validate(File.ReadAllBytes(temporary));
-                    if (File.Exists(destination)) File.Replace(temporary, destination, null); else File.Move(temporary, destination);
-                }
-                finally { if (File.Exists(temporary)) File.Delete(temporary); }
-                EditorUtility.RevealInFinder(destination);
-                // Keep the native modal short even for avatars with hundreds of
-                // omitted items. Diagnostics remain in one expandable Console entry.
-                if (warnings != null && warnings.Count > 0) Debug.Log(ExporterLocalization.T("VR Vlog 書き出し詳細\n・") + string.Join("\n・", warnings));
-                var expressionCount = VrmMenuExpressions.CountRegistered(bytes);
-                var completion = string.Format(ExporterLocalization.T("VRMを書き出しました（{0:N0}バイト）。\nVRChat表情: {1}件。"), bytes.Length, expressionCount);
-                var springSummary = warnings?.FirstOrDefault(message => message.StartsWith("PhysBone変換:", StringComparison.Ordinal));
-                if (springSummary != null) completion += "\n" + springSummary;
-                var changes = ExportAppearanceReport.Changes(warnings);
-                if (changes.Length == 0) EditorUtility.DisplayDialog(ExporterLocalization.T("書き出し完了"), completion, ExporterLocalization.T("閉じる"));
-                else if (!EditorUtility.DisplayDialog(ExporterLocalization.T("書き出し完了"), completion + ExporterLocalization.T("\n\n見た目の変更: ") + changes.Length + ExporterLocalization.T("件\n") + ExportAppearanceReport.Summary(changes), ExporterLocalization.T("閉じる"), ExporterLocalization.T("詳細を見る")))
-                    ExportAppearanceReportWindow.Open(warnings);
-            }
-            catch (OperationCanceledException) { }
-            catch (Exception exception)
-            {
-                Debug.LogException(exception);
-                ExportFailureWindow.Show(exception, omitAndRetry);
-            }
+            EditorUtility.RevealInFinder(destination);
+            var details = (warnings ?? Array.Empty<string>()).ToArray();
+            // Keep the native modal short even for avatars with hundreds of
+            // omitted items. Diagnostics remain in one expandable Console entry.
+            if (details.Length > 0) Debug.Log(ExporterLocalization.T("VR Vlog 書き出し詳細\n・") + string.Join("\n・", details));
+            var expressionCount = VrmMenuExpressions.CountRegistered(bytes);
+            var completion = string.Format(ExporterLocalization.T("VRMを書き出しました（{0:N0}バイト）。\nVRChat表情: {1}件。"), bytes.Length, expressionCount);
+            var springSummary = details.FirstOrDefault(message => message.StartsWith("PhysBone変換:", StringComparison.Ordinal));
+            if (springSummary != null) completion += "\n" + springSummary;
+            var changes = ExportAppearanceReport.Changes(details);
+            if (changes.Length == 0) EditorUtility.DisplayDialog(ExporterLocalization.T("書き出し完了"), completion, ExporterLocalization.T("閉じる"));
+            else if (!EditorUtility.DisplayDialog(ExporterLocalization.T("書き出し完了"), completion + ExporterLocalization.T("\n\n見た目の変更: ") + changes.Length + ExporterLocalization.T("件\n") + ExportAppearanceReport.Summary(changes), ExporterLocalization.T("閉じる"), ExporterLocalization.T("詳細を見る")))
+                ExportAppearanceReportWindow.Open(details);
         }
 
         private static string PackageVersion()

@@ -4,6 +4,7 @@
   "references": [
     "VRVlog.LilToonExporter.Editor",
     "VRVlog.LilToonExporter.Runtime",
+    "VRVlog.LilToonExporter.TestFixtures",
     "VRM10",
     "UniGLTF",
     "UniGLTF.Utils",

@@ -1,0 +1,10 @@
+{
+  "name": "VRVlog.LilToonExporter.TestFixtures",
+  "rootNamespace": "VRVlog.LilToonExporter.Tests",
+  "references": [],
+  "includePlatforms": [],
+  "optionalUnityReferences": [
+    "TestAssemblies"
+  ],
+  "autoReferenced": false
+}

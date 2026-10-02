@@ -1576,6 +1576,10 @@ namespace VRVlog.LilToonExporter.Tests
                 skins[0].sharedMaterial.shader = Shader.Find("lilToon"); skins[1].sharedMaterial = material;
                 var baseline = new Color(.5f, .3f, .2f, 1);
                 material.SetColor("_EmissionColor", baseline); material.EnableKeyword("_EMISSION");
+                // Linear projects round-trip HDR color values through native
+                // storage. Compare the exact value present before exporting,
+                // rather than assuming SetColor retained the supplied bits.
+                baseline = material.GetColor("_EmissionColor");
                 Vector4 target = baseline; if (moving) target.x += .1f;
                 clip.name = "UE/MouthClosed"; clip.MaterialColorBindings = new[] { new MaterialColorBinding {
                     MaterialName = material.name, BindType = MaterialColorType.emissionColor, TargetValue = target } };

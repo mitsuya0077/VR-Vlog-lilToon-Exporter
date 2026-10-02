@@ -135,7 +135,8 @@ namespace VRVlog.LilToonExporter
             }
         }
 
-        internal static NdmfExportPreparation Prepare(GameObject source, GameObject clone, ICollection<string> warnings = null)
+        internal static NdmfExportPreparation Prepare(GameObject source, GameObject clone, ICollection<string> warnings = null,
+            Action<Material, Material> materialCopyObserver = null)
         {
             RequireOwnedCopy(source, clone);
             if (!NeedsProcessing(clone))
@@ -147,11 +148,11 @@ namespace VRVlog.LilToonExporter
             var processor = FindType("nadena.dev.ndmf.AvatarProcessor");
             var package = processor != null ? PackageInfo.FindForAssembly(processor.Assembly) : null;
             var bridge = Bridge.Resolve(FindType, package?.version);
-            return ProcessClone(source, clone, bridge, warnings);
+            return ProcessClone(source, clone, bridge, warnings, materialCopyObserver);
         }
 
         internal static NdmfExportPreparation ProcessClone(GameObject source, GameObject clone, Bridge bridge,
-            ICollection<string> warnings = null)
+            ICollection<string> warnings = null, Action<Material, Material> materialCopyObserver = null)
         {
             RequireOwnedCopy(source, clone);
             // NDMF processes inactive tags too. Remove only irrelevant tags on
@@ -171,7 +172,7 @@ namespace VRVlog.LilToonExporter
                 try
                 {
                     RequireCopySceneReferences(clone, cloneAssets);
-                    lease.IsolateSharedAssets(clone, sourceAssets, cloneAssets);
+                    lease.IsolateSharedAssets(clone, sourceAssets, cloneAssets, materialCopyObserver);
                     // Legacy NDMF plugins (including LightLimitChanger) add
                     // subassets directly to context.AssetContainer. A null
                     // root selects NullAssetSaver and breaks every such pass.
@@ -285,7 +286,8 @@ namespace VRVlog.LilToonExporter
                 }
         }
 
-        private void IsolateSharedAssets(GameObject clone, HashSet<Object> sourceAssets, HashSet<Object> cloneAssets)
+        private void IsolateSharedAssets(GameObject clone, HashSet<Object> sourceAssets, HashSet<Object> cloneAssets,
+            Action<Material, Material> materialCopyObserver)
         {
             // NullAssetSaver treats every nonpersistent asset as mutable. A
             // scene avatar can legitimately own unsaved meshes, clips, menus,
@@ -334,6 +336,7 @@ namespace VRVlog.LilToonExporter
                 generated.Add(copy);
                 copy.name = value.name;
                 replacements.Add(value, copy);
+                if (copy is Material material && value is Material original) materialCopyObserver?.Invoke(material, original);
             }
             var copiedDependencies = Dependencies(replacements.Values)
                 .Where(value => IsMutableAsset(value) && !EditorUtility.IsPersistent(value) &&
