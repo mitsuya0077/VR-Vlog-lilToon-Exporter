@@ -78,6 +78,26 @@ namespace VRVlog.LilToonExporter
             stamp = ExportRecoverySourceStamp.Capture(source);
         }
 
+        // A normal export runs once before recovery exists. Seed that actual
+        // failure instead of rerunning the exporter merely to open diagnostics.
+        // This is a new session baseline; existing sessions are never restamped.
+        internal static ExportRecoverySession FromFailedExport(GameObject source, string destination,
+            Func<ExportRecoveryOptions, ExportRecoveryReport, ICollection<string>, byte[]> create,
+            Exception failure, ExportRecoveryReport report,
+            IEnumerable<GameObject> previewExcludedObjects = null, ExportGimmickOptions previewGimmicks = null)
+        {
+            if (failure == null) throw new ArgumentNullException(nameof(failure));
+            if (failure is OperationCanceledException)
+                throw new ArgumentException("Canceled exports do not create recovery diagnostics.", nameof(failure));
+            var session = new ExportRecoverySession(source, destination, create, previewExcludedObjects, previewGimmicks);
+            session.Failure = failure;
+            session.Report = report != null && report.Diagnostics.Count > 0
+                ? report : ExportRecoveryReport.FromException(source, failure, report?.Stage);
+            session.Report.Succeeded = false;
+            session.RememberDiagnostics(session.Report);
+            return session;
+        }
+
         internal ExportRecoveryPreview CreatePreview(ExportRecoveryOptions options)
         {
             if (CheckForChanges())

@@ -55,7 +55,7 @@ namespace VRVlog.LilToonExporter
         private static ExportFailureWindow NewWindow()
         {
             var window = CreateInstance<ExportFailureWindow>();
-            window.titleContent = new GUIContent(ExporterLocalization.T("VR Vlog 書き出しの確認"));
+            window.titleContent = new GUIContent(ExporterLocalization.T("VRMの書き出しを続ける"));
             window.minSize = new Vector2(520, 420);
             window.position = new Rect(120, 120, 620, 680);
             return window;
@@ -81,6 +81,13 @@ namespace VRVlog.LilToonExporter
             var diagnostics = (session.Report?.Diagnostics ?? new List<ExportRecoveryDiagnostic>())
                 .Concat(session.AvailableDiagnostics).GroupBy(item => item.Action?.Id ?? item.Id).Select(group => group.First());
             SetIssues(diagnostics);
+            // Only a single directly diagnosed material fix can be suggested.
+            // Broad menu/renderer omission always requires an explicit choice.
+            var current = (session.Report?.Diagnostics ?? new List<ExportRecoveryDiagnostic>())
+                .Where(issue => issue.Action != null).Select(issue => issue.Action).GroupBy(action => action.Id).Select(group => group.First()).ToArray();
+            if (selected.Count == 0 && session.LastSuccess == null && current.Length == 1 &&
+                (current[0].Kind == ExportRecoveryActionKind.DisableAudioLink || current[0].Kind == ExportRecoveryActionKind.OmitSecondLayer || current[0].Kind == ExportRecoveryActionKind.OmitThirdLayer) &&
+                session.AvailableDiagnostics.Any(issue => issue.Action?.Id == current[0].Id)) selected.Add(current[0].Id);
             copied = false;
             Repaint();
         }
@@ -112,43 +119,45 @@ namespace VRVlog.LilToonExporter
 
         private void OnGUI()
         {
-            EditorGUILayout.Space(6);
-            EditorGUILayout.LabelField(ExporterLocalization.T(session?.Failure != null || !hadSession
-                ? "書き出しを完了できませんでした" : "コピーに適用する対策を選んでください"), EditorStyles.boldLabel);
+            EditorGUILayout.Space(8);
+            var stale = session?.IsInvalidated == true;
+            EditorGUILayout.LabelField(ExporterLocalization.T(stale ? "アバターの変更を反映して書き出す" : session?.WasCanceled == true ? "キャンセル" : session != null && session.Failure == null ? "対処を変更する" : "この設定では書き出せませんでした"), EditorStyles.boldLabel);
             if (hadSession && session == null)
             {
                 EditorGUILayout.HelpBox(ExporterLocalization.T("Unityの再読み込みで確認内容が無効になりました。書き出し画面から再度書き出してください。"), MessageType.Warning);
-                if (GUILayout.Button(ExporterLocalization.T("閉じる"))) Close();
+                if (GUILayout.Button(ExporterLocalization.T("書き出し画面を開く"))) { LilToonExporterWindow.Open(); Close(); }
                 return;
             }
-            var stale = session?.IsInvalidated == true;
             using (var scroll = new EditorGUILayout.ScrollViewScope(scrollPosition))
             {
                 scrollPosition = scroll.scrollPosition;
                 if (stale)
-                {
-                    EditorGUILayout.HelpBox(ExporterLocalization.T("アバターまたは関連アセットが変わりました。古い診断とプレビューは無効です。再検査してください。"), MessageType.Warning);
-                }
+                    EditorGUILayout.HelpBox(ExporterLocalization.T("アバターの設定が変わったため、前の結果は保存できません。下のボタンで今のアバターから書き出し直します。保存先と書き出し設定は前回の指定を使います。"), MessageType.Info);
                 else
                 {
-                    if (!string.IsNullOrEmpty(message)) EditorGUILayout.HelpBox(ExporterLocalization.T(message), session?.WasCanceled == true ? MessageType.Info : MessageType.Error);
-                    if (session != null)
-                        EditorGUILayout.HelpBox(ExporterLocalization.T("対策は新しい変換用コピーに適用します。元のアバターと共有マテリアルは変更しません。未知の仕組みという理由だけでは除外しません。"), MessageType.Info);
+                    if (session?.WasCanceled == true) EditorGUILayout.HelpBox(ExporterLocalization.T("書き出しをキャンセルしました。前に成功した結果があれば確認できます。"), MessageType.Info);
+                    if (issues.Count == 0 && !string.IsNullOrEmpty(message)) EditorGUILayout.HelpBox(ExporterLocalization.T(message), MessageType.Error);
+                    if (session != null) EditorGUILayout.LabelField(ExporterLocalization.T(issues.Any(issue => issue.hasAction)
+                        ? "次に試すことを選んで、もう一度書き出してください。元のアバターは変更しません。"
+                        : "表示された設定を確認してください。元のアバターは変更しません。"), EditorStyles.wordWrappedLabel);
                     if (issues.Any(IsMenuIssue))
                     {
-                        EditorGUILayout.LabelField(ExporterLocalization.T("VRChatメニューの取り込み範囲"), EditorStyles.boldLabel);
-                        var scopeHelp = issues.Any(issue => issue.hasAction && issue.actionKind == ExportRecoveryActionKind.ExcludeMenuBranch)
-                            ? "取り込まない範囲を選んでください。複数の枝を選べます。メニューを分割するだけでは合計項目数は減りません。"
-                            : "枝ごとの候補がない場合は、全省略を選ぶかメニューを見直して再検査してください。";
-                        EditorGUILayout.HelpBox(ExporterLocalization.T(scopeHelp), MessageType.Info);
-                        EditorGUILayout.LabelField(ExporterLocalization.T("この対策はメニュー由来の表情・ポーズの取り込みだけを変えます。衣装・髪・骨格のオブジェクト自体は削除しません。"), EditorStyles.wordWrappedLabel);
+                        EditorGUILayout.HelpBox(ExporterLocalization.T("必要な表情を残し、取り込まないメニューを選んでください。メニューを分割するだけでは合計項目数は減りません。"), MessageType.Info);
                         if (issues.Any(issue => issue.hasAction && issue.actionKind == ExportRecoveryActionKind.SkipVrChatMenus && selected.Contains(issue.id)))
                             EditorGUILayout.HelpBox(ExporterLocalization.T("全省略を選ぶと、枝の選択にかかわらずVRChatメニュー由来の表情・ポーズをすべて省略します。"), MessageType.Warning);
                     }
-                    using (new EditorGUI.DisabledScope(busy))
-                        foreach (var issue in issues) DrawIssue(issue);
-                    showTechnicalDetails = EditorGUILayout.Foldout(showTechnicalDetails, ExporterLocalization.T("技術的な詳細"));
-                    if (showTechnicalDetails) EditorGUILayout.LabelField(technicalDetails ?? "", EditorStyles.wordWrappedLabel);
+                    using (new EditorGUI.DisabledScope(busy)) foreach (var issue in issues) DrawIssue(issue);
+                    showTechnicalDetails = EditorGUILayout.Foldout(showTechnicalDetails, ExporterLocalization.T("エラーの詳細・問い合わせ"));
+                    if (showTechnicalDetails)
+                    {
+                        foreach (var issue in issues) EditorGUILayout.LabelField(ExporterLocalization.T("工程: ") + ExporterLocalization.T(issue.stage), EditorStyles.wordWrappedLabel);
+                        EditorGUILayout.LabelField(technicalDetails ?? "", EditorStyles.wordWrappedLabel);
+                        if (GUILayout.Button(copied ? ExporterLocalization.T("共有用の診断をコピーしました") : ExporterLocalization.T("共有用の診断をコピー")))
+                        {
+                            EditorGUIUtility.systemCopyBuffer = supportText ?? "";
+                            copied = true;
+                        }
+                    }
                 }
             }
             if (session != null)
@@ -157,34 +166,41 @@ namespace VRVlog.LilToonExporter
                 {
                     if (stale)
                     {
-                        if (GUILayout.Button(ExporterLocalization.T("再検査する"), GUILayout.Height(32))) Schedule(true);
+                        if (GUILayout.Button(ExporterLocalization.T("今のアバターで書き出し直す"), GUILayout.Height(36))) Schedule(true);
                     }
                     else
                     {
                         var count = session.AvailableDiagnostics.Count(issue => issue.Action != null && selected.Contains(issue.Action.Id));
-                        using (new EditorGUI.DisabledScope(count == 0 && session.SelectedOptions.Actions.Count == 0 && !session.WasCanceled))
-                            if (GUILayout.Button(ExporterLocalization.T("コピーで対策を適用して試す"), GUILayout.Height(32))) Schedule(false);
-                        EditorGUILayout.LabelField(ExporterLocalization.T("チェックを外して再試行すると、その対策を解除した新しいコピーで確認します。"), EditorStyles.wordWrappedMiniLabel);
+                        if (count > 0 || session.SelectedOptions.Actions.Count > 0 || session.WasCanceled || !issues.Any(issue => issue.hasAction))
+                            if (GUILayout.Button(ExporterLocalization.T(count > 0 ? "選んだ対処で書き出す" : "設定を変えずにもう一度試す"), GUILayout.Height(36))) Schedule(false);
+                        if (count == 0 && issues.Any(issue => issue.hasAction))
+                            EditorGUILayout.LabelField(ExporterLocalization.T("試す対処にチェックを入れてください。変わる点を確認してから進めます。"), EditorStyles.wordWrappedMiniLabel);
                     }
-                    using (new EditorGUI.DisabledScope(stale || !session.HasCurrentSuccess))
-                        if (GUILayout.Button(ExporterLocalization.T("最後に成功した結果を確認")))
+                    using (new EditorGUI.DisabledScope(stale || !session.HasCurrentSuccess || !session.HasPendingSave))
+                        if (session.HasCurrentSuccess && session.HasPendingSave && GUILayout.Button(ExporterLocalization.T("前に成功したVRMを確認する"), GUILayout.Height(28)))
+                        {
                             ExportRecoveryComparisonWindow.Show(session, saved);
+                            Close();
+                        }
                 }
             }
+            using (new EditorGUI.DisabledScope(busy))
+                if (GUILayout.Button(ExporterLocalization.T("書き出しをやめる"), GUILayout.Height(28))) Close();
             EditorGUILayout.Space(4);
-            using (new EditorGUILayout.HorizontalScope())
+        }
+
+        internal static string ActionLabel(ExportRecoveryActionKind kind)
+        {
+            switch (kind)
             {
-                using (new EditorGUI.DisabledScope(stale))
-                    if (GUILayout.Button(copied ? ExporterLocalization.T("共有用の診断をコピーしました") : ExporterLocalization.T("共有用の診断をコピー"), GUILayout.Height(28)))
-                    {
-                        // Never put raw exception stacks or private absolute paths
-                        // in the text intended for a support report.
-                        EditorGUIUtility.systemCopyBuffer = supportText ?? "";
-                        copied = true;
-                    }
-                if (GUILayout.Button(ExporterLocalization.T("閉じる"), GUILayout.Height(28))) Close();
+                case ExportRecoveryActionKind.DisableAudioLink: return "AudioLinkをOFFにする";
+                case ExportRecoveryActionKind.OmitSecondLayer: return "カラー2ndレイヤーを省略する";
+                case ExportRecoveryActionKind.OmitThirdLayer: return "カラー3rdレイヤーを省略する";
+                case ExportRecoveryActionKind.ExcludeHiddenRenderer: return "この補助表示を省略する";
+                case ExportRecoveryActionKind.SkipVrChatMenus: return "VRChatメニュー由来の表情・ポーズをすべて取り込まない";
+                case ExportRecoveryActionKind.ExcludeMenuBranch: return "このメニューの枝を取り込まない";
+                default: throw new ArgumentOutOfRangeException(nameof(kind));
             }
-            EditorGUILayout.Space(4);
         }
 
         private void DrawIssue(IssueView issue)
@@ -194,24 +210,36 @@ namespace VRVlog.LilToonExporter
                 if (issue.hasAction && session != null)
                 {
                     var enabled = selected.Contains(issue.id);
-                    var label = issue.actionKind == ExportRecoveryActionKind.SkipVrChatMenus ? "VRChatメニュー由来の表情・ポーズをすべて取り込まない" :
-                        issue.actionKind == ExportRecoveryActionKind.ExcludeMenuBranch ? "このメニューの枝を取り込まない" : "この対策をコピーに適用する";
-                    var next = EditorGUILayout.ToggleLeft(ExporterLocalization.T(label), enabled, EditorStyles.boldLabel);
+                    var next = EditorGUILayout.ToggleLeft(ExporterLocalization.T(ActionLabel(issue.actionKind)), enabled, EditorStyles.boldLabel);
                     if (next != enabled) { if (next) selected.Add(issue.id); else selected.Remove(issue.id); }
                 }
-                EditorGUILayout.LabelField(ExporterLocalization.T("工程: ") + ExporterLocalization.T(issue.stage), EditorStyles.wordWrappedLabel);
                 EditorGUILayout.LabelField(ExporterLocalization.T("対象: ") + issue.target, EditorStyles.wordWrappedLabel);
                 EditorGUILayout.LabelField(ExporterLocalization.T("理由: ") + ExporterLocalization.T(issue.reason), EditorStyles.wordWrappedLabel);
-                EditorGUILayout.LabelField(ExporterLocalization.T("対策: ") + ExporterLocalization.T(issue.remedy), EditorStyles.wordWrappedLabel);
-                if (!string.IsNullOrEmpty(issue.lostEffect))
-                    EditorGUILayout.LabelField(ExporterLocalization.T("失われる効果: ") + ExporterLocalization.T(issue.lostEffect), EditorStyles.wordWrappedLabel);
-                using (new EditorGUI.DisabledScope(issue.source == null))
-                    if (GUILayout.Button(ExporterLocalization.T("元の対象を選択")))
+                if (!issue.hasAction) EditorGUILayout.LabelField(ExporterLocalization.T("次にすること: ") + ExporterLocalization.T(issue.remedy), EditorStyles.wordWrappedLabel);
+                if (!string.IsNullOrEmpty(issue.lostEffect)) EditorGUILayout.HelpBox(ExporterLocalization.T("変わる点: ") + ExporterLocalization.T(issue.lostEffect), MessageType.Warning);
+                using (new EditorGUI.DisabledScope(issue.source == null || busy))
+                    if (GUILayout.Button(ExporterLocalization.T("Unityで対象を確認")))
                     {
                         Selection.activeObject = issue.source;
                         EditorGUIUtility.PingObject(issue.source);
                     }
             }
+        }
+
+        internal static bool SaveUnmodifiedResult(ExportRecoverySession session, Action saved = null)
+        {
+            if (session == null || !session.HasCurrentSuccess) throw new ArgumentException(nameof(session));
+            if (session.LastSuccess.Options.Actions.Count != 0) return false;
+            session.SavePending();
+            CloseSessionWindows(session);
+            saved?.Invoke();
+            return true;
+        }
+
+        internal static void CloseSessionWindows(ExportRecoverySession session)
+        {
+            foreach (var window in Resources.FindObjectsOfTypeAll<ExportFailureWindow>().Where(window => window.session == session)) window.Close();
+            foreach (var window in Resources.FindObjectsOfTypeAll<ExportRecoveryComparisonWindow>().Where(window => window.Session == session)) window.Close();
         }
 
         private static bool IsMenuIssue(IssueView issue) => issue.hasAction &&
@@ -230,11 +258,18 @@ namespace VRVlog.LilToonExporter
                     RefreshSession();
                     if (success)
                     {
-                        ExportRecoveryComparisonWindow.Show(session, saved);
-                        Close();
+                        if (!SaveUnmodifiedResult(session, saved))
+                        {
+                            ExportRecoveryComparisonWindow.Show(session, saved);
+                            Close();
+                        }
                     }
                 }
-                catch (Exception exception) { Show(exception); }
+                catch (Exception exception)
+                {
+                    if (session.IsInvalidated) Show(session, saved);
+                    else Show(exception);
+                }
                 finally { busy = false; if (this != null) Repaint(); }
             };
         }

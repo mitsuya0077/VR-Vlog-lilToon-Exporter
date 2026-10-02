@@ -14,6 +14,8 @@ namespace VRVlog.LilToonExporter
         private GameObject avatar;
         private string author = "";
         private string outputPath = "";
+        private string lastSavedPath, lastSavedSummary;
+        private string[] lastSavedWarnings = Array.Empty<string>();
         private bool showAppearanceOptions;
         private bool showEnvironment;
         private bool showBlink;
@@ -94,7 +96,7 @@ namespace VRVlog.LilToonExporter
         private void DrawWindow()
         {
             EnsureStyles();
-            EditorGUILayout.LabelField(ExporterLocalization.T("アバターと作者名を指定して、VRMを書き出します。"), EditorStyles.wordWrappedLabel);
+            EditorGUILayout.LabelField(ExporterLocalization.T("保存先を選ぶと、VRMの書き出しと保存まで自動で進みます。"), EditorStyles.wordWrappedLabel);
             EditorGUILayout.Space(18f);
             DrawRequiredLabel(ExporterLocalization.T("アバター"), ExporterLocalization.T("Hierarchyにあるアバターの一番上のオブジェクトを指定します。"));
             var selectedAvatar = (GameObject)EditorGUILayout.ObjectField(
@@ -163,6 +165,16 @@ namespace VRVlog.LilToonExporter
 
             EditorGUILayout.Space(6f);
             EditorGUILayout.LabelField(canExport ? "" : ExporterLocalization.T("アバターと作者名を入力してください"), centeredHintStyle);
+
+            if (!string.IsNullOrEmpty(lastSavedPath))
+            {
+                EditorGUILayout.HelpBox(ExporterLocalization.T("VRMを保存しました。") + "\n" + System.IO.Path.GetFileName(lastSavedPath) + "\n" + lastSavedSummary, MessageType.Info);
+                using (new EditorGUILayout.HorizontalScope())
+                {
+                    if (GUILayout.Button(ExporterLocalization.T("保存先を開く"))) EditorUtility.RevealInFinder(lastSavedPath);
+                    if (lastSavedWarnings.Length > 0 && GUILayout.Button(ExporterLocalization.T("書き出しの詳細"))) ExportAppearanceReportWindow.Open(lastSavedWarnings);
+                }
+            }
 
             DrawSeparator();
             showEnvironment = EditorGUILayout.Foldout(showEnvironment, ExporterLocalization.T("動作環境"), true);
@@ -394,6 +406,9 @@ namespace VRVlog.LilToonExporter
             }
             outputPath = EditorUtility.SaveFilePanel(ExporterLocalization.T("VRMの保存先"), "", DefaultFileName(), "vrm");
             if (string.IsNullOrEmpty(outputPath)) return;
+            lastSavedPath = null;
+            lastSavedSummary = null;
+            lastSavedWarnings = Array.Empty<string>();
             // A nonmodal failure window may remain open while the user changes
             // this window. Retry exactly the avatar, destination and options
             // they chose for this attempt; revalidate the live avatar each time.
@@ -410,20 +425,42 @@ namespace VRVlog.LilToonExporter
                 ExporterLocalization.T("上書き"), ExporterLocalization.T("キャンセル"))) return;
             ExportRecoverySession session = null;
             void Completed() => ShowExportCompletion(session.LastSuccess.Bytes, session.LastSuccess.Warnings, targetOutput);
-            session = new ExportRecoverySession(targetAvatar, targetOutput, (options, report, warnings) =>
+            try
             {
-                if (targetAvatar == null) throw new InvalidOperationException(ExporterLocalization.T("この書き出しで選んだアバターが見つかりません。アバターを指定し直してください。"));
-                return UniVrmOneClickExporter.Export(targetAvatar, targetName, targetAuthor, warnings, false,
-                    PackageVersion(), RequireSupportedLilToon(), false, targetExclusions, null, targetGimmicks, targetBlink, targetPoses,
-                    recoveryOptions: options, recoveryReport: report);
-            }, targetExclusions, targetGimmicks);
-            if (!session.Attempt(new ExportRecoveryOptions()))
-            {
-                if (ShouldShowFailureAfterFailedAttempt(session)) ExportFailureWindow.Show(session, Completed);
-                return;
+                session = ExportAndSaveNormally(targetAvatar, targetOutput, (options, report, warnings) =>
+                {
+                    if (targetAvatar == null) throw new InvalidOperationException(ExporterLocalization.T("この書き出しで選んだアバターが見つかりません。アバターを指定し直してください。"));
+                    return UniVrmOneClickExporter.Export(targetAvatar, targetName, targetAuthor, warnings, false,
+                        PackageVersion(), RequireSupportedLilToon(), false, targetExclusions, null, targetGimmicks, targetBlink, targetPoses,
+                        recoveryOptions: options, recoveryReport: report);
+                }, (bytes, warnings) => ShowExportCompletion(bytes, warnings, targetOutput), targetExclusions, targetGimmicks);
+                if (session != null) ExportFailureWindow.Show(session, Completed);
             }
-            try { session.SavePending(); Completed(); }
-            catch (Exception exception) { Debug.LogException(exception); ExportFailureWindow.Show(exception); }
+            catch (Exception exception) { ExportFailureWindow.Show(exception); }
+        }
+
+        // A fresh export has no old diagnosis or preview to invalidate. The
+        // exporter works on its own copy; only an actual export failure starts
+        // a guarded recovery session. Successful normal exports save directly.
+        internal static ExportRecoverySession ExportAndSaveNormally(GameObject source, string destination,
+            Func<ExportRecoveryOptions, ExportRecoveryReport, ICollection<string>, byte[]> create,
+            Action<byte[], IEnumerable<string>> completed = null,
+            IEnumerable<GameObject> previewExcludedObjects = null, ExportGimmickOptions previewGimmicks = null)
+        {
+            if (create == null) throw new ArgumentNullException(nameof(create));
+            var warnings = new List<string>();
+            var report = new ExportRecoveryReport();
+            byte[] bytes;
+            try { bytes = create(new ExportRecoveryOptions(), report, warnings); }
+            catch (OperationCanceledException) { return null; }
+            catch (Exception exception)
+            {
+                return ExportRecoverySession.FromFailedExport(source, destination, create, exception, report,
+                    previewExcludedObjects, previewGimmicks);
+            }
+            ExportOutputWriter.Write(destination, bytes);
+            completed?.Invoke(bytes, warnings);
+            return null;
         }
 
         internal static bool ShouldShowFailureAfterFailedAttempt(ExportRecoverySession session)
@@ -444,27 +481,21 @@ namespace VRVlog.LilToonExporter
             return name + "-liltoon.vrm";
         }
 
-        private static void ShowExportCompletion(byte[] bytes, IEnumerable<string> warnings, string destination)
+        private void ShowExportCompletion(byte[] bytes, IEnumerable<string> warnings, string destination)
         {
-            EditorUtility.RevealInFinder(destination);
             var details = (warnings ?? Array.Empty<string>()).ToArray();
-            // Keep the native modal short even for avatars with hundreds of
-            // omitted items. Diagnostics remain in one expandable Console entry.
             if (details.Length > 0) Debug.Log(ExporterLocalization.T("VR Vlog 書き出し詳細\n・") + string.Join("\n・", details));
-            var expressionCount = VrmMenuExpressions.CountRegistered(bytes);
-            var completion = string.Format(ExporterLocalization.T("VRMを書き出しました（{0:N0}バイト）。\nVRChat表情: {1}件。"), bytes.Length, expressionCount);
-            var springSummary = details.FirstOrDefault(message => message.StartsWith("PhysBone変換:", StringComparison.Ordinal));
-            if (springSummary != null) completion += "\n" + springSummary;
-            var changes = ExportAppearanceReport.Changes(details);
-            if (changes.Length == 0) EditorUtility.DisplayDialog(ExporterLocalization.T("書き出し完了"), completion, ExporterLocalization.T("閉じる"));
-            else if (!EditorUtility.DisplayDialog(ExporterLocalization.T("書き出し完了"), completion + ExporterLocalization.T("\n\n見た目の変更: ") + changes.Length + ExporterLocalization.T("件\n") + ExportAppearanceReport.Summary(changes), ExporterLocalization.T("閉じる"), ExporterLocalization.T("詳細を見る")))
-                ExportAppearanceReportWindow.Open(details);
+            var resultWindow = this != null ? this : GetWindow<LilToonExporterWindow>(true, ExporterLocalization.T("VR Vlog VRM書き出し"));
+            resultWindow.lastSavedPath = destination;
+            resultWindow.lastSavedSummary = string.Format(ExporterLocalization.T("{0:N0}バイト・VRChat表情 {1}件"), bytes.Length, VrmMenuExpressions.CountRegistered(bytes));
+            resultWindow.lastSavedWarnings = details;
+            resultWindow.Repaint();
         }
 
         private static string PackageVersion()
         {
             var info = PackageManagerPackageInfo.FindForAssembly(typeof(LilToonExporterWindow).Assembly);
-            return info != null && !string.IsNullOrWhiteSpace(info.version) ? info.version : "0.11.8";
+            return info != null && !string.IsNullOrWhiteSpace(info.version) ? info.version : "0.11.9";
         }
 
         private static string InstalledLilToonStatus()
