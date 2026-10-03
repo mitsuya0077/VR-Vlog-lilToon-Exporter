@@ -834,6 +834,7 @@ namespace VRVlog.LilToonExporter.Tests
             var expectedNeutral = NativePose(fixture.Source, fx, "Front", new Dictionary<string, int> { ["Face"] = 0, ["GestureRight"] = 0 });
             var expectedMenu = NativePose(fixture.Source, fx, "Front", new Dictionary<string, int> { ["Face"] = 1, ["GestureRight"] = 0 });
             var expectedGesture = NativePose(fixture.Source, fx, "Front", new Dictionary<string, int> { ["Face"] = 0, ["GestureRight"] = 2 });
+            var sampledNeutral = NeutralShapeSampler.Sample(fixture.Source);
             Vrm10Instance imported = null;
             try
             {
@@ -844,7 +845,17 @@ namespace VRVlog.LilToonExporter.Tests
                 Assert.That(imported, Is.Not.Null, string.Join("\n", warnings));
                 imported.Runtime.Process();
                 var importedFront = imported.GetComponentsInChildren<SkinnedMeshRenderer>().Single(renderer => renderer.name == "Front");
-                AssertVertices(expectedNeutral.Vertices, WorldVertices(importedFront));
+                var actualNeutralVertices = WorldVertices(importedFront);
+                Assert.That(actualNeutralVertices.Length, Is.EqualTo(expectedNeutral.Vertices.Length), "Neutral");
+                for (var vertex = 0; vertex < actualNeutralVertices.Length; vertex++)
+                    Assert.That(Vector3.Distance(expectedNeutral.Vertices[vertex], actualNeutralVertices[vertex]), Is.LessThan(.0005f),
+                        "Neutral / vertex " + vertex + ": expected=" + expectedNeutral.Vertices[vertex].ToString("G9") +
+                        ", actual=" + actualNeutralVertices[vertex].ToString("G9") + "; native=" +
+                        string.Join(", ", expectedNeutral.Weights.Select(value => value.Key + "=" + value.Value.ToString("G9"))) +
+                        "; sampled=" + string.Join(", ", sampledNeutral.Select(value => value.Path + "/" + value.Shape + "=" + value.Weight.ToString("G9"))) +
+                        "; imported=" + string.Join(", ", Enumerable.Range(0, importedFront.sharedMesh.blendShapeCount)
+                            .Select(shape => importedFront.sharedMesh.GetBlendShapeName(shape) + "=" + importedFront.GetBlendShapeWeight(shape).ToString("G9"))) +
+                        "; warnings=" + string.Join(" | ", warnings));
                 foreach (var candidate in new[] { (Name: "Menu face", Pose: expectedMenu), (Name: "Gesture face", Pose: expectedGesture) })
                 {
                     foreach (var expression in imported.Vrm.Expression.CustomClips)
@@ -852,7 +863,15 @@ namespace VRVlog.LilToonExporter.Tests
                     var selected = imported.Vrm.Expression.CustomClips.Single(expression => expression.name.Contains(candidate.Name));
                     imported.Runtime.Expression.SetWeight(ExpressionKey.CreateCustom(selected.name), 1);
                     imported.Runtime.Process();
-                    AssertVertices(candidate.Pose.Vertices, WorldVertices(importedFront));
+                    var actualVertices = WorldVertices(importedFront);
+                    Assert.That(actualVertices.Length, Is.EqualTo(candidate.Pose.Vertices.Length), candidate.Name);
+                    for (var vertex = 0; vertex < actualVertices.Length; vertex++)
+                        Assert.That(Vector3.Distance(candidate.Pose.Vertices[vertex], actualVertices[vertex]), Is.LessThan(.0005f),
+                            candidate.Name + " / vertex " + vertex + ": expected=" + candidate.Pose.Vertices[vertex].ToString("G9") +
+                            ", actual=" + actualVertices[vertex].ToString("G9") + "; native=" +
+                            string.Join(", ", candidate.Pose.Weights.Select(value => value.Key + "=" + value.Value.ToString("G9"))) +
+                            "; imported=" + string.Join(", ", Enumerable.Range(0, importedFront.sharedMesh.blendShapeCount)
+                                .Select(shape => importedFront.sharedMesh.GetBlendShapeName(shape) + "=" + importedFront.GetBlendShapeWeight(shape).ToString("G9"))));
                 }
                 Assert.That(sourceFront.GetBlendShapeWeight(1), Is.Zero);
                 Assert.That(EditorJsonUtility.ToJson(fixture.Mesh), Is.EqualTo(beforeMesh));

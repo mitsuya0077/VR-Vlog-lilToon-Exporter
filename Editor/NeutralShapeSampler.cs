@@ -42,7 +42,8 @@ namespace VRVlog.LilToonExporter
                 try { dependencies = ExpressionDependencies.AnalyzeNeutral(metadata.Controller, roots, excludedPath, metadata, automatic); }
                 catch (NeutralShapeSamplingException) when (roots.All(automatic.Contains)) { continue; }
                 catch (InvalidOperationException error) { throw WithAffected(error, roots); }
-                var identity = string.Join(",", dependencies.Layers.OrderBy(index => index));
+                var identity = string.Join(",", dependencies.Layers.OrderBy(index => index)) + "|" +
+                    string.Join(",", dependencies.NativeSupportLayers.OrderBy(index => index));
                 if (!completed.Add(identity)) continue;
                 List<VrChatExpressionMenu.MorphValue> sampled;
                 try { sampled = VrChatExpressionSampler.SampleNeutral(prepared, metadata.Controller, dependencies, metadata, excludedPath); }

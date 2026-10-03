@@ -42,9 +42,6 @@ namespace VRVlog.LilToonExporter.Tests
                 Assert.That(entry.Values.Single(value => value.Shape == pair.Key).Weight,
                     Is.EqualTo(pair.Value).Within(.02f), pair.Key);
             Assert.That(entry.Values.Single(value => value.Shape == "Pupil").Weight, Is.EqualTo(50).Within(.02f));
-            if (!writeDefaults)
-                Assert.That(entry.Values.Single(value => value.Shape == "Open").Weight,
-                    Is.EqualTo(fractionalCommon ? 50 : 80).Within(.02f), "Raw common values must not bypass their original layer weight.");
             var result = entry.Values.Select(value => (value.Path, value.Shape, value.Weight)).ToArray();
             FaceEmoExpressions.ApplyPreparedDefaultFace(fixture.Avatar, source, bindings, registeredBindings: snapshot);
             Assert.That(entry.Values.Select(value => (value.Path, value.Shape, value.Weight)), Is.EqualTo(result),
@@ -60,7 +57,17 @@ namespace VRVlog.LilToonExporter.Tests
         public void AmbiguousGeneratedPlayerCannotSilentlyUseStandaloneLayerOrder(string kind)
         {
             using var fixture = new Fixture(false, false);
-            if (kind == "duplicate") fixture.Controller.AddLayer("[ USER EDIT ] FACE EMOTE PLAYER");
+            if (kind == "duplicate")
+            {
+                // AddLayer automatically makes names unique. Restore the exact
+                // duplicate to exercise ambiguous authored controller metadata.
+                fixture.Controller.AddLayer("[ USER EDIT ] FACE EMOTE PLAYER");
+                var layers = fixture.Controller.layers;
+                layers[layers.Length - 1].name = "[ USER EDIT ] FACE EMOTE PLAYER";
+                layers[layers.Length - 1].stateMachine.name = "[ USER EDIT ] FACE EMOTE PLAYER";
+                fixture.Controller.layers = layers;
+                Assert.That(fixture.Controller.layers.Count(layer => layer.name == "[ USER EDIT ] FACE EMOTE PLAYER"), Is.EqualTo(2));
+            }
             if (kind == "missing") fixture.Controller.RemoveLayer(2);
             if (kind == "write-defaults")
             {

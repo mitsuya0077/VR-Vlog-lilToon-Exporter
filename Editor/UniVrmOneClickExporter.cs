@@ -151,8 +151,7 @@ namespace VRVlog.LilToonExporter
                         suppressSharedTextureEmission: suppressSharedTextureEmission, suppressHdrTextureEmission: suppressHdrTextureEmission) : null;
                     optimizerBindings = ExportOptimizationBindings.Capture(clone,
                         trackingProfile == null ? null : authoredEndpoints.TrackingProfile, unifiedPreparation,
-                        objectRegistry: transformed.ObjectRegistry);
-                    optimizerBindings.ProtectRebasedNeutral(neutral);
+                        objectRegistry: transformed.ObjectRegistry, neutral: neutral);
                 });
                 optimizerBindings.ValidateAndApply((copy, original) =>
                 {

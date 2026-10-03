@@ -96,7 +96,8 @@ namespace VRVlog.LilToonExporter.Tests
             foreach (var point in actual)
             {
                 var index = unmatched.FindIndex(value => Vector3.Distance(value, point) < .0001f);
-                Assert.That(index, Is.GreaterThanOrEqualTo(0), message + ": unexpected world-space vertex " + point);
+                Assert.That(index, Is.GreaterThanOrEqualTo(0), message + ": unexpected world-space vertex " + point.ToString("G9") +
+                    "; expected remaining: " + string.Join(", ", unmatched.Select(value => value.ToString("G9"))));
                 unmatched.RemoveAt(index);
             }
         }
@@ -176,8 +177,11 @@ namespace VRVlog.LilToonExporter.Tests
                         "Usable UE jaw evidence permits missing blink, but cannot make the resting closure usable.");
                 }
                 using (var deferred = BlinkExportSession.CaptureForExport(fixture.Source))
+                {
                     Assert.That(deferred.HasBilateralPreset, Is.True,
                         "Export must capture the closed-eye channel for resolution after the FX-open neutral is evaluated.");
+                    Assert.That(deferred.Slots[0].Count, Is.EqualTo(skins.Length));
+                }
                 var bytes = UniVrmOneClickExporter.Export(fixture.Source, "AAO neutral endpoints", "Tests",
                     exporterVersion: fullLilToon ? "aao-neutral-endpoint-regression" : null, lilToonVersion: fullLilToon ? "2.3.4" : null);
                 imported = await Vrm10.LoadBytesAsync(bytes, canLoadVrm0X: false, awaitCaller: new ImmediateCaller()); imported.Runtime.Process();

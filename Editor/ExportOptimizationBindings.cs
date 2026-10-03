@@ -54,15 +54,16 @@ namespace VRVlog.LilToonExporter
         bool applied, disposed;
 
         internal static ExportOptimizationBindings Capture(GameObject clone, VrmTrackingProfile trackingProfile = null,
-            UnifiedExpressionPreparation preparation = null, object objectRegistry = null)
+            UnifiedExpressionPreparation preparation = null, object objectRegistry = null, NeutralShapeSnapshot neutral = null)
         {
             if (clone == null) throw new ArgumentNullException(nameof(clone));
             ExportRendererSelection.RequireActiveRoot(clone);
             if (EditorUtility.IsPersistent(clone)) throw new ArgumentException("An independent export copy is required.", nameof(clone));
-            return new ExportOptimizationBindings(clone, trackingProfile, preparation, objectRegistry);
+            return new ExportOptimizationBindings(clone, trackingProfile, preparation, objectRegistry, neutral);
         }
 
-        ExportOptimizationBindings(GameObject clone, VrmTrackingProfile trackingProfile, UnifiedExpressionPreparation preparation, object objectRegistry)
+        ExportOptimizationBindings(GameObject clone, VrmTrackingProfile trackingProfile, UnifiedExpressionPreparation preparation,
+            object objectRegistry, NeutralShapeSnapshot neutral)
         {
             avatar = clone;
             this.objectRegistry = objectRegistry;
@@ -110,6 +111,9 @@ namespace VRVlog.LilToonExporter
                 }
                 marker.Morphs = morphs.Values.ToArray();
                 marker.Materials = materials.Values.ToArray();
+                if (neutral != null) ProtectRebasedNeutral(neutral);
+                marker.Dependencies = marker.Dependencies.Concat(marker.PropertyMutations
+                    .Select(mutation => (Component)mutation.Renderer)).Distinct().ToArray();
             }
             catch { Dispose(); throw; }
         }

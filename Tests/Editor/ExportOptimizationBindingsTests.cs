@@ -649,8 +649,7 @@ namespace VRVlog.LilToonExporter.Tests
                 {
                     var neutral = NeutralShapeSnapshot.Capture(clone);
                     AvatarBaseShape.Preserve(clone, clone, meshes, null);
-                    bindings = ExportOptimizationBindings.Capture(clone);
-                    bindings.ProtectRebasedNeutral(neutral);
+                    bindings = ExportOptimizationBindings.Capture(clone, neutral: neutral);
                 });
                 bindings.ValidateAndApply();
                 var output = clone.GetComponentsInChildren<SkinnedMeshRenderer>().Single();
