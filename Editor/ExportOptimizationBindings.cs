@@ -111,20 +111,7 @@ namespace VRVlog.LilToonExporter
                 }
                 marker.Morphs = morphs.Values.ToArray();
                 marker.Materials = materials.Values.ToArray();
-                // These raw curves still exist in the prepared FX controller,
-                // but their neutral contributions are already in mesh vertices.
-                // Mark rebased properties as variable so AAO cannot apply their
-                // old constant animation values to the new residual a second time.
-                marker.PropertyMutations = marker.PropertyMutations.Concat((neutral?.Renderers ?? Array.Empty<NeutralShapeSnapshot.RendererState>())
-                    .Where(state => state.Renderer != null && state.Renderer.sharedMesh != null)
-                    .Select(state => new OptimizationPropertyMutation {
-                        Renderer = state.Renderer,
-                        Properties = Enumerable.Range(0, state.Weights.Length)
-                            .Where(index => state.Weights[index] != 0f)
-                            .Select(index => state.OriginalMesh.GetBlendShapeName(index))
-                            .Where(name => state.Renderer.sharedMesh.GetBlendShapeIndex(name) >= 0)
-                            .Select(name => "blendShape." + name).ToArray()
-                    }).Where(mutation => mutation.Properties.Length != 0)).ToArray();
+                if (neutral != null) ProtectRebasedNeutral(neutral);
                 marker.Dependencies = marker.Dependencies.Concat(marker.PropertyMutations
                     .Select(mutation => (Component)mutation.Renderer)).Distinct().ToArray();
             }
@@ -143,6 +130,40 @@ namespace VRVlog.LilToonExporter
             name.StartsWith("__VRVlog_Endpoint_", StringComparison.Ordinal) ||
             name.StartsWith("__VRVlog_Anim_", StringComparison.Ordinal) || name.StartsWith("__VRVlog_Blink_", StringComparison.Ordinal) ||
             name.StartsWith("__VRVlog_BlinkNone_", StringComparison.Ordinal) || name.StartsWith(UnifiedExpressionRegistry.RestPrefix, StringComparison.Ordinal));
+
+        internal void ProtectRebasedNeutral(NeutralShapeSnapshot neutral)
+        {
+            if (neutral == null || neutral.Root != avatar)
+                throw new ArgumentException("The neutral snapshot must belong to this export copy.", nameof(neutral));
+            var mutations = new Dictionary<Renderer, HashSet<string>>();
+            void Add(Renderer renderer, IEnumerable<string> properties)
+            {
+                if (!mutations.TryGetValue(renderer, out var values))
+                    mutations.Add(renderer, values = new HashSet<string>(StringComparer.Ordinal));
+                values.UnionWith(properties);
+            }
+            foreach (var mutation in marker.PropertyMutations)
+                if (mutation.Renderer != null) Add(mutation.Renderer, mutation.Properties);
+            foreach (var state in neutral.Renderers)
+                for (var index = 0; index < state.Weights.Length; index++)
+                {
+                    if (state.Weights[index] == 0f) continue;
+                    var shape = state.OriginalMesh.GetBlendShapeName(index);
+                    var renderer = state.Renderer;
+                    var current = renderer != null && renderer.sharedMesh != null
+                        ? renderer.sharedMesh.GetBlendShapeIndex(shape) : -1;
+                    if (current < 0 || renderer.GetBlendShapeWeight(current) != 0f)
+                        throw new InvalidOperationException("焼き込み済みの初期表情を保護できません: " + state.Path + " / " + shape);
+                    // This nonzero raw pose is already stored in base geometry.
+                    // Its committed FX curve still describes the old absolute
+                    // weight. Declare our owned residual channel mutable so AAO
+                    // cannot infer and bake that stale constant a second time.
+                    // Unconsumed zero channels remain eligible for auto-freeze.
+                    Add(renderer, new[] { "blendShape." + shape });
+                }
+            marker.PropertyMutations = mutations.Select(pair => new OptimizationPropertyMutation {
+                Renderer = pair.Key, Properties = pair.Value.ToArray() }).ToArray();
+        }
 
         OptimizationMorphRoute AddMorph(SkinnedMeshRenderer skin, string name, bool requireUsableEndpoint = true)
         {

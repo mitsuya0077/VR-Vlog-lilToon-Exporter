@@ -28,6 +28,8 @@ namespace VRVlog.LilToonExporter
                 if (route.Renderer != null) collector.AddDependency(route.Renderer);
             foreach (var route in component.Materials)
                 if (route.Renderer != null) collector.AddDependency(route.Renderer);
+            foreach (var mutation in component.PropertyMutations)
+                if (mutation.Renderer != null) collector.AddDependency(mutation.Renderer);
         }
 
         protected override void CollectMutations(ExportOptimizationMarker component, ComponentMutationsCollector collector)

@@ -158,13 +158,30 @@ namespace VRVlog.LilToonExporter.Tests
                 var blink = skins.SelectMany(skin => SourceTriangle(skin, 75, 100)).ToArray();
                 var sourceVertices = fixture.Mesh.vertices; var sourceController = EditorJsonUtility.ToJson(controller);
                 foreach (var skin in skins)
-                    Assert.That(AvatarBaseShape.HasUsableRawEndpoint(skin, skin.sharedMesh.GetBlendShapeIndex(Closure)), Is.False,
-                        "The serialized fully closed eyes have no raw closure range before native FX opens them.");
-                // Other usable UE evidence may permit an empty static blink
-                // resolution. Export must still capture the closed identities
-                // and resolve their usable range after evaluating FX neutral.
-                using (var pendingBlink = BlinkExportSession.CaptureForExport(fixture.Source))
-                    Assert.That(pendingBlink.Slots[0].Count, Is.EqualTo(skins.Length));
+                {
+                    var closureIndex = skin.sharedMesh.GetBlendShapeIndex(Closure);
+                    Assert.That(closureIndex, Is.GreaterThanOrEqualTo(0));
+                    Assert.That(skin.GetBlendShapeWeight(closureIndex), Is.EqualTo(100),
+                        "The source fixture must still have serialized fully closed eyes.");
+                    Assert.That(AvatarBaseShape.HasUsableRawEndpoint(skin, closureIndex), Is.False,
+                        "The serialized closed pose has no remaining raw blink range before FX opens the eyes.");
+                }
+                if (explicitProfile)
+                    Assert.Throws<InvalidOperationException>(() => {
+                        using var early = BlinkExportSession.Resolve(fixture.Source);
+                    }, "An explicit tracking profile cannot waive the missing usable blink before FX neutral evaluation.");
+                else
+                {
+                    using var early = BlinkExportSession.Resolve(fixture.Source);
+                    Assert.That(early.HasBilateralPreset, Is.False,
+                        "Usable UE jaw evidence permits missing blink, but cannot make the resting closure usable.");
+                }
+                using (var deferred = BlinkExportSession.CaptureForExport(fixture.Source))
+                {
+                    Assert.That(deferred.HasBilateralPreset, Is.True,
+                        "Export must capture the closed-eye channel for resolution after the FX-open neutral is evaluated.");
+                    Assert.That(deferred.Slots[0].Count, Is.EqualTo(skins.Length));
+                }
                 var bytes = UniVrmOneClickExporter.Export(fixture.Source, "AAO neutral endpoints", "Tests",
                     exporterVersion: fullLilToon ? "aao-neutral-endpoint-regression" : null, lilToonVersion: fullLilToon ? "2.3.4" : null);
                 imported = await Vrm10.LoadBytesAsync(bytes, canLoadVrm0X: false, awaitCaller: new ImmediateCaller()); imported.Runtime.Process();

@@ -550,8 +550,13 @@ namespace VRVlog.LilToonExporter.Tests
             }
             var originalController = EditorJsonUtility.ToJson(controller);
             var reference = NativePose(avatar, controller, "Face", new Dictionary<string, int>());
+            // Match the previous preparation's null-motion placeholder. A
+            // real zero-curve clip is a different native Animator graph.
+            var prunedReference = NativeStandalonePose(avatar, controller, null, "Face");
             Assert.That(Math.Abs(reference.Weights["Face size"] - 12), Is.GreaterThan(.01), "The unrelated native constant must differ from the authored renderer value.");
             Assert.That(Math.Abs(reference.Weights["Pupil removal"] - 20), Is.GreaterThan(.01), "The fractional native effect must actually move the required morph.");
+            Assert.That(Math.Abs(reference.Weights["Pupil removal"] - prunedReference.Weights["Pupil removal"]), Is.GreaterThan(.01),
+                "The original native base must affect fractional blending even though its own morphs are outside capture.");
             var neutral = VrChatExpressionSampler.SampleDefaults(avatar, controller, Parameters(0));
             Assert.That(neutral.Select(value => value.Shape), Is.EqualTo(new[] { "Pupil removal" }));
             Assert.That(neutral.Single().Weight, Is.EqualTo(reference.Weights["Pupil removal"]).Within(.01));

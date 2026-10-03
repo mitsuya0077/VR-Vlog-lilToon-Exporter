@@ -1,0 +1,11 @@
+--- a/Internal/MeshInfo2/MeshInfo2.cs
++++ b/Internal/MeshInfo2/MeshInfo2.cs
+@@ -293,7 +293,7 @@
+             var vertexBuffers = new (byte[] buffer, int stride)[vertexBufferCount];
+             for (var i = 0; i < vertexBufferCount; i++)
+             {
+-                var vertexBuffer = mesh.GetVertexBuffer(i);
++                using var vertexBuffer = mesh.GetVertexBuffer(i);
+                 var stride = vertexBuffer.stride;
+                 var data = new byte[vertexBuffer.count * vertexBuffer.stride];
+                 vertexBuffer.GetData(data);
