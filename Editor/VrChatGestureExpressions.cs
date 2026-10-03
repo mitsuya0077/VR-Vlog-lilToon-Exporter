@@ -51,7 +51,8 @@ namespace VRVlog.LilToonExporter
                     var bindings = AnimationUtility.GetCurveBindings(clip).Where(b => excludedPath?.Invoke(b.path) != true).ToArray();
                     if (!bindings.Any(IsMorph)) continue; // Hand/bone motions are not facial expressions.
                     ReadClip(avatar, clip, entry, excludedPath);
-                    VrChatExpressionSampler.ApplyPermanentOverrides(avatar, runtime, entry, target.Layer, target.State.writeDefaultValues, excludedPath);
+                    VrChatExpressionSampler.ApplyPermanentOverrides(avatar, runtime, entry, target.Layer, target.State.writeDefaultValues,
+                        excludedPath, metadata: source);
                 }
                 catch (InvalidOperationException error) { entry.Error = error.Message; }
                 source.Entries.Add(entry);

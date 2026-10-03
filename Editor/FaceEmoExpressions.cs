@@ -281,7 +281,7 @@ namespace VRVlog.LilToonExporter
                              ExpressionDependencies.Controller(source.Controller).layers[captured.Layer.Value].stateMachine != captured.Machine))
                             throw new InvalidOperationException("FaceEmoの表情FXレイヤーが評価前に変わりました。");
                         VrChatExpressionSampler.ApplyPermanentOverrides(prepared, captured.Runtime, entry,
-                            captured.Layer, captured.WriteDefaults, PreparedExcludedPath);
+                            captured.Layer, captured.WriteDefaults, PreparedExcludedPath, metadata: source);
                     }
                     catch (InvalidOperationException error) { entry.Error = error.Message; }
                 }
@@ -550,7 +550,7 @@ namespace VRVlog.LilToonExporter
                 else bindings.ReadClip(avatar, clip, entry);
                 if (bindings?.DeferPermanentOverrides == true) bindings.Defer(entry, source.Controller);
                 else VrChatExpressionSampler.ApplyPermanentOverrides(avatar, source.Controller, entry,
-                    excludedPath: bindings == null ? excludedPath : bindings.PreparedExcludedPath);
+                    excludedPath: bindings == null ? excludedPath : bindings.PreparedExcludedPath, metadata: source);
             }
             catch (InvalidOperationException error) { entry.Error = error.Message; }
             source.Entries.Add(entry);

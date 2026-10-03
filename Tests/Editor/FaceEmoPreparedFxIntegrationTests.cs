@@ -50,6 +50,48 @@ namespace VRVlog.LilToonExporter.Tests
             Assert.That(fixture.Skin.GetBlendShapeWeight(0), Is.EqualTo(20), "Native sampling must leave the prepared base untouched.");
         }
 
+        [TestCase(false)]
+        [TestCase(true)]
+        public void FractionalPlayerRetainsTransitionedCommonPoseBelowItsRegisteredClip(bool writeDefaults)
+        {
+            using var fixture = new Fixture(false, writeDefaults);
+            fixture.ConfigureTransitioningCommon();
+            Assert.That(ExpressionDependencies.StationaryLayers(fixture.Controller).ContainsKey(1), Is.False,
+                "This lower common layer must remain outside the reduced stationary-layer probe.");
+            var snapshot = FaceEmoExpressions.CaptureRegistered(fixture.Avatar, fixture.Registered, deferPermanentOverrides: true);
+            var old = fixture.Skin; fixture.ReplaceRenderer();
+            snapshot.RebindPrepared(renderer => ReferenceEquals(renderer, old) ? fixture.Skin : renderer);
+            var expected = fixture.NativeSelectedWeights();
+            var layers = fixture.Controller.layers;
+            var commonWeight = layers[1].defaultWeight;
+            Dictionary<string, float> withoutCommon;
+            try
+            {
+                layers[1].defaultWeight = 0; fixture.Controller.layers = layers;
+                withoutCommon = fixture.NativeSelectedWeights();
+            }
+            finally
+            {
+                layers = fixture.Controller.layers; layers[1].defaultWeight = commonWeight; fixture.Controller.layers = layers;
+            }
+            Assert.That(Math.Abs(expected["Smile"] - withoutCommon["Smile"]), Is.GreaterThan(.1f),
+                "The lower same-channel pose must actually affect the fractional selected branch.");
+            var source = new VrChatExpressionMenu.Source { Controller = fixture.Controller }; var serial = 0;
+            FaceEmoExpressions.ReadRegistered(fixture.Avatar, fixture.Registered, "FaceEmo", source,
+                ref serial, new HashSet<object>(), 0, bindings: snapshot);
+            var entry = source.Entries.Single(); Assert.That(entry.Error, Is.Null);
+            using var bindings = new PreparedExpressionBindings(fixture.Avatar, source);
+            FaceEmoExpressions.ApplyPreparedDefaultFace(fixture.Avatar, source, bindings, registeredBindings: snapshot);
+            Assert.That(entry.Error, Is.Null);
+            foreach (var pair in expected)
+                Assert.That(entry.Values.Single(value => value.Shape == pair.Key).Weight,
+                    Is.EqualTo(pair.Value).Within(.02f), pair.Key + " must preserve the original lower-layer pose and permanent FX order.");
+            Assert.That(entry.Values.Single(value => value.Shape == "Smile").Weight,
+                Is.Not.EqualTo(withoutCommon["Smile"]).Within(.02f));
+            Assert.That(AnimationUtility.GetCurveBindings(fixture.RegisteredClip).All(value => value.path == "Face"), Is.True);
+            Assert.That(fixture.Skin.GetBlendShapeWeight(1), Is.EqualTo(10), "Neither native reference nor export may bake the sampled pose into the prepared source.");
+        }
+
         [TestCase("duplicate")]
         [TestCase("missing")]
         [TestCase("write-defaults")]
@@ -157,6 +199,22 @@ namespace VRVlog.LilToonExporter.Tests
                 // the registered target merely because the string matches.
                 var reused = new GameObject("Face", typeof(SkinnedMeshRenderer)); reused.transform.SetParent(Avatar.transform, false);
                 reused.GetComponent<SkinnedMeshRenderer>().sharedMesh = mesh;
+            }
+
+            internal void ConfigureTransitioningCommon()
+            {
+                Controller.AddParameter(new AnimatorControllerParameter {
+                    name = "CommonPreset", type = AnimatorControllerParameterType.Int, defaultInt = 1
+                });
+                var layers = Controller.layers; layers[2].defaultWeight = .5f; Controller.layers = layers;
+                var machine = layers[1].stateMachine;
+                var stable = machine.AddState("Common selected by initial parameter");
+                stable.motion = Clip("Selected common pose", ("Open", 20), ("Smile", 30), ("Pupil", 60));
+                stable.writeDefaultValues = false;
+                var transition = machine.defaultState.AddTransition(stable);
+                transition.hasExitTime = false; transition.duration = 0;
+                transition.AddCondition(AnimatorConditionMode.Equals, 1, "CommonPreset");
+                AssetDatabase.SaveAssets();
             }
 
             private AnimationClip Clip(string name, params (string Shape, float Weight)[] values)
