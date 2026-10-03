@@ -38,10 +38,10 @@ namespace VRVlog.LilToonExporter.Tests
             {
                 f.Mesh.ClearBlendShapes();
                 Vector3[] Delta(Vector3 v) => Enumerable.Repeat(v, f.Mesh.vertexCount).ToArray();
-                f.Mesh.AddBlendShapeFrame("Open", 50, Delta(Vector3.up * .02f), null, null);
-                f.Mesh.AddBlendShapeFrame("Open", 100, Delta(Vector3.up * .03f), null, null);
+                f.Mesh.AddBlendShapeFrame("Open", 50, Delta(Vector3.up * .02f), Delta(new Vector3(.02f, .01f, 0)), null);
+                f.Mesh.AddBlendShapeFrame("Open", 100, Delta(Vector3.up * .03f), Delta(new Vector3(.06f, .02f, 0)), null);
                 f.Mesh.AddBlendShapeFrame("Customization", 100, Delta(Vector3.right * .04f), null, null);
-                f.Mesh.AddBlendShapeFrame("Duplicated deformation", 100, Delta(Vector3.up * .03f), null, null);
+                f.Mesh.AddBlendShapeFrame("Duplicated deformation", 100, Delta(Vector3.up * .03f), Delta(new Vector3(.06f, .02f, 0)), null);
                 for (var i = 3; i < 220; i++) f.Mesh.AddBlendShapeFrame("Authoring " + i, 100, Delta(Vector3.zero), null, null);
                 f.Mesh.RecalculateTangents();
                 var skins = f.Source.GetComponentsInChildren<SkinnedMeshRenderer>();
@@ -164,7 +164,11 @@ namespace VRVlog.LilToonExporter.Tests
                             skin.BakeMesh(baked);
                             Assert.That(baked.vertices[0].y, Is.EqualTo(1.7f + open).Within(.00002));
                             Assert.That(baked.vertices[0].x, Is.EqualTo(-.1f + (skin.name == "Front" ? .01f : .02f)).Within(.00002));
-                            Assert.That(Vector3.Distance(baked.normals[0], Vector3.forward), Is.LessThan(.00002));
+                            var normalDelta = input == 0 ? new Vector3(.06f, .02f, 0) : endpoint <= 50
+                                ? new Vector3(.02f, .01f, 0) * (endpoint / 50)
+                                : Vector3.LerpUnclamped(new Vector3(.02f, .01f, 0), new Vector3(.06f, .02f, 0), (endpoint - 50) / 50);
+                            var expectedNormal = (Vector3.forward + normalDelta).normalized;
+                            Assert.That(Vector3.Distance(baked.normals[0].normalized, expectedNormal), Is.LessThan(.00035));
                             Assert.That(baked.tangents.All(t => !float.IsNaN(t.x) && Mathf.Abs(t.w) == 1), Is.True);
                         }
                         finally { Object.DestroyImmediate(baked); }
