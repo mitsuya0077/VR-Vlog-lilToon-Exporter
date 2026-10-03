@@ -88,6 +88,7 @@ namespace VRVlog.LilToonExporter
                 using var blink = sourceBlink.ForClone(source, clone);
                 using var gimmicks = new ExportGimmickSession(source, clone, gimmickOptions);
                 bool ExcludedBinding(string path) => exclusions.ContainsPath(path) || gimmicks.ContainsPath(path);
+                bool PreparedExcludedBinding(string path) => VrChatExpressionSampler.IsExcludedPreparedPath(clone, path, ExcludedBinding);
                 MaAppearanceSnapshot.Apply(source, clone, temporaryMeshes, exclusions, warnings);
                 PoseExportSession.RemoveAplFromCopy(source, clone);
                 recovery?.Apply(warnings);
@@ -103,6 +104,7 @@ namespace VRVlog.LilToonExporter
                 if (requiresPreparation)
                     SkinnedMeshFallbackWeights.Preserve(clone, temporaryMeshes, warnings, fixedRootJoints);
                 var unifiedPreparation = trackingProfile == null ? new UnifiedExpressionPreparation(clone, suppressSharedTextureEmission: suppressSharedTextureEmission, suppressHdrTextureEmission: suppressHdrTextureEmission) : null;
+                var faceEmoBindings = FaceEmoExpressions.Capture(source, clone, ExcludedBinding, PreparedExcludedBinding);
                 List<VrmMenuExpressions.Expression> expressions = null;
                 recoveryReport.Stage = "ビルド処理";
                 using var preparation = NdmfExportPreparation.Prepare(source, clone, warnings, (copy, original) =>
@@ -114,8 +116,8 @@ namespace VRVlog.LilToonExporter
                     // Sample the FX controller MA actually built, including
                     // permanent overrides, before AAO edits topology or routes.
                     var preparedMenuPolicy = menuPolicy?.WithOwnedCopies(value => transformed.IsolatedCopyOf(value as UnityEngine.Object));
-                    VrChatExpressionSampler.ApplyMergedDefaults(source, clone, warnings, preparedMenuPolicy, ExcludedBinding);
-                    menu = VrChatExpressionSampler.Analyze(clone, ExcludedBinding, preparedMenuPolicy, source);
+                    VrChatExpressionSampler.ApplyMergedDefaults(source, clone, warnings, preparedMenuPolicy, PreparedExcludedBinding);
+                    menu = VrChatExpressionSampler.Analyze(clone, PreparedExcludedBinding, preparedMenuPolicy, source, faceEmoBindings);
                     var expressionBindings = new PreparedExpressionBindings(clone, menu);
                     gimmicks.Apply(expressionBindings, menu, warnings);
                     unifiedPreparation?.Verify(blink.RequiresUnifiedEvidence);

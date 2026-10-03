@@ -328,7 +328,9 @@ assert 'excludedExpressions' not in window and 'DrawExpressions' not in window
 assert 'var menuPolicy = ExportRecoveryReport.MenuImportPolicy(source, recoveryOptions);' in one_click
 assert 'var menu = VrChatExpressionMenu.Read(source, menuPolicy);' in one_click
 assert 'bool ExcludedBinding(string path) => exclusions.ContainsPath(path) || gimmicks.ContainsPath(path);' in one_click
-assert 'VrChatExpressionSampler.Analyze(clone, ExcludedBinding, preparedMenuPolicy, source)' in one_click
+assert 'bool PreparedExcludedBinding(string path) => VrChatExpressionSampler.IsExcludedPreparedPath(clone, path, ExcludedBinding);' in one_click
+assert 'VrChatExpressionSampler.Analyze(clone, PreparedExcludedBinding, preparedMenuPolicy, source, faceEmoBindings)' in one_click
+assert one_click.index('FaceEmoExpressions.Capture(source, clone, ExcludedBinding, PreparedExcludedBinding)') < one_click.index('NdmfExportPreparation.Prepare(source, clone,')
 assert 'new PoseExportSession(source, poseOptions, exclusions.Contains, menuPolicy)' in one_click
 assert 'SkipVrChatMenus' in recovery and 'ExcludeMenuBranch' in recovery
 assert one_click.index('AvatarBaseShape.Preserve(clone, clone,') < one_click.index('VrChatExpressionBaker.Bake(') < one_click.index('Vrm10AppearanceExporter.Export(')

@@ -22,6 +22,9 @@ namespace VRVlog.LilToonExporter
         }
 
         static readonly string[] DynamicErrorPrefixes = {
+            "FaceEmoの表情アニメーションが準備前の登録内容と一致していません: ",
+            "衣装・体形の処理後にFaceEmoの表情対象が残っていません: ",
+            "FaceEmoの表情参照が処理後に重複しています: ",
             "Unified Expressions の出力 mesh に primitive がありません: ",
             "Unified Expressions の morph target 参照が不正です: ",
             "BlendShape の移動先を解決できません: ",

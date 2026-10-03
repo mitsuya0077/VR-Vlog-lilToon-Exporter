@@ -14,8 +14,18 @@ namespace VRVlog.LilToonExporter
 {
     internal static class VrChatExpressionSampler
     {
+        // Source exclusions name the original hierarchy. After authoring passes,
+        // an active retained renderer can occupy an omitted object's old path.
+        // The omission must not transfer to that unrelated retained identity.
+        internal static bool IsExcludedPreparedPath(GameObject avatar, string path, Func<string, bool> originalExcludedPath)
+        {
+            if (originalExcludedPath?.Invoke(path) != true) return false;
+            return !avatar.GetComponentsInChildren<SkinnedMeshRenderer>().Any(renderer => renderer.enabled && renderer.sharedMesh != null &&
+                renderer.gameObject.activeInHierarchy && AnimationUtility.CalculateTransformPath(renderer.transform, avatar.transform) == path);
+        }
+
         internal static VrChatExpressionMenu.Source Analyze(GameObject avatar, Func<string, bool> excludedPath = null, VrChatMenuImportPolicy menuPolicy = null,
-            GameObject authoringSource = null)
+            GameObject authoringSource = null, FaceEmoExpressions.BindingSnapshot faceEmoBindings = null)
         {
             var source = VrChatExpressionMenu.Read(avatar, menuPolicy);
             try
@@ -30,7 +40,7 @@ namespace VRVlog.LilToonExporter
                     catch (InvalidOperationException error) { entry.Error = error.Message; }
                 }
                 VrChatGestureExpressions.Add(avatar, source, excludedPath);
-                FaceEmoExpressions.Add(avatar, source, excludedPath, authoringSource);
+                FaceEmoExpressions.Add(avatar, source, excludedPath, authoringSource, faceEmoBindings);
             }
             finally { EditorUtility.ClearProgressBar(); }
             return source;

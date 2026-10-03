@@ -12,11 +12,139 @@ namespace VRVlog.LilToonExporter
     // Read that authored data; do not run build plugins or modify its assets.
     internal static class FaceEmoExpressions
     {
+        // FaceEmo's GUID clips are outside the FX controller rewritten by MA.
+        // Remember their targets on our copy before Transforming moves them;
+        // evaluate the clips only after the merged FX controller is available.
+        internal sealed class BindingSnapshot
+        {
+            private readonly GameObject clone;
+            private readonly Func<string, bool> originalExcludedPath;
+            internal Func<string, bool> PreparedExcludedPath { get; }
+            private sealed class Target
+            {
+                internal Component[] Matches;
+                internal bool Excluded;
+            }
+            private readonly Dictionary<AnimationClip, Dictionary<EditorCurveBinding, Target>> targets =
+                new Dictionary<AnimationClip, Dictionary<EditorCurveBinding, Target>>();
+
+            internal BindingSnapshot(GameObject clone, Func<string, bool> excludedPath = null, Func<string, bool> preparedExcludedPath = null)
+            { this.clone = clone; originalExcludedPath = excludedPath; PreparedExcludedPath = preparedExcludedPath; }
+
+            internal void CaptureClip(AnimationClip clip)
+            {
+                if (clip == null || targets.ContainsKey(clip)) return;
+                targets.Add(clip, AnimationUtility.GetCurveBindings(clip).Concat(AnimationUtility.GetObjectReferenceCurveBindings(clip))
+                    .ToDictionary(binding => binding, binding => new Target
+                    {
+                        Excluded = originalExcludedPath?.Invoke(binding.path) == true,
+                        // A same-path auxiliary object with another component
+                        // type is not the registered facial renderer's identity.
+                        Matches = (typeof(Component).IsAssignableFrom(binding.type)
+                                ? clone.GetComponentsInChildren(binding.type, true).Cast<Component>()
+                                : clone.GetComponentsInChildren<Transform>(true).Cast<Component>())
+                            .Where(target => AnimationUtility.CalculateTransformPath(target.transform, clone.transform) == binding.path).ToArray()
+                    }));
+            }
+
+            internal void ReadClip(GameObject avatar, AnimationClip original, VrChatExpressionMenu.Entry entry)
+            {
+                if (avatar != clone) throw new InvalidOperationException("FaceEmoの表情参照は書き出し用コピーと一致していません。");
+                if (!targets.TryGetValue(original, out var paths))
+                    throw new InvalidOperationException("FaceEmoの表情アニメーションが準備前の登録内容と一致していません: " + original.name);
+                EditorCurveBinding? Remap(EditorCurveBinding binding)
+                {
+                    if (!paths.TryGetValue(binding, out var captured))
+                        throw new InvalidOperationException("FaceEmoの表情アニメーションが準備前の登録内容と一致していません: " + original.name);
+                    // Deliberate omissions follow their original identity. A
+                    // historical automatic path is queried only at capture;
+                    // after MA reparenting the live mapped path is authoritative.
+                    if (captured.Excluded) return null;
+                    if (captured.Matches.Length == 0)
+                        throw new InvalidOperationException("Rendererのパスを一意に解決できません: " + binding.path);
+                    if (captured.Matches.Length > 1)
+                        throw new InvalidOperationException("重複する階層パスの表情は取り込めません: " + binding.path);
+                    if (captured.Matches.Length == 1)
+                    {
+                        var target = captured.Matches[0];
+                        if (target == null || target.transform != clone.transform && !target.transform.IsChildOf(clone.transform))
+                            throw new InvalidOperationException("衣装・体形の処理後にFaceEmoの表情対象が残っていません: " + binding.path);
+                        binding.path = AnimationUtility.CalculateTransformPath(target.transform, clone.transform);
+                    }
+                    return PreparedExcludedPath?.Invoke(binding.path) == true ? (EditorCurveBinding?)null : binding;
+                }
+                var clip = UnityEngine.Object.Instantiate(original);
+                clip.name = original.name;
+                clip.hideFlags = HideFlags.HideAndDontSave;
+                try
+                {
+                    // Remove first so a reparented path cannot overwrite another
+                    // still-authored curve while paths are being rewritten.
+                    var curves = AnimationUtility.GetCurveBindings(original)
+                        .Select(binding => (Binding: Remap(binding), Curve: AnimationUtility.GetEditorCurve(original, binding)))
+                        .Where(curve => curve.Binding.HasValue).ToArray();
+                    var objects = AnimationUtility.GetObjectReferenceCurveBindings(original)
+                        .Select(binding => (Binding: Remap(binding), Curve: AnimationUtility.GetObjectReferenceCurve(original, binding)))
+                        .Where(curve => curve.Binding.HasValue).ToArray();
+                    foreach (var binding in AnimationUtility.GetCurveBindings(clip)) AnimationUtility.SetEditorCurve(clip, binding, null);
+                    foreach (var binding in AnimationUtility.GetObjectReferenceCurveBindings(clip)) AnimationUtility.SetObjectReferenceCurve(clip, binding, null);
+                    var seen = new HashSet<EditorCurveBinding>();
+                    foreach (var curve in curves)
+                    {
+                        var binding = curve.Binding.Value;
+                        if (!seen.Add(binding)) throw new InvalidOperationException("FaceEmoの表情参照が処理後に重複しています: " + binding.path + " / " + binding.propertyName);
+                        AnimationUtility.SetEditorCurve(clip, binding, curve.Curve);
+                    }
+                    foreach (var curve in objects)
+                    {
+                        var binding = curve.Binding.Value;
+                        if (!seen.Add(binding)) throw new InvalidOperationException("FaceEmoの表情参照が処理後に重複しています: " + binding.path + " / " + binding.propertyName);
+                        AnimationUtility.SetObjectReferenceCurve(clip, binding, curve.Curve);
+                    }
+                    VrChatGestureExpressions.ReadClip(avatar, clip, entry, PreparedExcludedPath);
+                    if (entry.Animation.Count > 0)
+                    {
+                        if (original.length <= 0 || original.length > 600)
+                            throw new InvalidOperationException("表情アニメーションの長さは0秒より長く600秒以下である必要があります: " + original.name);
+                        entry.Duration = original.length;
+                        entry.Loop = original.isLooping;
+                    }
+                }
+                finally { UnityEngine.Object.DestroyImmediate(clip); }
+            }
+        }
+
+        internal static BindingSnapshot Capture(GameObject authoringSource, GameObject clone, Func<string, bool> excludedPath = null,
+            Func<string, bool> preparedExcludedPath = null)
+        {
+            var snapshot = new BindingSnapshot(clone, excludedPath, preparedExcludedPath);
+            ReadRepositories(authoringSource, new VrChatExpressionMenu.Source(), registered =>
+                CaptureRegistered(clone, registered, snapshot));
+            return snapshot;
+        }
+
+        // Shares the serialized-data route with real FaceEmo discovery so tests
+        // can cover path remapping without installing its optional SDK.
+        internal static BindingSnapshot CaptureRegistered(GameObject clone, object registered, BindingSnapshot snapshot = null, Func<string, bool> excludedPath = null,
+            Func<string, bool> preparedExcludedPath = null)
+        {
+            snapshot = snapshot ?? new BindingSnapshot(clone, excludedPath, preparedExcludedPath);
+            VisitRegistered(registered, "FaceEmo", new HashSet<object>(), 0,
+                (animation, path) => snapshot.CaptureClip(Resolve(animation)));
+            return snapshot;
+        }
+
         internal static void Add(GameObject avatar, VrChatExpressionMenu.Source source, Func<string, bool> excludedPath = null,
-            GameObject authoringSource = null)
+            GameObject authoringSource = null, BindingSnapshot bindings = null)
         {
             var authored = authoringSource ?? avatar;
             var serial = 0;
+            ReadRepositories(authored, source, registered =>
+                ReadRegistered(avatar, registered, "FaceEmo", source, ref serial, new HashSet<object>(), 0, excludedPath, bindings));
+        }
+
+        private static void ReadRepositories(GameObject authored, VrChatExpressionMenu.Source source, Action<object> readRegistered)
+        {
             var repositories = new HashSet<Component>();
             foreach (var repository in authored.GetComponentsInChildren<Component>().Where(IsRepository))
             {
@@ -44,7 +172,7 @@ namespace VRVlog.LilToonExporter
                     source.Messages.Add("FaceEmo: 登録済みパターンのデータを読み取れませんでした。");
                     continue;
                 }
-                ReadRegistered(avatar, Member(menu, "Registered"), "FaceEmo", source, ref serial, new HashSet<object>(), 0, excludedPath);
+                readRegistered(Member(menu, "Registered"));
             }
         }
 
@@ -61,7 +189,18 @@ namespace VRVlog.LilToonExporter
         }
 
         internal static void ReadRegistered(GameObject avatar, object list, string prefix, VrChatExpressionMenu.Source source,
-            ref int serial, HashSet<object> visited, int depth, Func<string, bool> excludedPath = null)
+            ref int serial, HashSet<object> visited, int depth, Func<string, bool> excludedPath = null, BindingSnapshot bindings = null)
+        {
+            var nextSerial = serial;
+            try
+            {
+                VisitRegistered(list, prefix, visited, depth, (animation, path) =>
+                    AddClip(avatar, animation, path, source, ref nextSerial, excludedPath, bindings));
+            }
+            finally { serial = nextSerial; }
+        }
+
+        private static void VisitRegistered(object list, string prefix, HashSet<object> visited, int depth, Action<object, string> addClip)
         {
             if (list == null) return;
             if (depth > 16 || !visited.Add(list)) throw new InvalidOperationException("FaceEmoのグループ参照が循環しているか深すぎます。");
@@ -71,8 +210,8 @@ namespace VRVlog.LilToonExporter
                 {
                     if (item.IsGroup)
                     {
-                        ReadRegistered(avatar, item.Value, prefix + " / " + (Member(item.Value, "DisplayName") as string ?? "グループ"),
-                            source, ref serial, visited, depth + 1, excludedPath);
+                        VisitRegistered(item.Value, prefix + " / " + (Member(item.Value, "DisplayName") as string ?? "グループ"),
+                            visited, depth + 1, addClip);
                         continue;
                     }
                     var mode = item.Value;
@@ -85,7 +224,7 @@ namespace VRVlog.LilToonExporter
                     }
                     if (string.IsNullOrWhiteSpace(displayName)) displayName = "表情パターン";
                     var path = prefix + " / " + displayName;
-                    if (defaultAnimation != null) AddClip(avatar, defaultAnimation, path + " / デフォルト", source, ref serial, excludedPath);
+                    if (defaultAnimation != null) addClip(defaultAnimation, path + " / デフォルト");
                     var branchIndex = 0;
                     foreach (var branch in Items(Member(mode, "Branches")))
                     {
@@ -101,7 +240,7 @@ namespace VRVlog.LilToonExporter
                             var animation = Member(branch, variant);
                             if (animation == null) continue;
                             var label = variant == "BaseAnimation" ? "基本" : variant == "LeftHandAnimation" ? "左トリガー" : variant == "RightHandAnimation" ? "右トリガー" : "両トリガー";
-                            AddClip(avatar, animation, path + " / " + branchIndex + " / " + label, source, ref serial, excludedPath);
+                            addClip(animation, path + " / " + branchIndex + " / " + label);
                         }
                     }
                 }
@@ -138,7 +277,8 @@ namespace VRVlog.LilToonExporter
                 throw new InvalidOperationException("FaceEmoのメニュー順序と保存済み項目が一致しません。");
         }
 
-        private static void AddClip(GameObject avatar, object animation, string path, VrChatExpressionMenu.Source source, ref int serial, Func<string, bool> excludedPath)
+        private static void AddClip(GameObject avatar, object animation, string path, VrChatExpressionMenu.Source source, ref int serial, Func<string, bool> excludedPath,
+            BindingSnapshot bindings)
         {
             if (source.Entries.Count >= 512) throw new InvalidOperationException("表情候補が512件を超えています。");
             var entry = new VrChatExpressionMenu.Entry { Id = "faceemo/" + serial++, Name = path };
@@ -147,8 +287,10 @@ namespace VRVlog.LilToonExporter
                 var clip = Resolve(animation);
                 if (clip == null) throw new InvalidOperationException("FaceEmoに登録されたアニメーションGUIDを解決できません。");
                 entry.Name = path + " / " + clip.name;
-                VrChatGestureExpressions.ReadClip(avatar, clip, entry, excludedPath);
-                VrChatExpressionSampler.ApplyPermanentOverrides(avatar, source.Controller, entry, excludedPath: excludedPath);
+                if (bindings == null) VrChatGestureExpressions.ReadClip(avatar, clip, entry, excludedPath);
+                else bindings.ReadClip(avatar, clip, entry);
+                VrChatExpressionSampler.ApplyPermanentOverrides(avatar, source.Controller, entry,
+                    excludedPath: bindings == null ? excludedPath : bindings.PreparedExcludedPath);
             }
             catch (InvalidOperationException error) { entry.Error = error.Message; }
             source.Entries.Add(entry);

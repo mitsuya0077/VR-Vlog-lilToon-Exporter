@@ -26,7 +26,10 @@ namespace VRVlog.LilToonExporter.Tests
                     "マテリアルの移動先を解決できません: ",
                     "変形しない表情の出力先メッシュがありません: ",
                     "常時適用するFXのBlendShapeが見つかりません: ",
-                    "追跡表情の対象が最終VRMにありません: "
+                    "追跡表情の対象が最終VRMにありません: ",
+                    "FaceEmoの表情アニメーションが準備前の登録内容と一致していません: ",
+                    "衣装・体形の処理後にFaceEmoの表情対象が残っていません: ",
+                    "FaceEmoの表情参照が処理後に重複しています: "
                 })
                 {
                     var translatedPrefix = ExporterLocalization.T(prefix);
@@ -37,6 +40,8 @@ namespace VRVlog.LilToonExporter.Tests
                 }
                 const string fxFailure = "常時適用するFXの変形を確定できません。統合後のBlendShape設定を確認してください。";
                 Assert.That(ExporterLocalization.T(fxFailure), Is.Not.EqualTo(fxFailure));
+                const string faceEmoFailure = "FaceEmoの表情参照は書き出し用コピーと一致していません。";
+                Assert.That(ExporterLocalization.T(faceEmoFailure), Is.Not.EqualTo(faceEmoFailure));
             }
             finally
             {
