@@ -86,6 +86,11 @@ namespace VRVlog.LilToonExporter.Tests
             VrChatExpressionSampler.Sample(avatar, controller, metadata.Defaults,
                 new Dictionary<string, float> { ["Menu"] = 1 }, null, metadata, unresolved);
 
+        private List<VrChatExpressionMenu.MorphValue> SampleFixed(FixedExpressionContext context = null,
+            IDictionary<string, float> selected = null) =>
+            VrChatExpressionSampler.SampleFixed(avatar, controller, metadata.Defaults,
+                selected ?? new Dictionary<string, float> { ["Menu"] = 1 }, null, metadata, fixedContext: context);
+
         internal static VrChatParameterDriver.Operation Op(string kind, string destination, float value = 0, string source = null) =>
             new VrChatParameterDriver.Operation { Kind = kind, Destination = destination, Value = value, Source = source };
 
@@ -188,6 +193,229 @@ namespace VRVlog.LilToonExporter.Tests
             Transition(disabled, neutral, "Dance", 0, AnimatorConditionMode.IfNot);
             Transition(disabled, neutral, "InStation", 0, AnimatorConditionMode.IfNot);
             return neutral;
+        }
+
+        private void StationFxGate(string structure = "Flat")
+        {
+            controller.AddParameter("InStation", AnimatorControllerParameterType.Bool);
+            var machine = Layer("Station FX gate");
+            var neutral = State(machine, "Neutral FX"); machine.defaultState = neutral;
+            var disabledMachine = structure == "Nested" ? machine.AddStateMachine("Station") : machine;
+            var disabled = State(disabledMachine, "Station disables FX");
+            if (disabledMachine != machine) disabledMachine.defaultState = disabled;
+            PlayableControl(neutral, "FX", 1, 0); PlayableControl(disabled, "FX", 0, 0);
+            if (structure == "AnyState")
+            {
+                var transition = machine.AddAnyStateTransition(disabled);
+                transition.hasExitTime = false; transition.duration = 0; transition.canTransitionToSelf = false;
+                transition.AddCondition(AnimatorConditionMode.If, 0, "InStation");
+            }
+            else if (structure == "Nested")
+            {
+                var transition = neutral.AddTransition(disabledMachine);
+                transition.hasExitTime = false; transition.duration = 0;
+                transition.AddCondition(AnimatorConditionMode.If, 0, "InStation");
+            }
+            else Transition(neutral, disabled, "InStation", 0, AnimatorConditionMode.If);
+            if (structure == "MotionWriteDefaults")
+            {
+                disabled.motion = Clip("Unreached station face", 0);
+                disabled.writeDefaultValues = true;
+            }
+        }
+
+        [Test]
+        public void FixedNormalStationContextPreservesAuthoredAssetsDefaultsAndAvatarWeights()
+        {
+            Gate().motion = Clip("Menu face", 75); StationFxGate();
+            controller.AddParameter("IsLocal", AnimatorControllerParameterType.Bool);
+            var assets = AssetDatabase.LoadAllAssetsAtPath(folder + "/FX.controller");
+            var before = assets.ToDictionary(a => a, a => EditorJsonUtility.ToJson(a));
+            var defaultsBefore = new Dictionary<string, float>(metadata.Defaults);
+            var context = FixedExpressionContext.Create(controller, metadata.Defaults, metadata);
+            Assert.That(context.Values["InStation"], Is.Zero);
+            Assert.That(context.Values["IsLocal"], Is.EqualTo(1));
+            Assert.That(Assert.Throws<InvalidOperationException>(() => Sample()).Message,
+                Does.Contain("外部入力").And.Contain("InStation"));
+            Assert.That(SampleFixed(context).Single(v => v.Shape == "Face size").Weight, Is.EqualTo(75).Within(.01));
+            foreach (var asset in assets) Assert.That(EditorJsonUtility.ToJson(asset), Is.EqualTo(before[asset]), asset.name);
+            CollectionAssert.AreEquivalent(defaultsBefore, metadata.Defaults);
+            Assert.That(avatar.GetComponentInChildren<SkinnedMeshRenderer>().GetBlendShapeWeight(0), Is.EqualTo(25));
+            Assert.That(avatar.GetComponentInChildren<SkinnedMeshRenderer>().sharedMesh, Is.SameAs(mesh));
+        }
+
+        [TestCase("AnyState")]
+        [TestCase("Nested")]
+        [TestCase("MotionWriteDefaults")]
+        public void FixedFalseStationContextProvesComplexDisabledBranchUnreachable(string structure)
+        {
+            Gate().motion = Clip("Menu face", 75); StationFxGate(structure);
+            Assert.That(Assert.Throws<InvalidOperationException>(() => Sample()).Message,
+                Does.Contain("外部入力").And.Contain("InStation"));
+            Assert.That(SampleFixed().Single(v => v.Shape == "Face size").Weight, Is.EqualTo(75).Within(.01));
+        }
+
+        [Test]
+        public void FixedTrueStationContextStillRejectsAReachableFxDisable()
+        {
+            Gate().motion = Clip("Menu face", 75); StationFxGate();
+            var context = FixedExpressionContext.Create(controller, metadata.Defaults, metadata);
+            context.Values["InStation"] = 1;
+            Assert.That(Assert.Throws<InvalidOperationException>(() => SampleFixed(context)).Message,
+                Does.Contain("Station disables FX").And.Contain("FXの重み"));
+            Assert.That(SampleFixed().Single(v => v.Shape == "Face size").Weight, Is.EqualTo(75).Within(.01));
+        }
+
+        [Test]
+        public void FixedBuiltinCopyUsesNormalAndExplicitStationValuesWhileStrictSamplingRejectsIt()
+        {
+            controller.AddParameter("InStation", AnimatorControllerParameterType.Bool);
+            Driver(Gate(), Op("Copy", "Face", source: "InStation")); FaceLayer();
+            Assert.That(Assert.Throws<InvalidOperationException>(() => Sample()).Message,
+                Does.Contain("組み込みパラメーター").And.Contain("Copy元"));
+            var context = FixedExpressionContext.Create(controller, metadata.Defaults, metadata);
+            Assert.That(SampleFixed(context).Single(v => v.Shape == "Face size").Weight, Is.EqualTo(0).Within(.01));
+            context.Values["InStation"] = 1;
+            Assert.That(SampleFixed(context).Single(v => v.Shape == "Face size").Weight, Is.EqualTo(75).Within(.01));
+        }
+
+        [Test]
+        public void FixedStationReachabilityFollowsNestedEntryExitAndStateMachineTransitions()
+        {
+            Gate().motion = Clip("Menu face", 75);
+            controller.AddParameter("InStation", AnimatorControllerParameterType.Bool);
+            var root = Layer("Entry exit FX gate");
+            var neutral = State(root, "Neutral FX"); root.defaultState = neutral;
+            PlayableControl(neutral, "FX", 1, 0);
+            var nested = root.AddStateMachine("Nested gate");
+            var fallback = State(nested, "Unreached entry fallback"); nested.defaultState = fallback;
+            var fallbackCommand = PlayableControl(fallback, "FX", 0, 0);
+            var entry = State(nested, "Entry command");
+            var entryCommand = PlayableControl(entry, "FX", 1, 0);
+            nested.AddEntryTransition(entry);
+            var enter = neutral.AddTransition(nested); enter.hasExitTime = false; enter.duration = 0;
+            enter.AddCondition(AnimatorConditionMode.If, 0, "InStation");
+            var exit = entry.AddExitTransition(); exit.hasExitTime = false; exit.duration = 0;
+            exit.AddCondition(AnimatorConditionMode.If, 0, "InStation");
+            var disabled = State(root, "Exit disables FX");
+            var disabledCommand = PlayableControl(disabled, "FX", 0, 0);
+            root.AddStateMachineTransition(nested, disabled);
+            var context = FixedExpressionContext.Create(controller, metadata.Defaults, metadata);
+            Assert.That(SampleFixed(context).Single(v => v.Shape == "Face size").Weight, Is.EqualTo(75).Within(.01));
+            Assert.That(FixedExpressionContext.TryReachableFxCommands(root, context.Values, controller.parameters, out var normalCommands), Is.True);
+            Assert.That(normalCommands.Contains(entryCommand), Is.False);
+            Assert.That(normalCommands.Contains(disabledCommand), Is.False);
+            Assert.That(normalCommands.Contains(fallbackCommand), Is.False);
+            context.Values["InStation"] = 1;
+            Assert.That(FixedExpressionContext.TryReachableFxCommands(root, context.Values, controller.parameters, out var stationCommands), Is.True);
+            Assert.That(stationCommands.Contains(entryCommand), Is.True);
+            Assert.That(stationCommands.Contains(disabledCommand), Is.True);
+            Assert.That(stationCommands.Contains(fallbackCommand), Is.False);
+            Assert.That(Assert.Throws<InvalidOperationException>(() => SampleFixed(context)).Message,
+                Does.Contain("Exit disables FX").And.Contain("FXの重み"));
+        }
+
+        [Test]
+        public void FixedStationReachabilityKeepsParentAnyStateTransitionsWhenNestedStateIsActive()
+        {
+            Gate().motion = Clip("Menu face", 75);
+            controller.AddParameter("InStation", AnimatorControllerParameterType.Bool);
+            var root = Layer("Parent AnyState FX gate");
+            var neutral = State(root, "Neutral FX"); root.defaultState = neutral;
+            PlayableControl(neutral, "FX", 1, 0);
+            var nested = root.AddStateMachine("Nested active state");
+            var active = State(nested, "Active nested FX"); nested.defaultState = active;
+            var activeCommand = PlayableControl(active, "FX", 1, 0);
+            var enter = neutral.AddTransition(nested); enter.hasExitTime = false; enter.duration = 0;
+            enter.AddCondition(AnimatorConditionMode.IfNot, 0, "InStation");
+            var disabled = State(root, "Parent AnyState disables FX");
+            var disabledCommand = PlayableControl(disabled, "FX", 0, 0);
+            var any = root.AddAnyStateTransition(disabled); any.hasExitTime = false; any.duration = 0; any.canTransitionToSelf = false;
+            any.AddCondition(AnimatorConditionMode.If, 0, "InStation");
+            var context = FixedExpressionContext.Create(controller, metadata.Defaults, metadata);
+            Assert.That(SampleFixed(context).Single(v => v.Shape == "Face size").Weight, Is.EqualTo(75).Within(.01));
+            Assert.That(FixedExpressionContext.TryReachableFxCommands(root, context.Values, controller.parameters, out var normalCommands), Is.True);
+            Assert.That(normalCommands.Contains(activeCommand), Is.True);
+            Assert.That(normalCommands.Contains(disabledCommand), Is.False);
+            context.Values["InStation"] = 1;
+            Assert.That(FixedExpressionContext.TryReachableFxCommands(root, context.Values, controller.parameters, out var stationCommands), Is.True);
+            Assert.That(stationCommands, Does.Contain(disabledCommand));
+            Assert.That(Assert.Throws<InvalidOperationException>(() => SampleFixed(context)).Message,
+                Does.Contain("Parent AnyState disables FX").And.Contain("FXの重み"));
+        }
+
+        [Test]
+        public void FixedContactInputUsesAuthoredDefaultAndAllowsExplicitSelectionOverride()
+        {
+            controller.AddParameter("Contact", AnimatorControllerParameterType.Float);
+            metadata.ExternalParameters.Add("Contact"); metadata.Defaults["Contact"] = 1;
+            Driver(Gate(), Op("Copy", "Face", source: "Contact")); FaceLayer();
+            var context = FixedExpressionContext.Create(controller, metadata.Defaults, metadata);
+            Assert.That(context.Values["Contact"], Is.EqualTo(1));
+            Assert.That(Assert.Throws<InvalidOperationException>(() => Sample()).Message,
+                Does.Contain("外部入力").And.Contain("Contact"));
+            Assert.That(SampleFixed(context).Single(v => v.Shape == "Face size").Weight, Is.EqualTo(75).Within(.01));
+            var selected = new Dictionary<string, float> { ["Menu"] = 1, ["Contact"] = 0 };
+            Assert.That(SampleFixed(context, selected).Single(v => v.Shape == "Face size").Weight, Is.EqualTo(0).Within(.01));
+            Assert.That(context.Values["Contact"], Is.EqualTo(1));
+            Assert.That(metadata.Defaults["Contact"], Is.EqualTo(1));
+            Assert.That(selected["Contact"], Is.Zero);
+        }
+
+        [Test]
+        public void FixedExternalContextDoesNotReapplyMenuAfterAParameterDriverReset()
+        {
+            var gate = Gate(); Driver(gate, Op("Add", "Face", 1), Op("Set", "Menu", 0));
+            Transition(gate, controller.layers[0].stateMachine.defaultState, "Menu", 0);
+            FaceLayer(); StationFxGate();
+            var face = controller.layers[1].stateMachine;
+            var smile = face.states.Single(s => s.state.name == "Smile").state;
+            Transition(smile, face.defaultState, "Face", 1, AnimatorConditionMode.NotEqual);
+            metadata.ExternalParameters.Add("Menu");
+            var selected = new Dictionary<string, float> { ["Menu"] = 1 };
+            Assert.That(SampleFixed(selected: selected).Single(v => v.Shape == "Face size").Weight, Is.EqualTo(75).Within(.01));
+            Assert.That(selected["Menu"], Is.EqualTo(1));
+        }
+
+        [Test]
+        public void MenuAnalysisImportsStationDependentFaceUsingTheFixedNormalContext()
+        {
+            Gate().motion = Clip("Menu face", 75); StationFxGate();
+            Type Find(string name) => AppDomain.CurrentDomain.GetAssemblies().Select(a => a.GetType(name)).FirstOrDefault(t => t != null);
+            var menuType = Find("VRC.SDK3.Avatars.ScriptableObjects.VRCExpressionsMenu");
+            var descriptorType = Find("VRC.SDK3.Avatars.Components.VRCAvatarDescriptor");
+            if (menuType == null || descriptorType == null) Assert.Ignore("Install the real VRChat SDK to run menu-analysis integration tests.");
+            var menu = ScriptableObject.CreateInstance(menuType);
+            AssetDatabase.CreateAsset(menu, folder + "/Menu.asset");
+            using (var data = new SerializedObject(menu))
+            {
+                var controls = data.FindProperty("controls"); controls.arraySize = 1;
+                var item = controls.GetArrayElementAtIndex(0);
+                item.FindPropertyRelative("name").stringValue = "Station-independent smile";
+                var type = item.FindPropertyRelative("type"); type.enumValueIndex = Array.IndexOf(type.enumNames, "Toggle");
+                item.FindPropertyRelative("parameter").FindPropertyRelative("name").stringValue = "Menu";
+                item.FindPropertyRelative("value").floatValue = 1;
+                data.ApplyModifiedPropertiesWithoutUndo();
+            }
+            var descriptor = avatar.AddComponent(descriptorType);
+            using (var data = new SerializedObject(descriptor))
+            {
+                data.FindProperty("customExpressions").boolValue = true;
+                data.FindProperty("expressionsMenu").objectReferenceValue = menu;
+                data.FindProperty("customizeAnimationLayers").boolValue = true;
+                var list = data.FindProperty("baseAnimationLayers"); list.arraySize = 1;
+                var layer = list.GetArrayElementAtIndex(0); var type = layer.FindPropertyRelative("type");
+                type.enumValueIndex = Array.IndexOf(type.enumNames, "FX");
+                layer.FindPropertyRelative("isDefault").boolValue = false;
+                layer.FindPropertyRelative("animatorController").objectReferenceValue = controller;
+                data.FindProperty("specialAnimationLayers").arraySize = 0;
+                data.ApplyModifiedPropertiesWithoutUndo();
+            }
+            var source = VrChatExpressionSampler.Analyze(avatar);
+            var entry = source.Entries.Single(e => e.Name == "Station-independent smile");
+            Assert.That(entry.Error, Is.Null, string.Join("\n", source.Messages));
+            Assert.That(entry.Values.Single(v => v.Shape == "Face size").Weight, Is.EqualTo(75).Within(.01));
+            Assert.That(source.Controller, Is.SameAs(controller));
         }
 
         [TestCase(false)]
