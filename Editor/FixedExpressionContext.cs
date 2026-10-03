@@ -32,6 +32,9 @@ namespace VRVlog.LilToonExporter
                 var builtIn = VrChatParameterDriver.BuiltIn.Contains(parameter.name);
                 if ((!builtIn && source?.ExternalParameters.Contains(parameter.name) != true) ||
                     parameter.type == AnimatorControllerParameterType.Trigger) continue;
+                // Avatar-dependent height inputs cannot be inferred from Animator
+                // defaults. Leave unmodelled built-ins for the dependency check.
+                if (builtIn && !Normal.ContainsKey(parameter.name) && parameter.name != "TrackingType") continue;
                 var value = parameter.type == AnimatorControllerParameterType.Bool ? (parameter.defaultBool ? 1f : 0f) :
                     parameter.type == AnimatorControllerParameterType.Int ? parameter.defaultInt : parameter.defaultFloat;
                 if (source != null && source.Defaults.TryGetValue(parameter.name, out var supplied)) value = supplied;

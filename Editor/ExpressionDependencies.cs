@@ -136,6 +136,7 @@ namespace VRVlog.LilToonExporter
             if (result.Layers.Any(i => controller.layers[i].syncedLayerIndex >= 0))
                 throw new InvalidOperationException("このメニューに影響する同期Animatorレイヤーの表情変換は未対応です。");
             var external = gateExternal.Concat(source?.ExternalParameters ?? Enumerable.Empty<string>())
+                .Concat(fixedContext != null ? VrChatParameterDriver.BuiltIn : Enumerable.Empty<string>())
                 .Where(name => result.Parameters.Contains(name) && fixedContext?.Values.ContainsKey(name) != true)
                 .Distinct().OrderBy(n => n, StringComparer.Ordinal).ToArray();
             if (external.Length > 0) throw new InvalidOperationException("外部入力に依存する表情の値を確定できません: " + string.Join(", ", external));

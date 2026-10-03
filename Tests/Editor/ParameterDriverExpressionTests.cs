@@ -279,6 +279,112 @@ namespace VRVlog.LilToonExporter.Tests
             Assert.That(SampleFixed(context).Single(v => v.Shape == "Face size").Weight, Is.EqualTo(75).Within(.01));
         }
 
+        [TestCase("EyeHeightAsMeters", 0f, false)]
+        [TestCase("EyeHeightAsMeters", 1f, false)]
+        [TestCase("EyeHeightAsMeters", 0f, true)]
+        [TestCase("EyeHeightAsMeters", 1f, true)]
+        [TestCase("EyeHeightAsPercent", 0f, false)]
+        [TestCase("EyeHeightAsPercent", 1f, false)]
+        [TestCase("EyeHeightAsPercent", 0f, true)]
+        [TestCase("EyeHeightAsPercent", 1f, true)]
+        public void FixedEyeHeightFaceTransitionDoesNotTrustAuthoredOrSuppliedDefaults(string parameter, float value, bool suppliedDefault)
+        {
+            controller.AddParameter(new AnimatorControllerParameter
+            {
+                name = parameter, type = AnimatorControllerParameterType.Float, defaultFloat = suppliedDefault ? 0 : value
+            });
+            if (suppliedDefault) metadata.Defaults[parameter] = value;
+            Gate().motion = Clip("Eye height face", 75);
+            var idle = controller.layers[0].stateMachine.defaultState;
+            idle.motion = Clip("Neutral face", 0);
+            idle.transitions[0].AddCondition(AnimatorConditionMode.Greater, .5f, parameter);
+            var context = FixedExpressionContext.Create(controller, metadata.Defaults, metadata);
+            Assert.That(context.Values.ContainsKey(parameter), Is.False, "An authored default is not a measured eye height.");
+            Assert.That(Assert.Throws<InvalidOperationException>(() => SampleFixed(context)).Message,
+                Does.Contain("外部入力").And.Contain(parameter));
+        }
+
+        [TestCase("EyeHeightAsMeters", 0f)]
+        [TestCase("EyeHeightAsMeters", 1f)]
+        [TestCase("EyeHeightAsPercent", 0f)]
+        [TestCase("EyeHeightAsPercent", 1f)]
+        public void FixedEyeHeightDriverCopyRequiresExplicitInput(string parameter, float authoredValue)
+        {
+            controller.AddParameter(new AnimatorControllerParameter
+            {
+                name = parameter, type = AnimatorControllerParameterType.Float, defaultFloat = authoredValue
+            });
+            metadata.Defaults[parameter] = authoredValue;
+            Driver(Gate(), Op("Copy", "Face", source: parameter)); FaceLayer();
+            var context = FixedExpressionContext.Create(controller, metadata.Defaults, metadata);
+            Assert.That(context.Values.ContainsKey(parameter), Is.False);
+            Assert.That(Assert.Throws<InvalidOperationException>(() => SampleFixed(context)).Message,
+                Does.Contain("外部入力").And.Contain(parameter));
+            context.Values[parameter] = 1;
+            Assert.That(SampleFixed(context).Single(v => v.Shape == "Face size").Weight, Is.EqualTo(75).Within(.01));
+            Assert.That(metadata.Defaults[parameter], Is.EqualTo(authoredValue));
+        }
+
+        [TestCase("EyeHeightAsMeters", 0f)]
+        [TestCase("EyeHeightAsMeters", 1f)]
+        [TestCase("EyeHeightAsPercent", 0f)]
+        [TestCase("EyeHeightAsPercent", 1f)]
+        public void FixedUnusedEyeHeightDeclarationDoesNotBlockFace(string parameter, float authoredValue)
+        {
+            controller.AddParameter(new AnimatorControllerParameter
+            {
+                name = parameter, type = AnimatorControllerParameterType.Float, defaultFloat = authoredValue
+            });
+            metadata.Defaults[parameter] = authoredValue;
+            Gate().motion = Clip("Menu face", 75);
+            var context = FixedExpressionContext.Create(controller, metadata.Defaults, metadata);
+            Assert.That(context.Values.ContainsKey(parameter), Is.False);
+            Assert.That(SampleFixed(context).Single(v => v.Shape == "Face size").Weight, Is.EqualTo(75).Within(.01));
+            Assert.That(context.UsedParameters.Contains(parameter), Is.False);
+        }
+
+        [TestCase("EyeHeightAsMeters", 0f, 0f)]
+        [TestCase("EyeHeightAsMeters", 1f, 75f)]
+        [TestCase("EyeHeightAsPercent", 0f, 0f)]
+        [TestCase("EyeHeightAsPercent", 1f, 75f)]
+        public void FixedExplicitEyeHeightSelectsCorrectFace(string parameter, float suppliedValue, float expectedWeight)
+        {
+            controller.AddParameter(new AnimatorControllerParameter
+            {
+                name = parameter, type = AnimatorControllerParameterType.Float, defaultFloat = 1 - suppliedValue
+            });
+            metadata.Defaults[parameter] = 1 - suppliedValue;
+            Gate().motion = Clip("Eye height face", 75);
+            var idle = controller.layers[0].stateMachine.defaultState;
+            idle.motion = Clip("Neutral face", 0);
+            idle.transitions[0].AddCondition(AnimatorConditionMode.Greater, .5f, parameter);
+            var context = FixedExpressionContext.Create(controller, metadata.Defaults, metadata);
+            context.Values[parameter] = suppliedValue;
+            Assert.That(SampleFixed(context).Single(v => v.Shape == "Face size").Weight, Is.EqualTo(expectedWeight).Within(.01));
+            Assert.That(context.UsedParameters.Contains(parameter), Is.True);
+        }
+
+        [TestCase("EyeHeightAsMeters", 0f)]
+        [TestCase("EyeHeightAsMeters", 1f)]
+        [TestCase("EyeHeightAsPercent", 0f)]
+        [TestCase("EyeHeightAsPercent", 1f)]
+        public void FixedEyeHeightFxGateRequiresExplicitInput(string parameter, float authoredValue)
+        {
+            Gate().motion = Clip("Menu face", 75);
+            controller.AddParameter(new AnimatorControllerParameter
+            {
+                name = parameter, type = AnimatorControllerParameterType.Float, defaultFloat = authoredValue
+            });
+            metadata.Defaults[parameter] = authoredValue;
+            var machine = Layer("Eye height FX gate");
+            var neutral = State(machine, "Neutral FX"); machine.defaultState = neutral;
+            var disabled = State(machine, "Eye height disables FX");
+            PlayableControl(neutral, "FX", 1, 0); PlayableControl(disabled, "FX", 0, 0);
+            Transition(neutral, disabled, parameter, .5f, AnimatorConditionMode.Greater);
+            Assert.That(Assert.Throws<InvalidOperationException>(() => SampleFixed()).Message,
+                Does.Contain("外部入力").And.Contain(parameter));
+        }
+
         [Test]
         public void FixedStationReachabilityFollowsNestedEntryExitAndStateMachineTransitions()
         {
