@@ -12,16 +12,18 @@ namespace VRVlog.LilToonExporter
     // Read that authored data; do not run build plugins or modify its assets.
     internal static class FaceEmoExpressions
     {
-        internal static void Add(GameObject avatar, VrChatExpressionMenu.Source source, Func<string, bool> excludedPath = null)
+        internal static void Add(GameObject avatar, VrChatExpressionMenu.Source source, Func<string, bool> excludedPath = null,
+            GameObject authoringSource = null)
         {
+            var authored = authoringSource ?? avatar;
             var serial = 0;
             var repositories = new HashSet<Component>();
-            foreach (var repository in avatar.GetComponentsInChildren<Component>().Where(IsRepository))
+            foreach (var repository in authored.GetComponentsInChildren<Component>().Where(IsRepository))
             {
                 var launcher = repository.GetComponents<Component>().FirstOrDefault(IsLauncher);
                 // A pet or another embedded avatar may have its own FaceEmo
                 // configuration. Honor its target even inside this hierarchy.
-                if (launcher == null || TargetsAvatar(avatar, Member(launcher, "AV3Setting"))) repositories.Add(repository);
+                if (launcher == null || TargetsAvatar(authored, Member(launcher, "AV3Setting"))) repositories.Add(repository);
             }
             // FaceEmo normally creates a separate scene object. Its settings,
             // not its position in the hierarchy or its name, identify the avatar.
@@ -29,7 +31,7 @@ namespace VRVlog.LilToonExporter
             // project assets; neither is the user's current FaceEmo setup.
             foreach (var launcher in UnityEngine.Object.FindObjectsOfType<MonoBehaviour>())
             {
-                if (!IsLauncher(launcher) || !TargetsAvatar(avatar, Member(launcher, "AV3Setting"))) continue;
+                if (!IsLauncher(launcher) || !TargetsAvatar(authored, Member(launcher, "AV3Setting"))) continue;
                 foreach (var repository in launcher.GetComponents<Component>().Where(IsRepository))
                     repositories.Add(repository);
             }
@@ -146,6 +148,7 @@ namespace VRVlog.LilToonExporter
                 if (clip == null) throw new InvalidOperationException("FaceEmoに登録されたアニメーションGUIDを解決できません。");
                 entry.Name = path + " / " + clip.name;
                 VrChatGestureExpressions.ReadClip(avatar, clip, entry, excludedPath);
+                VrChatExpressionSampler.ApplyPermanentOverrides(avatar, source.Controller, entry, excludedPath: excludedPath);
             }
             catch (InvalidOperationException error) { entry.Error = error.Message; }
             source.Entries.Add(entry);

@@ -276,6 +276,16 @@ namespace VRVlog.LilToonExporter
             expressionCopies.Clear();
         }
 
+        internal void Remap(ExportOptimizationBindings mappings)
+        {
+            foreach (var binding in Slots.SelectMany(slot => slot))
+            {
+                var mapped = mappings.MapMorph(binding.Renderer, binding.Shape);
+                binding.Renderer = mapped.Renderer;
+                binding.Shape = mapped.Shape;
+            }
+        }
+
         internal void Bind(ModelExporter converter, VrmLib.Model model, ExportingGltfData storage)
         {
             foreach (var renderer in Slots.SelectMany(s => s).Select(b => b.Renderer).Distinct())

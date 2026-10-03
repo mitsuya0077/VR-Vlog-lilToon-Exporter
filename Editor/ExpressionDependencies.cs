@@ -43,9 +43,11 @@ namespace VRVlog.LilToonExporter
         }
 
         internal static ExpressionDependencies Analyze(RuntimeAnimatorController runtime, IEnumerable<string> selected,
-            Func<string, bool> excludedPath, VrChatExpressionMenu.Source source = null, IDictionary<string, float> defaults = null, IDictionary<string, float> selection = null)
+            Func<string, bool> excludedPath, VrChatExpressionMenu.Source source = null, IDictionary<string, float> defaults = null, IDictionary<string, float> selection = null,
+            IEnumerable<EditorCurveBinding> initialMorphs = null)
         {
             var result = new ExpressionDependencies();
+            if (initialMorphs != null) result.Morphs.UnionWith(initialMorphs);
             var controller = Controller(runtime);
             var unknown = new List<string>();
             var info = Inspect(runtime, excludedPath, result.Drivers, unknown, true);
@@ -146,6 +148,48 @@ namespace VRVlog.LilToonExporter
             }
             if (unsafeFxCommands.Count > 0)
                 throw new InvalidOperationException(unsafeFxCommands[0].Location + " / VRCPlayableLayerControl: FXの重みを変更する状態は固定表情に変換できません。");
+            return result;
+        }
+
+        // A permanent override does not read a menu parameter, so parameter-
+        // rooted dependency traversal alone cannot discover it. Seed only a
+        // proven stationary default clip; gesture and timed layers still enter
+        // the graph solely through their real property/parameter dependencies.
+        internal static HashSet<EditorCurveBinding> StationaryMorphBindings(RuntimeAnimatorController runtime,
+            Func<string, bool> excludedPath = null)
+        {
+            var result = new HashSet<EditorCurveBinding>();
+            foreach (var clip in StationaryLayers(runtime, excludedPath).Values)
+                result.UnionWith(AnimationUtility.GetCurveBindings(clip).Where(binding => excludedPath?.Invoke(binding.path) != true));
+            return result;
+        }
+
+        internal static Dictionary<int, AnimationClip> StationaryLayers(RuntimeAnimatorController runtime,
+            Func<string, bool> excludedPath = null)
+        {
+            var result = new Dictionary<int, AnimationClip>();
+            var controller = Controller(runtime);
+            var replacements = Overrides(runtime);
+            var layers = controller.layers;
+            for (var index = 0; index < layers.Length; index++)
+            {
+                var layer = layers[index];
+                var machine = layer.stateMachine;
+                if (layer.syncedLayerIndex >= 0 || layer.iKPass || index > 0 && layer.defaultWeight <= 0 ||
+                    machine == null || machine.behaviours.Length != 0 || machine.stateMachines.Length != 0 ||
+                    machine.anyStateTransitions.Length != 0 || machine.entryTransitions.Length != 0) continue;
+                var state = machine.defaultState;
+                if (state == null || state.transitions.Length != 0 || state.behaviours.Length != 0 || state.iKOnFeet ||
+                    state.timeParameterActive || state.speedParameterActive || state.mirrorParameterActive || state.cycleOffsetParameterActive ||
+                    !(state.motion is AnimationClip clip)) continue;
+                if (replacements.TryGetValue(clip, out var replacement)) clip = replacement;
+                if (AnimationUtility.GetObjectReferenceCurveBindings(clip).Any(binding => excludedPath?.Invoke(binding.path) != true)) continue;
+                var bindings = AnimationUtility.GetCurveBindings(clip).Where(binding => excludedPath?.Invoke(binding.path) != true).ToArray();
+                if (bindings.Length == 0 || bindings.Any(binding => binding.type != typeof(SkinnedMeshRenderer) ||
+                    !binding.propertyName.StartsWith("blendShape.", StringComparison.Ordinal) ||
+                    !VrChatExpressionSampler.IsConstant(AnimationUtility.GetEditorCurve(clip, binding)))) continue;
+                result.Add(index, clip);
+            }
             return result;
         }
 

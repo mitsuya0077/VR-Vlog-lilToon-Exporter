@@ -14,7 +14,8 @@ namespace VRVlog.LilToonExporter
 {
     internal static class VrChatExpressionSampler
     {
-        internal static VrChatExpressionMenu.Source Analyze(GameObject avatar, Func<string, bool> excludedPath = null, VrChatMenuImportPolicy menuPolicy = null)
+        internal static VrChatExpressionMenu.Source Analyze(GameObject avatar, Func<string, bool> excludedPath = null, VrChatMenuImportPolicy menuPolicy = null,
+            GameObject authoringSource = null)
         {
             var source = VrChatExpressionMenu.Read(avatar, menuPolicy);
             try
@@ -29,7 +30,7 @@ namespace VRVlog.LilToonExporter
                     catch (InvalidOperationException error) { entry.Error = error.Message; }
                 }
                 VrChatGestureExpressions.Add(avatar, source, excludedPath);
-                FaceEmoExpressions.Add(avatar, source, excludedPath);
+                FaceEmoExpressions.Add(avatar, source, excludedPath, authoringSource);
             }
             finally { EditorUtility.ClearProgressBar(); }
             return source;
@@ -40,9 +41,158 @@ namespace VRVlog.LilToonExporter
         internal static List<MorphValue> Sample(GameObject avatar, RuntimeAnimatorController runtime,
             IDictionary<string, float> defaults, IDictionary<string, float> selected, Func<string, bool> excludedPath = null,
             VrChatExpressionMenu.Source metadata = null, IList<MorphValue> unevaluated = null)
+            => Evaluate(avatar, runtime, defaults, selected, excludedPath, metadata, unevaluated,
+                StationaryBindings(avatar, runtime, excludedPath));
+
+        internal static List<MorphValue> SampleDefaults(GameObject avatar, RuntimeAnimatorController runtime,
+            IDictionary<string, float> defaults, Func<string, bool> excludedPath = null, VrChatExpressionMenu.Source metadata = null)
+        {
+            if (runtime == null) return new List<MorphValue>();
+            var stationary = StationaryBindings(avatar, runtime, excludedPath);
+            if (stationary.Count == 0) return new List<MorphValue>();
+            var unresolved = new List<MorphValue>();
+            var values = Evaluate(avatar, runtime, defaults, new Dictionary<string, float>(), excludedPath, metadata, unresolved, stationary);
+            if (unresolved.Count != 0)
+                throw new InvalidOperationException("常時適用するFXの変形を確定できません。統合後のBlendShape設定を確認してください。");
+            return values;
+        }
+
+        // Invoke on the committed post-Transforming copy. Native animation
+        // evaluation occurs on another disposable copy and writes back weights
+        // only; shared meshes/controllers and the source remain untouched.
+        internal static void ApplyMergedDefaults(GameObject source, GameObject clone, ICollection<string> warnings = null,
+            VrChatMenuImportPolicy menuPolicy = null, Func<string, bool> excludedPath = null)
+        {
+            if (source == null || clone == null) throw new ArgumentNullException(source == null ? nameof(source) : nameof(clone));
+            if (source == clone || clone.transform.IsChildOf(source.transform) || source.transform.IsChildOf(clone.transform) || EditorUtility.IsPersistent(clone))
+                throw new InvalidOperationException("FXの初期状態には原本から独立した書き出し用コピーが必要です。");
+            var metadata = VrChatExpressionMenu.Read(clone, menuPolicy);
+            var values = SampleDefaults(clone, metadata.Controller, metadata.Defaults, excludedPath, metadata);
+            foreach (var value in values)
+            {
+                var renderer = FindRenderer(clone, value.Path);
+                var index = renderer.sharedMesh.GetBlendShapeIndex(value.Shape);
+                if (index < 0) throw new InvalidOperationException("常時適用するFXのBlendShapeが見つかりません: " + value.Shape);
+                renderer.SetBlendShapeWeight(index, value.Weight);
+            }
+            if (values.Count > 0) warnings?.Add("統合後のFXにある常時適用の顔・体形設定を、一時コピーと表情の初期状態へ反映しました。");
+        }
+
+        // Direct clips (including moving gestures) bypass menu parameter
+        // sampling. Probe their scalar animation properties through the same
+        // native layer blending, then transform their curves by that response.
+        // Permanent layers contain only stationary morph curves, so this
+        // response is affine and preserves weighted/stepped tangent timing.
+        internal static void ApplyPermanentOverrides(GameObject avatar, RuntimeAnimatorController runtime,
+            VrChatExpressionMenu.Entry entry, int? layerIndex = null, bool writeDefaults = false, Func<string, bool> excludedPath = null)
+        {
+            if (runtime == null || entry.Error != null || entry.Values.Count == 0) return;
+            var stationaryBindings = StationaryBindings(avatar, runtime, excludedPath);
+            if (stationaryBindings.Count == 0) return;
+            var permanent = ExpressionDependencies.StationaryLayers(runtime, excludedPath);
+            var originalLayers = ExpressionDependencies.Controller(runtime).layers;
+            if (layerIndex.HasValue && (layerIndex.Value < 0 || layerIndex.Value >= originalLayers.Length))
+                throw new InvalidOperationException("表情のFXレイヤーを特定できません。");
+            if (layerIndex.HasValue && originalLayers[layerIndex.Value].blendingMode == AnimatorLayerBlendingMode.Additive)
+                throw new InvalidOperationException("Additiveレイヤーの表情クリップと常時適用FXの合成は、加算の基準ポーズを確定できないため省略しました。");
+            var owned = new List<UnityEngine.Object>();
+            try
+            {
+                List<MorphValue> Probe(float input)
+                {
+                    var clip = new AnimationClip { name = "VRVlog expression override probe", hideFlags = HideFlags.HideAndDontSave }; owned.Add(clip);
+                    foreach (var value in entry.Values)
+                        AnimationUtility.SetEditorCurve(clip, EditorCurveBinding.FloatCurve(value.Path, typeof(SkinnedMeshRenderer), "blendShape." + value.Shape),
+                            AnimationCurve.Constant(0, 1, input));
+                    var controller = new AnimatorController { name = "VRVlog expression override probe", hideFlags = HideFlags.HideAndDontSave }; owned.Add(controller);
+                    var layers = new List<AnimatorControllerLayer>();
+                    AnimatorControllerLayer Layer(AnimatorControllerLayer original, AnimationClip motion, bool defaults, float weight)
+                    {
+                        var layerName = original?.name ?? "Direct expression";
+                        // Unity hashes a root state's path using its root
+                        // machine name. Keep that equal to the layer name,
+                        // as AnimatorController.AddLayer does, so the native
+                        // state can be resolved by fixed-pose validation.
+                        var machine = new AnimatorStateMachine { name = layerName, hideFlags = HideFlags.HideAndDontSave }; owned.Add(machine);
+                        var state = machine.AddState("Probe"); owned.Add(state); state.motion = motion; state.writeDefaultValues = defaults;
+                        machine.defaultState = state;
+                        return new AnimatorControllerLayer { name = layerName, stateMachine = machine,
+                            avatarMask = original?.avatarMask, blendingMode = original?.blendingMode ?? AnimatorLayerBlendingMode.Override,
+                            defaultWeight = weight, syncedLayerIndex = -1, iKPass = false };
+                    }
+                    // FaceEmo's registered clips are standalone expressions.
+                    // They form the base; the prepared avatar's permanent FX
+                    // layers remain above them. Gestures retain their FX slot.
+                    if (!layerIndex.HasValue) layers.Add(Layer(null, clip, false, 1));
+                    for (var index = 0; index < originalLayers.Length; index++)
+                    {
+                        var original = originalLayers[index];
+                        var selected = layerIndex == index;
+                        permanent.TryGetValue(index, out var fixedClip);
+                        if (fixedClip != null && !AnimationUtility.GetCurveBindings(fixedClip).Any(stationaryBindings.Contains)) fixedClip = null;
+                        var motion = selected ? clip : fixedClip;
+                        layers.Add(Layer(original, motion, selected ? writeDefaults : motion != null && original.stateMachine.defaultState.writeDefaultValues,
+                            motion == null ? 0 : index == 0 ? 1 : original.defaultWeight));
+                    }
+                    controller.layers = layers.ToArray();
+                    var seeds = new HashSet<EditorCurveBinding>(stationaryBindings);
+                    seeds.UnionWith(AnimationUtility.GetCurveBindings(clip));
+                    return Evaluate(avatar, controller, new Dictionary<string, float>(), new Dictionary<string, float>(), excludedPath,
+                        null, new List<MorphValue>(), seeds);
+                }
+                var zero = Probe(0).ToDictionary(value => (value.Path, value.Shape));
+                var full = Probe(100).ToDictionary(value => (value.Path, value.Shape));
+                if (!zero.Keys.ToHashSet().SetEquals(full.Keys))
+                    throw new InvalidOperationException("常時適用FXと表情の影響範囲を確定できません。");
+                var responses = zero.ToDictionary(pair => pair.Key, pair => (Offset: (double)pair.Value.Weight,
+                    Scale: (full[pair.Key].Weight - pair.Value.Weight) / 100.0));
+                foreach (var value in entry.Values)
+                    if (responses.TryGetValue((value.Path, value.Shape), out var response))
+                        value.Weight = (float)(response.Offset + response.Scale * value.Weight);
+                var existing = new HashSet<(string, string)>(entry.Values.Select(value => (value.Path, value.Shape)));
+                foreach (var pair in zero)
+                    if (existing.Add(pair.Key)) entry.Values.Add(pair.Value);
+                foreach (var animation in entry.Animation)
+                {
+                    if (!responses.TryGetValue((animation.Path, animation.Shape), out var response)) continue;
+                    foreach (var key in animation.Curve.Keys)
+                    {
+                        key.Value = response.Offset + response.Scale * key.Value;
+                        if (key.InTangent.HasValue) key.InTangent *= response.Scale;
+                        if (key.OutTangent.HasValue) key.OutTangent *= response.Scale;
+                    }
+                    animation.Curve.Validate();
+                }
+                entry.Animation.RemoveAll(animation => { animation.Curve.Range(out var minimum, out var maximum); return minimum == maximum; });
+                if (entry.Animation.Count == 0) { entry.Duration = 0; entry.Loop = false; }
+            }
+            finally
+            {
+                foreach (var asset in owned) if (asset != null) UnityEngine.Object.DestroyImmediate(asset);
+            }
+        }
+
+        private static HashSet<EditorCurveBinding> StationaryBindings(GameObject avatar, RuntimeAnimatorController runtime,
+            Func<string, bool> excludedPath)
+        {
+            var result = ExpressionDependencies.StationaryMorphBindings(runtime, excludedPath);
+            // Unused inactive wardrobe layers cannot become a reason to sample
+            // another outfit or reject an otherwise retained facial expression.
+            result.RemoveWhere(binding =>
+            {
+                var target = string.IsNullOrEmpty(binding.path) ? avatar.transform : avatar.transform.Find(binding.path);
+                var renderer = target == null ? null : target.GetComponent<SkinnedMeshRenderer>();
+                return renderer == null || !renderer.enabled || !renderer.gameObject.activeInHierarchy || renderer.sharedMesh == null;
+            });
+            return result;
+        }
+
+        private static List<MorphValue> Evaluate(GameObject avatar, RuntimeAnimatorController runtime,
+            IDictionary<string, float> defaults, IDictionary<string, float> selected, Func<string, bool> excludedPath,
+            VrChatExpressionMenu.Source metadata, IList<MorphValue> unevaluated, IEnumerable<EditorCurveBinding> initialMorphs)
         {
             var originalController = ExpressionDependencies.Controller(runtime);
-            var dependencies = ExpressionDependencies.Analyze(runtime, selected.Keys, excludedPath, metadata, defaults, selected);
+            var dependencies = ExpressionDependencies.Analyze(runtime, selected.Keys, excludedPath, metadata, defaults, selected, initialMorphs);
             dependencies.Layers.ExceptWith(FindExcludedLayers(originalController, runtime, excludedPath, dependencies.Parameters));
             var affected = dependencies.Layers.OrderBy(i => i).ToArray();
             if (affected.Length == 0) throw new InvalidOperationException("このメニューに対応するFXの表情がありません。");
@@ -247,7 +397,7 @@ namespace VRVlog.LilToonExporter
             }
         }
 
-        private static bool IsConstant(AnimationCurve curve)
+        internal static bool IsConstant(AnimationCurve curve)
         {
             if (curve == null || curve.length == 0) return true;
             var keys = curve.keys;

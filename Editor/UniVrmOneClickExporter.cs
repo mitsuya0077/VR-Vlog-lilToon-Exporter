@@ -70,7 +70,7 @@ namespace VRVlog.LilToonExporter
             // cached source of expression weights after the user edits a clip.
             var menuPolicy = ExportRecoveryReport.MenuImportPolicy(source, recoveryOptions);
             recoveryReport.Stage = "表情メニュー読込";
-            var menu = VrChatExpressionSampler.Analyze(source, exclusions.ContainsPath, menuPolicy);
+            var menu = VrChatExpressionMenu.Read(source, menuPolicy);
             exclusions.FilterExpressions(menu, warnings);
             var sourceBlink = BlinkExportSession.Resolve(source, blinkOptions, exclusions.Contains, suppressSharedTextureEmission, suppressHdrTextureEmission);
             using var poses = new PoseExportSession(source, poseOptions, exclusions.Contains, menuPolicy);
@@ -81,16 +81,17 @@ namespace VRVlog.LilToonExporter
             var temporaryMeshes = new List<Mesh>();
             var temporaryTextures = new List<Texture2D>();
             var fixedRootJoints = new HashSet<Transform>();
+            ExportOptimizationBindings optimizerBindings = null;
             try
             {
                 var recovery = recoveryOptions == null || recoveryOptions.Actions.Count == 0 ? null : new ExportRecoveryCopySession(source, clone, temporaryMaterials, recoveryOptions, recoveryReport, bakeOptions);
                 using var blink = sourceBlink.ForClone(source, clone);
                 using var gimmicks = new ExportGimmickSession(source, clone, gimmickOptions);
-                var expressionBindings = new PreparedExpressionBindings(clone, menu);
+                bool ExcludedBinding(string path) => exclusions.ContainsPath(path) || gimmicks.ContainsPath(path);
                 MaAppearanceSnapshot.Apply(source, clone, temporaryMeshes, exclusions, warnings);
                 PoseExportSession.RemoveAplFromCopy(source, clone);
                 recovery?.Apply(warnings);
-                gimmicks.Apply(expressionBindings, menu, warnings);
+                gimmicks.Apply(null, menu, warnings);
                 if (exporterVersion == null) LilToonMainTextureBaker.ValidateAvatar(clone, options: bakeOptions);
                 // Omission consent follows source identity before plugins clone
                 // materials. All actual baking waits for the final appearance.
@@ -102,24 +103,38 @@ namespace VRVlog.LilToonExporter
                 if (requiresPreparation)
                     SkinnedMeshFallbackWeights.Preserve(clone, temporaryMeshes, warnings, fixedRootJoints);
                 var unifiedPreparation = trackingProfile == null ? new UnifiedExpressionPreparation(clone, suppressSharedTextureEmission: suppressSharedTextureEmission, suppressHdrTextureEmission: suppressHdrTextureEmission) : null;
+                List<VrmMenuExpressions.Expression> expressions = null;
                 recoveryReport.Stage = "ビルド処理";
                 using var preparation = NdmfExportPreparation.Prepare(source, clone, warnings, (copy, original) =>
                 {
                     recoveryReport.Track(copy, original);
                     recovery?.Track(copy, original);
+                }, afterTransforming: transformed =>
+                {
+                    // Sample the FX controller MA actually built, including
+                    // permanent overrides, before AAO edits topology or routes.
+                    var preparedMenuPolicy = menuPolicy?.WithOwnedCopies(value => transformed.IsolatedCopyOf(value as UnityEngine.Object));
+                    VrChatExpressionSampler.ApplyMergedDefaults(source, clone, warnings, preparedMenuPolicy, ExcludedBinding);
+                    menu = VrChatExpressionSampler.Analyze(clone, ExcludedBinding, preparedMenuPolicy, source);
+                    var expressionBindings = new PreparedExpressionBindings(clone, menu);
+                    gimmicks.Apply(expressionBindings, menu, warnings);
+                    unifiedPreparation?.Verify(blink.RequiresUnifiedEvidence);
+                    recoveryReport.Stage = "状態確定";
+                    poses.CollectPrepared(clone, warnings, preparedMenuPolicy);
+                    expressionBindings.Capture(menu);
+                    blink.Bake(clone, temporaryMeshes);
+                    AvatarBaseShape.Preserve(clone, clone, temporaryMeshes, warnings);
+                    expressions = VrChatExpressionBaker.Bake(null, clone, menu, temporaryMeshes, warnings, expressionBindings);
+                    optimizerBindings = ExportOptimizationBindings.Capture(clone, trackingProfile, unifiedPreparation);
                 });
-                gimmicks.Apply(expressionBindings, menu, warnings);
-                unifiedPreparation?.Verify(blink.RequiresUnifiedEvidence);
-                recoveryReport.Stage = "状態確定";
-                // Unsaved menu assets are deliberately isolated before NDMF
-                // runs. Preserve branch identity through those exact copies,
-                // while still rejecting a menu replaced by a plugin.
-                var preparedMenuPolicy = menuPolicy?.WithOwnedCopies(value => preparation.IsolatedCopyOf(value as UnityEngine.Object));
-                poses.CollectPrepared(clone, warnings, preparedMenuPolicy);
-                expressionBindings.Capture(menu);
-                blink.Bake(clone, temporaryMeshes);
-                AvatarBaseShape.Preserve(clone, clone, temporaryMeshes, warnings);
-                var expressions = VrChatExpressionBaker.Bake(null, clone, menu, temporaryMeshes, warnings, expressionBindings);
+                optimizerBindings.ValidateAndApply((copy, original) =>
+                {
+                    if (!(copy is Material copiedMaterial) || !(original is Material originalMaterial)) return;
+                    recoveryReport.Track(copiedMaterial, originalMaterial);
+                    recovery?.Track(copiedMaterial, originalMaterial);
+                });
+                blink.Remap(optimizerBindings);
+                RemapMenuExpressions(expressions, optimizerBindings);
                 // Authoring passes may restore source material references. Reapply
                 // only the selected, source-identity recipe to the owned copy.
                 recovery?.Apply();
@@ -142,7 +157,7 @@ namespace VRVlog.LilToonExporter
                 var springs = PhysBoneSpringExport.Convert(source, clone, warnings);
                 recoveryReport.Stage = "材質保存";
                 ReplaceLilToonMaterials(clone, temporaryMaterials, temporaryTextures, fallbackWarnings, suppressSharedTextureEmission);
-                unifiedPreparation?.Verify(blink.RequiresUnifiedEvidence);
+                optimizerBindings.VerifyMaterialEvidence();
                 MakeRendererMeshesUnique(clone, temporaryMeshes);
                 recoveryReport.Stage = "VRM変換";
                 var exported = Vrm10AppearanceExporter.Export(
@@ -156,12 +171,13 @@ namespace VRVlog.LilToonExporter
                         fullSnapshot?.Bind(converter, model, storage);
                         blink.Bind(converter, model, storage);
                         poses.Bind(converter, model, storage);
+                        optimizerBindings.Bind(converter, model, storage);
                     });
                 recoveryReport.Stage = "出力検査";
                 exported = ExportSkinRoots.Repair(exported, warnings);
                 exported = blink.Apply(VrmExpressionBindings.AddMissing(VrmMenuExpressions.Add(exported, expressions), warnings, inferBlink: false));
-                if (trackingProfile != null) exported = VrmTrackingExpressions.Add(exported, trackingProfile);
-                else exported = VrmUnifiedExpressions.Add(exported, warnings);
+                if (trackingProfile != null) exported = optimizerBindings.ApplyTracking(exported);
+                else exported = optimizerBindings.ApplyUnified(exported, warnings);
                 if (exporterVersion != null)
                 {
                     // The dedicated snapshot predates fallback baking. Its binary
@@ -182,10 +198,25 @@ namespace VRVlog.LilToonExporter
             }
             finally
             {
+                optimizerBindings?.Dispose();
                 UnityEngine.Object.DestroyImmediate(clone);
                 foreach (var material in temporaryMaterials) UnityEngine.Object.DestroyImmediate(material);
                 foreach (var mesh in temporaryMeshes) UnityEngine.Object.DestroyImmediate(mesh);
                 foreach (var texture in temporaryTextures) UnityEngine.Object.DestroyImmediate(texture);
+            }
+        }
+
+        private static void RemapMenuExpressions(IEnumerable<VrmMenuExpressions.Expression> expressions,
+            ExportOptimizationBindings bindings)
+        {
+            foreach (var expression in expressions)
+            {
+                for (var index = 0; index < expression.Targets.Count; index++)
+                    expression.Targets[index] = bindings.MapGeneratedName(expression.Targets[index]);
+                if (expression.Animation == null) continue;
+                foreach (var channel in expression.Animation.Channels)
+                    foreach (var point in channel.Points)
+                        if (point.Target != null) point.Target = bindings.MapGeneratedName(point.Target);
             }
         }
 

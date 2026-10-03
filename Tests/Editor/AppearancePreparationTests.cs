@@ -68,12 +68,18 @@ namespace VRVlog.LilToonExporter.Tests
             try
             {
                 MaAppearanceSnapshot.Apply(source, clone, owned);
+                Assert.That(clone.transform.Find("Hidden outfit").gameObject.activeSelf, Is.False,
+                    "The appearance snapshot must apply the toggle before the build pipeline.");
                 using (NdmfExportPreparation.Prepare(source, clone))
                 {
                     var prepared = clone.GetComponentInChildren<SkinnedMeshRenderer>();
                     Assert.That(prepared.GetBlendShapeWeight(0), Is.EqualTo(75));
                     Assert.That(prepared.sharedMaterial.GetColor("_Color"), Is.EqualTo(Color.red));
-                    Assert.That(clone.transform.Find("Hidden outfit").gameObject.activeSelf, Is.False);
+                    // MA's Optimizing GC pass may remove this empty object
+                    // when no platform animation refers to it. A surviving
+                    // target must still have the resolved hidden state.
+                    var preparedHidden = clone.transform.Find("Hidden outfit");
+                    Assert.That(preparedHidden == null || !preparedHidden.gameObject.activeSelf, Is.True);
                     AvatarBaseShape.Preserve(clone, clone, owned, null);
                     Assert.That(prepared.sharedMesh.vertices[0].x, Is.EqualTo(4));
                     Assert.That(prepared.GetBlendShapeWeight(0), Is.Zero);

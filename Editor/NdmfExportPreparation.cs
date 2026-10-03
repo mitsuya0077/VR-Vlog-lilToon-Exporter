@@ -21,7 +21,7 @@ namespace VRVlog.LilToonExporter
         private string temporaryAssetPath, temporaryAssetGuid;
         private const string MaNamespace = "nadena.dev.modular_avatar.core.";
         private const string CompatibilityMessage =
-            "Modular Avatar の準備に必要な NDMF API を利用できません。NDMF " + DependencyPolicy.NdmfMinimum + " 以降の 1.x が必要です。確認済み構成: MA " + DependencyPolicy.ModularAvatarReference + " / NDMF " + DependencyPolicy.NdmfReference + "。" + DependencyPolicy.Recovery;
+            "アバターの準備に必要な NDMF API を利用できません。NDMF " + DependencyPolicy.NdmfMinimum + " 以降の 1.x が必要です。確認済み構成: MA " + DependencyPolicy.ModularAvatarReference + " / NDMF " + DependencyPolicy.NdmfReference + "。" + DependencyPolicy.Recovery;
 
         internal static bool NeedsProcessing(GameObject avatar) => avatar != null && RelevantAuthoring(avatar).Count != 0;
 
@@ -31,8 +31,10 @@ namespace VRVlog.LilToonExporter
         private static bool IsAuthoringTag(Type type)
         {
             for (var current = type; current != null; current = current.BaseType)
-                if (current.FullName == MaNamespace + "AvatarTagComponent") return true;
-            return type.GetInterfaces().Any(i => i.FullName == "nadena.dev.ndmf.runtime.INDMFEditorOnly");
+                if (current.FullName == MaNamespace + "AvatarTagComponent" ||
+                    current.FullName == "Anatawa12.AvatarOptimizer.AvatarTagComponent") return true;
+            return type.GetInterfaces().Any(i => i.FullName == "nadena.dev.ndmf.INDMFEditorOnly" ||
+                i.FullName == "nadena.dev.ndmf.runtime.INDMFEditorOnly");
         }
 
         private static HashSet<Component> RelevantAuthoring(GameObject avatar, Func<Transform, bool> excluded = null)
@@ -142,23 +144,26 @@ namespace VRVlog.LilToonExporter
         }
 
         internal static NdmfExportPreparation Prepare(GameObject source, GameObject clone, ICollection<string> warnings = null,
-            Action<Material, Material> materialCopyObserver = null)
+            Action<Material, Material> materialCopyObserver = null, Action<NdmfExportPreparation> afterTransforming = null)
         {
             RequireOwnedCopy(source, clone);
             if (!NeedsProcessing(clone))
             {
                 PruneUnusedAuthoring(clone);
-                return new NdmfExportPreparation();
+                var lease = new NdmfExportPreparation();
+                try { afterTransforming?.Invoke(lease); return lease; }
+                catch { lease.Dispose(); throw; }
             }
             ValidateSource(clone);
             var processor = FindType("nadena.dev.ndmf.AvatarProcessor");
             var package = processor != null ? PackageInfo.FindForAssembly(processor.Assembly) : null;
             var bridge = Bridge.Resolve(FindType, package?.version);
-            return ProcessClone(source, clone, bridge, warnings, materialCopyObserver);
+            return ProcessClone(source, clone, bridge, warnings, materialCopyObserver, afterTransforming);
         }
 
         internal static NdmfExportPreparation ProcessClone(GameObject source, GameObject clone, Bridge bridge,
-            ICollection<string> warnings = null, Action<Material, Material> materialCopyObserver = null)
+            ICollection<string> warnings = null, Action<Material, Material> materialCopyObserver = null,
+            Action<NdmfExportPreparation> afterTransforming = null)
         {
             RequireOwnedCopy(source, clone);
             // NDMF processes inactive tags too. Remove only irrelevant tags on
@@ -192,6 +197,16 @@ namespace VRVlog.LilToonExporter
                     try
                     {
                         Invoke(() => bridge.Process.Invoke(null, new[] { context, bridge.First, bridge.Transforming }));
+                        if (IsSuccessful(bridge, context))
+                        {
+                            if (!requiredMorphs.IsSubsetOf(ExportMorphs(clone)))
+                                throw new InvalidOperationException("Modular Avatar / NDMF の処理で書き出し用の表情が失われました。メッシュや BlendShape を変更する追加ツールの設定を確認してください。");
+                            // Phase-end extension cleanup commits MA's virtual FX
+                            // controller. Evaluate that controller and declare the
+                            // viewer's morph dependencies before mesh optimization.
+                            afterTransforming?.Invoke(lease);
+                            Invoke(() => bridge.Process.Invoke(null, new[] { context, bridge.Optimizing, bridge.Optimizing }));
+                        }
                     }
                     catch (Exception error) { processError = error; }
                     try { Invoke(() => bridge.Finish.Invoke(context, null)); }
@@ -200,13 +215,19 @@ namespace VRVlog.LilToonExporter
                         processError = processError == null ? error : new AggregateException(processError, error);
                     }
                     if (processError != null)
+                    {
+                        // A user cancellation in expression sampling remains a
+                        // cancellation after Finish and owned-asset cleanup.
+                        if (processError is OperationCanceledException) throw processError;
                         throw BuildFailure(context, processError);
+                    }
                     // NDMF records plugin exceptions instead of always rethrowing.
-                    if (!(Invoke(() => bridge.Successful.GetValue(context)) is bool success) || !success)
-                        throw BuildFailure(context, null);
-                    if (!requiredMorphs.IsSubsetOf(ExportMorphs(clone)))
+                    RequireSuccessful(bridge, context);
+                    // The exporter callback validates scoped AAO mappings;
+                    // legacy callers still require exact generated names.
+                    if (afterTransforming == null && !requiredMorphs.IsSubsetOf(ExportMorphs(clone)))
                         throw new InvalidOperationException("Modular Avatar / NDMF の処理で書き出し用の表情が失われました。メッシュや BlendShape を変更する追加ツールの設定を確認してください。");
-                    warnings?.Add("Modular Avatar / NDMF の衣装・追従設定を一時コピーに適用しました（最適化フェーズは実行していません）。");
+                    warnings?.Add("Modular Avatar / NDMF の衣装・追従・メッシュ編集を一時コピーに適用しました。");
                     return lease;
                 }
                 finally
@@ -228,6 +249,14 @@ namespace VRVlog.LilToonExporter
                 throw;
             }
         }
+
+        private static void RequireSuccessful(Bridge bridge, object context)
+        {
+            if (!IsSuccessful(bridge, context)) throw BuildFailure(context, null);
+        }
+
+        private static bool IsSuccessful(Bridge bridge, object context) =>
+            Invoke(() => bridge.Successful.GetValue(context)) is bool success && success;
 
         private static void RequireOwnedCopy(GameObject source, GameObject clone)
         {
@@ -392,7 +421,9 @@ namespace VRVlog.LilToonExporter
                 {
                     var name = mesh.GetBlendShapeName(index);
                     if (name.StartsWith("__VRVlog_Menu_", StringComparison.Ordinal) ||
-                        name.StartsWith("__VRVlog_Anim_", StringComparison.Ordinal)) result.Add(name);
+                        name.StartsWith("__VRVlog_Anim_", StringComparison.Ordinal) ||
+                        name.StartsWith("__VRVlog_Blink_", StringComparison.Ordinal) ||
+                        name.StartsWith("__VRVlog_BlinkNone_", StringComparison.Ordinal)) result.Add(name);
                 }
             }
             return result;
@@ -501,13 +532,14 @@ namespace VRVlog.LilToonExporter
 
         // The phase-limited entry point and Finish are internal in the official
         // 1.8.3, 1.13.0 and 1.14.8 sources. Validate the whole bridge before any
-        // processing; public ProcessAvatar would also run mesh optimization.
+        // processing. The same context must span both ranges so plugins run
+        // once and the final extension cleanup can publish their mappings.
         internal sealed class Bridge
         {
             internal ConstructorInfo Context, DirectoryScope;
             internal MethodInfo Process, Finish, PrimaryPlatform;
             internal PropertyInfo Successful, AssetSaver, GenericPlatform;
-            internal object First, Transforming;
+            internal object First, Transforming, Optimizing;
 
             internal static Bridge Resolve(Func<string, Type> find, string version)
             {
@@ -535,13 +567,15 @@ namespace VRVlog.LilToonExporter
                     PrimaryPlatform = registry.GetMethod("GetPrimaryPlatformForAvatar", BindingFlags.Public | BindingFlags.Static, null, new[] { typeof(GameObject) }, null),
                     GenericPlatform = generic.GetProperty("Instance", BindingFlags.Public | BindingFlags.Static),
                     First = phase.GetProperty("First", staticMembers)?.GetValue(null),
-                    Transforming = phase.GetField("Transforming", staticMembers)?.GetValue(null)
+                    Transforming = phase.GetField("Transforming", staticMembers)?.GetValue(null),
+                    Optimizing = phase.GetField("Optimizing", staticMembers)?.GetValue(null)
                 };
                 if (result.Context == null || result.DirectoryScope == null || !typeof(IDisposable).IsAssignableFrom(directory) ||
                     result.Process?.ReturnType != typeof(void) || result.Finish?.ReturnType != typeof(void) ||
                     result.Successful?.PropertyType != typeof(bool) || result.Successful.GetMethod == null || result.AssetSaver?.GetMethod == null ||
                     result.PrimaryPlatform?.ReturnType != provider || result.GenericPlatform?.PropertyType != provider ||
-                    !phase.IsInstanceOfType(result.First) || !phase.IsInstanceOfType(result.Transforming))
+                    !phase.IsInstanceOfType(result.First) || !phase.IsInstanceOfType(result.Transforming) ||
+                    !phase.IsInstanceOfType(result.Optimizing))
                     throw new InvalidOperationException(CompatibilityMessage);
                 return result;
             }

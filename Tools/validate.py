@@ -192,7 +192,9 @@ assert "using PackageManagerPackageInfo = UnityEditor.PackageManager.PackageInfo
 assert "PackageManagerPackageInfo FindLilToonPackage()" in window
 assert "PackageManagerPackageInfo.GetAllRegisteredPackages()" in window
 assert "Vrm10AppearanceExporter.Export" in one_click
-assert one_click.index("NdmfExportPreparation.ValidateSource(source,") < one_click.index("VrChatExpressionSampler.Analyze(source,")
+assert one_click.index("NdmfExportPreparation.ValidateSource(source,") < one_click.index("VrChatExpressionMenu.Read(source,")
+assert one_click.index("VrChatExpressionSampler.ApplyMergedDefaults(source, clone,") < one_click.index("VrChatExpressionSampler.Analyze(clone,") < one_click.index("VrChatExpressionBaker.Bake(null, clone,") < one_click.index("ExportOptimizationBindings.Capture(clone,")
+assert one_click.index("optimizerBindings.ValidateAndApply(") < one_click.index("LilToonFullSnapshot.Capture(clone,") < one_click.index("Vrm10AppearanceExporter.Export(")
 assert one_click.index("NdmfExportPreparation.Prepare(source, clone,") < one_click.index("VrChatExpressionBaker.Bake(null, clone,")
 assert one_click.index("SkinnedMeshFallbackWeights.Preserve(clone,") < one_click.index("NdmfExportPreparation.Prepare(source, clone,") < one_click.index("AvatarBaseShape.Preserve(clone, clone,")
 assert one_click.index("NdmfExportPreparation.Prepare(source, clone,") < one_click.rindex("SkinnedMeshFallbackWeights.Preserve(clone,") < one_click.index("Vrm10AppearanceExporter.Export(")
@@ -324,7 +326,9 @@ assert 'fullSnapshot?.Bind(converter, model, storage);' in one_click
 assert 'blink.Bind(converter, model, storage);' in one_click
 assert 'excludedExpressions' not in window and 'DrawExpressions' not in window
 assert 'var menuPolicy = ExportRecoveryReport.MenuImportPolicy(source, recoveryOptions);' in one_click
-assert 'var menu = VrChatExpressionSampler.Analyze(source, exclusions.ContainsPath, menuPolicy);' in one_click
+assert 'var menu = VrChatExpressionMenu.Read(source, menuPolicy);' in one_click
+assert 'bool ExcludedBinding(string path) => exclusions.ContainsPath(path) || gimmicks.ContainsPath(path);' in one_click
+assert 'VrChatExpressionSampler.Analyze(clone, ExcludedBinding, preparedMenuPolicy, source)' in one_click
 assert 'new PoseExportSession(source, poseOptions, exclusions.Contains, menuPolicy)' in one_click
 assert 'SkipVrChatMenus' in recovery and 'ExcludeMenuBranch' in recovery
 assert one_click.index('AvatarBaseShape.Preserve(clone, clone,') < one_click.index('VrChatExpressionBaker.Bake(') < one_click.index('Vrm10AppearanceExporter.Export(')
