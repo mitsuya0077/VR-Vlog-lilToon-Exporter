@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using System.Linq;
+using System.Reflection;
 using UniGLTF;
 using UniGLTF.Extensions.VRMC_vrm;
 using UniVRM10;
@@ -37,7 +38,10 @@ namespace VRVlog.LilToonExporter
         readonly Dictionary<VRM10Expression, ClipSnapshot> clips = new Dictionary<VRM10Expression, ClipSnapshot>();
         readonly List<Action<VRM10ObjectExpression, Dictionary<VRM10Expression, VRM10Expression>>> rebuildClips =
             new List<Action<VRM10ObjectExpression, Dictionary<VRM10Expression, VRM10Expression>>>();
-        readonly HashSet<string> capturedClipKeys = new HashSet<string>(StringComparer.Ordinal);
+        readonly HashSet<ExpressionPreset> capturedPresets = new HashSet<ExpressionPreset>();
+        readonly HashSet<object> capturedCustomClips = new HashSet<object>();
+        readonly object objectRegistry;
+        readonly MethodInfo assetReference;
         readonly List<(string Canonical, OptimizationMorphRoute Route)> unified = new List<(string, OptimizationMorphRoute)>();
         readonly List<(string Canonical, string Kind, OptimizationMaterialRoute Route)> materialEvidence =
             new List<(string, string, OptimizationMaterialRoute)>();
@@ -50,17 +54,27 @@ namespace VRVlog.LilToonExporter
         bool applied, disposed;
 
         internal static ExportOptimizationBindings Capture(GameObject clone, VrmTrackingProfile trackingProfile = null,
-            UnifiedExpressionPreparation preparation = null)
+            UnifiedExpressionPreparation preparation = null, object objectRegistry = null)
         {
             if (clone == null) throw new ArgumentNullException(nameof(clone));
             ExportRendererSelection.RequireActiveRoot(clone);
             if (EditorUtility.IsPersistent(clone)) throw new ArgumentException("An independent export copy is required.", nameof(clone));
-            return new ExportOptimizationBindings(clone, trackingProfile, preparation);
+            return new ExportOptimizationBindings(clone, trackingProfile, preparation, objectRegistry);
         }
 
-        ExportOptimizationBindings(GameObject clone, VrmTrackingProfile trackingProfile, UnifiedExpressionPreparation preparation)
+        ExportOptimizationBindings(GameObject clone, VrmTrackingProfile trackingProfile, UnifiedExpressionPreparation preparation, object objectRegistry)
         {
             avatar = clone;
+            this.objectRegistry = objectRegistry;
+            if (objectRegistry != null)
+            {
+                // AAO registers cloned expression assets with the build's
+                // public NDMF registry. Retain that provenance after Finish;
+                // clip names and CustomClips list positions are mutable.
+                var registryInterface = objectRegistry.GetType().GetInterfaces().FirstOrDefault(type => type.FullName == "nadena.dev.ndmf.IObjectRegistry");
+                assetReference = registryInterface?.GetMethod("GetReference", new[] { typeof(Object), typeof(bool) });
+                if (assetReference == null) throw new InvalidOperationException("最適化後の表情の移動情報を取得できませんでした。");
+            }
             if (clone.GetComponent<ExportOptimizationMarker>() != null)
                 throw new InvalidOperationException("表情の最適化保護が既に開始されています。");
             expectsMapping = clone.GetComponentsInChildren<Component>(true).Any(IsAvatarOptimizerAuthoring);
@@ -178,7 +192,8 @@ namespace VRVlog.LilToonExporter
             {
                 var original = entry.Clip;
                 if (original == null) continue;
-                capturedClipKeys.Add(entry.Preset + "\n" + original.name);
+                if (entry.Preset == ExpressionPreset.custom) capturedCustomClips.Add(ClipIdentity(original));
+                else capturedPresets.Add(entry.Preset);
                 if (!clips.ContainsKey(original))
                 {
                     var template = Object.Instantiate(original); template.name = original.name; owned.Add(template);
@@ -317,19 +332,25 @@ namespace VRVlog.LilToonExporter
         MorphTargetBinding[] RemapAuthoredMorphs(ClipSnapshot snapshot)
         {
             var result = new List<MorphTargetBinding>();
-            var mapped = new HashSet<(int Renderer, int Index)>();
+            var owners = new Dictionary<(int Renderer, int Index), OptimizationMorphRoute>();
             foreach (var item in snapshot.Morphs)
             {
                 if (item.Route == null) { result.Add(item.Binding); continue; }
                 var route = item.Route;
                 var index = route.Renderer.sharedMesh.GetBlendShapeIndex(route.Shape);
-                // AAO may combine two authored renderer/shape routes. Their
-                // verified equal weight must drive the output property once.
-                if (!mapped.Add((route.Renderer.GetInstanceID(), index))) continue;
+                var key = (route.Renderer.GetInstanceID(), index);
+                // Keep the winning original property's entire declaration
+                // array: pinned UniVRM playback uses its first binding. Only
+                // a distinct source property newly coalesced by AAO is omitted.
+                if (owners.TryGetValue(key, out var owner) && !ReferenceEquals(owner, route)) continue;
+                owners[key] = route;
                 result.Add(new MorphTargetBinding(AnimationUtility.CalculateTransformPath(route.Renderer.transform, avatar.transform), index, item.Binding.Weight));
             }
             return result.ToArray();
         }
+
+        object ClipIdentity(VRM10Expression clip) => assetReference == null ? clip :
+            assetReference.Invoke(objectRegistry, new object[] { clip, true }) ?? clip;
 
         void ApplyAuthored(Action<Object, Object> assetCopyObserver)
         {
@@ -370,7 +391,8 @@ namespace VRVlog.LilToonExporter
                     Scaling = item.Binding.Scaling, Offset = item.Binding.Offset }).ToArray();
                 replacements.Add(pair.Key, copy);
             }
-            var additional = settings.Expression?.Clips.Where(entry => entry.Clip != null && !capturedClipKeys.Contains(entry.Preset + "\n" + entry.Clip.name)).ToArray();
+            var additional = settings.Expression?.Clips.Where(entry => entry.Clip != null &&
+                (entry.Preset == ExpressionPreset.custom ? !capturedCustomClips.Contains(ClipIdentity(entry.Clip)) : !capturedPresets.Contains(entry.Preset))).ToArray();
             settings.Expression = new VRM10ObjectExpression();
             foreach (var rebuild in rebuildClips) rebuild(settings.Expression, replacements);
             if (additional != null) foreach (var entry in additional) settings.Expression.AddClip(entry.Preset, entry.Clip);

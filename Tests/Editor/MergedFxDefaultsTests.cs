@@ -155,11 +155,9 @@ namespace VRVlog.LilToonExporter.Tests
             Assert.That(avatar.GetComponentInChildren<SkinnedMeshRenderer>().GetBlendShapeWeight(2), Is.Zero);
         }
 
-        [TestCase(false, false)]
-        [TestCase(false, true)]
-        [TestCase(true, false)]
-        [TestCase(true, true)]
-        public void ParameterOrEmptyWriteDefaultsLayerAffectsDirectClipsWithoutPermanentMorphs(bool parameterCurve, bool standalone)
+        [TestCase(false)]
+        [TestCase(true)]
+        public void ParameterOrEmptyWriteDefaultsLayerPreservesStandaloneClipsWithoutPermanentMorphs(bool parameterCurve)
         {
             Menu(controller.layers[0].stateMachine);
             var clip = Clip(parameterCurve ? "Constant parameter only" : "Empty Write Defaults");
@@ -173,19 +171,52 @@ namespace VRVlog.LilToonExporter.Tests
             Assert.That(ExpressionDependencies.StationaryMorphBindings(controller).Count, Is.Zero,
                 "This regression must reach the former early-return path without a permanent morph layer.");
             var selected = (AnimationClip)controller.layers[0].stateMachine.states.Single(child => child.state.name == "Selected").state.motion;
-            var reference = standalone ? NativeStandalonePose(avatar, controller, selected, "Face")
-                : NativePose(avatar, controller, "Face", new Dictionary<string, int> { ["Menu"] = 1 });
-            var entry = new VrChatExpressionMenu.Entry { Name = standalone ? "Registered face" : "Gesture" };
+            var reference = NativeStandalonePose(avatar, controller, selected, "Face");
+            var entry = new VrChatExpressionMenu.Entry { Name = "Registered face" };
             VrChatGestureExpressions.ReadClip(avatar, selected, entry);
             var authored = entry.Values.Single(value => value.Shape == "Face size").Weight;
-            Assert.That(Math.Abs(reference.Weights["Face size"] - authored), Is.GreaterThan(.01),
-                "The native WD layer must actually reset the direct clip; otherwise the old early return would pass.");
+            Assert.That(reference.Weights["Face size"], Is.EqualTo(authored).Within(.01),
+                "This authored WD layer has no morph curves and must preserve the standalone expression.");
             var beforeController = EditorJsonUtility.ToJson(controller);
-            VrChatExpressionSampler.ApplyPermanentOverrides(avatar, controller, entry, standalone ? (int?)null : 0);
+            VrChatExpressionSampler.ApplyPermanentOverrides(avatar, controller, entry);
             Assert.That(entry.Error, Is.Null);
             Assert.That(entry.Values.Single(value => value.Shape == "Face size").Weight,
                 Is.EqualTo(reference.Weights["Face size"]).Within(.01));
             Assert.That(EditorJsonUtility.ToJson(controller), Is.EqualTo(beforeController));
+            Assert.That(avatar.GetComponentInChildren<SkinnedMeshRenderer>().GetBlendShapeWeight(1), Is.Zero);
+        }
+
+        [TestCase(false)]
+        [TestCase(true)]
+        public void FractionalGestureWithoutPermanentMorphsKeepsEquivalentParameterOrEmptyBaseLayer(bool parameterCurve)
+        {
+            var baseClip = Clip(parameterCurve ? "Constant base parameter" : "Empty base Write Defaults");
+            if (parameterCurve)
+            {
+                controller.AddParameter("Relay", AnimatorControllerParameterType.Float);
+                AnimationUtility.SetEditorCurve(baseClip, EditorCurveBinding.FloatCurve("", typeof(Animator), "Relay"), AnimationCurve.Constant(0, 1, 1));
+            }
+            var baseMachine = controller.layers[0].stateMachine;
+            baseMachine.defaultState = State(baseMachine, "Base", baseClip, writeDefaults: true);
+            var gestureMachine = AddLayer("Fractional gesture"); Menu(gestureMachine);
+            var layers = controller.layers; layers[1].defaultWeight = .5f; controller.layers = layers;
+            Assert.That(ExpressionDependencies.StationaryMorphBindings(controller).Count, Is.Zero);
+            Assert.That(VrChatExpressionSampler.HasEquivalentConstantStates(controller, 0), Is.True);
+            var selected = (AnimationClip)gestureMachine.states.Single(child => child.state.name == "Selected").state.motion;
+            var reference = NativePose(avatar, controller, "Face", new Dictionary<string, int> { ["Menu"] = 1 });
+            var entry = new VrChatExpressionMenu.Entry { Name = "Fractional gesture" };
+            VrChatGestureExpressions.ReadClip(avatar, selected, entry);
+            var authored = entry.Values.Single(value => value.Shape == "Face size").Weight;
+            Assert.That(authored, Is.EqualTo(75));
+            Assert.That(Math.Abs(reference.Weights["Face size"] - authored), Is.GreaterThan(.01),
+                "The authored non-base layer must change its clip weight in native Unity; the old early return would leave it at 75.");
+            var beforeController = EditorJsonUtility.ToJson(controller);
+            VrChatExpressionSampler.ApplyPermanentOverrides(avatar, controller, entry, 1);
+            Assert.That(entry.Error, Is.Null);
+            Assert.That(entry.Values.Single(value => value.Shape == "Face size").Weight,
+                Is.EqualTo(reference.Weights["Face size"]).Within(.01));
+            Assert.That(EditorJsonUtility.ToJson(controller), Is.EqualTo(beforeController));
+            Assert.That(controller.layers[1].defaultWeight, Is.EqualTo(.5f));
             Assert.That(avatar.GetComponentInChildren<SkinnedMeshRenderer>().GetBlendShapeWeight(1), Is.Zero);
         }
 
@@ -438,6 +469,118 @@ namespace VRVlog.LilToonExporter.Tests
                 Assert.That(controller.layers[1].defaultWeight, Is.EqualTo(.5f));
             }
             finally { Object.DestroyImmediate(clone); }
+        }
+
+        [Test]
+        public void NeutralFractionalOverrideKeepsMovingBaseWithoutBakingUnrelatedMorphs()
+        {
+            var descriptorType = AppDomain.CurrentDomain.GetAssemblies().Select(assembly => assembly.GetType("VRC.SDK3.Avatars.Components.VRCAvatarDescriptor"))
+                .FirstOrDefault(type => type != null);
+            if (descriptorType == null) Assert.Ignore("Install the real VRChat SDK for neutral FX integration.");
+            var baseClip = Clip("Moving base face");
+            AnimationUtility.SetEditorCurve(baseClip, EditorCurveBinding.FloatCurve("Face", typeof(SkinnedMeshRenderer), "blendShape.Face size"),
+                AnimationCurve.Linear(0, 0, 30, 100));
+            var baseMachine = controller.layers[0].stateMachine;
+            baseMachine.defaultState = State(baseMachine, "Moving face", baseClip);
+            Permanent(AddLayer("Fractional pupil"));
+            var layers = controller.layers; layers[1].defaultWeight = .5f; controller.layers = layers;
+            var sourceSkin = avatar.GetComponentInChildren<SkinnedMeshRenderer>();
+            sourceSkin.SetBlendShapeWeight(1, 12); sourceSkin.SetBlendShapeWeight(2, 20);
+            var descriptor = avatar.AddComponent(descriptorType);
+            using (var data = new SerializedObject(descriptor))
+            {
+                data.FindProperty("customizeAnimationLayers").boolValue = true;
+                var descriptorLayers = data.FindProperty("baseAnimationLayers"); descriptorLayers.arraySize = 1;
+                var item = descriptorLayers.GetArrayElementAtIndex(0);
+                var type = item.FindPropertyRelative("type"); type.enumValueIndex = Array.IndexOf(type.enumNames, "FX");
+                item.FindPropertyRelative("isDefault").boolValue = false;
+                item.FindPropertyRelative("animatorController").objectReferenceValue = controller;
+                data.ApplyModifiedPropertiesWithoutUndo();
+            }
+            var originalController = EditorJsonUtility.ToJson(controller);
+            var reference = NativePose(avatar, controller, "Face", new Dictionary<string, int>());
+            Assert.That(Math.Abs(reference.Weights["Face size"] - 12), Is.GreaterThan(.01), "The native base curve must actually move.");
+            var neutral = VrChatExpressionSampler.SampleDefaults(avatar, controller, Parameters(0));
+            Assert.That(neutral.Select(value => value.Shape), Is.EqualTo(new[] { "Pupil removal" }));
+            Assert.That(neutral.Single().Weight, Is.EqualTo(reference.Weights["Pupil removal"]).Within(.01));
+            var clone = Object.Instantiate(avatar);
+            try
+            {
+                VrChatExpressionSampler.ApplyMergedDefaults(avatar, clone);
+                var skin = clone.GetComponentInChildren<SkinnedMeshRenderer>();
+                Assert.That(skin.GetBlendShapeWeight(2), Is.EqualTo(reference.Weights["Pupil removal"]).Within(.01));
+                Assert.That(skin.GetBlendShapeWeight(1), Is.EqualTo(12), "The unrelated moving face must not be baked into the neutral mesh.");
+                Assert.That(skin.sharedMesh, Is.SameAs(mesh));
+                Assert.That(sourceSkin.GetBlendShapeWeight(1), Is.EqualTo(12));
+                Assert.That(sourceSkin.GetBlendShapeWeight(2), Is.EqualTo(20));
+                Assert.That(EditorJsonUtility.ToJson(controller), Is.EqualTo(originalController));
+            }
+            finally { Object.DestroyImmediate(clone); }
+        }
+
+        [TestCase(false)]
+        [TestCase(true)]
+        public void NeutralFractionalOverrideRejectsDelayedBaseActivityChanges(bool writeDefaultsFlip)
+        {
+            var baseClip = Clip("Base face", ("Face size", 0));
+            var machine = controller.layers[0].stateMachine;
+            var idle = State(machine, "Idle", baseClip); machine.defaultState = idle;
+            var future = State(machine, "After thirty seconds", writeDefaultsFlip ? baseClip : null, writeDefaults: writeDefaultsFlip);
+            var transition = idle.AddTransition(future); transition.hasExitTime = true; transition.exitTime = 30; transition.duration = 0;
+            Permanent(AddLayer("Fractional pupil"));
+            var layers = controller.layers; layers[1].defaultWeight = .5f; controller.layers = layers;
+            avatar.GetComponentInChildren<SkinnedMeshRenderer>().SetBlendShapeWeight(2, 20);
+            var before = EditorJsonUtility.ToJson(controller);
+            Assert.That(NativePose(avatar, controller, "Face", new Dictionary<string, int>()).Weights["Pupil removal"], Is.GreaterThan(20));
+            var error = Assert.Throws<InvalidOperationException>(() => VrChatExpressionSampler.SampleDefaults(avatar, controller, Parameters(0)));
+            Assert.That(error.Message, Does.Contain("時間で遷移"), "A state change beyond the sampling window must still be rejected.");
+            Assert.That(EditorJsonUtility.ToJson(controller), Is.EqualTo(before));
+            Assert.That(avatar.GetComponentInChildren<SkinnedMeshRenderer>().GetBlendShapeWeight(2), Is.EqualTo(20));
+        }
+
+        [TestCase(false)]
+        [TestCase(true)]
+        public void NeutralFractionalBaseActivityRetainsExternalAndWriterDependencies(bool external)
+        {
+            controller.AddParameter("BaseGate", AnimatorControllerParameterType.Float);
+            var machine = controller.layers[0].stateMachine;
+            var idle = State(machine, "Idle", Clip("Base idle", ("Face size", 0))); machine.defaultState = idle;
+            var selected = State(machine, "External base", Clip("Base selected", ("Face size", 75)));
+            var transition = idle.AddTransition(selected); transition.hasExitTime = false; transition.duration = 0;
+            transition.AddCondition(AnimatorConditionMode.Greater, .5f, "BaseGate");
+            Permanent(AddLayer("Fractional pupil"));
+            var layers = controller.layers; layers[1].defaultWeight = .5f; controller.layers = layers;
+            var metadata = new VrChatExpressionMenu.Source();
+            if (external) metadata.ExternalParameters.Add("BaseGate");
+            else
+            {
+                var writer = AddLayer("Delayed base gate writer"); var clip = Clip("Changing base gate");
+                AnimationUtility.SetEditorCurve(clip, EditorCurveBinding.FloatCurve("", typeof(Animator), "BaseGate"), AnimationCurve.Linear(0, 0, 30, 1));
+                writer.defaultState = State(writer, "Later gate", clip);
+            }
+            var before = EditorJsonUtility.ToJson(controller);
+            var error = Assert.Throws<InvalidOperationException>(() => VrChatExpressionSampler.SampleDefaults(avatar, controller, Parameters(0), metadata: metadata));
+            Assert.That(error.Message, Does.Contain(external ? "外部入力" : "時間で変わる"));
+            Assert.That(EditorJsonUtility.ToJson(controller), Is.EqualTo(before));
+            Assert.That(avatar.GetComponentInChildren<SkinnedMeshRenderer>().GetBlendShapeWeight(2), Is.Zero);
+        }
+
+        [Test]
+        public void NeutralFractionalBaseCannotAssumeBuiltinGestureRemainsAtDefault()
+        {
+            controller.AddParameter("GestureLeft", AnimatorControllerParameterType.Int);
+            var machine = controller.layers[0].stateMachine;
+            var idle = State(machine, "Idle", Clip("Base idle", ("Face size", 0))); machine.defaultState = idle;
+            var selected = State(machine, "Gesture changes defaults", Clip("Base gesture", ("Face size", 75)), writeDefaults: true);
+            var transition = idle.AddTransition(selected); transition.hasExitTime = false; transition.duration = 0;
+            transition.AddCondition(AnimatorConditionMode.Equals, 2, "GestureLeft");
+            Permanent(AddLayer("Fractional pupil"));
+            var layers = controller.layers; layers[1].defaultWeight = .5f; controller.layers = layers;
+            var original = EditorJsonUtility.ToJson(controller);
+            var error = Assert.Throws<InvalidOperationException>(() => VrChatExpressionSampler.SampleDefaults(avatar, controller, Parameters(0)));
+            Assert.That(error.Message, Does.Contain("外部入力").And.Contain("GestureLeft"));
+            Assert.That(EditorJsonUtility.ToJson(controller), Is.EqualTo(original));
+            Assert.That(avatar.GetComponentInChildren<SkinnedMeshRenderer>().GetBlendShapeWeight(2), Is.Zero);
         }
 
         [TestCase(false)]

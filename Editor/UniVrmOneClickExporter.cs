@@ -130,7 +130,7 @@ namespace VRVlog.LilToonExporter
                     blink.Bake(clone, temporaryMeshes);
                     AvatarBaseShape.Preserve(clone, clone, temporaryMeshes, warnings);
                     expressions = VrChatExpressionBaker.Bake(null, clone, menu, temporaryMeshes, warnings, expressionBindings);
-                    optimizerBindings = ExportOptimizationBindings.Capture(clone, trackingProfile, unifiedPreparation);
+                    optimizerBindings = ExportOptimizationBindings.Capture(clone, trackingProfile, unifiedPreparation, objectRegistry: transformed.ObjectRegistry);
                 });
                 optimizerBindings.ValidateAndApply((copy, original) =>
                 {

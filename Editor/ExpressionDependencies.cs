@@ -19,6 +19,7 @@ namespace VRVlog.LilToonExporter
         }
 
         internal readonly HashSet<int> Layers = new HashSet<int>();
+        internal readonly HashSet<int> NativeSupportLayers = new HashSet<int>();
         internal bool HasFxControls;
         internal readonly HashSet<string> Parameters = new HashSet<string>(StringComparer.Ordinal);
         internal readonly HashSet<EditorCurveBinding> Morphs = new HashSet<EditorCurveBinding>();
@@ -55,7 +56,7 @@ namespace VRVlog.LilToonExporter
 
         internal static ExpressionDependencies Analyze(RuntimeAnimatorController runtime, IEnumerable<string> selected,
             Func<string, bool> excludedPath, VrChatExpressionMenu.Source source = null, IDictionary<string, float> defaults = null, IDictionary<string, float> selection = null,
-            IEnumerable<EditorCurveBinding> initialMorphs = null)
+            IEnumerable<EditorCurveBinding> initialMorphs = null, bool preserveNativeBasePose = false)
         {
             var result = new ExpressionDependencies();
             if (initialMorphs != null) result.Morphs.UnionWith(initialMorphs);
@@ -119,6 +120,21 @@ namespace VRVlog.LilToonExporter
             do
             {
                 modified = false;
+                // Preserve native base-pose activity for fractional neutral
+                // overrides. Its state parameters still need the same writer
+                // closure and external-input checks as any other dependency.
+                if (preserveNativeBasePose && info.Length > 0 && info[0].HasBindings &&
+                    result.Layers.Any(index => index > 0 && controller.layers[index].blendingMode == AnimatorLayerBlendingMode.Override &&
+                        controller.layers[index].defaultWeight > 0 && controller.layers[index].defaultWeight < 1 &&
+                        info[index].Morphs.Overlaps(result.Morphs)))
+                {
+                    gateExternal.UnionWith(info[0].Reads.Where(VrChatParameterDriver.BuiltIn.Contains));
+                    if (!result.Layers.Contains(0))
+                    {
+                        modified |= result.NativeSupportLayers.Add(0);
+                        foreach (var name in info[0].Reads) modified |= read.Add(name);
+                    }
+                }
                 for (var i = 0; i < info.Length; i++)
                 {
                     var layer = info[i];
@@ -128,6 +144,7 @@ namespace VRVlog.LilToonExporter
                     if (!result.Layers.Contains(i) && !layer.FxControl && !drivenBySelection && !layer.Writes.Overlaps(read) &&
                         !layer.Morphs.Overlaps(result.Morphs) && !defaultsMayReset && !implicitWriter) continue;
                     modified |= result.Layers.Add(i);
+                    result.NativeSupportLayers.Remove(i);
                     // A layer included only to check implicit defaults is not
                     // evidence that its unrelated drivers were menu selections.
                     if (drivenBySelection) foreach (var name in layer.Writes) modified |= changed.Add(name);
@@ -140,7 +157,7 @@ namespace VRVlog.LilToonExporter
             // Parameters supplied by the menu can be reset by a driver after
             // the selection; never reapply them on every sampled frame.
             result.Parameters.UnionWith(selected);
-            if (result.Layers.Any(i => controller.layers[i].syncedLayerIndex >= 0))
+            if (result.Layers.Concat(result.NativeSupportLayers).Any(i => controller.layers[i].syncedLayerIndex >= 0))
                 throw new InvalidOperationException("このメニューに影響する同期Animatorレイヤーの表情変換は未対応です。");
             var external = gateExternal.Concat(source?.ExternalParameters ?? Enumerable.Empty<string>())
                 .Where(result.Parameters.Contains).Distinct().OrderBy(n => n, StringComparer.Ordinal).ToArray();

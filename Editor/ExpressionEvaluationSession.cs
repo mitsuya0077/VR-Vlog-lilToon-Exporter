@@ -146,7 +146,7 @@ namespace VRVlog.LilToonExporter
             var layers = original.layers;
             for (var i = 0; i < layers.Length; i++)
             {
-                if (dependencies.Layers.Contains(i)) layers[i].stateMachine = Machine(layers[i].stateMachine);
+                if (dependencies.Layers.Contains(i) || dependencies.NativeSupportLayers.Contains(i)) layers[i].stateMachine = Machine(layers[i].stateMachine);
                 else
                 {
                     var empty = (AnimatorStateMachine)Own(new AnimatorStateMachine { name = layers[i].name });

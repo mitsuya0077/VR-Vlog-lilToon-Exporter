@@ -61,7 +61,8 @@ namespace VRVlog.LilToonExporter
             var stationary = StationaryBindings(avatar, runtime, excludedPath);
             if (stationary.Count == 0) return new List<MorphValue>();
             var unresolved = new List<MorphValue>();
-            var values = Evaluate(avatar, runtime, defaults, new Dictionary<string, float>(), excludedPath, metadata, unresolved, stationary);
+            var values = Evaluate(avatar, runtime, defaults, new Dictionary<string, float>(), excludedPath, metadata, unresolved, stationary,
+                preserveNativeBasePose: true);
             if (unresolved.Count != 0)
                 throw new InvalidOperationException("常時適用するFXの変形を確定できません。統合後のBlendShape設定を確認してください。");
             return values;
@@ -224,18 +225,23 @@ namespace VRVlog.LilToonExporter
 
         private static List<MorphValue> Evaluate(GameObject avatar, RuntimeAnimatorController runtime,
             IDictionary<string, float> defaults, IDictionary<string, float> selected, Func<string, bool> excludedPath,
-            VrChatExpressionMenu.Source metadata, IList<MorphValue> unevaluated, IEnumerable<EditorCurveBinding> initialMorphs)
+            VrChatExpressionMenu.Source metadata, IList<MorphValue> unevaluated, IEnumerable<EditorCurveBinding> initialMorphs,
+            bool preserveNativeBasePose = false)
         {
             var originalController = ExpressionDependencies.Controller(runtime);
-            var dependencies = ExpressionDependencies.Analyze(runtime, selected.Keys, excludedPath, metadata, defaults, selected, initialMorphs);
-            dependencies.Layers.ExceptWith(FindExcludedLayers(originalController, runtime, excludedPath, dependencies.Parameters));
+            var dependencies = ExpressionDependencies.Analyze(runtime, selected.Keys, excludedPath, metadata, defaults, selected, initialMorphs, preserveNativeBasePose);
+            var omittedLayers = FindExcludedLayers(originalController, runtime, excludedPath, dependencies.Parameters);
+            dependencies.Layers.ExceptWith(omittedLayers);
+            dependencies.NativeSupportLayers.ExceptWith(omittedLayers);
             var affected = dependencies.Layers.OrderBy(i => i).ToArray();
             if (affected.Length == 0) throw new InvalidOperationException("このメニューに対応するFXの表情がありません。");
-            var excludedLayers = new HashSet<int>(Enumerable.Range(0, originalController.layers.Length).Except(affected));
+            var excludedLayers = new HashSet<int>(Enumerable.Range(0, originalController.layers.Length)
+                .Except(affected.Concat(dependencies.NativeSupportLayers)));
             using var evaluation = new ExpressionEvaluationSession(runtime, dependencies, metadata?.ExpressionParameters,
                 !defaults.TryGetValue("IsLocal", out var local) || local != 0);
             var controller = evaluation.Controller;
-            var equivalentStates = new HashSet<int>(affected.Where(layer => HasEquivalentConstantStates(controller, layer)));
+            var equivalentStates = new HashSet<int>(affected.Concat(dependencies.NativeSupportLayers)
+                .Where(layer => HasEquivalentConstantStates(controller, layer)));
             unevaluated = unevaluated ?? new List<MorphValue>();
 
             var scene = EditorSceneManager.NewPreviewScene();
@@ -270,7 +276,8 @@ namespace VRVlog.LilToonExporter
                 evaluation.CheckNeutralFx();
                 SetParameters(playable, controller, selected);
                 Advance(graph, 120, remember);
-                ValidateFixedPose(avatar, playable, controller, excludedPath, excludedLayers, equivalentStates);
+                ValidateFixedPose(avatar, playable, controller, excludedPath, excludedLayers, equivalentStates,
+                    dependencies.NativeSupportLayers, dependencies.Morphs);
                 var bindings = ActiveBindings(playable, affected, excludedPath, equivalentStates);
                 var values = Capture(avatar, clone, history, excludedPath, dependencies.Morphs, unevaluated);
                 // A state transition, a changing curve or changing active clip
@@ -425,7 +432,7 @@ namespace VRVlog.LilToonExporter
         // state's possible timed exits and the entire lifetime of active morph
         // and parameter curves, including delayed steps after the sample window.
         private static void ValidateFixedPose(GameObject avatar, AnimatorControllerPlayable playable, AnimatorController controller, Func<string, bool> excludedPath,
-            ISet<int> excludedLayers, ISet<int> equivalentStates)
+            ISet<int> excludedLayers, ISet<int> equivalentStates, ISet<int> nativeSupportLayers, ISet<EditorCurveBinding> relevantMorphs)
         {
             var layers = controller.layers;
             for (var layer = 0; layer < layers.Length; layer++)
@@ -453,6 +460,10 @@ namespace VRVlog.LilToonExporter
                 if (!found) throw new InvalidOperationException("評価中のFX状態を特定できません。");
                 foreach (var info in playable.GetCurrentAnimatorClipInfo(layer).Concat(playable.GetNextAnimatorClipInfo(layer)))
                     if (info.clip != null && info.weight > 0.00001f)
+                    {
+                        if (nativeSupportLayers.Contains(layer) && (AnimationUtility.GetAnimationEvents(info.clip).Length != 0 ||
+                            AnimationUtility.GetObjectReferenceCurveBindings(info.clip).Any(binding => excludedPath?.Invoke(binding.path) != true)))
+                            throw new InvalidOperationException("常時適用FXと表情の影響範囲を確定できません。");
                         foreach (var binding in AnimationUtility.GetCurveBindings(info.clip))
                         {
                             if (excludedPath?.Invoke(binding.path) == true) continue;
@@ -463,9 +474,15 @@ namespace VRVlog.LilToonExporter
                             // stale reference or reject an unresolved new morph.
                             if (binding.type == typeof(SkinnedMeshRenderer) && FindRenderer(avatar, binding.path).sharedMesh
                                 .GetBlendShapeIndex(binding.propertyName.Substring("blendShape.".Length)) < 0) continue;
+                            // Native base activity must retain its state and
+                            // parameter validation. Its unrelated face/eye
+                            // curves are not stationary export targets.
+                            if (nativeSupportLayers.Contains(layer) && binding.type == typeof(SkinnedMeshRenderer) &&
+                                !relevantMorphs.Contains(binding)) continue;
                             var curve = AnimationUtility.GetEditorCurve(info.clip, binding);
                             if (!IsConstant(curve)) throw new InvalidOperationException("時間で変わるBlendShape・パラメーター曲線は固定表情に変換できません。");
                         }
+                    }
             }
         }
 

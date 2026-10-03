@@ -19,6 +19,9 @@ namespace VRVlog.LilToonExporter
         // created or replaced by NDMF plugins never enter this identity map.
         private readonly Dictionary<Object, Object> isolatedAssets = new Dictionary<Object, Object>();
         private string temporaryAssetPath, temporaryAssetGuid;
+        // NDMF tracks asset replacements made by authoring/optimization passes.
+        // Keep the optional public registry available to the preparation callback.
+        internal object ObjectRegistry { get; private set; }
         private const string MaNamespace = "nadena.dev.modular_avatar.core.";
         private const string CompatibilityMessage =
             "アバターの準備に必要な NDMF API を利用できません。NDMF " + DependencyPolicy.NdmfMinimum + " 以降の 1.x が必要です。確認済み構成: MA " + DependencyPolicy.ModularAvatarReference + " / NDMF " + DependencyPolicy.NdmfReference + "。" + DependencyPolicy.Recovery;
@@ -194,6 +197,7 @@ namespace VRVlog.LilToonExporter
                         Invoke(() => bridge.GenericPlatform.GetValue(null));
                     if (platform == null) throw new InvalidOperationException(CompatibilityMessage);
                     context = Invoke(() => bridge.Context.Invoke(new object[] { clone, lease.temporaryAssetPath, platform, true }));
+                    lease.ObjectRegistry = context.GetType().GetProperty("ObjectRegistry", BindingFlags.Public | BindingFlags.Instance)?.GetValue(context);
                     try
                     {
                         Invoke(() => bridge.Process.Invoke(null, new[] { context, bridge.First, bridge.Transforming }));
