@@ -53,6 +53,32 @@ namespace VRVlog.LilToonExporter.Tests
             Assert.That(merged.GetBlendShapeWeight(customIndex), Is.EqualTo(40), "Guarding tracking does not change the prepared customization.");
         }
 
+        [TestCase(false, false)]
+        [TestCase(true, false)]
+        [TestCase(true, true)]
+        public void SharedAliasBaselinesAreEnforcedOnlyWhenSourceOrPreparedOutputDeclaresUnified(bool generatedUnified, bool serializedResting)
+        {
+            var first = Skin("First", "JawOpen"); var second = Skin("Second", "JawOpen");
+            first.SetBlendShapeWeight(0, 25); second.SetBlendShapeWeight(0, 50);
+            var guard = new UnifiedExpressionPreparation(avatar);
+            Assert.That(guard.SupportsUnified, Is.False, "A shared alias alone does not establish UE support.");
+            var merged = generatedUnified ? Skin("Merged", "JawOpen", "UE/EyeClosed") : Skin("Merged", "JawOpen");
+            merged.SetBlendShapeWeight(0, serializedResting ? 100 : 40);
+            if (generatedUnified && serializedResting) merged.SetBlendShapeWeight(1, 100);
+            first.enabled = false; second.enabled = false;
+            Assert.That(new UnifiedExpressionPreparation(avatar).SupportsUnified, Is.EqualTo(generatedUnified && !serializedResting));
+            if (generatedUnified)
+                Assert.That(Assert.Throws<InvalidOperationException>(() => guard.RebindPrepared(Map(first, second, merged))).Message,
+                    Does.StartWith(UnifiedExpressionPreparation.ConflictingMergedWeights).And.Contain("Merged / JawOpen"),
+                    "Prepared structural UE evidence needs a unique original baseline before FX establishes neutral.");
+            else
+            {
+                Assert.DoesNotThrow(() => guard.RebindPrepared(Map(first, second, merged)));
+                Assert.DoesNotThrow(() => guard.VerifyIdentityAndDeformation());
+                Assert.That(merged.GetBlendShapeWeight(0), Is.EqualTo(40), "Inactive tracking cannot choose or alter a shared-alias baseline.");
+            }
+        }
+
         [Test]
         public void SharedAndDistinctMergedTrackingRoutesRetainEveryRequiredChannel()
         {

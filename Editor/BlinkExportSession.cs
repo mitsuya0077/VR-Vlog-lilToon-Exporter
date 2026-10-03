@@ -218,16 +218,61 @@ namespace VRVlog.LilToonExporter
         internal void RebindPrepared(Func<SkinnedMeshRenderer, SkinnedMeshRenderer> replacement)
         {
             if (replacement == null) throw new ArgumentNullException(nameof(replacement));
+            var mapped = new Dictionary<SkinnedMeshRenderer, SkinnedMeshRenderer>();
             SkinnedMeshRenderer Map(SkinnedMeshRenderer old)
             {
-                var current = replacement(old);
+                if (!mapped.TryGetValue(old, out var current)) mapped.Add(old, current = replacement(old));
                 if (current == null) throw new InvalidOperationException(NdmfExportPreparation.UnknownRendererRelocation);
                 return current;
             }
-            var endpoints = inferredEndpoints.ToArray(); inferredEndpoints.Clear();
-            foreach (var pair in endpoints) inferredEndpoints.Add((Map(pair.Key.Renderer), pair.Key.Shape), pair.Value);
-            foreach (var binding in Slots.SelectMany(slot => slot)) binding.Renderer = Map(binding.Renderer);
-            foreach (var candidate in candidates) candidate.Binding.Renderer = Map(candidate.Binding.Renderer);
+            InvalidOperationException Conflict(SkinnedMeshRenderer renderer, string shape) => new InvalidOperationException(
+                "Modular Avatar / NDMF の処理で同じ瞬きの変形に異なる閉眼量が統合されました。統合前の瞬き設定を一致させてください。: " + renderer.name + " / " + shape);
+            var nextEndpoints = new Dictionary<(SkinnedMeshRenderer Renderer, string Shape), float>();
+            foreach (var pair in inferredEndpoints)
+            {
+                var current = Map(pair.Key.Renderer);
+                var key = (current, pair.Key.Shape);
+                if (nextEndpoints.TryGetValue(key, out var endpoint) && !endpoint.Equals(pair.Value))
+                    throw Conflict(current, pair.Key.Shape);
+                nextEndpoints[key] = pair.Value;
+            }
+            var nextSlots = new List<BlinkShapeBinding>[Slots.Length];
+            for (var slot = 0; slot < Slots.Length; slot++)
+            {
+                nextSlots[slot] = new List<BlinkShapeBinding>();
+                var seen = new Dictionary<(SkinnedMeshRenderer Renderer, string Shape), (float Endpoint, float Weight)>();
+                foreach (var binding in Slots[slot])
+                {
+                    var row = binding.Copy(); row.Renderer = Map(binding.Renderer);
+                    var key = (row.Renderer, row.Shape);
+                    var endpoint = Endpoint(binding);
+                    if (seen.TryGetValue(key, out var previous))
+                    {
+                        if (!previous.Endpoint.Equals(endpoint) || !previous.Weight.Equals(row.Weight))
+                            throw Conflict(row.Renderer, row.Shape);
+                        continue;
+                    }
+                    seen.Add(key, (endpoint, row.Weight));
+                    nextSlots[slot].Add(row);
+                }
+            }
+            if (nextSlots[1].Any(left => nextSlots[2].Any(right => left.Renderer == right.Renderer &&
+                string.Equals(left.Shape, right.Shape, StringComparison.Ordinal))))
+                throw new InvalidOperationException("Modular Avatar / NDMF の処理で左右別の瞬きが同じ変形に統合されました。左右を別々に操作できる変形を残してください。");
+            // Keep each captured deformation obligation, including different
+            // source reference weights, even when output bindings coalesce.
+            var nextCandidates = candidates.Select(candidate => {
+                var row = candidate.Binding.Copy(); row.Renderer = Map(row.Renderer);
+                return new Candidate { Binding = row, Moving = candidate.Moving, ReferenceWeight = candidate.ReferenceWeight };
+            }).ToArray();
+            // Publish only after every mapping and collision has been checked.
+            inferredEndpoints.Clear();
+            foreach (var pair in nextEndpoints) inferredEndpoints.Add(pair.Key, pair.Value);
+            for (var slot = 0; slot < Slots.Length; slot++)
+            {
+                Slots[slot].Clear(); Slots[slot].AddRange(nextSlots[slot]);
+            }
+            candidates.Clear(); candidates.AddRange(nextCandidates);
         }
 
         internal void ResolvePreparedNeutral(GameObject prepared, Func<Transform, bool> excluded = null,

@@ -30,6 +30,7 @@ namespace VRVlog.LilToonExporter
         // this guard and need no arbitrary baseline after renderer merging.
         private readonly HashSet<(SkinnedMeshRenderer Renderer, string Shape)> baselineChannels =
             new HashSet<(SkinnedMeshRenderer, string)>();
+        private readonly bool declaresUnified;
         private readonly Func<SkinnedMeshRenderer, int, float> neutralWeight;
         private readonly GameObject avatar;
         private readonly Func<Transform, bool> excluded;
@@ -86,8 +87,8 @@ namespace VRVlog.LilToonExporter
             omittedMaterials.ExceptWith(materials);
             var clips = clone.GetComponent<Vrm10Instance>()?.Vrm?.Expression?.CustomClips?.Where(clip => clip != null).ToArray()
                 ?? Array.Empty<VRM10Expression>();
-            var supportsUnified = VrmUnifiedExpressions.HasEvidence(meshes.Values.SelectMany(names => names).Concat(clips.Select(clip => clip.name)));
-            if (!supportsUnified) return;
+            declaresUnified = VrmUnifiedExpressions.HasEvidence(meshes.Values.SelectMany(names => names).Concat(clips.Select(clip => clip.name)));
+            if (!declaresUnified) return;
             var reserved = new HashSet<string>(StringComparer.Ordinal);
             var coverage = new Dictionary<SkinnedMeshRenderer, HashSet<string>>();
             var globalCoverage = new HashSet<string>(StringComparer.Ordinal);
@@ -340,10 +341,19 @@ namespace VRVlog.LilToonExporter
                     routes[route.Key] = route.Value;
                 }
             }
+            // Shared aliases are speculative until source or prepared output
+            // declares UE. Use structural evidence here: final FX can reopen a
+            // serialized fully-resting channel only after this identity guard.
+            var preparedNames = ExportRendererSelection.Enumerate(avatar).OfType<SkinnedMeshRenderer>()
+                .Where(skin => skin.sharedMesh != null && excluded?.Invoke(skin.transform) != true)
+                .SelectMany(skin => Enumerable.Range(0, skin.sharedMesh.blendShapeCount).Select(skin.sharedMesh.GetBlendShapeName));
+            var preparedClips = avatar.GetComponent<Vrm10Instance>()?.Vrm?.Expression?.CustomClips
+                ?.Where(clip => clip != null).Select(clip => clip.name) ?? Enumerable.Empty<string>();
+            var preserveBaselines = declaresUnified || VrmUnifiedExpressions.HasEvidence(preparedNames.Concat(preparedClips));
             var nextWeights = new Dictionary<(SkinnedMeshRenderer Renderer, string Shape), float>();
             foreach (var pair in capturedWeights)
             {
-                if (!baselineChannels.Contains(pair.Key)) continue;
+                if (!preserveBaselines || !baselineChannels.Contains(pair.Key)) continue;
                 var current = Resolve(pair.Key.Renderer);
                 if (current == null) continue;
                 var key = (current, pair.Key.Shape);
