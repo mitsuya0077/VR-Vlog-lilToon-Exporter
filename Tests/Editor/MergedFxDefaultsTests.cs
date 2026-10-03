@@ -548,10 +548,11 @@ namespace VRVlog.LilToonExporter.Tests
                 item.FindPropertyRelative("animatorController").objectReferenceValue = controller;
                 data.ApplyModifiedPropertiesWithoutUndo();
             }
-            var emptyReference = Clip("Reference without active base");
             var originalController = EditorJsonUtility.ToJson(controller);
             var reference = NativePose(avatar, controller, "Face", new Dictionary<string, int>());
-            var prunedReference = NativeStandalonePose(avatar, controller, emptyReference, "Face");
+            // Match the previous preparation's null-motion placeholder. A
+            // real zero-curve clip is a different native Animator graph.
+            var prunedReference = NativeStandalonePose(avatar, controller, null, "Face");
             Assert.That(Math.Abs(reference.Weights["Face size"] - 12), Is.GreaterThan(.01), "The unrelated native constant must differ from the authored renderer value.");
             Assert.That(Math.Abs(reference.Weights["Pupil removal"] - 20), Is.GreaterThan(.01), "The fractional native effect must actually move the required morph.");
             Assert.That(Math.Abs(reference.Weights["Pupil removal"] - prunedReference.Weights["Pupil removal"]), Is.GreaterThan(.01),
