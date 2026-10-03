@@ -15,6 +15,7 @@ namespace VRVlog.LilToonExporter.Tests
         readonly List<Object> owned = new List<Object>();
         GameObject avatar;
         Material hidden, normal, unspecified;
+        string controllerFolder;
 
         [SetUp] public void SetUp()
         {
@@ -27,6 +28,8 @@ namespace VRVlog.LilToonExporter.Tests
         {
             for (var i = owned.Count - 1; i >= 0; i--) if (owned[i] != null) Object.DestroyImmediate(owned[i]);
             owned.Clear();
+            if (controllerFolder != null) AssetDatabase.DeleteAsset(controllerFolder);
+            controllerFolder = null;
         }
         T Own<T>(T item) where T : Object { owned.Add(item); return item; }
         GameObject Child(string name, Transform parent = null)
@@ -116,11 +119,13 @@ namespace VRVlog.LilToonExporter.Tests
             // Use distinct objects with the same binding path to exercise the
             // retained target and a reused historical path independently.
             var auxiliary = Render("Face", hidden);
-            var clip = Own(new AnimationClip());
+            var folderName = "__GimmickDefaults_" + Guid.NewGuid().ToString("N");
+            AssetDatabase.CreateFolder("Assets", folderName); controllerFolder = "Assets/" + folderName;
+            var controller = AnimatorController.CreateAnimatorControllerAtPath(controllerFolder + "/FX.controller");
+            var clip = new AnimationClip();
             AnimationUtility.SetEditorCurve(clip, EditorCurveBinding.FloatCurve("Face", typeof(SkinnedMeshRenderer), "blendShape.Smile"),
                 AnimationCurve.Constant(0, 1, 60));
-            var controller = Own(new AnimatorController());
-            controller.AddLayer("Permanent");
+            AssetDatabase.AddObjectToAsset(clip, controller);
             var state = controller.layers[0].stateMachine.AddState("Always"); state.motion = clip; state.writeDefaultValues = false;
             controller.layers[0].stateMachine.defaultState = state;
             var clone = Own(Object.Instantiate(avatar));
