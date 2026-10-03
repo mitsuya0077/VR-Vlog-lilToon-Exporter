@@ -104,9 +104,22 @@ namespace VRVlog.LilToonExporter
             // zero, as well as disable one that the probe would otherwise keep.
             ExpressionDependencies.ValidateProbeBehaviours(runtime, excludedPath);
             var stationaryBindings = StationaryBindings(avatar, runtime, excludedPath);
-            if (stationaryBindings.Count == 0) return;
             var permanent = ExpressionDependencies.StationaryLayers(runtime, excludedPath);
-            var originalLayers = ExpressionDependencies.Controller(runtime).layers;
+            var originalController = ExpressionDependencies.Controller(runtime);
+            var originalLayers = originalController.layers;
+            var replacements = ExpressionDependencies.Overrides(runtime);
+            // Constant parameter/empty clips can still impose Write Defaults.
+            // Keep proven equivalent layers in their authored slots even when
+            // none of their explicit bindings name a stationary morph.
+            var parameterLayers = new Dictionary<int, AnimationClip>();
+            for (var index = 0; index < originalLayers.Length; index++)
+                if (HasEquivalentConstantStates(originalController, index, replacements))
+                {
+                    var clip = (AnimationClip)originalLayers[index].stateMachine.defaultState.motion;
+                    if (replacements.TryGetValue(clip, out var replacement)) clip = replacement;
+                    if (AnimationUtility.GetCurveBindings(clip).All(binding => binding.type == typeof(Animator))) parameterLayers.Add(index, clip);
+                }
+            if (stationaryBindings.Count == 0 && parameterLayers.Count == 0) return;
             if (layerIndex.HasValue && (layerIndex.Value < 0 || layerIndex.Value >= originalLayers.Length))
                 throw new InvalidOperationException("表情のFXレイヤーを特定できません。");
             if (layerIndex.HasValue && originalLayers[layerIndex.Value].blendingMode == AnimatorLayerBlendingMode.Additive)
@@ -121,6 +134,11 @@ namespace VRVlog.LilToonExporter
                         AnimationUtility.SetEditorCurve(clip, EditorCurveBinding.FloatCurve(value.Path, typeof(SkinnedMeshRenderer), "blendShape." + value.Shape),
                             AnimationCurve.Constant(0, 1, input));
                     var controller = new AnimatorController { name = "VRVlog expression override probe", hideFlags = HideFlags.HideAndDontSave }; owned.Add(controller);
+                    controller.parameters = originalController.parameters.Select(parameter => new AnimatorControllerParameter
+                    {
+                        name = parameter.name, type = parameter.type, defaultBool = parameter.defaultBool,
+                        defaultInt = parameter.defaultInt, defaultFloat = parameter.defaultFloat
+                    }).ToArray();
                     var layers = new List<AnimatorControllerLayer>();
                     AnimatorControllerLayer Layer(AnimatorControllerLayer original, AnimationClip motion, bool defaults, float weight)
                     {
@@ -146,6 +164,7 @@ namespace VRVlog.LilToonExporter
                         var selected = layerIndex == index;
                         permanent.TryGetValue(index, out var fixedClip);
                         if (fixedClip != null && !AnimationUtility.GetCurveBindings(fixedClip).Any(stationaryBindings.Contains)) fixedClip = null;
+                        if (parameterLayers.TryGetValue(index, out var parameterClip)) fixedClip = parameterClip;
                         var motion = selected ? clip : fixedClip;
                         layers.Add(Layer(original, motion, selected ? writeDefaults : motion != null && original.stateMachine.defaultState.writeDefaultValues,
                             motion == null ? 0 : index == 0 ? 1 : original.defaultWeight));
@@ -216,6 +235,7 @@ namespace VRVlog.LilToonExporter
             using var evaluation = new ExpressionEvaluationSession(runtime, dependencies, metadata?.ExpressionParameters,
                 !defaults.TryGetValue("IsLocal", out var local) || local != 0);
             var controller = evaluation.Controller;
+            var equivalentStates = new HashSet<int>(affected.Where(layer => HasEquivalentConstantStates(controller, layer)));
             unevaluated = unevaluated ?? new List<MorphValue>();
 
             var scene = EditorSceneManager.NewPreviewScene();
@@ -250,15 +270,15 @@ namespace VRVlog.LilToonExporter
                 evaluation.CheckNeutralFx();
                 SetParameters(playable, controller, selected);
                 Advance(graph, 120, remember);
-                ValidateFixedPose(avatar, playable, controller, excludedPath, excludedLayers);
-                var bindings = ActiveBindings(playable, affected, excludedPath);
+                ValidateFixedPose(avatar, playable, controller, excludedPath, excludedLayers, equivalentStates);
+                var bindings = ActiveBindings(playable, affected, excludedPath, equivalentStates);
                 var values = Capture(avatar, clone, history, excludedPath, dependencies.Morphs, unevaluated);
                 // A state transition, a changing curve or changing active clip
                 // set cannot be represented as one fixed VRM expression.
                 for (var checkpoint = 0; checkpoint < 3; checkpoint++)
                 {
                     Advance(graph, 7 + checkpoint, evaluation.Check);
-                    var nextBindings = ActiveBindings(playable, affected, excludedPath);
+                    var nextBindings = ActiveBindings(playable, affected, excludedPath, equivalentStates);
                     if (!bindings.SetEquals(nextBindings)) throw new InvalidOperationException("表情が時間で切り替わるため、固定表情に変換できません。");
                     var next = Capture(avatar, clone, history, excludedPath, dependencies.Morphs, unevaluated);
                     if (values.Count != next.Count || values.Where((v, i) => v.Path != next[i].Path || v.Shape != next[i].Shape || Math.Abs(v.Weight - next[i].Weight) > 0.01f).Any())
@@ -365,18 +385,54 @@ namespace VRVlog.LilToonExporter
                 }
         }
 
+        // A transition need not be stationary when its entire layer always
+        // produces the same pose and parameter values. Keep the layer in native
+        // evaluation, including its Write Defaults; prove equivalence without
+        // assuming that any transition condition remains false in the future.
+        internal static bool HasEquivalentConstantStates(AnimatorController controller, int layerIndex,
+            IDictionary<AnimationClip, AnimationClip> replacements = null)
+        {
+            var layer = controller.layers[layerIndex];
+            var machine = layer.stateMachine;
+            if (layer.syncedLayerIndex >= 0 || layer.iKPass || machine == null || machine.behaviours.Length != 0 ||
+                machine.stateMachines.Length != 0 || machine.states.Length == 0) return false;
+            var states = new HashSet<AnimatorState>(machine.states.Select(child => child.state));
+            if (states.Contains(null) || machine.defaultState == null || !states.Contains(machine.defaultState)) return false;
+            AnimationClip EffectiveClip(AnimatorState state)
+            {
+                if (!(state.motion is AnimationClip value)) return null;
+                return replacements != null && replacements.TryGetValue(value, out var replacement) ? replacement : value;
+            }
+            var clip = EffectiveClip(machine.defaultState);
+            if (clip == null) return false;
+            var writeDefaults = machine.defaultState.writeDefaultValues;
+            if (states.Any(state => EffectiveClip(state) != clip || state.writeDefaultValues != writeDefaults || state.behaviours.Length != 0 ||
+                state.iKOnFeet || state.timeParameterActive || state.speedParameterActive || state.mirrorParameterActive ||
+                state.cycleOffsetParameterActive || state.speed != 1 || state.cycleOffset != 0 || state.mirror)) return false;
+            var parameters = new HashSet<string>(controller.parameters.Where(parameter => parameter.type != AnimatorControllerParameterType.Trigger)
+                .Select(parameter => parameter.name), StringComparer.Ordinal);
+            if (AnimationUtility.GetAnimationEvents(clip).Length != 0 || AnimationUtility.GetObjectReferenceCurveBindings(clip).Length != 0 ||
+                AnimationUtility.GetCurveBindings(clip).Any(binding =>
+                    !(binding.type == typeof(SkinnedMeshRenderer) && binding.propertyName.StartsWith("blendShape.", StringComparison.Ordinal) ||
+                      binding.type == typeof(Animator) && parameters.Contains(binding.propertyName)) ||
+                    !IsConstant(AnimationUtility.GetEditorCurve(clip, binding)))) return false;
+            return machine.anyStateTransitions.Cast<AnimatorTransitionBase>().Concat(machine.entryTransitions)
+                .Concat(states.SelectMany(state => state.transitions)).All(transition =>
+                    !transition.isExit && transition.destinationStateMachine == null && states.Contains(transition.destinationState));
+        }
+
         // Short samples alone cannot prove a fixed pose. Inspect every active
         // state's possible timed exits and the entire lifetime of active morph
         // and parameter curves, including delayed steps after the sample window.
         private static void ValidateFixedPose(GameObject avatar, AnimatorControllerPlayable playable, AnimatorController controller, Func<string, bool> excludedPath,
-            ISet<int> excludedLayers)
+            ISet<int> excludedLayers, ISet<int> equivalentStates)
         {
             var layers = controller.layers;
             for (var layer = 0; layer < layers.Length; layer++)
             {
                 if (excludedLayers.Contains(layer)) continue;
                 if (layer > 0 && playable.GetLayerWeight(layer) <= 0.00001f) continue;
-                if (playable.IsInTransition(layer)) throw new InvalidOperationException("FXの状態遷移が静止していません。");
+                if (playable.IsInTransition(layer) && !equivalentStates.Contains(layer)) throw new InvalidOperationException("FXの状態遷移が静止していません。");
                 var hash = playable.GetCurrentAnimatorStateInfo(layer).fullPathHash;
                 if (hash == 0) continue;
                 var found = false;
@@ -388,14 +444,14 @@ namespace VRVlog.LilToonExporter
                         if (Animator.StringToHash(path + "." + child.state.name) != hash) continue;
                         if (found) throw new InvalidOperationException("FXの状態名を一意に特定できません。");
                         found = true;
-                        if (timed || child.state.transitions.Any(t => !t.mute && t.hasExitTime))
+                        if (!equivalentStates.Contains(layer) && (timed || child.state.transitions.Any(t => !t.mute && t.hasExitTime)))
                             throw new InvalidOperationException("時間で遷移するFX状態は固定表情に変換できません: " + path + "." + child.state.name);
                     }
                     foreach (var child in machine.stateMachines) Visit(child.stateMachine, path + "." + child.stateMachine.name, timed);
                 }
                 Visit(layers[layer].stateMachine, layers[layer].name, false);
                 if (!found) throw new InvalidOperationException("評価中のFX状態を特定できません。");
-                foreach (var info in playable.GetCurrentAnimatorClipInfo(layer))
+                foreach (var info in playable.GetCurrentAnimatorClipInfo(layer).Concat(playable.GetNextAnimatorClipInfo(layer)))
                     if (info.clip != null && info.weight > 0.00001f)
                         foreach (var binding in AnimationUtility.GetCurveBindings(info.clip))
                         {
@@ -437,14 +493,14 @@ namespace VRVlog.LilToonExporter
             }
         }
 
-        private static HashSet<EditorCurveBinding> ActiveBindings(AnimatorControllerPlayable playable, int[] layers, Func<string, bool> excludedPath)
+        private static HashSet<EditorCurveBinding> ActiveBindings(AnimatorControllerPlayable playable, int[] layers, Func<string, bool> excludedPath, ISet<int> equivalentStates)
         {
             var bindings = new HashSet<EditorCurveBinding>();
             foreach (var layer in layers)
             {
-                if (playable.IsInTransition(layer)) throw new InvalidOperationException("FXの表情遷移が完了しません（2秒以内に静止する表情が必要です）。");
+                if (playable.IsInTransition(layer) && !equivalentStates.Contains(layer)) throw new InvalidOperationException("FXの表情遷移が完了しません（2秒以内に静止する表情が必要です）。");
                 if (layer > 0 && playable.GetLayerWeight(layer) <= 0.00001f) continue;
-                foreach (var info in playable.GetCurrentAnimatorClipInfo(layer))
+                foreach (var info in playable.GetCurrentAnimatorClipInfo(layer).Concat(playable.GetNextAnimatorClipInfo(layer)))
                 {
                     if (info.weight <= 0.00001f || info.clip == null) continue;
                     if (AnimationUtility.GetObjectReferenceCurveBindings(info.clip).Any(b => excludedPath?.Invoke(b.path) != true))

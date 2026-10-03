@@ -256,6 +256,9 @@ namespace VRVlog.LilToonExporter
             if (marker == null || expectsMapping && !marker.MappingApplied)
                 throw new InvalidOperationException("最適化後の表情の移動情報を取得できませんでした。");
             if (marker.MappingError != null) throw new InvalidOperationException(marker.MappingError);
+            // Detect a lossy merge before recreating no-op meshes, cloning
+            // materials, invoking copy observers or replacing VRM settings.
+            ValidateAuthoredMorphWeights();
             foreach (var route in morphs.Values)
             {
                 if (route.NoOp && (route.Removed || route.Renderer == null || route.Renderer.sharedMesh == null || route.Renderer.sharedMesh.GetBlendShapeIndex(route.Shape) < 0))
@@ -285,6 +288,47 @@ namespace VRVlog.LilToonExporter
             var name = (route.SourceShape.StartsWith("__VRVlog_BlinkNone_", StringComparison.Ordinal) ? "__VRVlog_BlinkNone_" : "__VRVlog_Empty_") + Guid.NewGuid().ToString("N");
             var zeros = new Vector3[mesh.vertexCount]; mesh.AddBlendShapeFrame(name, 100, zeros, zeros, zeros);
             route.Renderer = skin; route.Shape = name; route.Removed = false;
+        }
+
+        void ValidateAuthoredMorphWeights()
+        {
+            foreach (var snapshot in clips.Values)
+            {
+                var originals = new HashSet<OptimizationMorphRoute>();
+                var weights = new Dictionary<(int Renderer, int Index), float>();
+                foreach (var item in snapshot.Morphs)
+                {
+                    var route = item.Route;
+                    // Pinned UniVRM playback uses the first declaration for an
+                    // original property, including a first weight of zero.
+                    // Only distinct source properties newly combined by the
+                    // optimizer can introduce a conflicting output weight.
+                    if (route == null || !originals.Add(route) || route.Removed || route.Renderer == null || route.Renderer.sharedMesh == null) continue;
+                    var index = route.Renderer.sharedMesh.GetBlendShapeIndex(route.Shape);
+                    if (index < 0) continue; // Lost routes retain the existing validation/recovery path.
+                    var key = (route.Renderer.GetInstanceID(), index);
+                    if (weights.TryGetValue(key, out var previous) && !previous.Equals(item.Binding.Weight))
+                        throw new InvalidOperationException("最適化で元のVRM表情の適用量が衝突しました: " + snapshot.Template.name + " / " + route.Label);
+                    weights[key] = item.Binding.Weight;
+                }
+            }
+        }
+
+        MorphTargetBinding[] RemapAuthoredMorphs(ClipSnapshot snapshot)
+        {
+            var result = new List<MorphTargetBinding>();
+            var mapped = new HashSet<(int Renderer, int Index)>();
+            foreach (var item in snapshot.Morphs)
+            {
+                if (item.Route == null) { result.Add(item.Binding); continue; }
+                var route = item.Route;
+                var index = route.Renderer.sharedMesh.GetBlendShapeIndex(route.Shape);
+                // AAO may combine two authored renderer/shape routes. Their
+                // verified equal weight must drive the output property once.
+                if (!mapped.Add((route.Renderer.GetInstanceID(), index))) continue;
+                result.Add(new MorphTargetBinding(AnimationUtility.CalculateTransformPath(route.Renderer.transform, avatar.transform), index, item.Binding.Weight));
+            }
+            return result.ToArray();
         }
 
         void ApplyAuthored(Action<Object, Object> assetCopyObserver)
@@ -319,9 +363,7 @@ namespace VRVlog.LilToonExporter
                 var snapshot = pair.Value;
                 var copy = Object.Instantiate(snapshot.Template); copy.name = snapshot.Template.name; owned.Add(copy);
                 copy.Prefab = null; // The remapped routes belong to this export copy.
-                copy.MorphTargetBindings = snapshot.Morphs.Select(item => item.Route == null ? item.Binding :
-                    new MorphTargetBinding(AnimationUtility.CalculateTransformPath(item.Route.Renderer.transform, avatar.transform),
-                        item.Route.Renderer.sharedMesh.GetBlendShapeIndex(item.Route.Shape), item.Binding.Weight)).ToArray();
+                copy.MorphTargetBindings = RemapAuthoredMorphs(snapshot);
                 copy.MaterialColorBindings = snapshot.Colors.Select(item => new MaterialColorBinding { MaterialName = item.Route == null ? item.Binding.MaterialName : materialNames[item.Route],
                     BindType = item.Binding.BindType, TargetValue = item.Binding.TargetValue }).ToArray();
                 copy.MaterialUVBindings = snapshot.UV.Select(item => new MaterialUVBinding { MaterialName = item.Route == null ? item.Binding.MaterialName : materialNames[item.Route],

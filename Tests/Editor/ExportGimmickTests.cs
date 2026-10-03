@@ -115,10 +115,9 @@ namespace VRVlog.LilToonExporter.Tests
         {
             avatar.AddComponent<Animator>();
             var face = Skin(moveToOldPath ? "originalFace" : "Face", normal);
-            // Native renderers on one GameObject share their material storage.
-            // Use distinct objects with the same binding path to exercise the
-            // retained target and a reused historical path independently.
-            var auxiliary = Render("Face", hidden);
+            // Keep all animation paths unique. The moved case reuses the
+            // auxiliary's old path after renaming its retained Transform.
+            var auxiliary = Render(moveToOldPath ? "Face" : "auxiliary", hidden);
             var folderName = "__GimmickDefaults_" + Guid.NewGuid().ToString("N");
             AssetDatabase.CreateFolder("Assets", folderName); controllerFolder = "Assets/" + folderName;
             var controller = AnimatorController.CreateAnimatorControllerAtPath(controllerFolder + "/FX.controller");

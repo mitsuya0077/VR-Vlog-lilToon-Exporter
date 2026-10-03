@@ -79,6 +79,225 @@ namespace VRVlog.LilToonExporter.Tests
 
         static Dictionary<string, float> Parameters(int value) => new Dictionary<string, float> { ["Menu"] = value };
 
+        AnimatorStateMachine EquivalentRelay(int transitionMode, bool writeDefaults, out AnimatorState other)
+        {
+            controller.AddParameter("Relay", AnimatorControllerParameterType.Float);
+            var relay = AddLayer("Parameter relay");
+            var clip = Clip("Shared constant relay");
+            AnimationUtility.SetEditorCurve(clip, EditorCurveBinding.FloatCurve("", typeof(Animator), "Relay"), AnimationCurve.Constant(0, 1, 1));
+            var initial = State(relay, "Initial", clip, writeDefaults);
+            other = State(relay, "Other", clip, writeDefaults); relay.defaultState = initial;
+            var transition = initial.AddTransition(other);
+            transition.hasExitTime = transitionMode == 0; transition.exitTime = 10;
+            transition.hasFixedDuration = true; transition.duration = transitionMode == 2 ? 10 : 0;
+            transition.AddCondition(transitionMode == 0 ? AnimatorConditionMode.Less : AnimatorConditionMode.Equals,
+                transitionMode == 0 ? .5f : 1, transitionMode == 0 ? "Relay" : "Menu");
+            return relay;
+        }
+
+        // Match the sampler's default dwell and selection dwell using the
+        // original controller, independently of its equivalence proof.
+        (Dictionary<string, float> Weights, bool InTransition) NativeRelayPose(int selected)
+        {
+            var copy = Object.Instantiate(avatar);
+            var graph = PlayableGraph.Create("Constant relay reference"); graph.SetTimeUpdateMode(DirectorUpdateMode.Manual);
+            try
+            {
+                var animator = copy.GetComponent<Animator>(); animator.runtimeAnimatorController = null;
+                animator.applyRootMotion = false; animator.cullingMode = AnimatorCullingMode.AlwaysAnimate;
+                var playable = AnimatorControllerPlayable.Create(graph, controller);
+                for (var index = 0; index < controller.layers.Length; index++) playable.SetLayerWeight(index, index == 0 ? 1 : controller.layers[index].defaultWeight);
+                var output = AnimationPlayableOutput.Create(graph, "Face", animator); output.SetSourcePlayable(playable);
+                playable.SetInteger("Menu", 0); graph.Play();
+                for (var frame = 0; frame < 120; frame++) graph.Evaluate(1f / 60f);
+                playable.SetInteger("Menu", selected);
+                for (var frame = 0; frame < 120; frame++) graph.Evaluate(1f / 60f);
+                var renderer = copy.GetComponentInChildren<SkinnedMeshRenderer>();
+                return (Enumerable.Range(0, mesh.blendShapeCount).ToDictionary(mesh.GetBlendShapeName, renderer.GetBlendShapeWeight), playable.IsInTransition(1));
+            }
+            finally { if (graph.IsValid()) graph.Destroy(); Object.DestroyImmediate(copy); }
+        }
+
+        [TestCase(0, false)]
+        [TestCase(0, true)]
+        [TestCase(1, false)]
+        [TestCase(1, true)]
+        [TestCase(2, false)]
+        [TestCase(2, true)]
+        public void EquivalentConstantRelayPreservesNativeNeutralAndMenuEvenDuringTransitions(int transitionMode, bool writeDefaults)
+        {
+            Menu(controller.layers[0].stateMachine);
+            EquivalentRelay(transitionMode, writeDefaults, out _); Permanent(AddLayer("Permanent pupil"));
+            var original = EditorJsonUtility.ToJson(controller);
+            var neutralReference = NativeRelayPose(0); var selectedReference = NativeRelayPose(1);
+            Assert.That(neutralReference.InTransition, Is.False);
+            Assert.That(selectedReference.InTransition, Is.EqualTo(transitionMode == 2), "The long-transition case must actually be sampled mid-transition.");
+            var neutral = VrChatExpressionSampler.SampleDefaults(avatar, controller, Parameters(0));
+            var selected = VrChatExpressionSampler.Sample(avatar, controller, Parameters(0), Parameters(1));
+            foreach (var values in new[] { neutral, selected })
+            {
+                var expected = ReferenceEquals(values, neutral) ? neutralReference.Weights : selectedReference.Weights;
+                foreach (var value in values) Assert.That(value.Weight, Is.EqualTo(expected[value.Shape]).Within(.01), value.Shape);
+                Assert.That(values.Single(value => value.Shape == "Pupil removal").Weight, Is.EqualTo(100).Within(.01));
+            }
+            Assert.That(selected.Any(value => value.Shape == "Face size"), Is.True);
+            var selectedClip = (AnimationClip)controller.layers[0].stateMachine.states.Single(child => child.state.name == "Selected").state.motion;
+            foreach (var standalone in new[] { false, true })
+            {
+                var direct = new VrChatExpressionMenu.Entry { Name = standalone ? "Registered FaceEmo" : "Gesture" };
+                VrChatGestureExpressions.ReadClip(avatar, selectedClip, direct);
+                VrChatExpressionSampler.ApplyPermanentOverrides(avatar, controller, direct, standalone ? (int?)null : 0);
+                foreach (var value in direct.Values) Assert.That(value.Weight, Is.EqualTo(selectedReference.Weights[value.Shape]).Within(.01), direct.Name + ": " + value.Shape);
+                Assert.That(direct.Values.Single(value => value.Shape == "Pupil removal").Weight, Is.EqualTo(100).Within(.01));
+            }
+            Assert.That(VrChatExpressionSampler.HasEquivalentConstantStates(controller, 1), Is.True);
+            Assert.That(EditorJsonUtility.ToJson(controller), Is.EqualTo(original));
+            Assert.That(avatar.GetComponentInChildren<SkinnedMeshRenderer>().GetBlendShapeWeight(2), Is.Zero);
+        }
+
+        [TestCase(false, false)]
+        [TestCase(false, true)]
+        [TestCase(true, false)]
+        [TestCase(true, true)]
+        public void ParameterOrEmptyWriteDefaultsLayerAffectsDirectClipsWithoutPermanentMorphs(bool parameterCurve, bool standalone)
+        {
+            Menu(controller.layers[0].stateMachine);
+            var clip = Clip(parameterCurve ? "Constant parameter only" : "Empty Write Defaults");
+            if (parameterCurve)
+            {
+                controller.AddParameter("Relay", AnimatorControllerParameterType.Float);
+                AnimationUtility.SetEditorCurve(clip, EditorCurveBinding.FloatCurve("", typeof(Animator), "Relay"), AnimationCurve.Constant(0, 1, 1));
+            }
+            var upper = AddLayer("Write Defaults only");
+            upper.defaultState = State(upper, "Always", clip, writeDefaults: true);
+            Assert.That(ExpressionDependencies.StationaryMorphBindings(controller).Count, Is.Zero,
+                "This regression must reach the former early-return path without a permanent morph layer.");
+            var selected = (AnimationClip)controller.layers[0].stateMachine.states.Single(child => child.state.name == "Selected").state.motion;
+            var reference = standalone ? NativeStandalonePose(avatar, controller, selected, "Face")
+                : NativePose(avatar, controller, "Face", new Dictionary<string, int> { ["Menu"] = 1 });
+            var entry = new VrChatExpressionMenu.Entry { Name = standalone ? "Registered face" : "Gesture" };
+            VrChatGestureExpressions.ReadClip(avatar, selected, entry);
+            var authored = entry.Values.Single(value => value.Shape == "Face size").Weight;
+            Assert.That(Math.Abs(reference.Weights["Face size"] - authored), Is.GreaterThan(.01),
+                "The native WD layer must actually reset the direct clip; otherwise the old early return would pass.");
+            var beforeController = EditorJsonUtility.ToJson(controller);
+            VrChatExpressionSampler.ApplyPermanentOverrides(avatar, controller, entry, standalone ? (int?)null : 0);
+            Assert.That(entry.Error, Is.Null);
+            Assert.That(entry.Values.Single(value => value.Shape == "Face size").Weight,
+                Is.EqualTo(reference.Weights["Face size"]).Within(.01));
+            Assert.That(EditorJsonUtility.ToJson(controller), Is.EqualTo(beforeController));
+            Assert.That(avatar.GetComponentInChildren<SkinnedMeshRenderer>().GetBlendShapeWeight(1), Is.Zero);
+        }
+
+        [TestCase("different clip")]
+        [TestCase("different write defaults")]
+        [TestCase("changing parameter curve")]
+        [TestCase("object curve")]
+        [TestCase("event")]
+        [TestCase("outside destination")]
+        [TestCase("time parameter")]
+        public void ConstantRelayProofRejectsOutputOrCallbackDifferences(string difference)
+        {
+            Menu(controller.layers[0].stateMachine);
+            var relay = EquivalentRelay(0, true, out var other); Permanent(AddLayer("Permanent pupil"));
+            var clip = (AnimationClip)other.motion;
+            switch (difference)
+            {
+                case "different clip": other.motion = Clip("Different relay clip", ("Face size", 100)); break;
+                case "different write defaults": other.writeDefaultValues = false; break;
+                case "changing parameter curve":
+                    AnimationUtility.SetEditorCurve(clip, EditorCurveBinding.FloatCurve("", typeof(Animator), "Relay"), AnimationCurve.Linear(0, 1, 30, 0)); break;
+                case "object curve":
+                    AnimationUtility.SetObjectReferenceCurve(clip, EditorCurveBinding.PPtrCurve("Face", typeof(SkinnedMeshRenderer), "m_Mesh"),
+                        new[] { new ObjectReferenceKeyframe { time = 0, value = mesh } }); break;
+                case "event": AnimationUtility.SetAnimationEvents(clip, new[] { new AnimationEvent { time = 20, functionName = "AfterSampling" } }); break;
+                case "outside destination": relay.defaultState.transitions[0].destinationState = null; relay.defaultState.transitions[0].isExit = true; break;
+                case "time parameter": other.timeParameter = "Relay"; other.timeParameterActive = true; break;
+            }
+            Assert.That(VrChatExpressionSampler.HasEquivalentConstantStates(controller, 1), Is.False);
+            Assert.Throws<InvalidOperationException>(() => VrChatExpressionSampler.SampleDefaults(avatar, controller, Parameters(0)));
+        }
+
+        [Test]
+        public void ConstantRelayProofDoesNotAcceptAnSdkBehaviourEvenWhenClipsMatch()
+        {
+            var type = AppDomain.CurrentDomain.GetAssemblies().Select(assembly => assembly.GetType("VRC.SDK3.Avatars.Components.VRCAvatarParameterDriver"))
+                .FirstOrDefault(candidate => candidate != null);
+            if (type == null) Assert.Ignore("Install the real VRChat SDK for callback equivalence regression.");
+            Menu(controller.layers[0].stateMachine);
+            EquivalentRelay(0, true, out var other); Permanent(AddLayer("Permanent pupil"));
+            other.AddStateMachineBehaviour(type);
+            Assert.That(VrChatExpressionSampler.HasEquivalentConstantStates(controller, 1), Is.False);
+            Assert.Throws<InvalidOperationException>(() => VrChatExpressionSampler.SampleDefaults(avatar, controller, Parameters(0)));
+        }
+
+        [Test]
+        public void InstalledMaConstantParameterRelayKeepsMergedNeutralAndMenuPupilRemoval()
+        {
+            Type Installed(string name) => AppDomain.CurrentDomain.GetAssemblies().Select(assembly => assembly.GetType(name)).FirstOrDefault(type => type != null);
+            var mergeType = Installed("nadena.dev.modular_avatar.core.ModularAvatarMergeAnimator");
+            var rootType = Installed("nadena.dev.ndmf.runtime.components.NDMFAvatarRoot");
+            var descriptorType = Installed("VRC.SDK3.Avatars.Components.VRCAvatarDescriptor");
+            if (mergeType == null || rootType == null || descriptorType == null)
+                Assert.Ignore("Install MA, NDMF and the real VRChat SDK for the generated constant-relay regression.");
+            using var fixture = new AttachmentConnectionTests.Fixture();
+            var source = fixture.Source; source.AddComponent(rootType);
+            var zeros = new Vector3[fixture.Mesh.vertexCount]; var delta = new Vector3[fixture.Mesh.vertexCount]; delta[0] = Vector3.up;
+            fixture.Mesh.AddBlendShapeFrame("Face size", 100, delta, zeros, zeros);
+            fixture.Mesh.AddBlendShapeFrame("Pupil removal", 100, delta, zeros, zeros);
+            Menu(controller.layers[0].stateMachine);
+            foreach (var clip in controller.animationClips.Distinct())
+            {
+                foreach (var binding in AnimationUtility.GetCurveBindings(clip))
+                {
+                    var curve = AnimationUtility.GetEditorCurve(clip, binding); AnimationUtility.SetEditorCurve(clip, binding, null);
+                    var mapped = binding; mapped.path = "Front"; AnimationUtility.SetEditorCurve(clip, mapped, curve);
+                }
+            }
+            var permanent = AnimatorController.CreateAnimatorControllerAtPath(folder + "/Merge.controller");
+            var pupil = new AnimationClip { name = "Permanent pupil" }; AssetDatabase.AddObjectToAsset(pupil, permanent);
+            AnimationUtility.SetEditorCurve(pupil, EditorCurveBinding.FloatCurve("Front", typeof(SkinnedMeshRenderer), "blendShape.Pupil removal"), AnimationCurve.Constant(0, 1, 100));
+            permanent.layers[0].stateMachine.defaultState = State(permanent.layers[0].stateMachine, "Always", pupil);
+            var descriptor = source.AddComponent(descriptorType);
+            using (var data = new SerializedObject(descriptor))
+            {
+                data.FindProperty("customizeAnimationLayers").boolValue = true;
+                var layers = data.FindProperty("baseAnimationLayers"); layers.arraySize = 1;
+                var item = layers.GetArrayElementAtIndex(0); var type = item.FindPropertyRelative("type"); type.enumValueIndex = Array.IndexOf(type.enumNames, "FX");
+                item.FindPropertyRelative("isDefault").boolValue = false; item.FindPropertyRelative("animatorController").objectReferenceValue = controller;
+                data.ApplyModifiedPropertiesWithoutUndo();
+            }
+            var tool = new GameObject("Permanent pupil tool"); tool.transform.SetParent(source.transform, false);
+            var merge = tool.AddComponent(mergeType); mergeType.GetField("animator").SetValue(merge, permanent);
+            var pathMode = mergeType.GetField("pathMode"); pathMode.SetValue(merge, Enum.Parse(pathMode.FieldType, "Absolute"));
+            mergeType.GetField("layerPriority").SetValue(merge, 100); mergeType.GetField("matchAvatarWriteDefaults").SetValue(merge, false);
+            var sourceGraph = EditorJsonUtility.ToJson(controller); var sourceMesh = EditorJsonUtility.ToJson(fixture.Mesh);
+            var clone = Object.Instantiate(source); clone.name = source.name;
+            try
+            {
+                var evaluated = false;
+                using (NdmfExportPreparation.Prepare(source, clone, afterTransforming: prepared =>
+                {
+                    var metadata = VrChatExpressionMenu.Read(clone);
+                    var fx = ExpressionDependencies.Controller(metadata.Controller);
+                    Assert.That(Enumerable.Range(0, fx.layers.Length).Any(index => fx.layers[index].stateMachine.states.Length >= 3 &&
+                        VrChatExpressionSampler.HasEquivalentConstantStates(fx, index)), Is.True, "Real MA must generate the constant parameter relay with its default MMD setting.");
+                    var neutralReference = NativePose(clone, fx, "Front", new Dictionary<string, int> { ["Menu"] = 0 });
+                    var selectedReference = NativePose(clone, fx, "Front", new Dictionary<string, int> { ["Menu"] = 1 });
+                    var neutral = VrChatExpressionSampler.SampleDefaults(clone, metadata.Controller, metadata.Defaults, metadata: metadata);
+                    var selected = VrChatExpressionSampler.Sample(clone, metadata.Controller, metadata.Defaults, Parameters(1), metadata: metadata);
+                    Assert.That(neutral.Single(value => value.Shape == "Pupil removal").Weight, Is.EqualTo(neutralReference.Weights["Pupil removal"]).Within(.01));
+                    Assert.That(selected.Single(value => value.Shape == "Pupil removal").Weight, Is.EqualTo(100).Within(.01));
+                    foreach (var value in selected) Assert.That(value.Weight, Is.EqualTo(selectedReference.Weights[value.Shape]).Within(.01), value.Shape);
+                    evaluated = true;
+                })) { }
+                Assert.That(evaluated, Is.True);
+                Assert.That(EditorJsonUtility.ToJson(controller), Is.EqualTo(sourceGraph)); Assert.That(EditorJsonUtility.ToJson(fixture.Mesh), Is.EqualTo(sourceMesh));
+                Assert.That(source.transform.Find("Front").GetComponent<SkinnedMeshRenderer>().GetBlendShapeWeight(2), Is.Zero);
+            }
+            finally { Object.DestroyImmediate(clone); }
+        }
+
         // Independent native Animator playback provides the expected result;
         // it does not use the export sampler or its reconstructed probe graph.
         static (Dictionary<string, float> Weights, Vector3[] Vertices) NativePose(GameObject source, AnimatorController fx,
@@ -94,16 +313,43 @@ namespace VRVlog.LilToonExporter.Tests
                 animator.runtimeAnimatorController = null; animator.applyRootMotion = false; animator.cullingMode = AnimatorCullingMode.AlwaysAnimate;
                 var playable = AnimatorControllerPlayable.Create(graph, fx);
                 for (var index = 0; index < fx.layers.Length; index++) playable.SetLayerWeight(index, index == 0 ? 1 : fx.layers[index].defaultWeight);
-                foreach (var parameter in parameters) playable.SetInteger(parameter.Key, parameter.Value);
                 var output = AnimationPlayableOutput.Create(graph, "Face", animator); output.SetSourcePlayable(playable);
                 graph.Play(); graph.Evaluate(0);
-                for (var frame = 0; frame < 8; frame++) graph.Evaluate(.02f);
+                for (var frame = 0; frame < 120; frame++) graph.Evaluate(1f / 60f);
+                foreach (var parameter in parameters) playable.SetInteger(parameter.Key, parameter.Value);
+                for (var frame = 0; frame < 120; frame++) graph.Evaluate(1f / 60f);
                 var renderer = copy.transform.Find(path).GetComponent<SkinnedMeshRenderer>();
                 var weights = Enumerable.Range(0, renderer.sharedMesh.blendShapeCount)
                     .ToDictionary(renderer.sharedMesh.GetBlendShapeName, renderer.GetBlendShapeWeight);
                 return (weights, WorldVertices(renderer));
             }
             finally { if (graph.IsValid()) graph.Destroy(); Object.DestroyImmediate(copy); }
+        }
+
+        // Registered FaceEmo clips are a WD-Off base below the authored
+        // permanent FX layers. They do not inherit the selected menu state's
+        // WD setting. Replay that authored configuration independently of the
+        // export sampler's scalar response probes.
+        (Dictionary<string, float> Weights, Vector3[] Vertices) NativeStandalonePose(GameObject source, AnimatorController fx, AnimationClip clip, string path)
+        {
+            var reference = AnimatorController.CreateAnimatorControllerAtPath(folder + "/StandaloneReference.controller");
+            reference.parameters = fx.parameters.Select(parameter => new AnimatorControllerParameter
+            {
+                name = parameter.name, type = parameter.type, defaultBool = parameter.defaultBool,
+                defaultInt = parameter.defaultInt, defaultFloat = parameter.defaultFloat
+            }).ToArray();
+            var baseMachine = reference.layers[0].stateMachine;
+            baseMachine.defaultState = State(baseMachine, "Registered expression", clip);
+            foreach (var original in fx.layers.Skip(1))
+            {
+                Assert.That(original.stateMachine.states.Length, Is.EqualTo(1), "This reference owns only the fixture's stationary upper layers.");
+                reference.AddLayer(original.name); var layers = reference.layers; var layer = layers[layers.Length - 1];
+                layer.defaultWeight = original.defaultWeight; layer.blendingMode = original.blendingMode; layer.avatarMask = original.avatarMask;
+                var state = original.stateMachine.defaultState;
+                layer.stateMachine.defaultState = State(layer.stateMachine, "Authored permanent", (AnimationClip)state.motion, state.writeDefaultValues);
+                reference.layers = layers;
+            }
+            return NativePose(source, reference, path, new Dictionary<string, int>());
         }
 
         static Vector3[] WorldVertices(SkinnedMeshRenderer renderer)
@@ -165,6 +411,7 @@ namespace VRVlog.LilToonExporter.Tests
             var clip = (AnimationClip)controller.layers[0].stateMachine.states.Single(child => child.state.name == "Selected").state.motion;
             var registeredClip = Object.Instantiate(clip); registeredClip.name = "Weighted registered face";
             AssetDatabase.CreateAsset(registeredClip, folder + "/WeightedFaceEmo.anim");
+            var standaloneExpected = NativeStandalonePose(avatar, controller, registeredClip, "Face");
             var registered = new { Modes = new[] { new { DisplayName = "Weighted registered", ChangeDefaultFace = true,
                 Animation = new { GUID = AssetDatabase.AssetPathToGUID(folder + "/WeightedFaceEmo.anim") } } } };
             var clone = Object.Instantiate(avatar);
@@ -177,10 +424,12 @@ namespace VRVlog.LilToonExporter.Tests
                 var faceEmo = new VrChatExpressionMenu.Source { Controller = controller }; var serial = 0;
                 FaceEmoExpressions.ReadRegistered(clone, registered, "FaceEmo", faceEmo, ref serial, new HashSet<object>(), 0, bindings: bindings);
                 Assert.That(faceEmo.Entries.Single().Error, Is.Null);
-                foreach (var values in new[] { menu, gesture.Values, faceEmo.Entries.Single().Values })
+                foreach (var route in new[] { (Name: "Menu", Values: menu, Expected: expected),
+                    (Name: "Gesture", Values: gesture.Values, Expected: expected),
+                    (Name: "FaceEmo", Values: faceEmo.Entries.Single().Values, Expected: standaloneExpected) })
                 {
-                    Assert.That(values.Single(value => value.Shape == "Pupil removal").Weight, Is.EqualTo(expected.Weights["Pupil removal"]).Within(.01));
-                    Assert.That(values.Single(value => value.Shape == "Face size").Weight, Is.EqualTo(expected.Weights["Face size"]).Within(.01));
+                    Assert.That(route.Values.Single(value => value.Shape == "Pupil removal").Weight, Is.EqualTo(route.Expected.Weights["Pupil removal"]).Within(.01), route.Name + ": pupil");
+                    Assert.That(route.Values.Single(value => value.Shape == "Face size").Weight, Is.EqualTo(route.Expected.Weights["Face size"]).Within(.01), route.Name + ": face size");
                 }
                 Assert.That(clone.GetComponentInChildren<SkinnedMeshRenderer>().GetBlendShapeWeight(2), Is.EqualTo(20), "Analysis must not replace its own input baseline.");
                 VrChatExpressionSampler.ApplyMergedDefaults(avatar, clone);

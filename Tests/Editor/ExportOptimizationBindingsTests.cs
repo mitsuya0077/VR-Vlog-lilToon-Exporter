@@ -133,6 +133,127 @@ namespace VRVlog.LilToonExporter.Tests
             Assert.That(source.GetComponent<Vrm10Instance>().Vrm, Is.SameAs(settings));
         }
 
+        [TestCase(.25f)]
+        [TestCase(.75f)]
+        public void CoalescedAuthoredMorphRoutesRegisterOneEqualWeight(float weight)
+        {
+            Skin(source, "first", "original"); Skin(source, "second", "original");
+            var settings = Own(ScriptableObject.CreateInstance<VRM10Object>());
+            var expression = Own(ScriptableObject.CreateInstance<VRM10Expression>()); expression.name = "authored";
+            expression.MorphTargetBindings = new[] { new MorphTargetBinding("first", 0, weight), new MorphTargetBinding("second", 0, weight) };
+            settings.Expression.Happy = expression; source.AddComponent<Vrm10Instance>().Vrm = settings;
+            clone = Object.Instantiate(source);
+            using var bindings = ExportOptimizationBindings.Capture(clone);
+            var target = Skin(clone, "merged", "coalesced");
+            foreach (var route in clone.GetComponent<ExportOptimizationMarker>().Morphs) { route.Renderer = target; route.Shape = "coalesced"; }
+            Object.DestroyImmediate(clone.transform.Find("first").gameObject); Object.DestroyImmediate(clone.transform.Find("second").gameObject);
+            bindings.ValidateAndApply();
+            var copied = clone.GetComponent<Vrm10Instance>().Vrm.Expression.Happy;
+            Assert.That(copied.MorphTargetBindings.Length, Is.EqualTo(1));
+            Assert.That(copied.MorphTargetBindings.Single().RelativePath, Is.EqualTo("merged"));
+            Assert.That(copied.MorphTargetBindings.Single().Index, Is.EqualTo(0));
+            Assert.That(copied.MorphTargetBindings.Single().Weight, Is.EqualTo(weight));
+            Assert.That(expression.MorphTargetBindings.Select(binding => binding.Weight), Is.EqualTo(new[] { weight, weight }));
+            Assert.That(expression.MorphTargetBindings.Select(binding => binding.RelativePath), Is.EqualTo(new[] { "first", "second" }));
+            Assert.That(source.GetComponent<Vrm10Instance>().Vrm, Is.SameAs(settings));
+        }
+
+        [Test]
+        public void CoalescedAuthoredConflictingWeightsStopBeforeMeshMaterialOrSettingsMutation()
+        {
+            var first = Skin(source, "first", "original"); var second = Skin(source, "second", "original");
+            var noOp = Skin(source, "no op", "__VRVlog_BlinkNone_original", true);
+            var material = Own(new Material(Shader.Find("Unlit/Color")) { name = "same material" });
+            first.sharedMaterial = material; second.sharedMaterial = material;
+            var settings = Own(ScriptableObject.CreateInstance<VRM10Object>());
+            var expression = Own(ScriptableObject.CreateInstance<VRM10Expression>()); expression.name = "authored conflicting";
+            expression.MorphTargetBindings = new[] { new MorphTargetBinding("first", 0, .25f), new MorphTargetBinding("second", 0, .75f) };
+            expression.MaterialColorBindings = new[] { new MaterialColorBinding { MaterialName = material.name, TargetValue = Color.red } };
+            settings.Expression.Happy = expression; source.AddComponent<Vrm10Instance>().Vrm = settings;
+            clone = Object.Instantiate(source);
+            using var bindings = ExportOptimizationBindings.Capture(clone);
+            var target = Skin(clone, "merged", "coalesced");
+            var otherMaterial = Own(new Material(material)); target.sharedMaterials = new[] { material, otherMaterial };
+            var marker = clone.GetComponent<ExportOptimizationMarker>();
+            foreach (var route in marker.Morphs)
+            {
+                if (route.SourceShape.StartsWith("__VRVlog_BlinkNone_", StringComparison.Ordinal)) { route.Removed = true; route.Renderer = null; }
+                else { route.Renderer = target; route.Shape = "coalesced"; }
+            }
+            marker.Materials.Single().Renderer = target; marker.Materials.Single().Slot = 0;
+            Object.DestroyImmediate(clone.transform.Find("first").gameObject); Object.DestroyImmediate(clone.transform.Find("second").gameObject);
+            Object.DestroyImmediate(clone.transform.Find("no op").gameObject);
+            var originalMesh = target.sharedMesh; var copies = 0;
+            var error = Assert.Throws<InvalidOperationException>(() => bindings.ValidateAndApply((copy, original) => copies++));
+            Assert.That(error.Message, Does.Contain("authored conflicting"));
+            Assert.That(error.Message, Does.Contain("適用量が衝突"));
+            Assert.That(copies, Is.Zero);
+            Assert.That(target.sharedMesh, Is.SameAs(originalMesh), "No-op reconstruction must not run before conflict validation.");
+            Assert.That(target.sharedMaterials, Is.EqualTo(new[] { material, otherMaterial }));
+            Assert.That(clone.GetComponent<Vrm10Instance>().Vrm, Is.SameAs(settings));
+            Assert.That(source.GetComponent<Vrm10Instance>().Vrm, Is.SameAs(settings));
+            Assert.That(expression.MorphTargetBindings.Select(binding => binding.Weight), Is.EqualTo(new[] { .25f, .75f }));
+            Assert.That(noOp.sharedMesh.GetBlendShapeName(0), Is.EqualTo("__VRVlog_BlinkNone_original"));
+        }
+
+        [TestCase(0f)]
+        [TestCase(.2f)]
+        public void DuplicateOriginalAuthoredBindingsKeepPinnedFirstWeight(float firstWeight)
+        {
+            Skin(source, "face", "original");
+            var settings = Own(ScriptableObject.CreateInstance<VRM10Object>());
+            var expression = Own(ScriptableObject.CreateInstance<VRM10Expression>()); expression.name = "authored duplicate";
+            expression.MorphTargetBindings = new[] { new MorphTargetBinding("face", 0, firstWeight), new MorphTargetBinding("face", 0, .8f) };
+            settings.Expression.Happy = expression; source.AddComponent<Vrm10Instance>().Vrm = settings;
+            clone = Object.Instantiate(source);
+            using var bindings = ExportOptimizationBindings.Capture(clone);
+            Assert.That(clone.GetComponent<ExportOptimizationMarker>().Morphs.Length, Is.EqualTo(1), "Repeated declarations must share their captured original route.");
+            bindings.ValidateAndApply();
+            var copied = clone.GetComponent<Vrm10Instance>().Vrm.Expression.Happy;
+            Assert.That(copied.MorphTargetBindings.Length, Is.EqualTo(1));
+            Assert.That(copied.MorphTargetBindings.Single().Weight, Is.EqualTo(firstWeight));
+            Assert.That(expression.MorphTargetBindings.Select(binding => binding.Weight), Is.EqualTo(new[] { firstWeight, .8f }));
+            Assert.That(source.GetComponent<Vrm10Instance>().Vrm, Is.SameAs(settings));
+        }
+
+        [TestCase(0f, 0f, false)]
+        [TestCase(.2f, .2f, false)]
+        [TestCase(0f, .8f, true)]
+        [TestCase(.2f, .8f, true)]
+        public void CoalescedDistinctAuthoredRoutesCompareTheirFirstOriginalWeights(float firstWeight, float secondWeight, bool conflict)
+        {
+            Skin(source, "first", "original"); Skin(source, "second", "original");
+            var settings = Own(ScriptableObject.CreateInstance<VRM10Object>());
+            var expression = Own(ScriptableObject.CreateInstance<VRM10Expression>()); expression.name = "authored duplicated then coalesced";
+            expression.MorphTargetBindings = new[] {
+                new MorphTargetBinding("first", 0, firstWeight), new MorphTargetBinding("first", 0, .8f), new MorphTargetBinding("second", 0, secondWeight) };
+            settings.Expression.Happy = expression; source.AddComponent<Vrm10Instance>().Vrm = settings;
+            clone = Object.Instantiate(source);
+            using var bindings = ExportOptimizationBindings.Capture(clone);
+            var target = Skin(clone, "merged", "coalesced");
+            var marker = clone.GetComponent<ExportOptimizationMarker>();
+            Assert.That(marker.Morphs.Length, Is.EqualTo(2));
+            foreach (var route in marker.Morphs) { route.Renderer = target; route.Shape = "coalesced"; }
+            Object.DestroyImmediate(clone.transform.Find("first").gameObject); Object.DestroyImmediate(clone.transform.Find("second").gameObject);
+            var before = target.sharedMesh; var copies = 0;
+            if (conflict)
+            {
+                var error = Assert.Throws<InvalidOperationException>(() => bindings.ValidateAndApply((copy, original) => copies++));
+                Assert.That(error.Message, Does.Contain("適用量が衝突"));
+                Assert.That(copies, Is.Zero); Assert.That(target.sharedMesh, Is.SameAs(before));
+                Assert.That(clone.GetComponent<Vrm10Instance>().Vrm, Is.SameAs(settings));
+            }
+            else
+            {
+                bindings.ValidateAndApply();
+                var copied = clone.GetComponent<Vrm10Instance>().Vrm.Expression.Happy;
+                Assert.That(copied.MorphTargetBindings.Length, Is.EqualTo(1));
+                Assert.That(copied.MorphTargetBindings.Single().Weight, Is.EqualTo(firstWeight));
+            }
+            Assert.That(expression.MorphTargetBindings.Select(binding => binding.Weight), Is.EqualTo(new[] { firstWeight, .8f, secondWeight }));
+            Assert.That(source.GetComponent<Vrm10Instance>().Vrm, Is.SameAs(settings));
+        }
+
         [TestCase("color", false)]
         [TestCase("color", true)]
         [TestCase("emissionColor", false)]
@@ -463,6 +584,76 @@ namespace VRVlog.LilToonExporter.Tests
                 Assert.That(second.sharedMesh.GetBlendShapeName(0), Is.EqualTo("profile shape"));
                 Assert.That(first.sharedMesh.vertexCount, Is.EqualTo(3)); Assert.That(second.sharedMesh.vertexCount, Is.EqualTo(3));
                 Assert.That(profile.expressions.All(expression => expression.morphs.Single().shape == "profile shape" && expression.morphs.Single().weight == weight), Is.True);
+                Assert.That(merge != null, Is.True);
+            }
+            finally { bindings?.Dispose(); }
+        }
+
+        [TestCase(.25f, .25f, false)]
+        [TestCase(.75f, .75f, false)]
+        [TestCase(.25f, .75f, true)]
+        [TestCase(.75f, .25f, true)]
+        public void InstalledAvatarOptimizerCoalescedAuthoredShapesDriveOnceOrStopOnConflictingWeights(float firstWeight, float secondWeight, bool conflict)
+        {
+            RequireInstalledAvatarOptimizer("MergeSkinnedMesh");
+            if (InstalledType("Anatawa12.AvatarOptimizer.MergeSkinnedMesh").GetProperty("MergeBlendShapes") == null)
+                Assert.Ignore("This coalescing fixture requires the AAO 1.8+ merge configuration API.");
+            var first = Skin(source, "first", "authored shape"); var second = Skin(source, "second", "authored shape");
+            var firstMesh = first.sharedMesh; var secondMesh = second.sharedMesh;
+            var material = Own(new Material(Shader.Find("Unlit/Color")));
+            first.sharedMaterial = material; second.sharedMaterial = material;
+            var settings = Own(ScriptableObject.CreateInstance<VRM10Object>());
+            var expression = Own(ScriptableObject.CreateInstance<VRM10Expression>()); expression.name = "authored Happy";
+            expression.MorphTargetBindings = new[] { new MorphTargetBinding("first", 0, firstWeight), new MorphTargetBinding("second", 0, secondWeight) };
+            settings.Expression.Happy = expression; source.AddComponent<Vrm10Instance>().Vrm = settings;
+            var node = new GameObject("merged"); node.transform.SetParent(source.transform, false); node.AddComponent<SkinnedMeshRenderer>();
+            var merge = AddOptimizer(node, "MergeSkinnedMesh", 2);
+            merge.GetType().GetProperty("MergeBlendShapes").SetValue(merge, true);
+            var sources = merge.GetType().GetProperty("SourceSkinnedMeshRenderers").GetValue(merge);
+            var add = sources.GetType().GetMethod("Add", new[] { typeof(SkinnedMeshRenderer) });
+            Assert.That(add, Is.Not.Null);
+            add.Invoke(sources, new object[] { first }); add.Invoke(sources, new object[] { second });
+            merge.GetType().GetProperty("RemoveEmptyRendererObject").SetValue(merge, true);
+            source.AddComponent(InstalledType("Anatawa12.AvatarOptimizer.TraceAndOptimize"));
+            clone = Object.Instantiate(source);
+            var oldFirst = clone.transform.Find("first").GetComponent<SkinnedMeshRenderer>();
+            var oldSecond = clone.transform.Find("second").GetComponent<SkinnedMeshRenderer>();
+            ExportOptimizationBindings bindings = null;
+            try
+            {
+                using var preparation = NdmfExportPreparation.Prepare(source, clone, afterTransforming: _ => bindings = ExportOptimizationBindings.Capture(clone));
+                var routes = clone.GetComponent<ExportOptimizationMarker>().Morphs;
+                Assert.That(oldFirst == null && oldSecond == null, Is.True, "Installed AAO must destroy both original renderer objects.");
+                Assert.That(routes.Length, Is.EqualTo(2));
+                Assert.That(routes[0].Renderer, Is.SameAs(routes[1].Renderer));
+                Assert.That(routes[0].Shape, Is.EqualTo(routes[1].Shape), "The optimizer must really coalesce the authored output properties.");
+                var target = routes[0].Renderer; var meshBeforeApply = target.sharedMesh; var materialsBeforeApply = target.sharedMaterials;
+                var settingsBeforeApply = clone.GetComponent<Vrm10Instance>().Vrm; var copies = 0;
+                if (conflict)
+                {
+                    var error = Assert.Throws<InvalidOperationException>(() => bindings.ValidateAndApply((copy, original) => copies++));
+                    Assert.That(error.Message, Does.Contain("authored Happy"));
+                    Assert.That(error.Message, Does.Contain("適用量が衝突"));
+                    Assert.That(copies, Is.Zero);
+                    Assert.That(target.sharedMesh, Is.SameAs(meshBeforeApply));
+                    Assert.That(target.sharedMaterials, Is.EqualTo(materialsBeforeApply));
+                    Assert.That(clone.GetComponent<Vrm10Instance>().Vrm, Is.SameAs(settingsBeforeApply));
+                }
+                else
+                {
+                    bindings.ValidateAndApply();
+                    var copied = clone.GetComponent<Vrm10Instance>().Vrm.Expression.Happy;
+                    Assert.That(copied, Is.Not.SameAs(expression));
+                    Assert.That(copied.MorphTargetBindings.Length, Is.EqualTo(1));
+                    Assert.That(copied.MorphTargetBindings.Single().RelativePath, Is.EqualTo(UnityEditor.AnimationUtility.CalculateTransformPath(target.transform, clone.transform)));
+                    Assert.That(copied.MorphTargetBindings.Single().Index, Is.EqualTo(target.sharedMesh.GetBlendShapeIndex(routes[0].Shape)));
+                    Assert.That(copied.MorphTargetBindings.Single().Weight, Is.EqualTo(firstWeight));
+                }
+                Assert.That(source.GetComponent<Vrm10Instance>().Vrm, Is.SameAs(settings));
+                Assert.That(expression.MorphTargetBindings.Select(binding => binding.RelativePath), Is.EqualTo(new[] { "first", "second" }));
+                Assert.That(expression.MorphTargetBindings.Select(binding => binding.Weight), Is.EqualTo(new[] { firstWeight, secondWeight }));
+                Assert.That(first.sharedMesh, Is.SameAs(firstMesh)); Assert.That(second.sharedMesh, Is.SameAs(secondMesh));
+                Assert.That(firstMesh.GetBlendShapeName(0), Is.EqualTo("authored shape")); Assert.That(secondMesh.GetBlendShapeName(0), Is.EqualTo("authored shape"));
                 Assert.That(merge != null, Is.True);
             }
             finally { bindings?.Dispose(); }

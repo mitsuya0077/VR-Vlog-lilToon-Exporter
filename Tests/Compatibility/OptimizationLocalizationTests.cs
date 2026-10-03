@@ -23,6 +23,7 @@ namespace VRVlog.LilToonExporter.Tests
                 foreach (var prefix in new[]
                 {
                     "最適化で書き出し用の表情が失われました: ",
+                    "最適化で元のVRM表情の適用量が衝突しました: ",
                     "マテリアルの移動先を解決できません: ",
                     "変形しない表情の出力先メッシュがありません: ",
                     "常時適用するFXのBlendShapeが見つかりません: ",
