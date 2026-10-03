@@ -4,6 +4,7 @@ using System.Collections.Generic;
 using System.Linq;
 using System.Reflection;
 using UnityEditor;
+using UnityEditor.Animations;
 using UnityEngine;
 
 namespace VRVlog.LilToonExporter
@@ -12,6 +13,58 @@ namespace VRVlog.LilToonExporter
     // Read that authored data; do not run build plugins or modify its assets.
     internal static class FaceEmoExpressions
     {
+        // FaceEmo's mode default and branch animations are alternative states
+        // on FACE EMOTE PLAYER. Only DEFAULT FACE is their common underlay.
+        // Read the prepared clip after NDMF has retargeted its object paths, then
+        // map those paths back to the source menu's renderer identities.
+        internal static void ApplyPreparedDefaultFace(GameObject prepared, VrChatExpressionMenu.Source source,
+            Func<string, string> toAuthoringPath, Func<string, bool> excludedPath = null)
+        {
+            var entries = source.Entries.Where(entry => entry.Error == null && entry.Id?.StartsWith("faceemo/", StringComparison.Ordinal) == true).ToArray();
+            if (entries.Length == 0) return;
+            var metadata = VrChatExpressionMenu.Read(prepared, new VrChatMenuImportPolicy { SkipAll = true });
+            if (metadata.Controller == null) return;
+            var controller = ExpressionDependencies.Controller(metadata.Controller);
+            var layers = controller.layers.Where(layer => layer.name == "[ USER EDIT ] DEFAULT FACE").ToArray();
+            if (layers.Length == 0) return; // Authored registrations may exist without generated FaceEmo FX.
+            try
+            {
+                if (layers.Length != 1 || layers[0].syncedLayerIndex >= 0 || layers[0].stateMachine == null)
+                    throw new InvalidOperationException("FaceEmoの共通DEFAULT FACEレイヤーを一意に取得できません。");
+                var states = layers[0].stateMachine.states.Where(child => child.state != null && child.state.name == "DEFAULT").ToArray();
+                if (states.Length != 1 || !(states[0].state.motion is AnimationClip clip))
+                    throw new InvalidOperationException("FaceEmoの共通DEFAULT FACEアニメーションを取得できません。");
+                var replacements = ExpressionDependencies.Overrides(metadata.Controller);
+                if (replacements.TryGetValue(clip, out var replacement)) clip = replacement;
+                var underlay = new Dictionary<(string Path, string Shape), VrChatExpressionMenu.MorphValue>();
+                foreach (var binding in AnimationUtility.GetCurveBindings(clip))
+                {
+                    if (excludedPath?.Invoke(binding.path) == true || binding.type != typeof(SkinnedMeshRenderer) ||
+                        !binding.propertyName.StartsWith("blendShape.", StringComparison.Ordinal)) continue;
+                    var curve = VrChatGestureExpressions.ReadCurve(AnimationUtility.GetEditorCurve(clip, binding));
+                    curve.Range(out var minimum, out var maximum);
+                    if (minimum != maximum)
+                        throw new InvalidOperationException("FaceEmoの共通DEFAULT FACEが時間で変化します: " + binding.path + " / " + binding.propertyName);
+                    var path = toAuthoringPath?.Invoke(binding.path) ?? (toAuthoringPath == null ? binding.path : null);
+                    if (path == null)
+                        throw new InvalidOperationException("FaceEmoの共通DEFAULT FACEの元Rendererを特定できません: " + binding.path);
+                    var shape = binding.propertyName.Substring("blendShape.".Length);
+                    underlay[(path, shape)] = new VrChatExpressionMenu.MorphValue { Path = path, Shape = shape, Weight = (float)minimum };
+                }
+                foreach (var entry in entries)
+                {
+                    var values = new Dictionary<(string Path, string Shape), VrChatExpressionMenu.MorphValue>(underlay);
+                    foreach (var value in entry.Values) values[(value.Path, value.Shape)] = value;
+                    entry.Values.Clear();
+                    entry.Values.AddRange(values.Values.OrderBy(value => value.Path, StringComparer.Ordinal).ThenBy(value => value.Shape, StringComparer.Ordinal));
+                }
+            }
+            catch (InvalidOperationException error)
+            {
+                foreach (var entry in entries) entry.Error = error.Message;
+            }
+        }
+
         internal static void Add(GameObject avatar, VrChatExpressionMenu.Source source, Func<string, bool> excludedPath = null)
         {
             var serial = 0;

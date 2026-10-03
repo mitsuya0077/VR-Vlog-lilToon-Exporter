@@ -18,8 +18,12 @@ namespace VRVlog.LilToonExporter
         // Provenance only for copies made by our own isolation pass. Assets
         // created or replaced by NDMF plugins never enter this identity map.
         private readonly Dictionary<Object, Object> isolatedAssets = new Dictionary<Object, Object>();
+        private readonly Dictionary<SkinnedMeshRenderer, SkinnedMeshRenderer> rendererReplacements =
+            new Dictionary<SkinnedMeshRenderer, SkinnedMeshRenderer>();
+        private readonly HashSet<SkinnedMeshRenderer> ambiguousRendererReplacements = new HashSet<SkinnedMeshRenderer>();
         private string temporaryAssetPath, temporaryAssetGuid;
         private const string MaNamespace = "nadena.dev.modular_avatar.core.";
+        internal const string UnknownRendererRelocation = "Modular Avatar / NDMF の処理で表情の対象Rendererが変わりましたが、元の変形との対応を一意に確定できません。統合・分割ツールの設定を確認してください。";
         private const string CompatibilityMessage =
             "Modular Avatar の準備に必要な NDMF API を利用できません。NDMF " + DependencyPolicy.NdmfMinimum + " 以降の 1.x が必要です。確認済み構成: MA " + DependencyPolicy.ModularAvatarReference + " / NDMF " + DependencyPolicy.NdmfReference + "。" + DependencyPolicy.Recovery;
 
@@ -27,6 +31,38 @@ namespace VRVlog.LilToonExporter
 
         internal Object IsolatedCopyOf(Object original) => original != null && isolatedAssets.TryGetValue(original, out var copy)
             ? copy : original;
+
+        internal SkinnedMeshRenderer PreparedRendererFor(SkinnedMeshRenderer original)
+        {
+            if (ReferenceEquals(original, null)) return null;
+            if (original != null) return original;
+            if (ambiguousRendererReplacements.Contains(original)) return null;
+            return rendererReplacements.TryGetValue(original, out var current) ? current : null;
+        }
+
+        // NDMF's registry records provenance for diagnostic references. Read its
+        // existing references without creating entries or guessing by shape/name.
+        // Only one-to-one registered component replacement can carry a channel.
+        private void CaptureRendererReplacements(GameObject clone, object context)
+        {
+            var registry = context?.GetType().GetProperty("ObjectRegistry", BindingFlags.Public | BindingFlags.Instance)?.GetValue(context);
+            var contract = registry?.GetType().GetInterfaces().FirstOrDefault(type => type.FullName == "nadena.dev.ndmf.IObjectRegistry");
+            var getReference = contract?.GetMethod("GetReference", new[] { typeof(Object), typeof(bool) });
+            if (getReference == null) return;
+            foreach (var current in clone.GetComponentsInChildren<SkinnedMeshRenderer>(true))
+            {
+                var reference = getReference.Invoke(registry, new object[] { current, false });
+                var original = reference?.GetType().GetProperty("Object", BindingFlags.Public | BindingFlags.Instance)?.GetValue(reference)
+                    as SkinnedMeshRenderer;
+                if (ReferenceEquals(original, null)) continue;
+                if (rendererReplacements.TryGetValue(original, out var previous) && !ReferenceEquals(previous, current))
+                {
+                    ambiguousRendererReplacements.Add(original);
+                    rendererReplacements.Remove(original);
+                }
+                else if (!ambiguousRendererReplacements.Contains(original)) rendererReplacements[original] = current;
+            }
+        }
 
         private static bool IsAuthoringTag(Type type)
         {
@@ -204,6 +240,7 @@ namespace VRVlog.LilToonExporter
                     // NDMF records plugin exceptions instead of always rethrowing.
                     if (!(Invoke(() => bridge.Successful.GetValue(context)) is bool success) || !success)
                         throw BuildFailure(context, null);
+                    lease.CaptureRendererReplacements(clone, context);
                     if (!requiredMorphs.IsSubsetOf(ExportMorphs(clone)))
                         throw new InvalidOperationException("Modular Avatar / NDMF の処理で書き出し用の表情が失われました。メッシュや BlendShape を変更する追加ツールの設定を確認してください。");
                     warnings?.Add("Modular Avatar / NDMF の衣装・追従設定を一時コピーに適用しました（最適化フェーズは実行していません）。");
@@ -406,6 +443,8 @@ namespace VRVlog.LilToonExporter
                     if (value != null && !EditorUtility.IsPersistent(value)) Object.DestroyImmediate(value);
                 generated.Clear();
                 isolatedAssets.Clear();
+                rendererReplacements.Clear();
+                ambiguousRendererReplacements.Clear();
             }
             finally
             {
