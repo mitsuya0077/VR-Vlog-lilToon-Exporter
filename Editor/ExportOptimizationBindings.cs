@@ -390,7 +390,13 @@ namespace VRVlog.LilToonExporter
             foreach (var expression in profile)
             {
                 if (custom.ContainsKey(expression.Name)) throw new InvalidOperationException("既存のVRM表情と追跡名が重複しています: " + expression.Name);
-                custom.Add(expression.Name, Expression(expression.Morphs.Select(item => OutputBinding(glb.Json, item.Route, item.Weight))));
+                // AAO can coalesce independent source routes into one output
+                // property. Register that property once, retaining its first
+                // configured weight rather than adding repeated contributions.
+                var binds = expression.Morphs.Select(item => OutputBinding(glb.Json, item.Route, item.Weight))
+                    .GroupBy(binding => (binding["node"], binding["index"]))
+                    .Select(group => (object)group.First());
+                custom.Add(expression.Name, Expression(binds));
             }
             return glb.Write();
         }

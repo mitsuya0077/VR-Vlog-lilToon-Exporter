@@ -260,6 +260,47 @@ namespace VRVlog.LilToonExporter.Tests
             Assert.That(profile.expressions.All(expression => expression.morphs.Single().shape == "original" && expression.morphs.Single().weight == .3f), Is.True);
         }
 
+        [TestCase(.25f, .25f)]
+        [TestCase(.25f, .75f)]
+        public void ExplicitProfileCoalescedRoutesRegisterOneEndpointWithTheFirstConfiguredWeight(float firstWeight, float laterWeight)
+        {
+            Skin(source, "first", "original"); Skin(source, "second", "original");
+            var profile = Own(ScriptableObject.CreateInstance<VrmTrackingProfile>());
+            profile.expressions = VrmTrackingExpressions.Names.Select(name => new TrackingExpression { name = name,
+                morphs = new[] { new TrackingMorph { shape = "original", weight = firstWeight },
+                    new TrackingMorph { shape = "original", weight = laterWeight } } }).ToArray();
+            clone = Object.Instantiate(source);
+            using var bindings = ExportOptimizationBindings.Capture(clone, profile);
+            var target = Skin(clone, "merged", "coalesced");
+            foreach (var route in clone.GetComponent<ExportOptimizationMarker>().Morphs)
+            {
+                route.Renderer = target; route.Shape = "coalesced";
+            }
+            Object.DestroyImmediate(clone.transform.Find("first").gameObject); Object.DestroyImmediate(clone.transform.Find("second").gameObject);
+            bindings.ValidateAndApply(); bindings.BindNodes(_ => 0);
+            AssertSingleTrackingEndpoint(bindings.ApplyTracking(Output("coalesced")), 0, firstWeight);
+            Assert.That(profile.expressions.All(expression => expression.morphs[0].shape == "original" && expression.morphs[0].weight == firstWeight &&
+                expression.morphs[1].shape == "original" && expression.morphs[1].weight == laterWeight), Is.True);
+            Assert.That(source.GetComponentsInChildren<SkinnedMeshRenderer>().Length, Is.EqualTo(2));
+        }
+
+        static void AssertSingleTrackingEndpoint(byte[] bytes, int expectedIndex, float weight)
+        {
+            var document = GlbDocument.Read(bytes);
+            var vrm = (Dictionary<string, object>)((Dictionary<string, object>)document.Json["extensions"])["VRMC_vrm"];
+            var custom = (Dictionary<string, object>)((Dictionary<string, object>)vrm["expressions"])["custom"];
+            Assert.That(custom.Count, Is.EqualTo(52));
+            foreach (var expression in custom.Values.Cast<Dictionary<string, object>>())
+            {
+                var morphs = ((List<object>)expression["morphTargetBinds"]).Cast<Dictionary<string, object>>().ToArray();
+                Assert.That(morphs.Length, Is.EqualTo(1), "Coalesced properties must not contribute the ARKit weight twice.");
+                Assert.That(Convert.ToInt32(morphs[0]["node"]), Is.EqualTo(0));
+                Assert.That(Convert.ToInt32(morphs[0]["index"]), Is.EqualTo(expectedIndex));
+                Assert.That(Convert.ToDouble(morphs[0]["weight"]), Is.EqualTo((double)weight).Within(.000001));
+                Assert.That(morphs.Sum(binding => Convert.ToDouble(binding["weight"])), Is.EqualTo((double)weight).Within(.000001));
+            }
+        }
+
         static byte[] Output(params string[] names) => GlbDocument.Create(new Dictionary<string, object> {
             ["asset"] = new Dictionary<string, object> { ["version"] = "2.0" },
             ["nodes"] = new List<object> { new Dictionary<string, object> { ["mesh"] = 0L } },
@@ -374,6 +415,55 @@ namespace VRVlog.LilToonExporter.Tests
                 Assert.That(firstRoute.Renderer.sharedMesh.GetBlendShapeIndex(secondRoute.Shape), Is.GreaterThanOrEqualTo(0));
                 Assert.That(first != null && second != null, Is.True);
                 Assert.That(first.sharedMesh.GetBlendShapeName(0), Is.EqualTo("UE/JawOpen"));
+            }
+            finally { bindings?.Dispose(); }
+        }
+
+        [TestCase(.25f)]
+        [TestCase(.75f)]
+        public void InstalledAvatarOptimizerCoalescedTrackingShapesDoNotMultiplyProfileWeights(float weight)
+        {
+            RequireInstalledAvatarOptimizer("MergeSkinnedMesh");
+            if (InstalledType("Anatawa12.AvatarOptimizer.MergeSkinnedMesh").GetProperty("MergeBlendShapes") == null)
+                Assert.Ignore("This coalescing fixture requires the AAO 1.8+ merge configuration API.");
+            var first = Skin(source, "first", "profile shape"); var second = Skin(source, "second", "profile shape");
+            var material = Own(new Material(Shader.Find("Unlit/Color")));
+            first.sharedMaterial = material; second.sharedMaterial = material;
+            var node = new GameObject("merged"); node.transform.SetParent(source.transform, false); node.AddComponent<SkinnedMeshRenderer>();
+            var merge = AddOptimizer(node, "MergeSkinnedMesh", 2);
+            merge.GetType().GetProperty("MergeBlendShapes").SetValue(merge, true);
+            var sources = merge.GetType().GetProperty("SourceSkinnedMeshRenderers").GetValue(merge);
+            var add = sources.GetType().GetMethod("Add", new[] { typeof(SkinnedMeshRenderer) });
+            Assert.That(add, Is.Not.Null);
+            add.Invoke(sources, new object[] { first }); add.Invoke(sources, new object[] { second });
+            merge.GetType().GetProperty("RemoveEmptyRendererObject").SetValue(merge, true);
+            source.AddComponent(InstalledType("Anatawa12.AvatarOptimizer.TraceAndOptimize"));
+            var profile = Own(ScriptableObject.CreateInstance<VrmTrackingProfile>());
+            profile.expressions = VrmTrackingExpressions.Names.Select(name => new TrackingExpression { name = name,
+                morphs = new[] { new TrackingMorph { shape = "profile shape", weight = weight } } }).ToArray();
+            clone = Object.Instantiate(source);
+            Assert.That(NdmfExportPreparation.NeedsProcessing(clone), Is.True);
+            var oldFirst = clone.transform.Find("first").GetComponent<SkinnedMeshRenderer>();
+            var oldSecond = clone.transform.Find("second").GetComponent<SkinnedMeshRenderer>();
+            ExportOptimizationBindings bindings = null;
+            try
+            {
+                using var preparation = NdmfExportPreparation.Prepare(source, clone, afterTransforming: _ => bindings = ExportOptimizationBindings.Capture(clone, profile));
+                bindings.ValidateAndApply();
+                var firstRoute = bindings.MapMorph(oldFirst, "profile shape"); var secondRoute = bindings.MapMorph(oldSecond, "profile shape");
+                Assert.That(oldFirst == null && oldSecond == null, Is.True);
+                Assert.That(firstRoute.Renderer, Is.SameAs(secondRoute.Renderer));
+                Assert.That(firstRoute.Shape, Is.EqualTo(secondRoute.Shape), "The installed optimizer must actually coalesce both source controls.");
+                var mesh = firstRoute.Renderer.sharedMesh;
+                bindings.BindNodes(renderer => renderer == firstRoute.Renderer ? 0 : -1);
+                var bytes = bindings.ApplyTracking(Output(Enumerable.Range(0, mesh.blendShapeCount).Select(mesh.GetBlendShapeName).ToArray()));
+                AssertSingleTrackingEndpoint(bytes, mesh.GetBlendShapeIndex(firstRoute.Shape), weight);
+                Assert.That(first != null && second != null, Is.True);
+                Assert.That(first.sharedMesh.GetBlendShapeName(0), Is.EqualTo("profile shape"));
+                Assert.That(second.sharedMesh.GetBlendShapeName(0), Is.EqualTo("profile shape"));
+                Assert.That(first.sharedMesh.vertexCount, Is.EqualTo(3)); Assert.That(second.sharedMesh.vertexCount, Is.EqualTo(3));
+                Assert.That(profile.expressions.All(expression => expression.morphs.Single().shape == "profile shape" && expression.morphs.Single().weight == weight), Is.True);
+                Assert.That(merge != null, Is.True);
             }
             finally { bindings?.Dispose(); }
         }
