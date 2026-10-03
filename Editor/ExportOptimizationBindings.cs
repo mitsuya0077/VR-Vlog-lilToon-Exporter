@@ -127,6 +127,40 @@ namespace VRVlog.LilToonExporter
             name.StartsWith("__VRVlog_Anim_", StringComparison.Ordinal) || name.StartsWith("__VRVlog_Blink_", StringComparison.Ordinal) ||
             name.StartsWith("__VRVlog_BlinkNone_", StringComparison.Ordinal) || name.StartsWith(UnifiedExpressionRegistry.RestPrefix, StringComparison.Ordinal));
 
+        internal void ProtectRebasedNeutral(NeutralShapeSnapshot neutral)
+        {
+            if (neutral == null || neutral.Root != avatar)
+                throw new ArgumentException("The neutral snapshot must belong to this export copy.", nameof(neutral));
+            var mutations = new Dictionary<Renderer, HashSet<string>>();
+            void Add(Renderer renderer, IEnumerable<string> properties)
+            {
+                if (!mutations.TryGetValue(renderer, out var values))
+                    mutations.Add(renderer, values = new HashSet<string>(StringComparer.Ordinal));
+                values.UnionWith(properties);
+            }
+            foreach (var mutation in marker.PropertyMutations)
+                if (mutation.Renderer != null) Add(mutation.Renderer, mutation.Properties);
+            foreach (var state in neutral.Renderers)
+                for (var index = 0; index < state.Weights.Length; index++)
+                {
+                    if (state.Weights[index] == 0f) continue;
+                    var shape = state.OriginalMesh.GetBlendShapeName(index);
+                    var renderer = state.Renderer;
+                    var current = renderer != null && renderer.sharedMesh != null
+                        ? renderer.sharedMesh.GetBlendShapeIndex(shape) : -1;
+                    if (current < 0 || renderer.GetBlendShapeWeight(current) != 0f)
+                        throw new InvalidOperationException("焼き込み済みの初期表情を保護できません: " + state.Path + " / " + shape);
+                    // This nonzero raw pose is already stored in base geometry.
+                    // Its committed FX curve still describes the old absolute
+                    // weight. Declare our owned residual channel mutable so AAO
+                    // cannot infer and bake that stale constant a second time.
+                    // Unconsumed zero channels remain eligible for auto-freeze.
+                    Add(renderer, new[] { "blendShape." + shape });
+                }
+            marker.PropertyMutations = mutations.Select(pair => new OptimizationPropertyMutation {
+                Renderer = pair.Key, Properties = pair.Value.ToArray() }).ToArray();
+        }
+
         OptimizationMorphRoute AddMorph(SkinnedMeshRenderer skin, string name, bool requireUsableEndpoint = true)
         {
             if (skin == null || skin.sharedMesh == null || string.IsNullOrEmpty(name) || skin.sharedMesh.GetBlendShapeIndex(name) < 0)

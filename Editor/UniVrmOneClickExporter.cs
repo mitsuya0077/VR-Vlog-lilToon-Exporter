@@ -152,6 +152,7 @@ namespace VRVlog.LilToonExporter
                     optimizerBindings = ExportOptimizationBindings.Capture(clone,
                         trackingProfile == null ? null : authoredEndpoints.TrackingProfile, unifiedPreparation,
                         objectRegistry: transformed.ObjectRegistry);
+                    optimizerBindings.ProtectRebasedNeutral(neutral);
                 });
                 optimizerBindings.ValidateAndApply((copy, original) =>
                 {

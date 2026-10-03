@@ -6,6 +6,8 @@ using System.Text.RegularExpressions;
 using NUnit.Framework;
 using UniGLTF.Extensions.VRMC_vrm;
 using UniVRM10;
+using UnityEditor;
+using UnityEditor.Animations;
 using UnityEngine;
 using UnityEngine.TestTools;
 using Object = UnityEngine.Object;
@@ -601,6 +603,83 @@ namespace VRVlog.LilToonExporter.Tests
                 Assert.That(component != null, Is.True);
             }
             finally { bindings?.Dispose(); }
+        }
+
+        [Test]
+        public void InstalledAvatarOptimizerPreservesRebasedNeutralAndStillFreezesUnconsumedZeroChannel()
+        {
+            RequireInstalledAvatarOptimizer("TraceAndOptimize");
+            var skin = Skin(source, "face", "Neutral opening");
+            var mesh = skin.sharedMesh;
+            mesh.AddBlendShapeFrame("Unconsumed zero", 100, Enumerable.Repeat(Vector3.right * .1f, 3).ToArray(), null, null);
+            mesh.AddBlendShapeFrame("__VRVlog_Menu_control", 100, Enumerable.Repeat(Vector3.up * .05f, 3).ToArray(), null, null);
+            var bone = new GameObject("bone").transform; bone.SetParent(source.transform, false);
+            mesh.bindposes = new[] { bone.worldToLocalMatrix * skin.transform.localToWorldMatrix };
+            mesh.boneWeights = Enumerable.Repeat(new BoneWeight { boneIndex0 = 0, weight0 = 1 }, 3).ToArray();
+            skin.bones = new[] { bone }; skin.rootBone = bone;
+            skin.sharedMaterial = Own(new Material(Shader.Find("Unlit/Color")));
+            skin.SetBlendShapeWeight(0, 75);
+            source.AddComponent(InstalledType("Anatawa12.AvatarOptimizer.TraceAndOptimize"));
+            var folderName = "__AaoRebasedNeutral_" + Guid.NewGuid().ToString("N");
+            AssetDatabase.CreateFolder("Assets", folderName); var folder = "Assets/" + folderName;
+            var meshes = new List<Mesh>();
+            ExportOptimizationBindings bindings = null;
+            Vector3[] NativeVertices(SkinnedMeshRenderer renderer)
+            {
+                var baked = new Mesh();
+                try { renderer.BakeMesh(baked); return baked.vertices.Select(renderer.transform.TransformPoint).ToArray(); }
+                finally { Object.DestroyImmediate(baked); }
+            }
+            try
+            {
+                var controller = AnimatorController.CreateAnimatorControllerAtPath(folder + "/FX.controller");
+                var clip = new AnimationClip { name = "Absolute neutral75 and unused zero" };
+                AssetDatabase.AddObjectToAsset(clip, controller);
+                var neutralBinding = EditorCurveBinding.FloatCurve("face", typeof(SkinnedMeshRenderer), "blendShape.Neutral opening");
+                var zeroBinding = EditorCurveBinding.FloatCurve("face", typeof(SkinnedMeshRenderer), "blendShape.Unconsumed zero");
+                AnimationUtility.SetEditorCurve(clip, neutralBinding, AnimationCurve.Constant(0, 1, 75));
+                AnimationUtility.SetEditorCurve(clip, zeroBinding, AnimationCurve.Constant(0, 1, 0));
+                var machine = controller.layers[0].stateMachine;
+                var state = machine.AddState("Neutral"); state.motion = clip; state.writeDefaultValues = false; machine.defaultState = state;
+                source.AddComponent<Animator>().runtimeAnimatorController = controller;
+                var sourceController = EditorJsonUtility.ToJson(controller);
+                var expected = NativeVertices(skin);
+                clone = Object.Instantiate(source);
+                using var preparation = NdmfExportPreparation.Prepare(source, clone, afterTransforming: _ =>
+                {
+                    var neutral = NeutralShapeSnapshot.Capture(clone);
+                    AvatarBaseShape.Preserve(clone, clone, meshes, null);
+                    bindings = ExportOptimizationBindings.Capture(clone);
+                    bindings.ProtectRebasedNeutral(neutral);
+                });
+                bindings.ValidateAndApply();
+                var output = clone.GetComponentsInChildren<SkinnedMeshRenderer>().Single();
+                var actual = NativeVertices(output);
+                Assert.That(actual.Length, Is.EqualTo(expected.Length));
+                var unmatched = expected.ToList();
+                foreach (var vertex in actual)
+                {
+                    var index = unmatched.FindIndex(value => Vector3.Distance(vertex, value) < .00001f);
+                    Assert.That(index, Is.GreaterThanOrEqualTo(0),
+                        "AAO must preserve native source neutral75 rather than reapply its old FX constant.");
+                    unmatched.RemoveAt(index);
+                }
+                Assert.That(output.sharedMesh.GetBlendShapeIndex("Unconsumed zero"), Is.EqualTo(-1),
+                    "The unrelated constant-zero channel must still be frozen by the normal optimizer pass.");
+                Assert.That(output.sharedMesh.GetBlendShapeIndex("Neutral opening"), Is.GreaterThanOrEqualTo(0));
+                Assert.That(skin.sharedMesh, Is.SameAs(mesh));
+                Assert.That(skin.GetBlendShapeWeight(0), Is.EqualTo(75));
+                Assert.That(mesh.blendShapeCount, Is.EqualTo(3));
+                Assert.That(AnimationUtility.GetEditorCurve(clip, neutralBinding).Evaluate(0), Is.EqualTo(75));
+                Assert.That(AnimationUtility.GetEditorCurve(clip, zeroBinding).Evaluate(0), Is.Zero);
+                Assert.That(EditorJsonUtility.ToJson(controller), Is.EqualTo(sourceController));
+            }
+            finally
+            {
+                bindings?.Dispose();
+                foreach (var ownedMesh in meshes) if (ownedMesh != null) Object.DestroyImmediate(ownedMesh);
+                AssetDatabase.DeleteAsset(folder);
+            }
         }
 
         [Test]

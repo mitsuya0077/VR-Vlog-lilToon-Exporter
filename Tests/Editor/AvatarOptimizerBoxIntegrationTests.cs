@@ -328,6 +328,27 @@ namespace VRVlog.LilToonExporter.Tests
             finally { if (baked != null) Object.DestroyImmediate(baked); }
         }
 
+        static string[] SourceExpressionTriangles(SkinnedMeshRenderer[] skins, SkinnedMeshRenderer front,
+            int morphIndex, float sourceWeight)
+        {
+            // Capture the native authored pose before export. Its endpoint is
+            // independent of how the exporter stores residual/generated shapes.
+            var weights = skins.ToDictionary(skin => skin, skin =>
+                Enumerable.Range(0, skin.sharedMesh.blendShapeCount).Select(skin.GetBlendShapeWeight).ToArray());
+            try
+            {
+                front.SetBlendShapeWeight(morphIndex, sourceWeight);
+                return skins.SelectMany(skin => TriangleSignatures(skin,
+                    ReferenceEquals(skin, front) ? new[] { 1, 2 } : null)).ToArray();
+            }
+            finally
+            {
+                foreach (var pair in weights)
+                    for (var index = 0; index < pair.Value.Length; index++)
+                        pair.Key.SetBlendShapeWeight(index, pair.Value[index]);
+            }
+        }
+
         [TestCase(false, false)]
         [TestCase(false, true)]
         [TestCase(true, false)]
@@ -382,6 +403,12 @@ namespace VRVlog.LilToonExporter.Tests
                 MaterialName = material.name, BindType = MaterialColorType.color, TargetValue = Color.red } };
             settings.Expression.CustomClips.Add(expression);
             fixture.Source.AddComponent<Vrm10Instance>().Vrm = settings;
+            var inputs = new[] { 0f, .5f, 1f };
+            var sourceBinding = expression.MorphTargetBindings[0];
+            var originalSkinWeights = skins.ToDictionary(skin => skin, skin =>
+                Enumerable.Range(0, mesh.blendShapeCount).Select(skin.GetBlendShapeWeight).ToArray());
+            var expectedExpressionTriangles = inputs.ToDictionary(input => input, input =>
+                SourceExpressionTriangles(skins, front, sourceBinding.Index, sourceBinding.Weight * 100f * input));
             var originalVertices = mesh.vertices; var originalTriangles = mesh.triangles;
             var temporaryFolders = ExportFolders();
             Vrm10Instance imported = null;
@@ -416,11 +443,14 @@ namespace VRVlog.LilToonExporter.Tests
                 }
                 var morph = mapped.MorphTargetBindings[0];
                 var mappedSkin = imported.transform.Find(morph.RelativePath).GetComponent<SkinnedMeshRenderer>();
-                foreach (var weight in new[] { 0f, .5f, 1f })
+                Assert.That(morph.Index, Is.InRange(0, mappedSkin.sharedMesh.blendShapeCount - 1));
+                foreach (var weight in inputs)
                 {
                     imported.Runtime.Expression.SetWeight(ExpressionKey.CreateCustom(expression.name), weight);
                     imported.Runtime.Process();
-                    Assert.That(mappedSkin.GetBlendShapeWeight(morph.Index), Is.EqualTo(40 * weight).Within(.001));
+                    Assert.That(importedSkins.SelectMany(skin => TriangleSignatures(skin)),
+                        Is.EquivalentTo(expectedExpressionTriangles[weight]),
+                        "Expression playback must match the retained native source Front endpoint and untouched Back at input " + weight);
                     Assert.That(importedSkins.Sum(skin => skin.sharedMesh.triangles.Length / 3), Is.EqualTo(5));
                 }
                 Assert.That(imported.Vrm.Expression.Blink.MorphTargetBindings, Is.Not.Empty);
@@ -431,8 +461,12 @@ namespace VRVlog.LilToonExporter.Tests
                 Assert.That(mesh.vertices, Is.EqualTo(originalVertices));
                 Assert.That(mesh.triangles, Is.EqualTo(originalTriangles));
                 Assert.That(front.sharedMesh, Is.SameAs(mesh));
+                foreach (var pair in originalSkinWeights)
+                    Assert.That(Enumerable.Range(0, mesh.blendShapeCount).Select(pair.Key.GetBlendShapeWeight), Is.EqualTo(pair.Value));
                 Assert.That(material.GetColor("_Color"), Is.EqualTo(Color.blue));
                 Assert.That(expression.MorphTargetBindings[0].RelativePath, Is.EqualTo("Front"));
+                Assert.That(expression.MorphTargetBindings[0].Index, Is.EqualTo(sourceBinding.Index));
+                Assert.That(expression.MorphTargetBindings[0].Weight, Is.EqualTo(sourceBinding.Weight));
                 Assert.That(expression.MaterialColorBindings[0].MaterialName, Is.EqualTo(material.name));
                 Assert.That(fixture.Source.GetComponent<Vrm10Instance>().Vrm, Is.SameAs(settings));
                 Assert.That(fixture.Source.GetComponent<ExportOptimizationMarker>(), Is.Null);

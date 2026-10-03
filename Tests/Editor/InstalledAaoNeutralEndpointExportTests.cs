@@ -156,8 +156,28 @@ namespace VRVlog.LilToonExporter.Tests
                 var tracking = skins.SelectMany(skin => SourceTriangle(skin, explicitProfile ? 25 : 100, 0)).ToArray();
                 var blink = skins.SelectMany(skin => SourceTriangle(skin, 75, 100)).ToArray();
                 var sourceVertices = fixture.Mesh.vertices; var sourceController = EditorJsonUtility.ToJson(controller);
-                Assert.Throws<InvalidOperationException>(() => BlinkExportSession.Resolve(fixture.Source),
-                    "The serialized fully closed eyes must need the deferred native FX-open neutral before blink can be resolved.");
+                foreach (var skin in skins)
+                {
+                    var closureIndex = skin.sharedMesh.GetBlendShapeIndex(Closure);
+                    Assert.That(closureIndex, Is.GreaterThanOrEqualTo(0));
+                    Assert.That(skin.GetBlendShapeWeight(closureIndex), Is.EqualTo(100),
+                        "The source fixture must still have serialized fully closed eyes.");
+                    Assert.That(AvatarBaseShape.HasUsableRawEndpoint(skin, closureIndex), Is.False,
+                        "The serialized closed pose has no remaining raw blink range before FX opens the eyes.");
+                }
+                if (explicitProfile)
+                    Assert.Throws<InvalidOperationException>(() => {
+                        using var early = BlinkExportSession.Resolve(fixture.Source);
+                    }, "An explicit tracking profile cannot waive the missing usable blink before FX neutral evaluation.");
+                else
+                {
+                    using var early = BlinkExportSession.Resolve(fixture.Source);
+                    Assert.That(early.HasBilateralPreset, Is.False,
+                        "Usable UE jaw evidence permits missing blink, but cannot make the resting closure usable.");
+                }
+                using (var deferred = BlinkExportSession.CaptureForExport(fixture.Source))
+                    Assert.That(deferred.HasBilateralPreset, Is.True,
+                        "Export must capture the closed-eye channel for resolution after the FX-open neutral is evaluated.");
                 var bytes = UniVrmOneClickExporter.Export(fixture.Source, "AAO neutral endpoints", "Tests",
                     exporterVersion: fullLilToon ? "aao-neutral-endpoint-regression" : null, lilToonVersion: fullLilToon ? "2.3.4" : null);
                 imported = await Vrm10.LoadBytesAsync(bytes, canLoadVrm0X: false, awaitCaller: new ImmediateCaller()); imported.Runtime.Process();
