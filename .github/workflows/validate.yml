@@ -31,6 +31,9 @@ jobs:
       - name: Run exporter behavior checks
         shell: pwsh
         run: ./Tools/run-behavior-tests.ps1
+      - name: Run pinned TLS sender checks
+        shell: pwsh
+        run: ./Tools/run-lan-transfer-tests.ps1
       - name: Validate optional humanoid pose contract
         shell: pwsh
         run: ./Tools/run-pose-contract-tests.ps1

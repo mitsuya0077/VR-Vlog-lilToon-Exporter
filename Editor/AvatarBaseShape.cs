@@ -75,6 +75,20 @@ namespace VRVlog.LilToonExporter
             if (mesh == null || mesh.vertexCount == 0 || shape < 0 || shape >= mesh.blendShapeCount || !Finite(weight)) return false;
             var frames = mesh.GetBlendShapeFrameCount(shape);
             if (frames == 0) return false;
+            var finalWeight = mesh.GetBlendShapeFrameWeight(shape, frames - 1);
+            if (!Finite(finalWeight) || finalWeight <= 0f) return false;
+            return HasUsableMorphEndpoint(mesh, shape, weight, finalWeight);
+        }
+
+        // Authored VRM/profile binds declare an absolute source endpoint. In
+        // particular a zero endpoint can move away from nonzero neutral, and a
+        // partial endpoint can be inert even when the final frame moves.
+        internal static bool HasUsableMorphEndpoint(Mesh mesh, int shape, float neutralWeight, float endpointWeight)
+        {
+            if (mesh == null || mesh.vertexCount == 0 || shape < 0 || shape >= mesh.blendShapeCount ||
+                !Finite(neutralWeight) || !Finite(endpointWeight)) return false;
+            var frames = mesh.GetBlendShapeFrameCount(shape);
+            if (frames == 0) return false;
             var endpoint = new Deltas(mesh.vertexCount);
             for (var frame = 0; frame < frames; frame++)
             {
@@ -88,8 +102,13 @@ namespace VRVlog.LilToonExporter
                     if (frameWeight == 0f && (Nonzero(endpoint.Vertices[vertex]) || Nonzero(endpoint.Normals[vertex]) || Nonzero(endpoint.Tangents[vertex]))) return false;
                 }
             }
-            if (mesh.GetBlendShapeFrameWeight(shape, frames - 1) <= 0f) return false;
-            var rest = Evaluate(mesh, shape, weight);
+            Deltas rest;
+            try
+            {
+                rest = Evaluate(mesh, shape, neutralWeight);
+                endpoint = Evaluate(mesh, shape, endpointWeight);
+            }
+            catch (InvalidOperationException) { return false; }
             var meaningful = false;
             for (var vertex = 0; vertex < mesh.vertexCount; vertex++)
             {

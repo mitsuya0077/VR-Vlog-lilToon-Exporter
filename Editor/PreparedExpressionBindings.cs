@@ -1,13 +1,16 @@
 using System;
 using System.Collections.Generic;
 using System.Linq;
+using UniVRM10;
+using UnityEditor;
 using UnityEngine;
+using Object = UnityEngine.Object;
 
 namespace VRVlog.LilToonExporter
 {
     // Resolve authoring paths once, before NDMF moves objects. Geometry and rest
     // weights are captured only after the authoring passes finish.
-    internal sealed class PreparedExpressionBindings
+    internal sealed class PreparedExpressionBindings : IDisposable
     {
         internal sealed class Binding
         {
@@ -18,21 +21,206 @@ namespace VRVlog.LilToonExporter
         }
 
         private readonly Dictionary<string, Binding> bindings = new Dictionary<string, Binding>(StringComparer.Ordinal);
+        private readonly Dictionary<SkinnedMeshRenderer, (string Path, Binding Binding)> originalRenderers =
+            new Dictionary<SkinnedMeshRenderer, (string, Binding)>();
+        private readonly GameObject root;
+        private readonly Dictionary<Renderer, bool> excludedRenderers = new Dictionary<Renderer, bool>();
+        private readonly HashSet<string> excludedAuthoringPaths = new HashSet<string>(StringComparer.Ordinal);
+        private readonly List<Object> ownedAssets = new List<Object>();
+        private readonly List<AuthoredClip> authoredClips = new List<AuthoredClip>();
 
-        internal PreparedExpressionBindings(GameObject clone, VrChatExpressionMenu.Source menu, GameObject source = null)
+        private sealed class AuthoredClip
         {
-            foreach (var path in menu.Entries.Where(e => e.Error == null)
+            internal VRM10Expression Clip;
+            internal AuthoredMorph[] Morphs;
+        }
+
+        private sealed class AuthoredMorph
+        {
+            internal MorphTargetBinding Value;
+            internal Binding Renderer;
+            internal string Shape;
+        }
+
+        internal PreparedExpressionBindings(GameObject clone, VrChatExpressionMenu.Source menu, GameObject source = null,
+            Func<string, bool> excludedPath = null)
+        {
+            root = clone;
+            foreach (var target in clone.GetComponentsInChildren<Transform>(true))
+            {
+                var path = AnimationUtility.CalculateTransformPath(target, clone.transform);
+                if (excludedPath?.Invoke(path) == true) excludedAuthoringPaths.Add(path);
+            }
+            foreach (var renderer in clone.GetComponentsInChildren<Renderer>(true))
+                excludedRenderers.Add(renderer, excludedPath?.Invoke(AnimationUtility.CalculateTransformPath(renderer.transform, clone.transform)) == true);
+            // A FaceEmo underlay can use renderers absent from every authored
+            // menu branch. Record all identities before plugins move them.
+            foreach (var renderer in clone.GetComponentsInChildren<SkinnedMeshRenderer>(true))
+            {
+                var path = AnimationUtility.CalculateTransformPath(renderer.transform, clone.transform);
+                var original = renderer.sharedMesh;
+                if (source != null)
+                {
+                    var target = string.IsNullOrEmpty(path) ? source.transform : source.transform.Find(path);
+                    var index = Array.IndexOf(renderer.GetComponents<SkinnedMeshRenderer>(), renderer);
+                    var siblings = target == null ? Array.Empty<SkinnedMeshRenderer>() : target.GetComponents<SkinnedMeshRenderer>();
+                    if (index >= 0 && index < siblings.Length) original = siblings[index].sharedMesh;
+                }
+                originalRenderers.Add(renderer, (path, new Binding {
+                    Renderer = renderer,
+                    OriginalShapes = new HashSet<string>(original == null ? Enumerable.Empty<string>() :
+                        Enumerable.Range(0, original.blendShapeCount).Select(original.GetBlendShapeName), StringComparer.Ordinal)
+                }));
+            }
+            foreach (var group in originalRenderers.Values.GroupBy(value => value.Path, StringComparer.Ordinal))
+                if (group.Count() == 1) bindings.Add(group.Key, group.Single().Binding);
+            foreach (var path in (menu?.Entries ?? new List<VrChatExpressionMenu.Entry>()).Where(e => e.Error == null)
                          .SelectMany(e => e.Values.Select(v => v.Path).Concat(e.Animation.Select(v => v.Path))
                              .Concat(e.Unevaluated.Select(v => v.Path))).Distinct())
             {
                 var renderer = VrChatExpressionSampler.FindRenderer(clone, path);
-                var original = source == null ? renderer.sharedMesh : VrChatExpressionSampler.FindRenderer(source, path).sharedMesh;
-                bindings.Add(path, new Binding
-                {
-                    Renderer = renderer,
-                    OriginalShapes = new HashSet<string>(Enumerable.Range(0, original.blendShapeCount).Select(original.GetBlendShapeName), StringComparer.Ordinal)
-                });
+                bindings[path] = originalRenderers[renderer].Binding;
             }
+        }
+
+        internal string AuthoringPath(string preparedPath)
+        {
+            var paths = AuthoringPaths(preparedPath);
+            return paths.Length == 1 ? paths[0] : null;
+        }
+
+        internal string[] AuthoringPaths(string preparedPath)
+        {
+            SkinnedMeshRenderer resolved;
+            try { resolved = VrChatExpressionSampler.FindRenderer(root, preparedPath ?? ""); }
+            catch (InvalidOperationException) { return Array.Empty<string>(); }
+            var matches = originalRenderers.Where(pair => pair.Value.Binding.Renderer == resolved && pair.Value.Binding.Renderer.enabled &&
+                pair.Value.Binding.Renderer.gameObject.activeInHierarchy && pair.Value.Binding.Renderer.sharedMesh != null &&
+                (pair.Value.Binding.Renderer.transform == root.transform || pair.Value.Binding.Renderer.transform.IsChildOf(root.transform)) &&
+                string.Equals(AnimationUtility.CalculateTransformPath(pair.Value.Binding.Renderer.transform, root.transform), preparedPath ?? "", StringComparison.Ordinal))
+                .Select(pair => pair.Value).ToArray();
+            if (matches.Length == 0 || matches.Any(match => originalRenderers.Values.Count(value => value.Path == match.Path) != 1))
+                return Array.Empty<string>();
+            return matches.Select(match => match.Path).OrderBy(path => path, StringComparer.Ordinal).ToArray();
+        }
+
+        internal bool ExcludesPreparedPath(string preparedPath)
+        {
+            var live = root.GetComponentsInChildren<Renderer>(true).Where(renderer =>
+                string.Equals(AnimationUtility.CalculateTransformPath(renderer.transform, root.transform), preparedPath ?? "", StringComparison.Ordinal)).ToArray();
+            // A moved included renderer, or a newly generated one, must not
+            // inherit exclusion solely by reusing an omitted source path.
+            if (live.Length > 0) return live.All(renderer => excludedRenderers.TryGetValue(renderer, out var excluded) && excluded);
+            return excludedAuthoringPaths.Contains(preparedPath ?? "");
+        }
+
+        internal void RebindPrepared(Func<SkinnedMeshRenderer, SkinnedMeshRenderer> replacement)
+        {
+            if (replacement == null) throw new ArgumentNullException(nameof(replacement));
+            foreach (var pair in originalRenderers)
+            {
+                var old = pair.Value.Binding.Renderer;
+                var current = replacement(old);
+                if (current == null || ReferenceEquals(current, old)) continue;
+                if (excludedRenderers.TryGetValue(old, out var excluded)) excludedRenderers[current] = excluded;
+                pair.Value.Binding.Renderer = current;
+            }
+        }
+
+        // Capture after pruning/recovery and before NDMF. These are the actual
+        // authoring indices; an added/reordered shape must not change their meaning.
+        internal void CaptureAuthoredExpressions()
+        {
+            authoredClips.Clear();
+            var vrm = root.GetComponent<Vrm10Instance>()?.Vrm;
+            if (vrm?.Expression == null) return;
+            foreach (var clip in vrm.Expression.Clips.Select(value => value.Clip).Where(value => value != null).Distinct())
+            {
+                var morphs = (clip.MorphTargetBindings ?? Array.Empty<MorphTargetBinding>()).Select(value => {
+                    SkinnedMeshRenderer resolved;
+                    try { resolved = VrChatExpressionSampler.FindRenderer(root, value.RelativePath ?? ""); }
+                    catch (InvalidOperationException) { resolved = null; }
+                    var target = resolved == null ? null : originalRenderers.Values.Select(item => item.Binding)
+                        .SingleOrDefault(item => item.Renderer == resolved);
+                    var mesh = target?.Renderer.sharedMesh;
+                    return new AuthoredMorph {
+                        Value = value,
+                        Renderer = target,
+                        Shape = mesh != null && value.Index >= 0 && value.Index < mesh.blendShapeCount
+                            ? mesh.GetBlendShapeName(value.Index) : null
+                    };
+                }).ToArray();
+                authoredClips.Add(new AuthoredClip { Clip = clip, Morphs = morphs });
+            }
+        }
+
+        internal void RebindAuthoredExpressions(Func<Object, Object> isolatedCopy)
+        {
+            if (isolatedCopy == null) throw new ArgumentNullException(nameof(isolatedCopy));
+            var instance = root.GetComponent<Vrm10Instance>();
+            var vrm = instance?.Vrm;
+            if (vrm?.Expression == null) return;
+            var currentClips = new HashSet<VRM10Expression>(vrm.Expression.Clips.Select(value => value.Clip));
+            var replacements = new Dictionary<VRM10Expression, VRM10Expression>();
+            foreach (var captured in authoredClips)
+            {
+                var current = isolatedCopy(captured.Clip) as VRM10Expression;
+                if (current == null || !currentClips.Contains(current)) continue;
+                var values = current.MorphTargetBindings ?? Array.Empty<MorphTargetBinding>();
+                // A plugin that replaced the binding array owns the new routes.
+                // Only unchanged, identity-correlated authoring binds are ours.
+                if (values.Length != captured.Morphs.Length) continue;
+                var result = values.ToArray();
+                var changed = false;
+                for (var i = 0; i < values.Length; i++)
+                {
+                    var old = captured.Morphs[i]; var value = values[i];
+                    if (value.RelativePath != old.Value.RelativePath || value.Index != old.Value.Index ||
+                        !value.Weight.Equals(old.Value.Weight)) continue;
+                    if (old.Shape == null)
+                    {
+                        // Appended/generated channels must not make an invalid
+                        // authoring index suddenly address a real expression.
+                        if (value.Index >= 0 && value.Index != int.MaxValue)
+                        {
+                            result[i] = new MorphTargetBinding(value.RelativePath, int.MaxValue, value.Weight); changed = true;
+                        }
+                        continue;
+                    }
+                    var target = old.Renderer?.Renderer;
+                    var mesh = target == null ? null : target.sharedMesh;
+                    var index = mesh == null ? -1 : mesh.GetBlendShapeIndex(old.Shape);
+                    if (target == null || index < 0)
+                    {
+                        // Preserve disabled/invalid author binds without turning
+                        // them into a new usable endpoint or inventing a channel.
+                        if (value.Weight == 0 || !NeutralShapeSnapshot.Finite(value.Weight) || value.Weight < 0 || value.Weight > 1) continue;
+                        throw new InvalidOperationException(NdmfExportPreparation.UnknownRendererRelocation + " (" +
+                            old.Value.RelativePath + " / " + old.Shape + ")");
+                    }
+                    var path = AnimationUtility.CalculateTransformPath(target.transform, root.transform);
+                    bool unique;
+                    try { unique = VrChatExpressionSampler.FindRenderer(root, path) == target; }
+                    catch (InvalidOperationException) { unique = false; }
+                    if (!unique)
+                    {
+                        if (value.Weight == 0 || !NeutralShapeSnapshot.Finite(value.Weight) || value.Weight < 0 || value.Weight > 1) continue;
+                        throw new InvalidOperationException("処理後の表情のRendererパスを一意に確定できません: " + path);
+                    }
+                    if (path == value.RelativePath && index == value.Index) continue;
+                    result[i] = new MorphTargetBinding(path, index, value.Weight); changed = true;
+                }
+                if (!changed) continue;
+                var copy = Object.Instantiate(current); ownedAssets.Add(copy); copy.name = current.name;
+                copy.MorphTargetBindings = result;
+                replacements.Add(current, copy);
+            }
+            if (replacements.Count == 0) return;
+            var settings = Object.Instantiate(vrm); ownedAssets.Add(settings); settings.name = vrm.name;
+            settings.Expression = new VRM10ObjectExpression();
+            foreach (var entry in vrm.Expression.Clips)
+                settings.Expression.AddClip(entry.Preset, replacements.TryGetValue(entry.Clip, out var copy) ? copy : entry.Clip);
+            instance.Vrm = settings;
         }
 
         internal void Capture(VrChatExpressionMenu.Source menu)
@@ -93,5 +281,11 @@ namespace VRVlog.LilToonExporter
         }
 
         internal Binding Get(string path) => bindings[path];
+
+        public void Dispose()
+        {
+            foreach (var asset in ownedAssets) if (asset != null) Object.DestroyImmediate(asset);
+            ownedAssets.Clear();
+        }
     }
 }

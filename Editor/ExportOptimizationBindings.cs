@@ -123,6 +123,7 @@ namespace VRVlog.LilToonExporter
         }
 
         static bool Generated(string name) => name != null && (name.StartsWith("__VRVlog_Menu_", StringComparison.Ordinal) ||
+            name.StartsWith("__VRVlog_Endpoint_", StringComparison.Ordinal) ||
             name.StartsWith("__VRVlog_Anim_", StringComparison.Ordinal) || name.StartsWith("__VRVlog_Blink_", StringComparison.Ordinal) ||
             name.StartsWith("__VRVlog_BlinkNone_", StringComparison.Ordinal) || name.StartsWith(UnifiedExpressionRegistry.RestPrefix, StringComparison.Ordinal));
 
