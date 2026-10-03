@@ -31,7 +31,9 @@ namespace VRVlog.LilToonExporter.Tests
             FakeDirectoryScope.Current = "original-directory";
             FakeRegistry.Selected = new FakeProvider();
             FakeProcessor.Action = null;
+            FakeProcessor.OptimizationAction = null;
             FakeProcessor.Calls = 0;
+            FakeProcessor.Ranges.Clear();
             FakeContext.ReportedErrors.Clear();
         }
 
@@ -56,11 +58,13 @@ namespace VRVlog.LilToonExporter.Tests
                 root.GetComponent<SkinnedMeshRenderer>().sharedMesh = generated;
                 unrelated = new Material(Shader.Find("Unlit/Color"));
             };
-            using (NdmfExportPreparation.ProcessClone(source, clone, Resolve()))
+            using (NdmfExportPreparation.ProcessClone(source, clone, Resolve(), afterTransforming: lease => { }))
             {
-                Assert.AreEqual(1, FakeProcessor.Calls);
-                Assert.AreSame(FakePhase.Start, FakeProcessor.First);
-                Assert.AreSame(FakePhase.Transforming, FakeProcessor.Last);
+                Assert.AreEqual(2, FakeProcessor.Calls);
+                Assert.AreSame(FakePhase.Start, FakeProcessor.Ranges[0][0]);
+                Assert.AreSame(FakePhase.Transforming, FakeProcessor.Ranges[0][1]);
+                Assert.AreSame(FakePhase.Optimizing, FakeProcessor.Ranges[1][0]);
+                Assert.AreSame(FakePhase.Optimizing, FakeProcessor.Ranges[1][1]);
                 Assert.AreSame(FakeRegistry.Selected, FakeContext.Last.Platform);
                 Assert.IsTrue(FakeContext.Last.AssetPath.StartsWith("Assets/VRVlogExportTemp-", StringComparison.Ordinal));
                 Assert.IsTrue(FakeContext.Last.Finished);
@@ -73,6 +77,96 @@ namespace VRVlog.LilToonExporter.Tests
             Assert.IsTrue(original != null);
             Assert.IsTrue(unrelated != null, "Global resource collection must not claim another owner's assets.");
             Assert.AreSame(original, source.GetComponent<SkinnedMeshRenderer>().sharedMesh);
+        }
+
+        [Test]
+        public void CallbackFreePreparationStopsAfterTransformingAndRetainsOwnedAssetLifetime()
+        {
+            FakeProcessor.Action = ReplaceWithGenerated;
+            FakeProcessor.OptimizationAction = root => { throw new InvalidOperationException("Preview must not optimize captured renderers."); };
+            using (NdmfExportPreparation.ProcessClone(source, clone, Resolve()))
+            {
+                Assert.AreEqual(1, FakeProcessor.Calls);
+                Assert.AreEqual(1, FakeProcessor.Ranges.Count);
+                Assert.AreSame(FakePhase.Start, FakeProcessor.Ranges[0][0]);
+                Assert.AreSame(FakePhase.Transforming, FakeProcessor.Ranges[0][1]);
+                Assert.AreEqual(1, FakeContext.Last.FinishCount);
+                Assert.IsTrue(FakeContext.Last.Saver.Disposed);
+                Assert.AreEqual("original-directory", FakeDirectoryScope.Current);
+                Assert.IsTrue(generated != null);
+                Assert.IsTrue(UnityEditor.AssetDatabase.IsValidFolder(FakeContext.Last.AssetPath));
+            }
+            Assert.IsTrue(generated == null);
+            Assert.IsFalse(UnityEditor.AssetDatabase.IsValidFolder(FakeContext.Last.AssetPath));
+            Assert.AreSame(original, source.GetComponent<SkinnedMeshRenderer>().sharedMesh);
+            Assert.IsTrue(original != null);
+        }
+
+        [Test]
+        public void ExportPreparationRunsBetweenCanonicalPhasesOnTheSameUnfinishedContext()
+        {
+            var callbacks = 0;
+            FakeContext context = null;
+            FakeProcessor.OptimizationAction = root =>
+            {
+                Assert.AreEqual(1, callbacks);
+                Assert.AreSame(context, FakeContext.Last);
+                Assert.IsFalse(context.Finished);
+            };
+            using (NdmfExportPreparation.ProcessClone(source, clone, Resolve(), afterTransforming: lease =>
+            {
+                callbacks++;
+                context = FakeContext.Last;
+                Assert.AreEqual(1, FakeProcessor.Calls);
+                Assert.IsFalse(context.Finished);
+                Assert.IsTrue(UnityEditor.AssetDatabase.IsValidFolder(context.AssetPath));
+            }))
+            {
+                Assert.AreEqual(1, callbacks);
+                Assert.AreEqual(2, FakeProcessor.Calls);
+                Assert.AreSame(FakePhase.Optimizing, FakeProcessor.Ranges[1][0]);
+                Assert.AreSame(FakePhase.Optimizing, FakeProcessor.Ranges[1][1]);
+                Assert.AreEqual(1, context.FinishCount);
+            }
+        }
+
+        [Test]
+        public void PreparationFailureSkipsOptimizationAndStillFinishesAndCleansUp()
+        {
+            FakeProcessor.Action = ReplaceWithGenerated;
+            Assert.Throws<InvalidOperationException>(() => NdmfExportPreparation.ProcessClone(source, clone, Resolve(),
+                afterTransforming: lease => { throw new InvalidOperationException("expression preparation failed"); }));
+            Assert.AreEqual(1, FakeProcessor.Calls);
+            Assert.AreEqual(1, FakeContext.Last.FinishCount);
+            Assert.IsTrue(generated == null);
+            Assert.IsTrue(original != null);
+            Assert.IsFalse(UnityEditor.AssetDatabase.IsValidFolder(FakeContext.Last.AssetPath));
+        }
+
+        [Test]
+        public void PreparationCancellationRemainsCancellationAfterCleanup()
+        {
+            FakeProcessor.Action = ReplaceWithGenerated;
+            Assert.Throws<OperationCanceledException>(() => NdmfExportPreparation.ProcessClone(source, clone, Resolve(),
+                afterTransforming: lease => { throw new OperationCanceledException(); }));
+            Assert.AreEqual(1, FakeProcessor.Calls);
+            Assert.AreEqual(1, FakeContext.Last.FinishCount);
+            Assert.IsTrue(generated == null);
+            Assert.IsTrue(original != null);
+            Assert.IsFalse(UnityEditor.AssetDatabase.IsValidFolder(FakeContext.Last.AssetPath));
+        }
+
+        [Test]
+        public void OptimizationFailureStillFinishesAndCleansUp()
+        {
+            FakeProcessor.Action = ReplaceWithGenerated;
+            FakeProcessor.OptimizationAction = root => { throw new InvalidOperationException("mesh optimization failed"); };
+            Assert.Throws<InvalidOperationException>(() => NdmfExportPreparation.ProcessClone(source, clone, Resolve(), afterTransforming: lease => { }));
+            Assert.AreEqual(2, FakeProcessor.Calls);
+            Assert.AreEqual(1, FakeContext.Last.FinishCount);
+            Assert.IsTrue(generated == null);
+            Assert.IsTrue(original != null);
+            Assert.IsFalse(UnityEditor.AssetDatabase.IsValidFolder(FakeContext.Last.AssetPath));
         }
 
         [Test]
@@ -457,10 +551,20 @@ namespace VRVlog.LilToonExporter.Tests
             var node = Child(root.transform, name, Vector3.zero).gameObject;
             node.SetActive(false);
             var component = node.AddComponent(type);
+            DisableFixturePosePreview(component);
             var reference = type.GetField("mergeTarget").GetValue(component);
             reference.GetType().GetMethod("Set", new[] { typeof(GameObject) }).Invoke(reference, new object[] { target == null ? null : target.gameObject });
             node.SetActive(active);
             return component;
+        }
+
+        private static void DisableFixturePosePreview(Component component)
+        {
+            // These fixtures exercise NDMF's real merge, not MA's edit-mode
+            // bone synchronization. Temporary rigs must not register preview
+            // jobs that outlive their transforms when tests destroy the rigs.
+            var mode = component.GetType().GetField("LockMode");
+            if (mode != null) mode.SetValue(component, Enum.Parse(mode.FieldType, "NotLocked"));
         }
 
         [Test]
@@ -504,6 +608,7 @@ namespace VRVlog.LilToonExporter.Tests
             var clothingRig = Child(source.transform, "ClothingRig", Vector3.zero);
             var clothingArm = Child(clothingRig, "UpperArm.L", mainArm.localPosition);
             var merge = clothingRig.gameObject.AddComponent(mergeType);
+            DisableFixturePosePreview(merge);
             var reference = mergeType.GetField("mergeTarget").GetValue(merge);
             reference.GetType().GetMethod("Set", new[] { typeof(GameObject) }).Invoke(reference, new object[] { mainRig.gameObject });
             generated = MakeMesh("__VRVlog_Menu_sleeve");
@@ -560,6 +665,7 @@ namespace VRVlog.LilToonExporter.Tests
                 source.transform.SetParent(wholeAvatar.transform);
                 var target = Child(wholeAvatar.transform, "outside-selected-subtree", Vector3.zero);
                 var merge = source.AddComponent(mergeType);
+                DisableFixturePosePreview(merge);
                 var reference = mergeType.GetField("mergeTarget").GetValue(merge);
                 reference.GetType().GetMethod("Set", new[] { typeof(GameObject) }).Invoke(reference, new object[] { target.gameObject });
                 var error = Assert.Throws<InvalidOperationException>(() => NdmfExportPreparation.ValidateSource(source));
@@ -635,7 +741,7 @@ namespace VRVlog.LilToonExporter.Tests
         }
         public sealed class FakePhase
         {
-            public static readonly FakePhase Start = new FakePhase(), Transforming = new FakePhase();
+            public static readonly FakePhase Start = new FakePhase(), Transforming = new FakePhase(), Optimizing = new FakePhase();
             private static FakePhase First => Start;
         }
         public sealed class FakeDirectoryScope : IDisposable
@@ -655,13 +761,14 @@ namespace VRVlog.LilToonExporter.Tests
             public readonly IFakeProvider Platform;
             public readonly FakeSaver Saver = new FakeSaver();
             public bool Finished;
+            public int FinishCount;
             public bool Successful => Success;
             public IDisposable AssetSaver => Saver;
             public static readonly List<FakeErrorContext> ReportedErrors = new List<FakeErrorContext>();
             public FakeReport ErrorReport { get; } = new FakeReport();
             public FakeContext(GameObject root, string path, IFakeProvider platform, bool isClone)
             { Root = root; AssetPath = path; Platform = platform; Last = this; }
-            internal void Finish() { Finished = true; if (FailFinish) throw new InvalidOperationException("finish failed"); }
+            internal void Finish() { FinishCount++; Finished = true; if (FailFinish) throw new InvalidOperationException("finish failed"); }
         }
         public sealed class FakeReport { public IEnumerable<FakeErrorContext> Errors => FakeContext.ReportedErrors; }
         public sealed class FakePlugin { public string DisplayName => "LightLimitChanger"; }
@@ -675,26 +782,17 @@ namespace VRVlog.LilToonExporter.Tests
         public static class FakeProcessor
         {
             public static Action<GameObject> Action;
+            public static Action<GameObject> OptimizationAction;
+            public static readonly List<FakePhase[]> Ranges = new List<FakePhase[]>();
             public static int Calls;
             public static FakePhase First, Last;
             internal static void ProcessAvatar(FakeContext context, FakePhase first, FakePhase last)
-            { Calls++; First = first; Last = last; Action?.Invoke(context.Root); }
+            {
+                Calls++; First = first; Last = last; Ranges.Add(new[] { first, last });
+                if (first == FakePhase.Optimizing) OptimizationAction?.Invoke(context.Root);
+                else Action?.Invoke(context.Root);
+            }
         }
     }
 
-    public sealed class NdmfSharedAssetFixture : ScriptableObject
-    {
-        public Mesh Mesh;
-        public Material Material;
-        public AnimationClip Clip;
-        public NdmfSharedAssetFixture Next;
-        public Object Target;
-        public int Value;
-    }
-
-    public sealed class NdmfSharedAssetHolder : MonoBehaviour
-    {
-        public NdmfSharedAssetFixture Settings;
-        public Renderer Renderer;
-    }
 }

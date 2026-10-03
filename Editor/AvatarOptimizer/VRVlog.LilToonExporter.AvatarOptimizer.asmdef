@@ -1,0 +1,18 @@
+{
+  "name": "VRVlog.LilToonExporter.AvatarOptimizer",
+  "rootNamespace": "VRVlog.LilToonExporter",
+  "references": [
+    "VRVlog.LilToonExporter.Runtime",
+    "com.anatawa12.avatar-optimizer.api.editor"
+  ],
+  "includePlatforms": ["Editor"],
+  "autoReferenced": true,
+  "defineConstraints": ["VRVLOG_AAO_COMPAT"],
+  "versionDefines": [
+    {
+      "name": "com.anatawa12.avatar-optimizer",
+      "expression": "[1.7,2.0)",
+      "define": "VRVLOG_AAO_COMPAT"
+    }
+  ]
+}

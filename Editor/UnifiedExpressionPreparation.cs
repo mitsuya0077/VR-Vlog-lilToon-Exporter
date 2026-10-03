@@ -42,6 +42,16 @@ namespace VRVlog.LilToonExporter
 
         internal bool SupportsUnified { get; private set; }
 
+        internal IEnumerable<(SkinnedMeshRenderer Renderer, string Shape, string Canonical)> OptimizationRawRoutes =>
+            selectedRawRoutes.SelectMany(pair => pair.Value.Select(route => (pair.Key, route.Value, route.Key)));
+
+        internal IEnumerable<(SkinnedMeshRenderer Renderer, string Shape)> OptimizationMorphs =>
+            required.SelectMany(pair => pair.Value.Select(shape => (pair.Key, shape)));
+
+        internal IEnumerable<(string Canonical, string Kind, Renderer Renderer, int Slot)> OptimizationMaterialEvidence =>
+            effectiveMaterialRoutes.Select(route => (route.Canonical, route.Kind,
+                materialScopes[route.Material].Renderer, materialScopes[route.Material].Slot));
+
         internal static bool HasUsableEvidence(GameObject source, Func<Transform, bool> excluded = null,
             bool suppressSharedTextureEmission = false, bool suppressHdrTextureEmission = false) =>
             new UnifiedExpressionPreparation(source, excluded, suppressSharedTextureEmission, suppressHdrTextureEmission).SupportsUnified;
@@ -432,6 +442,42 @@ namespace VRVlog.LilToonExporter
                             !routes.TryGetValue(canonical, out var selectedName) || !string.Equals(name, selectedName, StringComparison.Ordinal))
                             throw new InvalidOperationException(LostTracking);
                     }
+            }
+        }
+
+        // Fallback baking changes material baselines after AAO has moved the
+        // renderers. Check the mapped slots rather than the original hierarchy
+        // or raw morph names, and preserve each formerly moving material route.
+        internal void VerifyMappedMaterialEvidence(IEnumerable<(string Canonical, string Kind, Renderer Renderer, int Slot)> routes)
+        {
+            var expected = routes.ToArray();
+            if (expected.Length == 0) return;
+            if (avatar == null || !avatar.activeInHierarchy) throw new InvalidOperationException(LostTracking);
+            var materials = ExportRendererSelection.Enumerate(avatar).SelectMany(renderer => renderer.sharedMaterials)
+                .Where(material => material != null).GroupBy(material => material.name, StringComparer.Ordinal)
+                .ToDictionary(group => group.Key, group => group.First(), StringComparer.Ordinal);
+            var clips = avatar.GetComponent<Vrm10Instance>()?.Vrm?.Expression?.CustomClips?.Where(clip => clip != null).ToArray()
+                ?? Array.Empty<VRM10Expression>();
+            var selected = clips.Where(clip => UnifiedExpressionRegistry.TryCanonicalize(clip.name, out _))
+                .GroupBy(clip => { UnifiedExpressionRegistry.TryCanonicalize(clip.name, out var canonical); return canonical; }, StringComparer.Ordinal)
+                .ToDictionary(group => group.Key, group => {
+                    var priority = group.Min(clip => VrmUnifiedExpressions.RawPriority(clip.name, group.Key));
+                    var preferred = group.Where(clip => VrmUnifiedExpressions.RawPriority(clip.name, group.Key) == priority).ToArray();
+                    return preferred.Length == 1 ? preferred[0] : null;
+                }, StringComparer.Ordinal);
+            var omitted = new HashSet<string>(StringComparer.Ordinal);
+            foreach (var route in expected)
+            {
+                var renderer = route.Renderer;
+                if (renderer == null || !renderer.enabled || !renderer.gameObject.activeInHierarchy ||
+                    !renderer.transform.IsChildOf(avatar.transform) || route.Slot < 0 || route.Slot >= renderer.sharedMaterials.Length)
+                    throw new InvalidOperationException(LostTracking);
+                var material = renderer.sharedMaterials[route.Slot];
+                if (material == null || !materials.TryGetValue(material.name, out var selectedMaterial) || selectedMaterial != material ||
+                    !selected.TryGetValue(route.Canonical, out var clip) || clip == null ||
+                    !MaterialRoutes(clip, materials, omitted, suppressSharedTextureEmission, suppressHdrTextureEmission)
+                        .Any(endpoint => endpoint.Material == material.name && endpoint.Kind == route.Kind))
+                    throw new InvalidOperationException(LostTracking);
             }
         }
 

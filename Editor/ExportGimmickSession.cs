@@ -16,6 +16,21 @@ namespace VRVlog.LilToonExporter
         readonly HashSet<Transform> included = new HashSet<Transform>();
         readonly List<Object> assets = new List<Object>();
         readonly HashSet<string> reported = new HashSet<string>(StringComparer.Ordinal);
+        readonly HashSet<string> removedPaths = new HashSet<string>(StringComparer.Ordinal);
+        readonly HashSet<Transform> removedTransforms = new HashSet<Transform>();
+
+        internal bool ContainsPath(string path)
+        {
+            if (path == null) return false;
+            // Removing a render component does not remove every binding on its
+            // GameObject. Resolve the current hierarchy so a retained skin on
+            // that object, or a skin moved into an old path, keeps its morphs.
+            if (clone.GetComponentsInChildren<SkinnedMeshRenderer>().Any(skin =>
+                skin.enabled && skin.sharedMesh != null && skin.gameObject.activeInHierarchy &&
+                AnimationUtility.CalculateTransformPath(skin.transform, clone.transform) == path)) return false;
+            return removedPaths.Contains(path) || removedTransforms.Any(target => target != null &&
+                AnimationUtility.CalculateTransformPath(target, clone.transform) == path);
+        }
 
         internal ExportGimmickSession(GameObject source, GameObject clone, ExportGimmickOptions options)
         {
@@ -55,6 +70,8 @@ namespace VRVlog.LilToonExporter
             ExportReferencePruning.Prepare(clone, Array.Empty<Transform>(), assets, warnings, removed);
             foreach (var renderer in removed)
             {
+                removedPaths.Add(AnimationUtility.CalculateTransformPath(renderer.transform, clone.transform));
+                removedTransforms.Add(renderer.transform);
                 // Delete the render component, not its Transform: a retained
                 // skin, constraint, or ordinary child may still depend on it.
                 Object.DestroyImmediate(renderer);
