@@ -128,6 +128,11 @@ namespace VRVlog.LilToonExporter
             var originalLayers = originalController.layers;
             var replacements = ExpressionDependencies.Overrides(runtime);
             var nativeSlot = layerIndex.HasValue && layerIndex.Value > 0;
+            // Inactive authored slots still expose their direct clip as a
+            // candidate. Preserve that legacy route rather than evaluating an
+            // inactive native layer and erasing the clip's authored values.
+            if (nativeSlot && layerIndex.Value < originalLayers.Length)
+                nativeSlot = originalLayers[layerIndex.Value].defaultWeight > 0;
             // Constant parameter/empty clips can still impose Write Defaults.
             // Keep proven equivalent layers in their authored slots even when
             // none of their explicit bindings name a stationary morph.
@@ -144,6 +149,10 @@ namespace VRVlog.LilToonExporter
                 throw new InvalidOperationException("表情のFXレイヤーを特定できません。");
             if (layerIndex.HasValue && originalLayers[layerIndex.Value].blendingMode == AnimatorLayerBlendingMode.Additive)
                 throw new InvalidOperationException("Additiveレイヤーの表情クリップと常時適用FXの合成は、加算の基準ポーズを確定できないため省略しました。");
+            // A registered clip supplies a slot, not a unique original state.
+            // Do not guess which entry callbacks to run. Check any dropped
+            // selected-slot driver against the retained graph's real inputs.
+            var omittedDriverWrites = nativeSlot ? ExpressionDependencies.SelectedLayerDriverWrites(runtime, layerIndex.Value, excludedPath) : null;
             var owned = new List<UnityEngine.Object>();
             try
             {
@@ -221,7 +230,7 @@ namespace VRVlog.LilToonExporter
                     var seeds = new HashSet<EditorCurveBinding>(stationaryBindings);
                     seeds.UnionWith(AnimationUtility.GetCurveBindings(clip));
                     return Evaluate(avatar, probeRuntime, metadata?.Defaults ?? new Dictionary<string, float>(), new Dictionary<string, float>(), excludedPath,
-                        metadata, new List<MorphValue>(), seeds, preserveNativeBasePose: nativeSlot);
+                        metadata, new List<MorphValue>(), seeds, preserveNativeBasePose: nativeSlot, omittedDriverWrites: omittedDriverWrites);
                 }
                 var zero = Probe(0).ToDictionary(value => (value.Path, value.Shape));
                 var full = Probe(100).ToDictionary(value => (value.Path, value.Shape));
@@ -273,7 +282,7 @@ namespace VRVlog.LilToonExporter
         private static List<MorphValue> Evaluate(GameObject avatar, RuntimeAnimatorController runtime,
             IDictionary<string, float> defaults, IDictionary<string, float> selected, Func<string, bool> excludedPath,
             VrChatExpressionMenu.Source metadata, IList<MorphValue> unevaluated, IEnumerable<EditorCurveBinding> initialMorphs,
-            bool preserveNativeBasePose = false, FixedExpressionContext fixedContext = null)
+            bool preserveNativeBasePose = false, FixedExpressionContext fixedContext = null, ISet<string> omittedDriverWrites = null)
         {
             if (fixedContext != null)
             {
@@ -283,6 +292,9 @@ namespace VRVlog.LilToonExporter
             }
             var originalController = ExpressionDependencies.Controller(runtime);
             var dependencies = ExpressionDependencies.Analyze(runtime, selected.Keys, excludedPath, metadata, defaults, selected, initialMorphs, preserveNativeBasePose, fixedContext);
+            if (omittedDriverWrites?.Overlaps(dependencies.Parameters) == true)
+                throw new InvalidOperationException("選択したFXレイヤーのParameter Driverが他の表情レイヤーに影響するため、直接クリップとの合成を確定できません: " +
+                    string.Join(", ", omittedDriverWrites.Intersect(dependencies.Parameters).OrderBy(name => name, StringComparer.Ordinal)));
             var omittedLayers = FindExcludedLayers(originalController, runtime, excludedPath, dependencies.Parameters);
             dependencies.Layers.ExceptWith(omittedLayers);
             dependencies.NativeSupportLayers.ExceptWith(omittedLayers);

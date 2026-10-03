@@ -13,6 +13,7 @@ namespace VRVlog.LilToonExporter
         {
             internal readonly HashSet<string> Reads = new HashSet<string>(StringComparer.Ordinal);
             internal readonly HashSet<string> Writes = new HashSet<string>(StringComparer.Ordinal);
+            internal readonly HashSet<string> DriverWrites = new HashSet<string>(StringComparer.Ordinal);
             internal readonly HashSet<string> CurveWrites = new HashSet<string>(StringComparer.Ordinal);
             internal readonly HashSet<EditorCurveBinding> Morphs = new HashSet<EditorCurveBinding>();
             internal readonly Dictionary<StateMachineBehaviour, VrChatParameterDriver.Program> FxCommands = new Dictionary<StateMachineBehaviour, VrChatParameterDriver.Program>();
@@ -54,6 +55,15 @@ namespace VRVlog.LilToonExporter
             Inspect(runtime, excludedPath, new Dictionary<StateMachineBehaviour, VrChatParameterDriver.Program>(), unknown);
             if (unknown.Count > 0)
                 throw new InvalidOperationException("FXの影響範囲を確定できないState Behaviourがあります: " + string.Join(", ", unknown));
+        }
+
+        internal static HashSet<string> SelectedLayerDriverWrites(RuntimeAnimatorController runtime, int layerIndex, Func<string, bool> excludedPath)
+        {
+            var unknown = new List<string>();
+            var layers = Inspect(runtime, excludedPath, new Dictionary<StateMachineBehaviour, VrChatParameterDriver.Program>(), unknown);
+            if (unknown.Count > 0)
+                throw new InvalidOperationException("FXの影響範囲を確定できないState Behaviourがあります: " + string.Join(", ", unknown));
+            return layers[layerIndex].DriverWrites;
         }
 
         internal static ExpressionDependencies Analyze(RuntimeAnimatorController runtime, IEnumerable<string> selected,
@@ -600,6 +610,7 @@ namespace VRVlog.LilToonExporter
                         foreach (var op in program.Operations)
                         {
                             info.Writes.Add(op.Destination);
+                            info.DriverWrites.Add(op.Destination);
                             if (op.Kind == "Copy") ReadParameter(op.Source);
                             if (op.Kind == "Add") ReadParameter(op.Destination);
                         }

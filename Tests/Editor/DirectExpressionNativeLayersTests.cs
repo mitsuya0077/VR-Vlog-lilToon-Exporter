@@ -141,6 +141,85 @@ namespace VRVlog.LilToonExporter.Tests
             AssertUnchanged(sourceJson, meshJson, probes);
         }
 
+        [TestCase(false)]
+        [TestCase(true)]
+        public void InactiveAuthoredSlotsKeepTheirDirectClipCandidate(bool synced)
+        {
+            var layers = controller.layers; layers[1].defaultWeight = 0;
+            if (synced) layers[1].syncedLayerIndex = 0;
+            controller.layers = layers;
+            if (synced) controller.SetStateEffectiveMotion(lower, selected.motion, 1);
+            Assert.That(Native(controller), Is.EqualTo(30).Within(.01), "The candidate slot is inactive in the native default graph.");
+            var entry = new VrChatExpressionMenu.Entry(); VrChatGestureExpressions.ReadClip(avatar, (AnimationClip)selected.motion, entry);
+            var sourceJson = EditorJsonUtility.ToJson(controller); var meshJson = EditorJsonUtility.ToJson(mesh); var probes = ProbeObjects();
+            VrChatExpressionSampler.ApplyPermanentOverrides(avatar, controller, entry, 1);
+            Assert.That(entry.Values.Single().Weight, Is.EqualTo(80), "A direct clip candidate keeps its authored pose even when its FX slot is initially inactive.");
+            AssertUnchanged(sourceJson, meshJson, probes);
+        }
+
+        [Test]
+        public void ActiveFractionalSyncedSlotKeepsItsEffectiveMotionAndControllerReplacement()
+        {
+            var layers = controller.layers; layers[1].syncedLayerIndex = 0; controller.layers = layers;
+            controller.SetStateEffectiveMotion(lower, selected.motion, 1);
+            var replacementLower = Clip("Effective synced lower", 50); var replacementSelected = Clip("Effective synced expression", 90);
+            var runtime = new AnimatorOverrideController(controller);
+            runtime[(AnimationClip)lower.motion] = replacementLower; runtime[(AnimationClip)selected.motion] = replacementSelected;
+            AssetDatabase.CreateAsset(runtime, folder + "/EffectiveSynced.overrideController");
+            var expected = Native(runtime); Assert.That(expected, Is.EqualTo(70).Within(.01));
+            var entry = new VrChatExpressionMenu.Entry(); VrChatGestureExpressions.ReadClip(avatar, replacementSelected, entry);
+            var sourceJson = EditorJsonUtility.ToJson(controller); var meshJson = EditorJsonUtility.ToJson(mesh); var overrideJson = EditorJsonUtility.ToJson(runtime);
+            var probes = ProbeObjects();
+            VrChatExpressionSampler.ApplyPermanentOverrides(avatar, runtime, entry, 1);
+            Assert.That(entry.Values.Single().Weight, Is.EqualTo(expected).Within(.01));
+            Assert.That(EditorJsonUtility.ToJson(runtime), Is.EqualTo(overrideJson));
+            AssertUnchanged(sourceJson, meshJson, probes);
+        }
+
+        [TestCase("state")]
+        [TestCase("machine")]
+        [TestCase("nested machine")]
+        public void DroppedSelectedDriversCannotSilentlyChooseARetainedLowerPose(string placement)
+        {
+            var driver = ParameterDriverExpressionTests.Driver(selected, ParameterDriverExpressionTests.Op("Set", "Face", 1));
+            var machine = controller.layers[1].stateMachine;
+            if (placement != "state")
+            {
+                selected.behaviours = Array.Empty<StateMachineBehaviour>();
+                if (placement == "nested machine") machine = machine.AddStateMachine("Registered alternatives");
+                machine.behaviours = new[] { driver };
+            }
+            Assert.That(VrChatParameterDriver.Read(driver, "Authored player").Operations.Single().Destination, Is.EqualTo("Face"));
+            // Native playback at the driver's declared target value shows that
+            // this destination changes the retained lower pose. SDK callbacks
+            // are not simulated or installed on their process-wide delegates.
+            Assert.That(Native(controller, new Dictionary<string, float> { ["Face"] = 1 }), Is.EqualTo(70).Within(.01));
+            var sourceAssets = AssetDatabase.LoadAllAssetsAtPath(folder + "/FX.controller").ToDictionary(asset => asset, asset => EditorJsonUtility.ToJson(asset));
+            var entry = new VrChatExpressionMenu.Entry(); VrChatGestureExpressions.ReadClip(avatar, (AnimationClip)selected.motion, entry);
+            var sourceJson = EditorJsonUtility.ToJson(controller); var meshJson = EditorJsonUtility.ToJson(mesh); var probes = ProbeObjects();
+            var error = Assert.Throws<InvalidOperationException>(() => VrChatExpressionSampler.ApplyPermanentOverrides(avatar, controller, entry, 1));
+            Assert.That(error.Message, Does.Contain("Parameter Driver").And.Contain("Face"));
+            Assert.That(entry.Values.Single().Weight, Is.EqualTo(80), "Rejected selected callbacks cannot partially rewrite a registered clip.");
+            foreach (var pair in sourceAssets) Assert.That(EditorJsonUtility.ToJson(pair.Key), Is.EqualTo(pair.Value), pair.Key.name);
+            AssertUnchanged(sourceJson, meshJson, probes);
+        }
+
+        [Test]
+        public void UnrelatedSelectedDriverDestinationDoesNotBlockTheNativeProbe()
+        {
+            controller.AddParameter("Unused driver destination", AnimatorControllerParameterType.Int);
+            var driver = ParameterDriverExpressionTests.Driver(selected, ParameterDriverExpressionTests.Op("Set", "Unused driver destination", 1));
+            var sourceAssets = AssetDatabase.LoadAllAssetsAtPath(folder + "/FX.controller").ToDictionary(asset => asset, asset => EditorJsonUtility.ToJson(asset));
+            var expected = Native(controller); Assert.That(expected, Is.EqualTo(55).Within(.01));
+            var entry = new VrChatExpressionMenu.Entry(); VrChatGestureExpressions.ReadClip(avatar, (AnimationClip)selected.motion, entry);
+            var sourceJson = EditorJsonUtility.ToJson(controller); var meshJson = EditorJsonUtility.ToJson(mesh); var probes = ProbeObjects();
+            VrChatExpressionSampler.ApplyPermanentOverrides(avatar, controller, entry, 1);
+            Assert.That(entry.Values.Single().Weight, Is.EqualTo(expected).Within(.01));
+            Assert.That(selected.behaviours, Does.Contain(driver));
+            foreach (var pair in sourceAssets) Assert.That(EditorJsonUtility.ToJson(pair.Key), Is.EqualTo(pair.Value), pair.Key.name);
+            AssertUnchanged(sourceJson, meshJson, probes);
+        }
+
         [TestCase("external")]
         [TestCase("parameter curve")]
         [TestCase("other controller")]
