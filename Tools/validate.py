@@ -2,8 +2,10 @@
 import json
 import re
 from pathlib import Path
+from unity_meta import validate_meta_guids
 
 root = Path(__file__).resolve().parents[1]
+validate_meta_guids(root)
 package = json.loads((root / "package.json").read_text(encoding="utf-8"))
 schema = json.loads(
     (root / "Schema/VRVLOG_materials_liltoon.schema.json").read_text(encoding="utf-8")
@@ -193,7 +195,8 @@ assert "PackageManagerPackageInfo FindLilToonPackage()" in window
 assert "PackageManagerPackageInfo.GetAllRegisteredPackages()" in window
 assert "Vrm10AppearanceExporter.Export" in one_click
 assert one_click.index("NdmfExportPreparation.ValidateSource(source,") < one_click.index("VrChatExpressionMenu.Read(source,")
-assert one_click.index("VrChatExpressionSampler.Analyze(clone,") < one_click.index("VrChatExpressionSampler.ApplyMergedDefaults(source, clone,") < one_click.index("expressionBindings.Capture(menu)") < one_click.index("VrChatExpressionBaker.Bake(null, clone,") < one_click.index("ExportOptimizationBindings.Capture(clone,")
+assert one_click.index("VrChatExpressionSampler.Analyze(clone,") < one_click.index("FaceEmoExpressions.ApplyPreparedDefaultFace(clone,") < one_click.index("NeutralShapeSnapshot.Apply(clone,") < one_click.index("preparedMenuBindings.Capture(menu)") < one_click.index("VrChatExpressionBaker.Bake(null, clone,") < one_click.index("ExportOptimizationBindings.Capture(clone,")
+assert "VrChatExpressionSampler.ApplyMergedDefaults(source, clone," not in one_click
 assert one_click.index("optimizerBindings.ValidateAndApply(") < one_click.index("LilToonFullSnapshot.Capture(clone,") < one_click.index("Vrm10AppearanceExporter.Export(")
 assert one_click.index("NdmfExportPreparation.Prepare(source, clone,") < one_click.index("VrChatExpressionBaker.Bake(null, clone,")
 assert one_click.index("SkinnedMeshFallbackWeights.Preserve(clone,") < one_click.index("NdmfExportPreparation.Prepare(source, clone,") < one_click.index("AvatarBaseShape.Preserve(clone, clone,")
@@ -328,9 +331,10 @@ assert 'excludedExpressions' not in window and 'DrawExpressions' not in window
 assert 'var menuPolicy = ExportRecoveryReport.MenuImportPolicy(source, recoveryOptions);' in one_click
 assert 'var menu = VrChatExpressionMenu.Read(source, menuPolicy);' in one_click
 assert 'bool ExcludedBinding(string path) => exclusions.ContainsPath(path) || gimmicks.ContainsPath(path);' in one_click
-assert 'bool PreparedExcludedBinding(string path) => VrChatExpressionSampler.IsExcludedPreparedPath(clone, path, ExcludedBinding);' in one_click
-assert 'VrChatExpressionSampler.Analyze(clone, PreparedExcludedBinding, preparedMenuPolicy, source, faceEmoBindings)' in one_click
-assert one_click.index('FaceEmoExpressions.Capture(source, clone, ExcludedBinding, PreparedExcludedBinding)') < one_click.index('NdmfExportPreparation.Prepare(source, clone,')
+assert 'new PreparedExpressionBindings(clone, menu, excludedPath: ExcludedBinding)' in one_click
+assert 'VrChatExpressionSampler.Analyze(clone, expressionBindings.ExcludesPreparedPath,' in one_click
+assert one_click.index('FaceEmoExpressions.Capture(source, clone, ExcludedBinding,') < one_click.index('NdmfExportPreparation.Prepare(source, clone,')
+assert 'faceEmoBindings?.RebindPrepared(transformed.PreparedRendererFor);' in one_click
 assert 'new PoseExportSession(source, poseOptions, exclusions.Contains, menuPolicy)' in one_click
 assert 'SkipVrChatMenus' in recovery and 'ExcludeMenuBranch' in recovery
 assert one_click.index('AvatarBaseShape.Preserve(clone, clone,') < one_click.index('VrChatExpressionBaker.Bake(') < one_click.index('Vrm10AppearanceExporter.Export(')

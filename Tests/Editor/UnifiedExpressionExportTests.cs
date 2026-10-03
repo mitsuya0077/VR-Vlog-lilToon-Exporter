@@ -14,6 +14,40 @@ namespace VRVlog.LilToonExporter.Tests
 {
     public sealed class UnifiedExpressionExportTests
     {
+        // Native source poses are independent of the exporter's residual math.
+        // Restore every temporary source weight before exporting/asserting ownership.
+        private static Vector3 NativeWorldVertex(SkinnedMeshRenderer skin)
+        {
+            var baked = new Mesh();
+            try { skin.BakeMesh(baked); return skin.transform.TransformPoint(baked.vertices[0]); }
+            finally { Object.DestroyImmediate(baked); }
+        }
+
+        private static Dictionary<string, (Vector3 Neutral, Vector3 Endpoint)> NativePoses(
+            IEnumerable<SkinnedMeshRenderer> renderers, int index, float endpointWeight)
+        {
+            var result = new Dictionary<string, (Vector3, Vector3)>(StringComparer.Ordinal);
+            foreach (var skin in renderers)
+            {
+                var previous = skin.GetBlendShapeWeight(index);
+                try
+                {
+                    var neutral = NativeWorldVertex(skin);
+                    skin.SetBlendShapeWeight(index, endpointWeight);
+                    result.Add(skin.name, (neutral, NativeWorldVertex(skin)));
+                }
+                finally { skin.SetBlendShapeWeight(index, previous); }
+            }
+            return result;
+        }
+
+        private static void AssertNativePose(SkinnedMeshRenderer output, (Vector3 Neutral, Vector3 Endpoint) source, float input)
+        {
+            var expected = Vector3.LerpUnclamped(source.Neutral, source.Endpoint, input);
+            Assert.That(Vector3.Distance(NativeWorldVertex(output), expected), Is.LessThan(.00001f),
+                "The expression coefficient must interpolate from native source neutral to its declared absolute source pose.");
+        }
+
         [Test] public void FinalGlbTrackingContract() => UnifiedExpressionFixture.Run((ok, message) => Assert.That(ok, Is.True, message));
 
         [TestCase(false)]
@@ -94,11 +128,20 @@ namespace VRVlog.LilToonExporter.Tests
                     name = name, morphs = new[] { new TrackingMorph { shape = "Hair detail", weight = .6f } }
                 }).ToArray();
                 fixture.Source.AddComponent<VrmTrackingMarker>().profile = profile;
+                var nativePoses = NativePoses(fixture.Source.GetComponentsInChildren<SkinnedMeshRenderer>(), 0, 60);
                 var bytes = UniVrmOneClickExporter.Export(fixture.Source, "Explicit ARKit", "Tests", blinkOptions: new BlinkExportOptions { Mode = BlinkExportMode.None });
                 imported = await Vrm10.LoadBytesAsync(bytes, canLoadVrm0X: false, awaitCaller: new ImmediateCaller());
                 Assert.That(imported.Vrm.Expression.CustomClips.Count, Is.EqualTo(52));
                 Assert.That(imported.Vrm.Expression.CustomClips.Any(clip => clip.name.StartsWith("UE/", StringComparison.Ordinal)), Is.False);
-                Assert.That(imported.Vrm.Expression.CustomClips.Single(clip => clip.name == "JawOpen").MorphTargetBindings.All(binding => Math.Abs(binding.Weight - .6f) < .0001f), Is.True);
+                var jaw = imported.Vrm.Expression.CustomClips.Single(clip => clip.name == "JawOpen");
+                Assert.That(jaw.MorphTargetBindings.All(binding => binding.Weight == 1), Is.True);
+                imported.Runtime.Expression.SetWeight(ExpressionKey.CreateCustom(jaw.name), 1); imported.Runtime.Process();
+                foreach (var binding in jaw.MorphTargetBindings)
+                {
+                    var skin = imported.transform.Find(binding.RelativePath).GetComponent<SkinnedMeshRenderer>();
+                    AssertNativePose(skin, nativePoses[skin.name], 1);
+                }
+                Assert.That(profile.expressions.All(value => value.morphs.Single().weight == .6f), Is.True);
                 Assert.That(fixture.Source.GetComponent<VrmTrackingMarker>().profile, Is.SameAs(profile));
             }
             finally
@@ -197,6 +240,7 @@ namespace VRVlog.LilToonExporter.Tests
                     .Select(path => new MorphTargetBinding(path, 2, authoredWeight)).ToArray();
                 vrm.Expression.CustomClips.Add(clip);
                 fixture.Source.AddComponent<Vrm10Instance>().Vrm = vrm;
+                var nativePoses = NativePoses(fixture.Source.GetComponentsInChildren<SkinnedMeshRenderer>(), 2, authoredWeight * 100);
                 // A disabled authored route reserves both meshes without
                 // establishing UE support. Verify the automatic safeguard,
                 // then opt out of blink for this authored-preservation probe.
@@ -206,7 +250,7 @@ namespace VRVlog.LilToonExporter.Tests
                     blinkOptions: noBlink ? new BlinkExportOptions { Mode = BlinkExportMode.None } : null);
                 imported = await Vrm10.LoadBytesAsync(bytes, canLoadVrm0X: false, awaitCaller: new ImmediateCaller());
                 var retained = imported.Vrm.Expression.CustomClips.Single(value => value.name == clip.name);
-                Assert.That(retained.MorphTargetBindings.All(binding => Math.Abs(binding.Weight - authoredWeight) < .0001), Is.True);
+                Assert.That(retained.MorphTargetBindings.All(binding => binding.Weight == (authoredWeight == 0 ? 0 : 1)), Is.True);
                 var aggregate = imported.Vrm.Expression.CustomClips.SingleOrDefault(value => value.name == "UE/LipFunnel");
                 Assert.That(aggregate != null, Is.EqualTo(otherMeshUncovered), "Raw aggregate cannot displace authored split coverage.");
                 if (aggregate != null)
@@ -219,7 +263,10 @@ namespace VRVlog.LilToonExporter.Tests
                 imported.Runtime.Process();
                 var front = imported.transform.Find("Front").GetComponent<SkinnedMeshRenderer>();
                 Assert.That(front.GetBlendShapeWeight(front.sharedMesh.GetBlendShapeIndex("LipFunnel")), Is.Zero);
-                Assert.That(front.GetBlendShapeWeight(front.sharedMesh.GetBlendShapeIndex("LipFunnelUpperLeft")), Is.EqualTo(authoredWeight * 100).Within(.001));
+                Assert.That(front.GetBlendShapeWeight(front.sharedMesh.GetBlendShapeIndex("LipFunnelUpperLeft")), Is.Zero);
+                var endpoint = retained.MorphTargetBindings.Single(value => value.RelativePath == "Front");
+                Assert.That(front.GetBlendShapeWeight(endpoint.Index), Is.EqualTo(authoredWeight == 0 ? 0 : 100).Within(.001));
+                AssertNativePose(front, nativePoses[front.name], 1);
                 Assert.That(vrm.Expression.CustomClips.Single(), Is.SameAs(clip));
                 Assert.That(clip.MorphTargetBindings.All(binding => binding.Weight == authoredWeight), Is.True);
             }
@@ -281,7 +328,9 @@ namespace VRVlog.LilToonExporter.Tests
                 var front = imported.transform.Find("Front").GetComponent<SkinnedMeshRenderer>();
                 var back = imported.transform.Find("Back").GetComponent<SkinnedMeshRenderer>();
                 Assert.That(front.GetBlendShapeWeight(front.sharedMesh.GetBlendShapeIndex("LipFunnel")), Is.Zero);
-                Assert.That(front.GetBlendShapeWeight(front.sharedMesh.GetBlendShapeIndex("LipFunnelUpperLeft")), Is.EqualTo(40).Within(.001));
+                Assert.That(front.GetBlendShapeWeight(front.sharedMesh.GetBlendShapeIndex("LipFunnelUpperLeft")), Is.Zero);
+                Assert.That(authored.MorphTargetBindings.Single().Weight, Is.EqualTo(1));
+                Assert.That(front.GetBlendShapeWeight(authored.MorphTargetBindings.Single().Index), Is.EqualTo(100).Within(.001));
                 Assert.That(front.GetBlendShapeWeight(front.sharedMesh.GetBlendShapeIndex("LipFunnelUpperRight")), Is.EqualTo(30).Within(.001));
                 Assert.That(back.GetBlendShapeWeight(back.sharedMesh.GetBlendShapeIndex("LipFunnel")), Is.EqualTo(50).Within(.001));
                 Assert.That(back.GetBlendShapeWeight(back.sharedMesh.GetBlendShapeIndex("LipFunnelUpperLeft")), Is.Zero);
@@ -594,11 +643,23 @@ namespace VRVlog.LilToonExporter.Tests
                 }
                 foreach (var skin in fixture.Source.GetComponentsInChildren<SkinnedMeshRenderer>()) skin.sharedMaterial.shader = Shader.Find("lilToon");
                 fixture.Source.AddComponent<Vrm10Instance>().Vrm = vrm;
-                Assert.That(UnifiedExpressionPreparation.HasUsableEvidence(fixture.Source), Is.False);
-                var error = Assert.Throws<InvalidOperationException>(() => UniVrmOneClickExporter.Export(fixture.Source,
-                    "Missing blink safeguard", "Tests", exporterVersion: fullLilToon ? "0.11.5" : null,
-                    lilToonVersion: fullLilToon ? "2.3.4" : null));
-                Assert.That(error.Message, Does.Contain("閉眼"));
+                var usable = scenario == "authoredRest100Partial";
+                Assert.That(UnifiedExpressionPreparation.HasUsableEvidence(fixture.Source), Is.EqualTo(usable));
+                if (usable)
+                {
+                    Assert.DoesNotThrow(() => UniVrmOneClickExporter.Export(fixture.Source,
+                        "Authored source50 moves from neutral100", "Tests", exporterVersion: fullLilToon ? "0.11.5" : null,
+                        lilToonVersion: fullLilToon ? "2.3.4" : null));
+                    Assert.That(clip.MorphTargetBindings.Single().Weight, Is.EqualTo(.5f));
+                    Assert.That(fixture.Source.GetComponentsInChildren<SkinnedMeshRenderer>().All(skin => skin.GetBlendShapeWeight(2) == 100), Is.True);
+                }
+                else
+                {
+                    var error = Assert.Throws<InvalidOperationException>(() => UniVrmOneClickExporter.Export(fixture.Source,
+                        "Missing blink safeguard", "Tests", exporterVersion: fullLilToon ? "0.11.5" : null,
+                        lilToonVersion: fullLilToon ? "2.3.4" : null));
+                    Assert.That(error.Message, Does.Contain("閉眼"));
+                }
                 Assert.That(fixture.Source.GetComponentsInChildren<SkinnedMeshRenderer>().All(skin => skin.sharedMesh == fixture.Mesh), Is.True);
                 Assert.That(fixture.Mesh.GetBlendShapeIndex("JawOpen"), Is.EqualTo(1));
             }
@@ -669,7 +730,11 @@ namespace VRVlog.LilToonExporter.Tests
                 foreach (var binding in jaw.MorphTargetBindings)
                     Assert.That(imported.transform.Find(binding.RelativePath).GetComponent<SkinnedMeshRenderer>().GetBlendShapeWeight(binding.Index), Is.EqualTo(30).Within(.001));
                 var route = imported.Vrm.Expression.CustomClips.Single(value => value.name == (scenario == "partial" ? "UE/EyeClosedLeft" : "UE/MouthClosed"));
-                if (scenario == "authoredMorph") Assert.That(route.MorphTargetBindings.Single().Weight, Is.EqualTo(.4f).Within(.001));
+                if (scenario == "authoredMorph")
+                {
+                    Assert.That(route.MorphTargetBindings.Single().Weight, Is.EqualTo(1));
+                    Assert.That(clip.MorphTargetBindings.Single().Weight, Is.EqualTo(.4f));
+                }
                 if (scenario == "authoredColor" || scenario == "authoredColorInert") Assert.That(route.MaterialColorBindings.Length, Is.EqualTo(1));
                 if (scenario == "authoredUv" || scenario == "authoredUvInert") Assert.That(route.MaterialUVBindings.Length, Is.EqualTo(1));
                 Assert.That(fixture.Source.GetComponentsInChildren<SkinnedMeshRenderer>().All(skin => skin.sharedMesh == fixture.Mesh), Is.True);
@@ -701,7 +766,8 @@ namespace VRVlog.LilToonExporter.Tests
                 clip.name = "UE/MouthClosed";
                 clip.MorphTargetBindings = new[] { new MorphTargetBinding("Front", 1, bindingWeight), new MorphTargetBinding("Back", 1, bindingWeight) };
                 vrm.Expression.CustomClips.Add(clip); fixture.Source.AddComponent<Vrm10Instance>().Vrm = vrm;
-                var usable = rest < 100;
+                var nativePoses = NativePoses(skins, 1, bindingWeight * 100);
+                var usable = nativePoses.Values.Any(value => Vector3.Distance(value.Neutral, value.Endpoint) > .000001f);
                 Assert.That(UnifiedExpressionPreparation.HasUsableEvidence(fixture.Source), Is.EqualTo(usable));
                 if (!usable) Assert.Throws<InvalidOperationException>(() => UniVrmOneClickExporter.Export(fixture.Source,
                     "Authored residual safeguard", "Tests", exporterVersion: fullLilToon ? "0.11.5" : null, lilToonVersion: fullLilToon ? "2.3.4" : null));
@@ -710,18 +776,16 @@ namespace VRVlog.LilToonExporter.Tests
                     blinkOptions: usable ? null : new BlinkExportOptions { Mode = BlinkExportMode.None });
                 imported = await Vrm10.LoadBytesAsync(bytes, canLoadVrm0X: false, awaitCaller: new ImmediateCaller());
                 var authored = imported.Vrm.Expression.CustomClips.Single(value => value.name == clip.name);
-                Assert.That(authored.MorphTargetBindings.All(binding => binding.Weight == bindingWeight), Is.True);
+                Assert.That(authored.MorphTargetBindings.All(binding => binding.Weight == 1), Is.True);
                 imported.Runtime.Expression.SetWeight(ExpressionKey.CreateCustom(clip.name), 1f); imported.Runtime.Process();
                 foreach (var binding in authored.MorphTargetBindings)
                 {
                     var skin = imported.transform.Find(binding.RelativePath).GetComponent<SkinnedMeshRenderer>();
-                    var delta = new Vector3[skin.sharedMesh.vertexCount];
-                    skin.sharedMesh.GetBlendShapeFrameVertices(binding.Index, 0, delta, null, null);
-                    Assert.That(delta[0].y, Is.EqualTo(.02f * (1 - rest / 100)).Within(.00001),
-                        "The actual exported endpoint, including rest100+author.5, must agree with eligibility.");
-                    Assert.That(skin.GetBlendShapeWeight(binding.Index), Is.EqualTo(bindingWeight * 100).Within(.001));
+                    Assert.That(skin.GetBlendShapeWeight(binding.Index), Is.EqualTo(100).Within(.001));
+                    AssertNativePose(skin, nativePoses[skin.name], 1);
                 }
                 Assert.That(skins.All(skin => skin.GetBlendShapeWeight(1) == rest && skin.sharedMesh == fixture.Mesh), Is.True);
+                Assert.That(clip.MorphTargetBindings.All(binding => binding.Weight == bindingWeight), Is.True);
             }
             finally { if (imported != null) Object.DestroyImmediate(imported.gameObject); Object.DestroyImmediate(clip); Object.DestroyImmediate(vrm); }
         }
@@ -768,7 +832,7 @@ namespace VRVlog.LilToonExporter.Tests
                     AddTrackingDelta(altered, "MouthClosed", 0); AddTrackingDelta(altered, "EyeClosedLeft", 0);
                     front.sharedMesh = altered;
                 }
-                else if (change.EndsWith("Rest", StringComparison.Ordinal)) front.SetBlendShapeWeight(1, 100);
+                else if (change.EndsWith("Rest", StringComparison.Ordinal)) front.SetBlendShapeWeight(1, authored ? 50 : 100);
                 else if (change == "authoredDisabled") clip.MorphTargetBindings = clip.MorphTargetBindings.Select(binding => new MorphTargetBinding(binding.RelativePath, binding.Index, 0)).ToArray();
                 else if (change == "authoredRemoved") vrm.Expression.CustomClips.Clear();
                 else if (change == "color") clip.MaterialColorBindings = new[] { new MaterialColorBinding { MaterialName = "lost material", BindType = MaterialColorType.color, TargetValue = Color.red } };
@@ -852,6 +916,8 @@ namespace VRVlog.LilToonExporter.Tests
                     new MaterialUVBinding { MaterialName = name, Scaling = Vector2.one, Offset = Vector2.up }).ToArray();
                 vrm.Expression.CustomClips.Add(clip); fixture.Source.AddComponent<Vrm10Instance>().Vrm = vrm;
                 Assert.That(UnifiedExpressionPreparation.HasUsableEvidence(fixture.Source, target => target == back.transform), Is.True);
+                var repaired = kind == "onlyExcluded" || kind == "onlyExcludedColor";
+                var nativePoses = NativePoses(new[] { front }, 1, repaired ? 100 : 50);
                 var bytes = UniVrmOneClickExporter.Export(fixture.Source, "Retained authored UE references", "Tests",
                     excludedObjects: new[] { back.gameObject }, exporterVersion: fullLilToon ? "0.11.5" : null,
                     lilToonVersion: fullLilToon ? "2.3.4" : null);
@@ -859,14 +925,14 @@ namespace VRVlog.LilToonExporter.Tests
                 var route = imported.Vrm.Expression.CustomClips.Single(value => value.name == clip.name);
                 Assert.That(route.MorphTargetBindings.Length, Is.EqualTo(1));
                 Assert.That(route.MorphTargetBindings[0].RelativePath, Is.EqualTo("Front"));
-                var repaired = kind == "onlyExcluded" || kind == "onlyExcludedColor";
-                Assert.That(route.MorphTargetBindings[0].Weight, Is.EqualTo(repaired ? 1 : .5f).Within(.001));
+                Assert.That(route.MorphTargetBindings[0].Weight, Is.EqualTo(1));
                 Assert.That(route.MaterialColorBindings.Length, Is.EqualTo(kind == "color" ? 1 : 0));
                 Assert.That(route.MaterialUVBindings.Length, Is.EqualTo(kind == "uv" ? 1 : 0));
                 Assert.That(imported.transform.Find("Back"), Is.Null);
                 imported.Runtime.Expression.SetWeight(ExpressionKey.CreateCustom(route.name), .5f); imported.Runtime.Process();
-                Assert.That(imported.transform.Find("Front").GetComponent<SkinnedMeshRenderer>().GetBlendShapeWeight(route.MorphTargetBindings[0].Index),
-                    Is.EqualTo(repaired ? 50 : 25).Within(.001));
+                var exportedFront = imported.transform.Find("Front").GetComponent<SkinnedMeshRenderer>();
+                Assert.That(exportedFront.GetBlendShapeWeight(route.MorphTargetBindings[0].Index), Is.EqualTo(50).Within(.001));
+                AssertNativePose(exportedFront, nativePoses[front.name], .5f);
                 Assert.That(back.sharedMesh, Is.SameAs(fixture.Mesh)); Assert.That(back.sharedMaterial, Is.SameAs(excludedMaterial));
                 Assert.That(vrm.Expression.CustomClips.Single(), Is.SameAs(clip));
                 Assert.That(clip.MorphTargetBindings.Any(binding => binding.RelativePath == "Back"), Is.EqualTo(kind == "mixedMorph" || kind == "discardedInvalidMorph" || kind == "onlyExcluded"));
@@ -918,25 +984,21 @@ namespace VRVlog.LilToonExporter.Tests
                     clip.MorphTargetBindings = new[] { new MorphTargetBinding("Front", 1, .6f), new MorphTargetBinding("Back", 1, .6f) };
                     vrm.Expression.CustomClips.Add(clip); fixture.Source.AddComponent<Vrm10Instance>().Vrm = vrm;
                 }
+                var nativePoses = NativePoses(fixture.Source.GetComponentsInChildren<SkinnedMeshRenderer>(), 1, authored ? 60 : 100);
                 Assert.That(UnifiedExpressionPreparation.HasUsableEvidence(fixture.Source), Is.True);
                 var bytes = UniVrmOneClickExporter.Export(fixture.Source, "Leading neutral UE frame", "Tests",
                     exporterVersion: fullLilToon ? "0.11.5" : null, lilToonVersion: fullLilToon ? "2.3.4" : null);
                 imported = await Vrm10.LoadBytesAsync(bytes, canLoadVrm0X: false, awaitCaller: new ImmediateCaller());
                 var route = imported.Vrm.Expression.CustomClips.Single(value => value.name == clip.name);
-                var baseline = new Dictionary<string, Vector3>();
+                Assert.That(route.MorphTargetBindings.All(binding => binding.Weight == 1), Is.True);
                 foreach (var input in new[] { 0f, .5f, 1f })
                 {
                     imported.Runtime.Expression.SetWeight(ExpressionKey.CreateCustom(route.name), input); imported.Runtime.Process();
                     foreach (var binding in route.MorphTargetBindings)
                     {
                         var skin = imported.transform.Find(binding.RelativePath).GetComponent<SkinnedMeshRenderer>();
-                        Assert.That(skin.GetBlendShapeWeight(binding.Index), Is.EqualTo(input * (authored ? 60 : 100)).Within(.001));
-                        var delta = new Vector3[skin.sharedMesh.vertexCount]; skin.sharedMesh.GetBlendShapeFrameVertices(binding.Index, 0, delta, null, null);
-                        Assert.That(delta[0].y, Is.EqualTo(.02f * (1 - rest / 100)).Within(.00001));
-                        skin.BakeMesh(baked);
-                        if (input == 0) baseline.Add(binding.RelativePath, baked.vertices[0]);
-                        Assert.That(Vector3.Distance(baseline[binding.RelativePath], baked.vertices[0]),
-                            Is.EqualTo(.02f * (1 - rest / 100) * input * (authored ? .6f : 1)).Within(.0001));
+                        Assert.That(skin.GetBlendShapeWeight(binding.Index), Is.EqualTo(input * 100).Within(.001));
+                        AssertNativePose(skin, nativePoses[skin.name], input);
                     }
                 }
                 Assert.That(fixture.Mesh.GetBlendShapeFrameCount(1), Is.EqualTo(2));
@@ -1026,6 +1088,7 @@ namespace VRVlog.LilToonExporter.Tests
                 clip.name = "UE/MouthClosed"; clip.MorphTargetBindings = new[] {
                     new MorphTargetBinding("Front", 1, positiveFirst ? .6f : 0), new MorphTargetBinding("Front", 1, positiveFirst ? 0 : .6f) };
                 vrm.Expression.CustomClips.Add(clip); fixture.Source.AddComponent<Vrm10Instance>().Vrm = vrm;
+                var nativePoses = NativePoses(new[] { fixture.Source.transform.Find("Front").GetComponent<SkinnedMeshRenderer>() }, 1, positiveFirst ? 60 : 0);
                 Assert.That(UnifiedExpressionPreparation.HasUsableEvidence(fixture.Source), Is.EqualTo(positiveFirst));
                 if (!positiveFirst) Assert.Throws<InvalidOperationException>(() => UniVrmOneClickExporter.Export(fixture.Source, "Disabled first authored target", "Tests",
                     exporterVersion: fullLilToon ? "0.11.5" : null, lilToonVersion: fullLilToon ? "2.3.4" : null));
@@ -1034,11 +1097,12 @@ namespace VRVlog.LilToonExporter.Tests
                     blinkOptions: positiveFirst ? null : new BlinkExportOptions { Mode = BlinkExportMode.None });
                 imported = await Vrm10.LoadBytesAsync(bytes, canLoadVrm0X: false, awaitCaller: new ImmediateCaller());
                 var route = imported.Vrm.Expression.CustomClips.Single(value => value.name == clip.name);
-                Assert.That(route.MorphTargetBindings.Length, Is.EqualTo(2));
-                Assert.That(route.MorphTargetBindings[0].Weight, Is.EqualTo(positiveFirst ? .6f : 0));
+                Assert.That(route.MorphTargetBindings.Length, Is.EqualTo(positiveFirst ? 1 : 2));
+                Assert.That(route.MorphTargetBindings[0].Weight, Is.EqualTo(positiveFirst ? 1 : 0));
                 imported.Runtime.Expression.SetWeight(ExpressionKey.CreateCustom(route.name), .5f); imported.Runtime.Process();
                 var target = imported.transform.Find("Front").GetComponent<SkinnedMeshRenderer>();
-                Assert.That(target.GetBlendShapeWeight(route.MorphTargetBindings[0].Index), Is.EqualTo(positiveFirst ? 30 : 0).Within(.001));
+                Assert.That(target.GetBlendShapeWeight(route.MorphTargetBindings[0].Index), Is.EqualTo(positiveFirst ? 50 : 0).Within(.001));
+                AssertNativePose(target, nativePoses[target.name], .5f);
                 Assert.That(clip.MorphTargetBindings.Length, Is.EqualTo(2));
                 Assert.That(clip.MorphTargetBindings[1].Weight, Is.EqualTo(positiveFirst ? 0 : .6f));
             }
@@ -1137,7 +1201,8 @@ namespace VRVlog.LilToonExporter.Tests
                     clip.MorphTargetBindings = new[] { new MorphTargetBinding("Front", 1, .6f), new MorphTargetBinding("Back", 1, .6f) };
                     vrm.Expression.CustomClips.Add(clip); fixture.Source.AddComponent<Vrm10Instance>().Vrm = vrm;
                 }
-                var usable = rest < 100;
+                var nativePoses = NativePoses(sourceSkins, 1, authored ? 60 : 100);
+                var usable = nativePoses.Values.Any(value => Vector3.Distance(value.Neutral, value.Endpoint) > .000001f);
                 Assert.That(UnifiedExpressionPreparation.HasUsableEvidence(fixture.Source), Is.EqualTo(usable));
                 if (!usable)
                 {
@@ -1150,21 +1215,17 @@ namespace VRVlog.LilToonExporter.Tests
                     blinkOptions: usable ? null : new BlinkExportOptions { Mode = BlinkExportMode.None });
                 imported = await Vrm10.LoadBytesAsync(bytes, canLoadVrm0X: false, awaitCaller: new ImmediateCaller());
                 var route = imported.Vrm.Expression.CustomClips.Single(value => value.name == clip.name);
-                var baseline = new Dictionary<string, Vector3>();
+                Assert.That(route.MorphTargetBindings.All(binding => binding.Weight == 1), Is.True);
                 foreach (var input in new[] { 0f, .5f, 1f })
                 {
                     imported.Runtime.Expression.SetWeight(ExpressionKey.CreateCustom(route.name), input); imported.Runtime.Process();
                     foreach (var binding in route.MorphTargetBindings)
                     {
                         var skin = imported.transform.Find(binding.RelativePath).GetComponent<SkinnedMeshRenderer>();
-                        Assert.That(skin.GetBlendShapeWeight(binding.Index), Is.EqualTo(input * (authored ? 60 : 100)).Within(.001));
+                        Assert.That(skin.GetBlendShapeWeight(binding.Index), Is.EqualTo(input * 100).Within(.001));
                         Assert.That(skin.sharedMesh.GetBlendShapeFrameCount(binding.Index), Is.EqualTo(1));
                         Assert.That(skin.sharedMesh.GetBlendShapeFrameWeight(binding.Index, 0), Is.EqualTo(100));
-                        var delta = new Vector3[skin.sharedMesh.vertexCount]; skin.sharedMesh.GetBlendShapeFrameVertices(binding.Index, 0, delta, null, null);
-                        Assert.That(delta[0].y, Is.EqualTo(.04f * (1 - rest / 100)).Within(.000001));
-                        skin.BakeMesh(baked); if (input == 0) baseline.Add(binding.RelativePath, baked.vertices[0]);
-                        Assert.That(Vector3.Distance(baseline[binding.RelativePath], baked.vertices[0]),
-                            Is.EqualTo(.04f * (1 - rest / 100) * input * (authored ? .6f : 1)).Within(.00001));
+                        AssertNativePose(skin, nativePoses[skin.name], input);
                     }
                 }
                 Assert.That(fixture.Mesh.GetBlendShapeFrameCount(1), Is.EqualTo(2));
@@ -1208,7 +1269,7 @@ namespace VRVlog.LilToonExporter.Tests
                         var expectedOffset = curve == "explicitNeutral" ? 0f : curve == "zeroEndpoint" ? .02f : .026666667f;
                         Assert.That(Vector3.Distance(baked.vertices[0], fixture.Mesh.vertices[0] + Vector3.up * expectedOffset), Is.LessThan(.000001f));
                     }
-                    skin.SetBlendShapeWeight(1, 100); skin.BakeMesh(baked); nativeEnd.Add(skin.name, skin.transform.TransformPoint(baked.vertices[0]));
+                    skin.SetBlendShapeWeight(1, authored ? 60 : 100); skin.BakeMesh(baked); nativeEnd.Add(skin.name, skin.transform.TransformPoint(baked.vertices[0]));
                     skin.SetBlendShapeWeight(1, rest);
                 }
                 clip.name = "UE/MouthClosed";
@@ -1217,7 +1278,7 @@ namespace VRVlog.LilToonExporter.Tests
                     clip.MorphTargetBindings = new[] { new MorphTargetBinding("Front", 1, .6f), new MorphTargetBinding("Back", 1, .6f) };
                     vrm.Expression.CustomClips.Add(clip); fixture.Source.AddComponent<Vrm10Instance>().Vrm = vrm;
                 }
-                var usable = rest < 100;
+                var usable = nativeRest.Any(value => Vector3.Distance(value.Value, nativeEnd[value.Key]) > .000001f);
                 Assert.That(UnifiedExpressionPreparation.HasUsableEvidence(fixture.Source), Is.EqualTo(usable));
                 if (!usable)
                 {
@@ -1237,7 +1298,9 @@ namespace VRVlog.LilToonExporter.Tests
                     foreach (var binding in route.MorphTargetBindings)
                     {
                         var skin = imported.transform.Find(binding.RelativePath).GetComponent<SkinnedMeshRenderer>();
-                        var expected = Vector3.LerpUnclamped(nativeRest[skin.name], nativeEnd[skin.name], input * (authored ? .6f : 1));
+                        Assert.That(binding.Weight, Is.EqualTo(1));
+                        Assert.That(skin.GetBlendShapeWeight(binding.Index), Is.EqualTo(input * 100).Within(.001));
+                        var expected = Vector3.LerpUnclamped(nativeRest[skin.name], nativeEnd[skin.name], input);
                         skin.BakeMesh(baked);
                         Assert.That(Vector3.Distance(skin.transform.TransformPoint(baked.vertices[0]), expected), Is.LessThan(.00001f),
                             "Exported coefficient " + input + " must start from the actual native rest, including a negative/positive bracket's nonzero weight0 geometry.");

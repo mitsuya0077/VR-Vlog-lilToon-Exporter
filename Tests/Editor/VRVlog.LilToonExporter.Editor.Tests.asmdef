@@ -5,6 +5,7 @@
     "VRVlog.LilToonExporter.Editor",
     "VRVlog.LilToonExporter.Runtime",
     "VRVlog.LilToonExporter.TestFixtures",
+    "VRVlog.LanTransfer.Editor.Tests",
     "VRM10",
     "SpringBoneJobs",
     "UniGLTF",

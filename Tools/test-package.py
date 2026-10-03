@@ -17,6 +17,36 @@ def load(name):
 
 package = load("build-package")
 public = load("check-public-content")
+unity_meta = load("unity_meta")
+
+
+class UnityMetaTests(unittest.TestCase):
+    def setUp(self):
+        self.temp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.temp.cleanup)
+        self.root = Path(self.temp.name)
+        self.meta = self.root / "Example.cs.meta"
+
+    def test_valid_guid_and_bom_are_accepted(self):
+        self.meta.write_text("fileFormatVersion: 2\nguid: 0123456789ABCDEF0123456789abcdef\n", encoding="utf-8-sig")
+        unity_meta.validate_meta_guids(self.root)
+
+    def test_malformed_guid_reports_ignored_asset(self):
+        # The first fixture reproduced Unity omitting NeutralShapeSampler.cs.
+        for value in ("720af334c68d4a34b80e68321e35ff148", "a" * 31, "g" * 32, "", "a" * 32 + "\nguid: " + "b" * 32):
+            with self.subTest(value=value):
+                self.meta.write_text("fileFormatVersion: 2\nguid: " + value + "\n", encoding="utf-8")
+                with self.assertRaisesRegex(ValueError, "Invalid Unity GUID in Example.cs.meta"):
+                    unity_meta.validate_meta_guids(self.root)
+        self.meta.write_text("fileFormatVersion: 2\n", encoding="utf-8")
+        with self.assertRaisesRegex(ValueError, "Invalid Unity GUID in Example.cs.meta"):
+            unity_meta.validate_meta_guids(self.root)
+
+    def test_duplicate_guid_reports_both_assets(self):
+        self.meta.write_text("guid: " + "a" * 32 + "\n", encoding="utf-8")
+        (self.root / "Other.cs.meta").write_text("guid: " + "A" * 32 + "\n", encoding="utf-8")
+        with self.assertRaisesRegex(ValueError, "Duplicate Unity GUID: Example.cs.meta and Other.cs.meta"):
+            unity_meta.validate_meta_guids(self.root)
 
 
 class PackageTests(unittest.TestCase):
@@ -75,6 +105,43 @@ class PackageTests(unittest.TestCase):
         self.git("rm", "--cached", "LICENSE")
         with self.assertRaisesRegex(ValueError, "Required package files"):
             package.build(self.root, self.root / "invalid.zip")
+
+    def test_lan_transfer_guide_is_packaged_and_required(self):
+        guide = "Documentation~/LanTransfer.md"
+        content = "Public LAN installation, permissions and acceptance instructions\n"
+        self.write(guide, content)
+        expected = (self.root / guide).read_bytes()
+        self.git("add", guide)
+        archive = self.root / "with-lan-guide.zip"
+        names = package.build(self.root, archive)
+        self.assertIn(guide, names)
+        with zipfile.ZipFile(archive) as built:
+            self.assertEqual(built.read(guide), expected)
+        self.assertFalse(package.included("Documentation~/private-notes.md"))
+        self.git("rm", "--cached", guide)
+        with self.assertRaisesRegex(ValueError, "Required package files.*LanTransfer"):
+            package.build(self.root, self.root / "missing-lan-guide.zip")
+
+    def test_only_pinned_dlls_are_allowed(self):
+        for name in package.PINNED_DLLS:
+            self.assertTrue(package.included(name))
+        self.assertFalse(package.included("Editor/arbitrary.dll"))
+        self.assertFalse(package.included("Runtime/BouncyCastle.Cryptography.dll"))
+
+    def test_missing_or_modified_transfer_dependency_fails(self):
+        contents = {"Editor/LanTransfer/VRVlog.LanTransfer.Editor.asmdef": b"{}"}
+        with self.assertRaisesRegex(ValueError, "Pinned LAN transfer dependency"):
+            package.verify_lan_dependencies(contents)
+        for name in package.PINNED_DLLS:
+            contents[name] = b"modified DLL"
+            contents[name + ".meta"] = b"importer"
+        with self.assertRaisesRegex(ValueError, "different SHA-256"):
+            package.verify_lan_dependencies(contents)
+
+    def test_referenced_untracked_transfer_assembly_fails(self):
+        contents = {"Editor/VRVlog.LilToonExporter.Editor.asmdef": b'{"references":["VRVlog.LanTransfer.Editor"]}'}
+        with self.assertRaisesRegex(ValueError, "Required LAN transfer assembly"):
+            package.verify_lan_dependencies(contents)
 
     def test_missing_locale_asset_fails(self):
         self.git("rm", "--cached", "Editor/Locales/ExporterLocale_ko.json")

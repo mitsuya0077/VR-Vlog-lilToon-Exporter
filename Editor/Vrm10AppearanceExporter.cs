@@ -18,9 +18,10 @@ namespace VRVlog.LilToonExporter
             using var arrays = new NativeArrayManager();
             var converter = new ModelExporter();
             var model = converter.Export(settings, arrays, avatar);
+            PreserveMorphNormals(converter, arrays, settings);
             model.ConvertCoordinate(Coordinates.Vrm1);
             using var exporter = new Vrm10Exporter(settings, materialExporter, textureSerializer);
-            exporter.Export(avatar, model, converter, new ExportArgs(), vrmMeta);
+            exporter.Export(avatar, model, converter, new ExportArgs { removeMorphNormal = settings.ExportOnlyBlendShapePosition }, vrmMeta);
             // Vrm10Exporter emits materials in model.Materials order. Preserve
             // object identity for extension injection, even with duplicate names.
             if (materialIndices != null)
@@ -28,6 +29,38 @@ namespace VRVlog.LilToonExporter
             if (settings.ExportVertexColor) PreserveVertexColors(model, exporter.Storage);
             afterExport?.Invoke(converter, model, exporter.Storage);
             return exporter.Storage.ToGlbBytes();
+        }
+
+        // The pinned ModelExporter computes useNormal but only copies each
+        // morph's POSITION buffer. Fill NORMAL from its exact source Mesh map
+        // while both buffers still use Unity coordinates and source vertex order.
+        // MeshWriter subsequently applies its own submesh index remapping.
+        private static void PreserveMorphNormals(ModelExporter converter, NativeArrayManager arrays, GltfExportSettings settings)
+        {
+            if (settings.ExportOnlyBlendShapePosition) return;
+            foreach (var pair in converter.Meshes)
+            {
+                var source = pair.Key;
+                var group = pair.Value;
+                if (group.Meshes.Count != 1 || group.Meshes[0].VertexBuffer.Count != source.vertexCount ||
+                    group.Meshes[0].MorphTargets.Count != source.blendShapeCount)
+                    throw new InvalidOperationException("UniVRMの元メッシュとMorphTargetの対応が一致しないため、表情の法線を安全に保存できません。");
+                if (source.normals.Length != source.vertexCount) continue;
+                var mesh = group.Meshes[0];
+                var vertices = new Vector3[source.vertexCount];
+                var normals = new Vector3[source.vertexCount];
+                for (var shape = 0; shape < source.blendShapeCount; shape++)
+                {
+                    var target = mesh.MorphTargets[shape];
+                    var frames = source.GetBlendShapeFrameCount(shape);
+                    if (frames == 0 || target.Name != source.GetBlendShapeName(shape) || target.VertexBuffer.Count != source.vertexCount)
+                        throw new InvalidOperationException("UniVRMの元BlendShapeとMorphTargetの対応が一致しないため、表情の法線を安全に保存できません: " + source.name);
+                    source.GetBlendShapeFrameVertices(shape, frames - 1, vertices, normals, null);
+                    var buffer = arrays.CreateNativeArray(normals).Reinterpret<byte>(12);
+                    target.VertexBuffer.Add(VertexBuffer.NormalKey,
+                        new BufferAccessor(arrays, buffer, AccessorValueType.FLOAT, AccessorVectorType.VEC3, normals.Length));
+                }
+            }
         }
 
         // UniVRM 0.131 ModelExporter retains COLOR_0 but MeshWriter's divided

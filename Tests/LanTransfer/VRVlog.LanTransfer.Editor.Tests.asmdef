@@ -1,0 +1,9 @@
+{
+  "name": "VRVlog.LanTransfer.Editor.Tests",
+  "references": ["VRVlog.LanTransfer.Editor"],
+  "includePlatforms": ["Editor"],
+  "optionalUnityReferences": ["TestAssemblies"],
+  "overrideReferences": true,
+  "precompiledReferences": ["BouncyCastle.Cryptography.dll", "zxing.dll"],
+  "autoReferenced": false
+}

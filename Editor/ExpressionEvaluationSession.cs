@@ -20,6 +20,7 @@ namespace VRVlog.LilToonExporter
         private readonly ISet<string> expressionParameters;
         private readonly ExpressionDependencies dependencies;
         private readonly bool defaultLocal;
+        private readonly ISet<string> suppliedInputs;
         private InvalidOperationException failure;
         private int entries;
         private bool neutralFxObserved;
@@ -28,11 +29,15 @@ namespace VRVlog.LilToonExporter
         internal AnimatorController Controller { get; private set; }
 
         internal ExpressionEvaluationSession(RuntimeAnimatorController runtime, ExpressionDependencies dependencies,
-            ISet<string> expressionParameters, bool defaultLocal = true)
+            ISet<string> expressionParameters, bool defaultLocal = true, FixedExpressionContext fixedContext = null)
         {
             this.dependencies = dependencies;
             this.expressionParameters = expressionParameters ?? new HashSet<string>();
             this.defaultLocal = defaultLocal;
+            suppliedInputs = fixedContext == null ? null : new HashSet<string>(fixedContext.Values.Keys, StringComparer.Ordinal);
+            // The fixed export environment explicitly starts with FX enabled.
+            // Every potentially reachable non-unit command is still rejected.
+            neutralFxObserved = fixedContext != null;
             var original = ExpressionDependencies.Controller(runtime);
             types = original.parameters.ToDictionary(p => p.name, p => p.type, StringComparer.Ordinal);
             id = ++nextId;
@@ -198,7 +203,7 @@ namespace VRVlog.LilToonExporter
                     }
                 }
                 var local = session.types.ContainsKey("IsLocal") ? Read("IsLocal") != 0 : session.defaultLocal;
-                VrChatParameterDriver.Execute(program, session.types, session.expressionParameters, session.dependencies.Parameters, local, Read, Write);
+                VrChatParameterDriver.Execute(program, session.types, session.expressionParameters, session.dependencies.Parameters, local, Read, Write, session.suppliedInputs);
             }
             catch (Exception error)
             {

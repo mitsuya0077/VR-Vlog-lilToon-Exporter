@@ -48,6 +48,11 @@ namespace VRVlog.LilToonExporter.Tests
                 });
                 Assert.That(recovery, Is.Null); Assert.That(calls, Is.EqualTo(1)); Assert.That(completed, Is.EqualTo(1));
                 Assert.That(Directory.GetFiles(directory), Is.EqualTo(new[] { destination }));
+                // Reuse the same atomic writer used by "スマホに送る", then
+                // verify the actual extension-bearing bytes over pinned TLS.
+                var transferSnapshot = Path.Combine(directory, "transfer.vrm");
+                ExportOutputWriter.Write(transferSnapshot, exported);
+                VRVlog.LilToonExporter.LanTransfer.Tests.LanTransferTests.AssertSnapshotRoundTrip(transferSnapshot, exported);
                 imported = await Vrm10.LoadBytesAsync(File.ReadAllBytes(destination), canLoadVrm0X: false,
                     awaitCaller: new ImmediateCaller(), controlRigGenerationOption: ControlRigGenerationOption.None);
                 Assert.That(imported, Is.Not.Null);

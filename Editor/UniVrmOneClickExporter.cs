@@ -72,7 +72,7 @@ namespace VRVlog.LilToonExporter
             recoveryReport.Stage = "表情メニュー読込";
             var menu = VrChatExpressionMenu.Read(source, menuPolicy);
             exclusions.FilterExpressions(menu, warnings);
-            var sourceBlink = BlinkExportSession.Resolve(source, blinkOptions, exclusions.Contains, suppressSharedTextureEmission, suppressHdrTextureEmission);
+            var sourceBlink = BlinkExportSession.CaptureForExport(source, blinkOptions, exclusions.Contains, suppressSharedTextureEmission, suppressHdrTextureEmission);
             using var poses = new PoseExportSession(source, poseOptions, exclusions.Contains, menuPolicy);
             recoveryReport.Stage = "コピー作成";
             var clone = UnityEngine.Object.Instantiate(source);
@@ -82,13 +82,14 @@ namespace VRVlog.LilToonExporter
             var temporaryTextures = new List<Texture2D>();
             var fixedRootJoints = new HashSet<Transform>();
             ExportOptimizationBindings optimizerBindings = null;
+            AuthoredExpressionEndpoints authoredEndpoints = null;
             try
             {
                 var recovery = recoveryOptions == null || recoveryOptions.Actions.Count == 0 ? null : new ExportRecoveryCopySession(source, clone, temporaryMaterials, recoveryOptions, recoveryReport, bakeOptions);
                 using var blink = sourceBlink.ForClone(source, clone);
                 using var gimmicks = new ExportGimmickSession(source, clone, gimmickOptions);
                 bool ExcludedBinding(string path) => exclusions.ContainsPath(path) || gimmicks.ContainsPath(path);
-                bool PreparedExcludedBinding(string path) => VrChatExpressionSampler.IsExcludedPreparedPath(clone, path, ExcludedBinding);
+                using var expressionBindings = new PreparedExpressionBindings(clone, menu, excludedPath: ExcludedBinding);
                 MaAppearanceSnapshot.Apply(source, clone, temporaryMeshes, exclusions, warnings);
                 PoseExportSession.RemoveAplFromCopy(source, clone);
                 recovery?.Apply(warnings);
@@ -98,39 +99,59 @@ namespace VRVlog.LilToonExporter
                 // materials. All actual baking waits for the final appearance.
                 if (exporterVersion == null) LilToonMainTextureBaker.ApplyOmissions(clone, temporaryMaterials, warnings, bakeOptions);
                 var requiresPreparation = NdmfExportPreparation.NeedsProcessing(clone);
-                // MA can change rootBone for bounds or retarget it while merging
-                // rigs. Make implicit vertices explicit before those changes so
-                // they participate in the same bindpose preservation as the skin.
                 if (requiresPreparation)
                     SkinnedMeshFallbackWeights.Preserve(clone, temporaryMeshes, warnings, fixedRootJoints);
-                var unifiedPreparation = trackingProfile == null ? new UnifiedExpressionPreparation(clone, suppressSharedTextureEmission: suppressSharedTextureEmission, suppressHdrTextureEmission: suppressHdrTextureEmission) : null;
-                var faceEmoBindings = FaceEmoExpressions.Capture(source, clone, ExcludedBinding, PreparedExcludedBinding);
+                var unifiedPreparation = trackingProfile == null ? new UnifiedExpressionPreparation(clone,
+                    suppressSharedTextureEmission: suppressSharedTextureEmission, suppressHdrTextureEmission: suppressHdrTextureEmission) : null;
+                var faceEmoBindings = FaceEmoExpressions.Capture(source, clone, ExcludedBinding,
+                    expressionBindings.ExcludesPreparedPath, deferPermanentOverrides: true);
                 List<VrmMenuExpressions.Expression> expressions = null;
                 recoveryReport.Stage = "ビルド処理";
+                expressionBindings.CaptureAuthoredExpressions();
                 using var preparation = NdmfExportPreparation.Prepare(source, clone, warnings, (copy, original) =>
                 {
                     recoveryReport.Track(copy, original);
                     recovery?.Track(copy, original);
                 }, afterTransforming: transformed =>
                 {
-                    // Sample the FX controller MA actually built, including
-                    // permanent overrides, before AAO edits topology or routes.
+                    expressionBindings.RebindPrepared(transformed.PreparedRendererFor);
+                    expressionBindings.RebindAuthoredExpressions(transformed.IsolatedCopyOf);
+                    faceEmoBindings?.RebindPrepared(transformed.PreparedRendererFor);
+                    blink.RebindPrepared(transformed.PreparedRendererFor);
+                    unifiedPreparation?.RebindPrepared(transformed.PreparedRendererFor);
+                    blink.VerifyPreparedIdentity(clone);
+                    unifiedPreparation?.VerifyIdentityAndDeformation();
                     var preparedMenuPolicy = menuPolicy?.WithOwnedCopies(value => transformed.IsolatedCopyOf(value as UnityEngine.Object));
-                    // Every native sample/probe starts from the authored prepared
-                    // weights. Applying a fractional/additive neutral result first
-                    // would blend that already evaluated result a second time.
-                    menu = VrChatExpressionSampler.Analyze(clone, PreparedExcludedBinding, preparedMenuPolicy, source, faceEmoBindings);
-                    VrChatExpressionSampler.ApplyMergedDefaults(source, clone, warnings, preparedMenuPolicy, PreparedExcludedBinding);
-                    var expressionBindings = new PreparedExpressionBindings(clone, menu);
-                    gimmicks.Apply(expressionBindings, menu, warnings);
-                    unifiedPreparation?.Verify(blink.RequiresUnifiedEvidence);
-                    recoveryReport.Stage = "状態確定";
+                    // Analyze every endpoint and neutral from the same prepared
+                    // authored weights; fractional/additive FX is applied once.
+                    menu = VrChatExpressionSampler.Analyze(clone, expressionBindings.ExcludesPreparedPath,
+                        preparedMenuPolicy, source, faceEmoBindings);
+                    // Analyzed curves use the prepared hierarchy. Keep the
+                    // earlier bindings only for authoring identity/exclusions.
+                    using var preparedMenuBindings = new PreparedExpressionBindings(clone, menu,
+                        excludedPath: expressionBindings.ExcludesPreparedPath);
+                    gimmicks.Apply(preparedMenuBindings, menu, warnings);
+                    FaceEmoExpressions.ApplyPreparedDefaultFace(clone, menu, preparedMenuBindings,
+                        preparedMenuBindings.ExcludesPreparedPath, faceEmoBindings);
                     poses.CollectPrepared(clone, warnings, preparedMenuPolicy);
-                    expressionBindings.Capture(menu);
+                    recoveryReport.Stage = "基準形評価";
+                    NeutralShapeSnapshot.Apply(clone, NeutralShapeSampler.Sample(clone, preparedMenuBindings.ExcludesPreparedPath));
+                    blink.ResolvePreparedNeutral(clone, suppressSharedTextureEmission: suppressSharedTextureEmission,
+                        suppressHdrTextureEmission: suppressHdrTextureEmission);
+                    var neutral = NeutralShapeSnapshot.Capture(clone);
+                    authoredEndpoints = AuthoredExpressionEndpoints.Capture(clone, neutral, trackingProfile);
+                    preparedMenuBindings.Capture(menu);
                     blink.Bake(clone, temporaryMeshes);
                     AvatarBaseShape.Preserve(clone, clone, temporaryMeshes, warnings);
-                    expressions = VrChatExpressionBaker.Bake(null, clone, menu, temporaryMeshes, warnings, expressionBindings);
-                    optimizerBindings = ExportOptimizationBindings.Capture(clone, trackingProfile, unifiedPreparation, objectRegistry: transformed.ObjectRegistry);
+                    authoredEndpoints.Bake(temporaryMeshes);
+                    expressions = VrChatExpressionBaker.Bake(null, clone, menu, temporaryMeshes, warnings, preparedMenuBindings);
+                    // Generated absolute endpoints now define the protected
+                    // routes for both automatic and explicitly authored tracking.
+                    unifiedPreparation = trackingProfile == null ? new UnifiedExpressionPreparation(clone,
+                        suppressSharedTextureEmission: suppressSharedTextureEmission, suppressHdrTextureEmission: suppressHdrTextureEmission) : null;
+                    optimizerBindings = ExportOptimizationBindings.Capture(clone,
+                        trackingProfile == null ? null : authoredEndpoints.TrackingProfile, unifiedPreparation,
+                        objectRegistry: transformed.ObjectRegistry);
                 });
                 optimizerBindings.ValidateAndApply((copy, original) =>
                 {
@@ -204,6 +225,7 @@ namespace VRVlog.LilToonExporter
             finally
             {
                 optimizerBindings?.Dispose();
+                authoredEndpoints?.Dispose();
                 UnityEngine.Object.DestroyImmediate(clone);
                 foreach (var material in temporaryMaterials) UnityEngine.Object.DestroyImmediate(material);
                 foreach (var mesh in temporaryMeshes) UnityEngine.Object.DestroyImmediate(mesh);

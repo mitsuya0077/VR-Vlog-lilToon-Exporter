@@ -471,6 +471,167 @@ namespace VRVlog.LilToonExporter.Tests
             Assert.That(BlinkExportSession.Resolve(root).Slots[0].Single().Shape, Is.EqualTo("Blink"));
         }
 
+        static void SetBlinkFrames(SkinnedMeshRenderer skin, params (string Shape, float Endpoint, float Delta)[] frames)
+        {
+            skin.sharedMesh.ClearBlendShapes();
+            foreach (var frame in frames)
+                skin.sharedMesh.AddBlendShapeFrame(frame.Shape, frame.Endpoint,
+                    new[] { Vector3.up * frame.Delta, Vector3.zero, Vector3.zero }, null, null);
+        }
+
+        static float GeneratedBlinkDelta(BlinkShapeBinding binding)
+        {
+            var mesh = binding.Renderer.sharedMesh;
+            var delta = new Vector3[mesh.vertexCount];
+            mesh.GetBlendShapeFrameVertices(mesh.GetBlendShapeIndex(binding.Shape), 0, delta, null, null);
+            return delta[0].y;
+        }
+
+        [TestCase(100f)][TestCase(150f)]
+        public void CompatibleMergedAutomaticBlinkKeepsOneBindingAndTheSourceEndpoint(float endpoint)
+        {
+            var first = Skin("UE/EyeClosed"); var second = Skin("UE/EyeClosed");
+            SetBlinkFrames(first, ("UE/EyeClosed", endpoint, .2f));
+            SetBlinkFrames(second, ("UE/EyeClosed", endpoint, .3f));
+            var firstMesh = first.sharedMesh; var secondMesh = second.sharedMesh;
+            using var session = BlinkExportSession.CaptureForExport(root);
+            copy = new GameObject("prepared");
+            var merged = Skin("UE/EyeClosed"); merged.transform.SetParent(copy.transform, false);
+            SetBlinkFrames(merged, ("UE/EyeClosed", endpoint, .5f));
+            Assert.DoesNotThrow(() => session.RebindPrepared(skin => merged));
+            Assert.That(session.Slots[0].Single().Renderer, Is.SameAs(merged));
+            Assert.That(session.Slots[0].Single().Shape, Is.EqualTo("UE/EyeClosed"));
+            Assert.DoesNotThrow(() => session.VerifyPreparedIdentity(copy));
+            session.ResolvePreparedNeutral(copy); session.Bake(copy, generated);
+            Assert.That(GeneratedBlinkDelta(session.Slots[0].Single()), Is.EqualTo(.5f).Within(.00001f),
+                "A150 source frame must not fall back to the public100 setting or double the merged binding.");
+            Assert.That(first.sharedMesh, Is.SameAs(firstMesh)); Assert.That(second.sharedMesh, Is.SameAs(secondMesh));
+            Assert.That(firstMesh.blendShapeCount, Is.EqualTo(1)); Assert.That(secondMesh.blendShapeCount, Is.EqualTo(1));
+            Assert.That(first.GetBlendShapeWeight(0), Is.Zero); Assert.That(second.GetBlendShapeWeight(0), Is.Zero);
+        }
+
+        [Test]
+        public void DisjointMergedAutomaticBlinkChannelsKeepBothSidesAndTheirEndpoints()
+        {
+            var left = Skin("UE/EyeClosedLeft"); var right = Skin("UE/EyeClosedRight");
+            SetBlinkFrames(left, ("UE/EyeClosedLeft", 150f, .2f));
+            SetBlinkFrames(right, ("UE/EyeClosedRight", 100f, .3f));
+            using var session = BlinkExportSession.CaptureForExport(root);
+            copy = new GameObject("prepared");
+            var merged = Skin("UE/EyeClosedLeft", "UE/EyeClosedRight"); merged.transform.SetParent(copy.transform, false);
+            SetBlinkFrames(merged, ("UE/EyeClosedLeft", 150f, .2f), ("UE/EyeClosedRight", 100f, .3f));
+            session.RebindPrepared(skin => merged);
+            Assert.That(session.Slots[0].Select(binding => binding.Shape), Is.EquivalentTo(new[] { "UE/EyeClosedLeft", "UE/EyeClosedRight" }));
+            Assert.That(session.Slots[1].Single().Shape, Is.EqualTo("UE/EyeClosedLeft"));
+            Assert.That(session.Slots[2].Single().Shape, Is.EqualTo("UE/EyeClosedRight"));
+            session.VerifyPreparedIdentity(copy); session.ResolvePreparedNeutral(copy);
+            var expectations = session.Slots.SelectMany(slot => slot).ToDictionary(binding => binding,
+                binding => binding.Shape == "UE/EyeClosedLeft" ? .2f : .3f);
+            session.Bake(copy, generated);
+            foreach (var pair in expectations)
+                Assert.That(GeneratedBlinkDelta(pair.Key), Is.EqualTo(pair.Value).Within(.00001f));
+        }
+
+        [TestCase(false)][TestCase(true)]
+        public void ConflictingMergedAutomaticEndpointsLeaveEverySourceBindingUsable(bool reverse)
+        {
+            var first = Skin("UE/EyeClosed"); var second = Skin("UE/EyeClosed");
+            SetBlinkFrames(first, ("UE/EyeClosed", reverse ? 150f : 100f, .2f));
+            SetBlinkFrames(second, ("UE/EyeClosed", reverse ? 100f : 150f, .3f));
+            using var session = BlinkExportSession.Resolve(root);
+            copy = new GameObject("prepared");
+            var merged = Skin("UE/EyeClosed"); merged.transform.SetParent(copy.transform, false);
+            var error = Assert.Throws<InvalidOperationException>(() => session.RebindPrepared(skin => merged));
+            Assert.That(error.Message, Does.Contain("閉眼量").And.Contain("UE/EyeClosed"));
+            Assert.That(session.Slots[0].Select(binding => binding.Renderer), Is.EquivalentTo(new[] { first, second }));
+            Assert.DoesNotThrow(() => session.VerifyPreparedIdentity(root));
+            Object.DestroyImmediate(copy); copy = Object.Instantiate(root);
+            using var unchanged = session.ForClone(root, copy);
+            unchanged.Bake(copy, generated);
+            Assert.That(unchanged.Slots[0].Select(GeneratedBlinkDelta).OrderBy(value => value), Is.EqualTo(new[] { .2f, .3f }).Within(.00001f),
+                "A failed relocation must retain both original inferred endpoint values.");
+        }
+
+        [TestCase(40f, true)][TestCase(60f, false)]
+        public void MergedManualBlinkCoalescesOnlyMatchingClosureAmounts(float secondWeight, bool compatible)
+        {
+            var first = Skin("custom"); var second = Skin("custom");
+            var options = new BlinkExportOptions { Mode = BlinkExportMode.Manual };
+            options.Both.Add(new BlinkShapeBinding { Renderer = first, Shape = "custom", Weight = 40f });
+            options.Both.Add(new BlinkShapeBinding { Renderer = second, Shape = "custom", Weight = secondWeight });
+            using var session = BlinkExportSession.Resolve(root, options);
+            copy = new GameObject("prepared");
+            var merged = Skin("custom"); merged.transform.SetParent(copy.transform, false);
+            SetBlinkFrames(merged, ("custom", 100f, .4f));
+            if (!compatible)
+            {
+                var error = Assert.Throws<InvalidOperationException>(() => session.RebindPrepared(skin => merged));
+                Assert.That(error.Message, Does.Contain("閉眼量"));
+                Assert.That(session.Slots[0].Select(binding => binding.Renderer), Is.EquivalentTo(new[] { first, second }));
+                Assert.That(session.Slots[0].Select(binding => binding.Weight), Is.EqualTo(new[] { 40f, secondWeight }));
+                session.VerifyPreparedIdentity(root);
+                return;
+            }
+            session.RebindPrepared(skin => merged); session.VerifyPreparedIdentity(copy);
+            Assert.That(session.Slots[0].Count, Is.EqualTo(1));
+            session.Bake(copy, generated);
+            Assert.That(GeneratedBlinkDelta(session.Slots[0].Single()), Is.EqualTo(.16f).Within(.00001f));
+        }
+
+        [TestCase(false)][TestCase(true)]
+        public void MergedBlinkRetainsDeformationChecksForEveryCapturedReference(bool reverse)
+        {
+            var first = Skin("UE/EyeClosed"); var second = Skin("UE/EyeClosed");
+            first.SetBlendShapeWeight(0, reverse ? 50f : 0f);
+            second.SetBlendShapeWeight(0, reverse ? 0f : 50f);
+            using var session = BlinkExportSession.CaptureForExport(root);
+            copy = new GameObject("prepared");
+            var merged = Skin("UE/EyeClosed"); merged.transform.SetParent(copy.transform, false);
+            // One captured origin still moves0..100. The other loses its50..100
+            // range; retaining only the first merged candidate would miss that.
+            SetBlinkFrames(merged, ("UE/EyeClosed", 50f, .4f), ("UE/EyeClosed", 100f, .4f));
+            session.RebindPrepared(skin => merged);
+            Assert.That(session.Slots[0].Count, Is.EqualTo(1));
+            var error = Assert.Throws<InvalidOperationException>(() => session.VerifyPreparedIdentity(copy));
+            Assert.That(error.Message, Does.Contain("変形が失われました"));
+        }
+
+        [Test]
+        public void MissingMergedBlinkRendererCannotPartiallyPublishEndpointRelocation()
+        {
+            var first = Skin("UE/EyeClosed"); var second = Skin("UE/EyeClosed");
+            SetBlinkFrames(first, ("UE/EyeClosed", 150f, .2f));
+            SetBlinkFrames(second, ("UE/EyeClosed", 150f, .3f));
+            using var session = BlinkExportSession.Resolve(root);
+            copy = new GameObject("prepared");
+            var merged = Skin("UE/EyeClosed"); merged.transform.SetParent(copy.transform, false);
+            var error = Assert.Throws<InvalidOperationException>(() => session.RebindPrepared(skin => skin == first ? merged : null));
+            Assert.That(error.Message, Is.EqualTo(NdmfExportPreparation.UnknownRendererRelocation));
+            Assert.That(session.Slots[0].Select(binding => binding.Renderer), Is.EquivalentTo(new[] { first, second }));
+            session.VerifyPreparedIdentity(root);
+            Object.DestroyImmediate(copy); copy = Object.Instantiate(root);
+            using var unchanged = session.ForClone(root, copy); unchanged.Bake(copy, generated);
+            Assert.That(unchanged.Slots[0].Select(GeneratedBlinkDelta).OrderBy(value => value), Is.EqualTo(new[] { .2f, .3f }).Within(.00001f));
+        }
+
+        [Test]
+        public void MergingIndependentLeftAndRightBlinkCannotTurnThemIntoOneSharedChannel()
+        {
+            var left = Skin("custom"); var right = Skin("custom");
+            var options = new BlinkExportOptions { Mode = BlinkExportMode.Manual };
+            options.Left.Add(new BlinkShapeBinding { Renderer = left, Shape = "custom" });
+            options.Right.Add(new BlinkShapeBinding { Renderer = right, Shape = "custom" });
+            using var session = BlinkExportSession.Resolve(root, options);
+            copy = new GameObject("prepared");
+            var merged = Skin("custom"); merged.transform.SetParent(copy.transform, false);
+            var error = Assert.Throws<InvalidOperationException>(() => session.RebindPrepared(skin => merged));
+            Assert.That(error.Message, Does.Contain("左右別"));
+            Assert.That(session.Slots[1].Single().Renderer, Is.SameAs(left));
+            Assert.That(session.Slots[2].Single().Renderer, Is.SameAs(right));
+            session.VerifyPreparedIdentity(root);
+        }
+
+
         [TestCase(false)][TestCase(true)]
         public void ActualUniVrmExportBindsGeneratedTargetsToTheirFinalNodes(bool modularAvatar)
         {

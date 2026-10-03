@@ -166,7 +166,8 @@ namespace VRVlog.LilToonExporter
         }
 
         internal static void Execute(Program program, IDictionary<string, AnimatorControllerParameterType> types,
-            ISet<string> expressionParameters, ISet<string> needed, bool isLocal, Func<string, double> read, Action<string, double> write)
+            ISet<string> expressionParameters, ISet<string> needed, bool isLocal, Func<string, double> read, Action<string, double> write,
+            ISet<string> suppliedInputs = null)
         {
             if (program.LocalOnly && !isLocal) return;
             if (program.Error != null) throw new InvalidOperationException(program.Location + " / Parameter Driver: " + program.Error);
@@ -186,7 +187,8 @@ namespace VRVlog.LilToonExporter
                     double value;
                     if (op.Kind == "Copy")
                     {
-                        if (BuiltIn.Contains(op.Source)) throw new InvalidOperationException("VRChat組み込みパラメーターをCopy元として再現できません。");
+                        if (BuiltIn.Contains(op.Source) && suppliedInputs?.Contains(op.Source) != true)
+                            throw new InvalidOperationException("VRChat組み込みパラメーターをCopy元として再現できません。");
                         if (!types.TryGetValue(op.Source, out var sourceType) || sourceType == AnimatorControllerParameterType.Trigger)
                             throw new InvalidOperationException("Copy元の型を解決できません: " + op.Source);
                         value = read(op.Source);
