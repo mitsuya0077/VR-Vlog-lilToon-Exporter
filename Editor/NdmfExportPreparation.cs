@@ -189,6 +189,9 @@ namespace VRVlog.LilToonExporter
             Action<Material, Material> materialCopyObserver = null, Action<NdmfExportPreparation> afterTransforming = null)
         {
             RequireOwnedCopy(source, clone);
+            // Relevance must see MA's effective targets before it decides
+            // whether an inactive dependent authoring tag can be discarded.
+            ResolveMaSceneReferences(clone);
             if (!NeedsProcessing(clone))
             {
                 PruneUnusedAuthoring(clone);
@@ -210,6 +213,7 @@ namespace VRVlog.LilToonExporter
             RequireOwnedCopy(source, clone);
             // NDMF processes inactive tags too. Remove only irrelevant tags on
             // our copy before dependency safety checks or any canonical pass.
+            ResolveMaSceneReferences(clone);
             PruneUnusedAuthoring(clone);
             var lease = new NdmfExportPreparation();
             var sourceAssets = Dependencies(source);
@@ -331,7 +335,13 @@ namespace VRVlog.LilToonExporter
             {
                 var value = pending.Dequeue();
                 if (value == null || !result.Add(value) || value is Shader || value is ComputeShader || value is MonoScript) continue;
-                foreach (var reference in References(value)) pending.Enqueue(reference);
+                foreach (var reference in References(value))
+                {
+                    // Every component of our hierarchy is already a root. An
+                    // external scene edge must be diagnosed on its holder,
+                    // not pull another avatar's assets into this ownership set.
+                    if (!(reference is GameObject) && !(reference is Component)) pending.Enqueue(reference);
+                }
             }
             return result;
         }
@@ -362,14 +372,83 @@ namespace VRVlog.LilToonExporter
             var holders = clone.GetComponentsInChildren<Component>(true).Where(value => value != null).Cast<Object>()
                 .Concat(cloneAssets.Where(IsMutableAsset)).Distinct();
             foreach (var holder in holders)
-                foreach (var reference in References(holder))
+            {
+                if (holder is Mesh || holder is Texture) continue;
+                using (var serialized = new SerializedObject(holder))
                 {
-                    var target = reference is GameObject gameObject ? gameObject.transform :
-                        (reference as Component)?.transform;
-                    if (target != null && !EditorUtility.IsPersistent(reference) && target != clone.transform && !target.IsChildOf(clone.transform))
-                        throw new InvalidOperationException(holder.name + ": 設定に書き出し用コピーの外部を指すシーン参照が残っています。" +
-                            "元のアバターやシーンを保護するため NDMF の処理を中止しました。該当設定の参照先を確認し、書き出し用コピー内で完結する構成にしてください。");
+                    var property = serialized.GetIterator();
+                    while (property.Next(true))
+                    {
+                        if (property.propertyType != SerializedPropertyType.ObjectReference) continue;
+                        var reference = property.objectReferenceValue;
+                        var target = reference is GameObject gameObject ? gameObject.transform :
+                            (reference as Component)?.transform;
+                        if (target != null && !EditorUtility.IsPersistent(reference) && !IsWithinCopy(target, clone))
+                            throw new InvalidOperationException(holder.name + " (" + holder.GetType().Name + ") / " + property.propertyPath +
+                                ": 設定に書き出し用コピーの外部を指すシーン参照が残っています。参照先: " + ScenePath(target) +
+                                "。元のアバターやシーンを保護するため NDMF の処理を中止しました。" +
+                                "対象コンポーネントの参照先を同じアバター内に設定し、衣装だけでなくアバター全体を選んで書き出してください。");
+                    }
                 }
+            }
+        }
+
+        private static bool IsWithinCopy(Transform target, GameObject clone) =>
+            target == clone.transform || target.IsChildOf(clone.transform);
+
+        private static string ScenePath(Transform target)
+        {
+            var names = new Stack<string>();
+            for (var node = target; node != null; node = node.parent) names.Push(node.name);
+            return string.Join("/", names);
+        }
+
+        private static void ResolveMaSceneReferences(GameObject clone)
+        {
+            // MA deliberately falls back to the avatar-relative path when a
+            // serialized targetObject belongs to a previous avatar. Resolve
+            // that supported reference on our copy before inspecting raw edges.
+            // Shared assets and ordinary component references remain untouched.
+            var type = FindType(MaNamespace + "AvatarObjectReference");
+            var resolve = type?.GetMethod("Get", BindingFlags.Public | BindingFlags.Static, null,
+                new[] { typeof(SerializedProperty) }, null);
+            if (resolve?.ReturnType != typeof(GameObject)) return;
+            foreach (var component in clone.GetComponentsInChildren<Component>(true))
+            {
+                if (component == null || !IsMaTag(component.GetType())) continue;
+                using (var serialized = new SerializedObject(component))
+                {
+                    var property = serialized.GetIterator();
+                    var changed = false;
+                    while (property.Next(true))
+                    {
+                        if (property.propertyType != SerializedPropertyType.Generic || property.type != type.Name) continue;
+                        var direct = property.FindPropertyRelative("targetObject");
+                        var path = property.FindPropertyRelative("referencePath");
+                        if (direct?.propertyType != SerializedPropertyType.ObjectReference ||
+                            path?.propertyType != SerializedPropertyType.String || string.IsNullOrEmpty(path.stringValue)) continue;
+                        var stale = direct.objectReferenceValue as GameObject;
+                        if (stale == null || EditorUtility.IsPersistent(stale) || IsWithinCopy(stale.transform, clone)) continue;
+                        var resolved = Invoke(() => resolve.Invoke(null, new object[] { property })) as GameObject;
+                        // Merge Armature's runtime getter includes MA's own
+                        // special handling for duplicated Armature transforms.
+                        // Preserve that effective target instead of choosing one.
+                        if (property.propertyPath == "mergeTarget" && FollowingProperty(component) == "mergeTargetObject")
+                            resolved = ReadFollowingTarget(component, "mergeTargetObject")?.gameObject;
+                        if (resolved == null || !IsWithinCopy(resolved.transform, clone)) continue;
+                        direct.objectReferenceValue = resolved;
+                        changed = true;
+                    }
+                    if (changed) serialized.ApplyModifiedPropertiesWithoutUndo();
+                }
+            }
+        }
+
+        private static bool IsMaTag(Type type)
+        {
+            for (var current = type; current != null; current = current.BaseType)
+                if (current.FullName == MaNamespace + "AvatarTagComponent") return true;
+            return false;
         }
 
         private void IsolateSharedAssets(GameObject clone, HashSet<Object> sourceAssets, HashSet<Object> cloneAssets,

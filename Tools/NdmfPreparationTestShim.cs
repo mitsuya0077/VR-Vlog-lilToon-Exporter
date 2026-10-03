@@ -140,7 +140,7 @@ namespace UnityEditor
                 foreach (var field in current.GetFields(BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.DeclaredOnly)) yield return field;
         }
     }
-    public enum SerializedPropertyType { ObjectReference }
+    public enum SerializedPropertyType { ObjectReference, Generic, String }
     public sealed class SerializedObject : IDisposable
     {
         readonly Object target;
@@ -155,6 +155,11 @@ namespace UnityEditor
         public SerializedProperty(Object target) { this.target = target; fields = EditorUtility.Fields(target.GetType()).Where(f => typeof(Object).IsAssignableFrom(f.FieldType)).ToArray(); }
         public bool Next(bool children) => ++position < fields.Length;
         public SerializedPropertyType propertyType => SerializedPropertyType.ObjectReference;
+        public string propertyPath => fields[position].Name;
+        public string type => fields[position].FieldType.Name;
+        // Native MA reference-resolution cases run in Unity, not this adapter.
+        public SerializedProperty FindPropertyRelative(string name) => null;
+        public string stringValue => null;
         public Object objectReferenceValue { get => (Object)fields[position].GetValue(target); set => fields[position].SetValue(target, value); }
     }
     public static class AssetDatabase
