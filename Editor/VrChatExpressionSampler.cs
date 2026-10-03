@@ -80,6 +80,10 @@ namespace VRVlog.LilToonExporter
                 var history = new HashSet<EditorCurveBinding>();
                 var visitedClips = new HashSet<AnimationClip>();
                 Action remember = () => { evaluation.Check(); RememberBindings(playable, affected, history, visitedClips, excludedPath); };
+                // Initialize at time zero before a short-lived default state can exit.
+                // Its WD-Off writes remain part of the eventual neutral appearance.
+                graph.Evaluate(0f);
+                remember();
                 Advance(graph, 120, remember);
                 evaluation.CheckNeutralFx();
                 SetParameters(playable, controller, selected);
@@ -152,10 +156,14 @@ namespace VRVlog.LilToonExporter
                 var history = new HashSet<EditorCurveBinding>();
                 var visited = new HashSet<AnimationClip>();
                 Action remember = () => { evaluation.Check(); RememberBindings(playable, affected, history, visited, excludedPath); };
+                // Initialize at time zero before a short-lived default state can exit.
+                // Its WD-Off writes remain part of the eventual neutral appearance.
+                graph.Evaluate(0f);
+                remember();
                 Advance(graph, 120, remember);
                 evaluation.CheckNeutralFx();
                 ValidateFixedPose(avatar, playable, controller, excludedPath, excludedLayers, neutral: true,
-                    neutralFixed: dependencies.NeutralFixedValues);
+                    neutralFixed: dependencies.NeutralFixedValues, dependencies: dependencies, metadata: metadata);
                 var bindings = ActiveBindings(playable, affected, excludedPath, neutral: true);
                 var unresolved = new List<MorphValue>();
                 var values = Capture(avatar, clone, history, excludedPath, dependencies.Morphs, unresolved);
@@ -274,9 +282,12 @@ namespace VRVlog.LilToonExporter
         // state's possible timed exits and the entire lifetime of active morph
         // and parameter curves, including delayed steps after the sample window.
         private static void ValidateFixedPose(GameObject avatar, AnimatorControllerPlayable playable, AnimatorController controller, Func<string, bool> excludedPath,
-            ISet<int> excludedLayers, bool neutral = false, IDictionary<string, float> neutralFixed = null)
+            ISet<int> excludedLayers, bool neutral = false, IDictionary<string, float> neutralFixed = null,
+            ExpressionDependencies dependencies = null, VrChatExpressionMenu.Source metadata = null)
         {
-            InvalidOperationException Unstable(string message) => neutral ? new NeutralShapeSamplingException(message) : new InvalidOperationException(message);
+            InvalidOperationException Unstable(string message) => neutral ?
+                new NeutralShapeSamplingException(message) : new InvalidOperationException(message);
+            var timedValues = neutral ? NeutralCurveConditions.FixedTimedValues(playable, controller, neutralFixed, dependencies, metadata) : neutralFixed;
             var layers = controller.layers;
             for (var layer = 0; layer < layers.Length; layer++)
             {
@@ -288,13 +299,13 @@ namespace VRVlog.LilToonExporter
                 var found = false;
                 void Visit(AnimatorStateMachine machine, string path, bool timedAncestor)
                 {
-                    var timed = timedAncestor || machine.anyStateTransitions.Any(t => !t.mute && t.hasExitTime && !ExpressionDependencies.IsFalse(t, neutralFixed));
+                    var timed = timedAncestor || machine.anyStateTransitions.Any(t => !t.mute && t.hasExitTime && !ExpressionDependencies.IsFalse(t, timedValues));
                     foreach (var child in machine.states)
                     {
                         if (Animator.StringToHash(path + "." + child.state.name) != hash) continue;
                         if (found) throw new InvalidOperationException("FXの状態名を一意に特定できません。");
                         found = true;
-                        if (timed || child.state.transitions.Any(t => !t.mute && t.hasExitTime && !ExpressionDependencies.IsFalse(t, neutralFixed)))
+                        if (timed || child.state.transitions.Any(t => !t.mute && t.hasExitTime && !ExpressionDependencies.IsFalse(t, timedValues)))
                             throw Unstable("時間で遷移するFX状態は固定表情に変換できません: " + path + "." + child.state.name);
                     }
                     foreach (var child in machine.stateMachines) Visit(child.stateMachine, path + "." + child.stateMachine.name, timed);
@@ -314,7 +325,8 @@ namespace VRVlog.LilToonExporter
                             if (binding.type == typeof(SkinnedMeshRenderer) && FindRenderer(avatar, binding.path).sharedMesh
                                 .GetBlendShapeIndex(binding.propertyName.Substring("blendShape.".Length)) < 0) continue;
                             var curve = AnimationUtility.GetEditorCurve(info.clip, binding);
-                            if (!IsConstant(curve)) throw Unstable("時間で変わるBlendShape・パラメーター曲線は固定表情に変換できません。");
+                            if (!IsConstant(curve)) throw Unstable("時間で変わるBlendShape・パラメーター曲線は固定表情に変換できません: " +
+                                layers[layer].name + " / " + info.clip.name + " / " + binding.path + " / " + binding.propertyName);
                         }
             }
         }

@@ -175,15 +175,18 @@ namespace VRVlog.LilToonExporter
                 var instance = avatar.GetComponent<Vrm10Instance>();
                 if (instance == null || instance.Vrm == null) throw new InvalidOperationException("元のVRM表情設定がありません。");
                 var privateVrm = Object.Instantiate(instance.Vrm); owned.Add(privateVrm);
+                privateVrm.name = instance.Vrm.name;
                 var replacements = new Dictionary<VRM10Expression, VRM10Expression>();
                 foreach (var pair in inertBindings)
                 {
                     var copy = Object.Instantiate(pair.Key); owned.Add(copy);
+                    copy.name = pair.Key.name;
                     copy.MorphTargetBindings = pair.Value; replacements.Add(pair.Key, copy);
                 }
                 foreach (var endpoint in clips)
                 {
                     var copy = Object.Instantiate(endpoint.Clip); owned.Add(copy);
+                    copy.name = endpoint.Clip.name;
                     copy.MorphTargetBindings = endpoint.Retained.Concat(endpoint.Endpoints.Select(value => new MorphTargetBinding(
                         AnimationUtility.CalculateTransformPath(value.State.Renderer.transform, avatar.transform),
                         value.State.Renderer.sharedMesh.GetBlendShapeIndex(value.Name), 1f))).ToArray();

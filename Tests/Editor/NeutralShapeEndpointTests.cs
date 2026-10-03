@@ -106,6 +106,44 @@ namespace VRVlog.LilToonExporter.Tests
             Assert.That(fixture.Source.GetComponent<Vrm10Instance>().Vrm, Is.SameAs(fixture.Vrm));
         }
 
+        [TestCase(false)]
+        [TestCase(true)]
+        public void AuthoredCustomPrivateCopyKeepsRuntimeKeyAndSettings(bool invalidMorph)
+        {
+            using var fixture = new Fixture();
+            fixture.Vrm.name = "Authored VRM";
+            fixture.Clip.name = "UE/MouthClosed";
+            fixture.Vrm.Expression.Happy = null;
+            fixture.Vrm.Expression.CustomClips.Add(fixture.Clip);
+            fixture.Clip.IsBinary = true;
+            fixture.Clip.OverrideBlink = ExpressionOverrideType.block;
+            fixture.Clip.OverrideLookAt = ExpressionOverrideType.blend;
+            fixture.Clip.OverrideMouth = ExpressionOverrideType.block;
+            fixture.Clip.MaterialColorBindings = new[] { new MaterialColorBinding {
+                MaterialName = "Face material", BindType = MaterialColorType.color, TargetValue = Color.red } };
+            fixture.Clip.MaterialUVBindings = new[] { new MaterialUVBinding {
+                MaterialName = "Face material", Scaling = new Vector2(2, 3), Offset = new Vector2(.2f, .3f) } };
+            if (invalidMorph)
+                fixture.Clip.MorphTargetBindings = new[] { new MorphTargetBinding("Face", fixture.Mesh.blendShapeCount, .25f) };
+            using var session = AuthoredExpressionEndpoints.Capture(fixture.Copy, NeutralShapeSnapshot.Capture(fixture.Copy));
+            fixture.Preserve(); session.Bake(fixture.Owned);
+            var settings = fixture.Copy.GetComponent<Vrm10Instance>().Vrm;
+            var clip = settings.Expression.CustomClips.Single();
+            Assert.That(clip, Is.Not.SameAs(fixture.Clip));
+            // UniVRM exports custom names directly and uses them as runtime keys.
+            Assert.That(clip.name, Is.EqualTo("UE/MouthClosed"));
+            Assert.That(settings.Expression.CreateKey(clip).Name, Is.EqualTo("UE/MouthClosed"));
+            Assert.That(settings.name, Is.EqualTo(fixture.Vrm.name));
+            Assert.That(clip.IsBinary, Is.True);
+            Assert.That(clip.OverrideBlink, Is.EqualTo(fixture.Clip.OverrideBlink));
+            Assert.That(clip.OverrideLookAt, Is.EqualTo(fixture.Clip.OverrideLookAt));
+            Assert.That(clip.OverrideMouth, Is.EqualTo(fixture.Clip.OverrideMouth));
+            Assert.That(clip.MaterialColorBindings, Is.EqualTo(fixture.Clip.MaterialColorBindings));
+            Assert.That(clip.MaterialUVBindings, Is.EqualTo(fixture.Clip.MaterialUVBindings));
+            Assert.That(fixture.Vrm.Expression.CustomClips.Single(), Is.SameAs(fixture.Clip));
+            Assert.That(fixture.Clip.name, Is.EqualTo("UE/MouthClosed"));
+        }
+
         [Test]
         public void DuplicateRendererPathsCannotSilentlyApplySampleToTheFirstSibling()
         {
@@ -137,8 +175,9 @@ namespace VRVlog.LilToonExporter.Tests
             Assert.That(clip.MorphTargetBindings.Single().Weight, Is.EqualTo(1));
             Assert.That(fixture.Endpoint(clip), Is.EqualTo(new Vector3(1, 1, 0)),
                 "The selected absolute source25 endpoint must replace neutral75 rather than scaling the remaining range.");
-            var normal = new Vector3[3]; var tangent = new Vector3[3];
-            fixture.Skin.sharedMesh.GetBlendShapeFrameVertices(clip.MorphTargetBindings.Single().Index, 0, null, normal, tangent);
+            var count = fixture.Skin.sharedMesh.vertexCount;
+            var vertices = new Vector3[count]; var normal = new Vector3[count]; var tangent = new Vector3[count];
+            fixture.Skin.sharedMesh.GetBlendShapeFrameVertices(clip.MorphTargetBindings.Single().Index, 0, vertices, normal, tangent);
             Assert.That(fixture.Skin.sharedMesh.normals[0] + normal[0], Is.EqualTo(new Vector3(.5f, 0, 1)));
             var baseTangent = fixture.Skin.sharedMesh.tangents[0];
             Assert.That(new Vector3(baseTangent.x, baseTangent.y, baseTangent.z) + tangent[0], Is.EqualTo(new Vector3(1, .5f, 0)));

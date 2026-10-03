@@ -231,10 +231,16 @@ namespace VRVlog.LilToonExporter.Tests
             var afk = player.AddStateMachine("AFK");
             player.AddEntryTransition(afk).AddCondition(AnimatorConditionMode.If, 0, "AFK");
             afk.defaultState = State(afk, Clip("Open", AnimationCurve.Linear(0, 0, 10, 100)));
+            afk.defaultState.motion.name = "AFK dynamic opening";
             var mode = State(normal, Clip("Open", AnimationCurve.Constant(0, 1, 70))); normal.defaultState = mode;
             var branch = State(normal, Clip("Open", AnimationCurve.Constant(0, 1, 20)));
+            mode.motion.name = "Mode default opening70"; branch.motion.name = "Branch opening20";
             normal.AddEntryTransition(mode).AddCondition(AnimatorConditionMode.Equals, 1, "FaceEmo_SYNC_EM_EMOTE");
             normal.AddEntryTransition(branch).AddCondition(AnimatorConditionMode.Equals, 2, "FaceEmo_SYNC_EM_EMOTE");
+            // The real generator also creates a direct root "in OVERRIDE"
+            // state after its nested machines. Keep a valid root fallback here;
+            // a parent containing no direct state is not that generated graph.
+            player.defaultState = State(player); player.defaultState.name = "in OVERRIDE";
             var changed = mode.AddExitTransition(); changed.hasExitTime = false; changed.duration = 0;
             changed.AddCondition(AnimatorConditionMode.NotEqual, 1, "FaceEmo_SYNC_EM_EMOTE");
             changed.AddCondition(AnimatorConditionMode.If, 0, "FaceEmo_SYNC_CN_WAIT_FACE_EMOTE_BY_VOICE");
