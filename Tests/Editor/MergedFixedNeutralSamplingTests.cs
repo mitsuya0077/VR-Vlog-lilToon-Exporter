@@ -75,7 +75,7 @@ namespace VRVlog.LilToonExporter.Tests
             var permanent = Layer("Permanent pupil"); permanent.defaultState = State(permanent, "Always", Clip("Pupil", "Pupil removal", 100));
         }
 
-        private Dictionary<string, float> Native(bool select)
+        private Dictionary<string, float> Native(bool select, bool requireRelay = true)
         {
             var copy = Object.Instantiate(avatar); var graph = PlayableGraph.Create("Merged neutral reference");
             graph.SetTimeUpdateMode(DirectorUpdateMode.Manual);
@@ -94,7 +94,8 @@ namespace VRVlog.LilToonExporter.Tests
                     playable.SetInteger("Menu", 1);
                     for (var frame = 0; frame < 120; frame++) graph.Evaluate(1f / 60f);
                 }
-                Assert.That(playable.IsInTransition(1), Is.True, "Exercise the equivalent-state proof during a real native transition.");
+                if (requireRelay)
+                    Assert.That(playable.IsInTransition(1), Is.True, "Exercise the equivalent-state proof during a real native transition.");
                 var skin = copy.GetComponentInChildren<SkinnedMeshRenderer>();
                 return Enumerable.Range(0, mesh.blendShapeCount).ToDictionary(mesh.GetBlendShapeName, skin.GetBlendShapeWeight);
             }
@@ -157,6 +158,82 @@ namespace VRVlog.LilToonExporter.Tests
             Assert.That(values.Single(value => value.Shape == "Pupil removal").Weight, Is.EqualTo(100).Within(.01));
             Assert.That(EditorJsonUtility.ToJson(controller), Is.EqualTo(sourceJson));
             Assert.That(avatar.GetComponentInChildren<SkinnedMeshRenderer>().GetBlendShapeWeight(0), Is.Zero);
+        }
+
+        private void FractionalPupil(bool defaults = false)
+        {
+            var idle = Layer("Empty gesture"); idle.defaultState = State(idle, "Neutral", null);
+            var permanent = Layer("Fractional pupil");
+            permanent.defaultState = State(permanent, "Always", Clip("Pupil", "Pupil removal", 100), defaults);
+            var layers = controller.layers; layers[layers.Length - 1].defaultWeight = .5f; controller.layers = layers;
+            SetDescriptorFx();
+        }
+
+        [TestCase(false, false)]
+        [TestCase(false, true)]
+        [TestCase(true, false)]
+        [TestCase(true, true)]
+        public void FractionalNeutralRetainsNativeBaseActivityAndLeavesAutomaticBlinkLive(bool automatic, bool defaults)
+        {
+            var baseClip = Clip("Native base", automatic ? "Blink" : "Face size", 35);
+            if (automatic) AnimationUtility.SetEditorCurve(baseClip,
+                EditorCurveBinding.FloatCurve("Face", typeof(SkinnedMeshRenderer), "blendShape.Blink"), AnimationCurve.Linear(0, 0, 30, 100));
+            var machine = controller.layers[0].stateMachine;
+            machine.defaultState = State(machine, "Base", baseClip);
+            FractionalPupil(defaults);
+            var skin = avatar.GetComponentInChildren<SkinnedMeshRenderer>();
+            skin.SetBlendShapeWeight(mesh.GetBlendShapeIndex("Pupil removal"), 20);
+            skin.SetBlendShapeWeight(mesh.GetBlendShapeIndex("Face size"), 12);
+            var sourceJson = EditorJsonUtility.ToJson(controller);
+            var expected = Native(false, requireRelay: false);
+            var values = NeutralShapeSampler.Sample(avatar);
+            Assert.That(values.Single(value => value.Shape == "Pupil removal").Weight,
+                Is.EqualTo(expected["Pupil removal"]).Within(.01), "The unrelated native base must preserve the effective fractional override weight.");
+            Assert.That(values.Select(value => value.Shape), Is.EquivalentTo(automatic ?
+                new[] { "Pupil removal" } : new[] { "Face size", "Pupil removal" }));
+            if (!automatic) Assert.That(values.Single(value => value.Shape == "Face size").Weight, Is.EqualTo(expected["Face size"]).Within(.01));
+            Assert.That(EditorJsonUtility.ToJson(controller), Is.EqualTo(sourceJson));
+            Assert.That(skin.GetBlendShapeWeight(mesh.GetBlendShapeIndex("Pupil removal")), Is.EqualTo(20));
+            Assert.That(skin.GetBlendShapeWeight(mesh.GetBlendShapeIndex("Face size")), Is.EqualTo(12));
+            Assert.That(skin.GetBlendShapeWeight(mesh.GetBlendShapeIndex("Blink")), Is.Zero);
+        }
+
+        [TestCase(false)]
+        [TestCase(true)]
+        public void FractionalNeutralChecksUnobservedSupportMotions(bool animationEvent)
+        {
+            var baseClip = Clip("Automatic base", "Blink");
+            AnimationUtility.SetEditorCurve(baseClip, EditorCurveBinding.FloatCurve("Face", typeof(SkinnedMeshRenderer), "blendShape.Blink"),
+                AnimationCurve.Linear(0, 0, 30, 100));
+            var machine = controller.layers[0].stateMachine; machine.defaultState = State(machine, "Live blink", baseClip);
+            var unsafeClip = Clip("Unobserved callback or object", "Blink");
+            if (animationEvent) AnimationUtility.SetAnimationEvents(unsafeClip,
+                new[] { new AnimationEvent { time = 30, functionName = "FutureCallback" } });
+            else AnimationUtility.SetObjectReferenceCurve(unsafeClip, EditorCurveBinding.PPtrCurve("Face", typeof(SkinnedMeshRenderer), "m_Mesh"),
+                new[] { new ObjectReferenceKeyframe { time = 0, value = mesh } });
+            State(machine, "Alternative unsupported motion", unsafeClip);
+            FractionalPupil();
+            var sourceJson = EditorJsonUtility.ToJson(controller);
+            var error = Assert.Throws<InvalidOperationException>(() => NeutralShapeSampler.Sample(avatar));
+            Assert.That(error.Message, Does.Contain(animationEvent ? "影響範囲" : "差し替え"));
+            Assert.That(EditorJsonUtility.ToJson(controller), Is.EqualTo(sourceJson));
+        }
+
+        [Test]
+        public void FractionalNeutralRejectsDelayedAutomaticBaseActivityChanges()
+        {
+            var baseClip = Clip("Automatic base", "Blink");
+            AnimationUtility.SetEditorCurve(baseClip, EditorCurveBinding.FloatCurve("Face", typeof(SkinnedMeshRenderer), "blendShape.Blink"),
+                AnimationCurve.Linear(0, 0, 30, 100));
+            var machine = controller.layers[0].stateMachine;
+            var initial = State(machine, "Live blink", baseClip); machine.defaultState = initial;
+            var held = State(machine, "Future empty base", null);
+            var transition = initial.AddTransition(held); transition.hasExitTime = true; transition.exitTime = 30; transition.duration = 0;
+            FractionalPupil();
+            var sourceJson = EditorJsonUtility.ToJson(controller);
+            var error = Assert.Throws<NeutralShapeSamplingException>(() => NeutralShapeSampler.Sample(avatar));
+            Assert.That(error.Message, Does.Contain("時間で遷移"));
+            Assert.That(EditorJsonUtility.ToJson(controller), Is.EqualTo(sourceJson));
         }
     }
 }

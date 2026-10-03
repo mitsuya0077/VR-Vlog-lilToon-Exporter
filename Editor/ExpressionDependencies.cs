@@ -80,7 +80,7 @@ namespace VRVlog.LilToonExporter
         internal static ExpressionDependencies AnalyzeNeutral(RuntimeAnimatorController runtime, ISet<EditorCurveBinding> morphs,
             Func<string, bool> excludedPath, VrChatExpressionMenu.Source source, ISet<EditorCurveBinding> automatic = null)
             => AnalyzeCore(runtime, Array.Empty<string>(), excludedPath, source, source.Defaults,
-                new Dictionary<string, float>(), morphs, automatic);
+                new Dictionary<string, float>(), morphs, automatic, initialMorphs: morphs, preserveNativeBasePose: true);
 
         private static ExpressionDependencies AnalyzeCore(RuntimeAnimatorController runtime, IEnumerable<string> selected,
             Func<string, bool> excludedPath, VrChatExpressionMenu.Source source, IDictionary<string, float> defaults,
@@ -93,6 +93,7 @@ namespace VRVlog.LilToonExporter
             var controller = Controller(runtime);
             var unknown = new List<string>();
             var info = Inspect(runtime, excludedPath, result.Drivers, unknown, true);
+            var nativeBaseHasBindings = info.Length > 0 && info[0].HasBindings;
             result.HasFxControls = info.Any(layer => layer.FxControl);
             // Arbitrary behaviours can affect any parameter, layer or scene
             // object. No name/path-based independence claim is safe for them.
@@ -103,6 +104,10 @@ namespace VRVlog.LilToonExporter
                 // Keep all driver programs for the private controller copy, but
                 // root neutral dependencies only in reachable default states.
                 info = Inspect(runtime, excludedPath, result.Drivers, new List<string>(), true, result.NeutralFixedValues);
+                // An automatic-only base still contributes native layer
+                // activity to fractional overrides, even when its live morphs
+                // must remain outside the authored neutral roots.
+                nativeBaseHasBindings = info.Length > 0 && info[0].HasBindings;
                 RemoveIndependentAutomaticWriters(info, automatic, source, result.NeutralFixedValues);
             }
             var gateExternal = new HashSet<string>(StringComparer.Ordinal);
@@ -162,14 +167,15 @@ namespace VRVlog.LilToonExporter
             // Classify native base support before Write Defaults closure can
             // promote it into the evaluation graph. An unrelated base motion
             // stays outside capture even when its native defaults matter.
-            var needsNativeBasePose = preserveNativeBasePose && info.Length > 0 && info[0].HasBindings &&
+            var needsNativeBasePose = preserveNativeBasePose && nativeBaseHasBindings &&
                 Enumerable.Range(1, Math.Max(0, info.Length - 1)).Any(index =>
                     controller.layers[index].blendingMode == AnimatorLayerBlendingMode.Override &&
                     controller.layers[index].defaultWeight > 0 && controller.layers[index].defaultWeight < 1 &&
                     info[index].Morphs.Overlaps(requiredMorphs));
             if (needsNativeBasePose)
             {
-                gateExternal.UnionWith(info[0].Reads.Where(VrChatParameterDriver.BuiltIn.Contains));
+                gateExternal.UnionWith(info[0].Reads.Where(name => VrChatParameterDriver.BuiltIn.Contains(name) &&
+                    (neutralMorphs == null || !result.NeutralFixedValues.ContainsKey(name))));
                 if (!info[0].Morphs.Overlaps(requiredMorphs))
                 {
                     result.NativeSupportLayers.Add(0);

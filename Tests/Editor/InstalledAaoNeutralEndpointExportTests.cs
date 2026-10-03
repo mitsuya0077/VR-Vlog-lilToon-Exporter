@@ -96,7 +96,8 @@ namespace VRVlog.LilToonExporter.Tests
             foreach (var point in actual)
             {
                 var index = unmatched.FindIndex(value => Vector3.Distance(value, point) < .0001f);
-                Assert.That(index, Is.GreaterThanOrEqualTo(0), message + ": unexpected world-space vertex " + point);
+                Assert.That(index, Is.GreaterThanOrEqualTo(0), message + ": unexpected world-space vertex " + point.ToString("G9") +
+                    "; expected remaining: " + string.Join(", ", unmatched.Select(value => value.ToString("G9"))));
                 unmatched.RemoveAt(index);
             }
         }
@@ -156,8 +157,14 @@ namespace VRVlog.LilToonExporter.Tests
                 var tracking = skins.SelectMany(skin => SourceTriangle(skin, explicitProfile ? 25 : 100, 0)).ToArray();
                 var blink = skins.SelectMany(skin => SourceTriangle(skin, 75, 100)).ToArray();
                 var sourceVertices = fixture.Mesh.vertices; var sourceController = EditorJsonUtility.ToJson(controller);
-                Assert.Throws<InvalidOperationException>(() => BlinkExportSession.Resolve(fixture.Source),
-                    "The serialized fully closed eyes must need the deferred native FX-open neutral before blink can be resolved.");
+                foreach (var skin in skins)
+                    Assert.That(AvatarBaseShape.HasUsableRawEndpoint(skin, skin.sharedMesh.GetBlendShapeIndex(Closure)), Is.False,
+                        "The serialized fully closed eyes have no raw closure range before native FX opens them.");
+                // Other usable UE evidence may permit an empty static blink
+                // resolution. Export must still capture the closed identities
+                // and resolve their usable range after evaluating FX neutral.
+                using (var pendingBlink = BlinkExportSession.CaptureForExport(fixture.Source))
+                    Assert.That(pendingBlink.Slots[0].Count, Is.EqualTo(skins.Length));
                 var bytes = UniVrmOneClickExporter.Export(fixture.Source, "AAO neutral endpoints", "Tests",
                     exporterVersion: fullLilToon ? "aao-neutral-endpoint-regression" : null, lilToonVersion: fullLilToon ? "2.3.4" : null);
                 imported = await Vrm10.LoadBytesAsync(bytes, canLoadVrm0X: false, awaitCaller: new ImmediateCaller()); imported.Runtime.Process();

@@ -54,15 +54,16 @@ namespace VRVlog.LilToonExporter
         bool applied, disposed;
 
         internal static ExportOptimizationBindings Capture(GameObject clone, VrmTrackingProfile trackingProfile = null,
-            UnifiedExpressionPreparation preparation = null, object objectRegistry = null)
+            UnifiedExpressionPreparation preparation = null, object objectRegistry = null, NeutralShapeSnapshot neutral = null)
         {
             if (clone == null) throw new ArgumentNullException(nameof(clone));
             ExportRendererSelection.RequireActiveRoot(clone);
             if (EditorUtility.IsPersistent(clone)) throw new ArgumentException("An independent export copy is required.", nameof(clone));
-            return new ExportOptimizationBindings(clone, trackingProfile, preparation, objectRegistry);
+            return new ExportOptimizationBindings(clone, trackingProfile, preparation, objectRegistry, neutral);
         }
 
-        ExportOptimizationBindings(GameObject clone, VrmTrackingProfile trackingProfile, UnifiedExpressionPreparation preparation, object objectRegistry)
+        ExportOptimizationBindings(GameObject clone, VrmTrackingProfile trackingProfile, UnifiedExpressionPreparation preparation,
+            object objectRegistry, NeutralShapeSnapshot neutral)
         {
             avatar = clone;
             this.objectRegistry = objectRegistry;
@@ -110,6 +111,22 @@ namespace VRVlog.LilToonExporter
                 }
                 marker.Morphs = morphs.Values.ToArray();
                 marker.Materials = materials.Values.ToArray();
+                // These raw curves still exist in the prepared FX controller,
+                // but their neutral contributions are already in mesh vertices.
+                // Mark rebased properties as variable so AAO cannot apply their
+                // old constant animation values to the new residual a second time.
+                marker.PropertyMutations = marker.PropertyMutations.Concat((neutral?.Renderers ?? Array.Empty<NeutralShapeSnapshot.RendererState>())
+                    .Where(state => state.Renderer != null && state.Renderer.sharedMesh != null)
+                    .Select(state => new OptimizationPropertyMutation {
+                        Renderer = state.Renderer,
+                        Properties = Enumerable.Range(0, state.Weights.Length)
+                            .Where(index => state.Weights[index] != 0f)
+                            .Select(index => state.OriginalMesh.GetBlendShapeName(index))
+                            .Where(name => state.Renderer.sharedMesh.GetBlendShapeIndex(name) >= 0)
+                            .Select(name => "blendShape." + name).ToArray()
+                    }).Where(mutation => mutation.Properties.Length != 0)).ToArray();
+                marker.Dependencies = marker.Dependencies.Concat(marker.PropertyMutations
+                    .Select(mutation => (Component)mutation.Renderer)).Distinct().ToArray();
             }
             catch { Dispose(); throw; }
         }

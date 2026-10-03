@@ -348,14 +348,17 @@ namespace VRVlog.LilToonExporter
             ExpressionDependencies dependencies, VrChatExpressionMenu.Source metadata, Func<string, bool> excludedPath)
         {
             var originalController = ExpressionDependencies.Controller(runtime);
-            dependencies.Layers.ExceptWith(FindExcludedLayers(originalController, runtime, excludedPath, dependencies.Parameters));
-            var affected = dependencies.Layers.OrderBy(index => index).ToArray();
+            var omittedLayers = FindExcludedLayers(originalController, runtime, excludedPath, dependencies.Parameters);
+            dependencies.Layers.ExceptWith(omittedLayers);
+            dependencies.NativeSupportLayers.ExceptWith(omittedLayers);
+            var affected = dependencies.Layers.Except(dependencies.NativeSupportLayers).OrderBy(index => index).ToArray();
             if (affected.Length == 0) return new List<MorphValue>();
-            var excludedLayers = new HashSet<int>(Enumerable.Range(0, originalController.layers.Length).Except(affected));
+            var excludedLayers = new HashSet<int>(Enumerable.Range(0, originalController.layers.Length)
+                .Except(affected.Concat(dependencies.NativeSupportLayers)));
             using var evaluation = new ExpressionEvaluationSession(runtime, dependencies, metadata.ExpressionParameters,
                 !metadata.Defaults.TryGetValue("IsLocal", out var local) || local != 0);
             var controller = evaluation.Controller;
-            var equivalentStates = new HashSet<int>(affected.Where(layer => HasEquivalentConstantStates(controller, layer)));
+            ValidateNativeSupportMotions(controller, dependencies.NativeSupportLayers, excludedPath);
             var scene = EditorSceneManager.NewPreviewScene();
             GameObject clone = null;
             var graph = default(PlayableGraph);
@@ -384,14 +387,23 @@ namespace VRVlog.LilToonExporter
                 graph.Play();
                 var history = new HashSet<EditorCurveBinding>();
                 var visited = new HashSet<AnimationClip>();
-                Action remember = () => { evaluation.Check(); RememberBindings(playable, affected, history, visited, excludedPath); };
+                var visitedSupportClips = new HashSet<AnimationClip>();
+                var supportLayers = dependencies.NativeSupportLayers.OrderBy(index => index).ToArray();
+                Action remember = () =>
+                {
+                    evaluation.Check();
+                    RememberBindings(playable, affected, history, visited, excludedPath);
+                    RememberBindings(playable, supportLayers, history, visitedSupportClips, excludedPath, dependencies.Morphs);
+                };
                 // Initialize at time zero before a short-lived default state can exit.
                 // Its WD-Off writes remain part of the eventual neutral appearance.
                 graph.Evaluate(0f);
                 remember();
                 Advance(graph, 120, remember);
                 evaluation.CheckNeutralFx();
-                ValidateFixedPose(avatar, playable, controller, excludedPath, excludedLayers, equivalentStates, neutral: true,
+                var equivalentStates = EquivalentNeutralLayers(playable, controller, affected.Concat(supportLayers), dependencies, metadata);
+                ValidateFixedPose(avatar, playable, controller, excludedPath, excludedLayers, equivalentStates,
+                    dependencies.NativeSupportLayers, dependencies.Morphs, neutral: true,
                     neutralFixed: dependencies.NeutralFixedValues, dependencies: dependencies, metadata: metadata);
                 var bindings = ActiveBindings(playable, affected, excludedPath, equivalentStates, neutral: true);
                 var unresolved = new List<MorphValue>();
@@ -582,6 +594,73 @@ namespace VRVlog.LilToonExporter
             return machine.anyStateTransitions.Cast<AnimatorTransitionBase>().Concat(machine.entryTransitions)
                 .Concat(states.SelectMany(state => state.transitions)).All(transition =>
                     !transition.isExit && transition.destinationStateMachine == null && states.Contains(transition.destinationState));
+        }
+
+        // Equal clips prove a layer's pose, but an Animator-parameter relay
+        // also participates in global timed conditions. Its constant curve is
+        // not a proof of the global parameter when a driver/another layer may
+        // write it, or when a fractional layer blends it with another value.
+        // Preserve the neutral sampler's stricter full-writer contract even
+        // while accepting a genuinely equivalent layer mid-transition.
+        private static HashSet<int> EquivalentNeutralLayers(AnimatorControllerPlayable playable, AnimatorController controller,
+            IEnumerable<int> affected, ExpressionDependencies dependencies, VrChatExpressionMenu.Source metadata)
+        {
+            var layers = controller.layers;
+            var writers = new HashSet<string>[layers.Length];
+            var implicitWriters = new bool[layers.Length];
+            for (var index = 0; index < layers.Length; index++)
+            {
+                var parameters = writers[index] = new HashSet<string>(StringComparer.Ordinal);
+                var hasDefaults = false;
+                var machines = new HashSet<AnimatorStateMachine>(); var motions = new HashSet<Motion>();
+                void Motion(Motion motion)
+                {
+                    if (motion == null || !motions.Add(motion)) return;
+                    if (motion is AnimationClip clip)
+                        foreach (var binding in AnimationUtility.GetCurveBindings(clip).Where(binding => binding.type == typeof(Animator)))
+                            parameters.Add(binding.propertyName);
+                    else if (motion is BlendTree tree)
+                        foreach (var child in tree.children) Motion(child.motion);
+                }
+                void Machine(AnimatorStateMachine machine)
+                {
+                    if (machine == null || !machines.Add(machine)) return;
+                    foreach (var child in machine.states) { hasDefaults |= child.state.writeDefaultValues; Motion(child.state.motion); }
+                    foreach (var child in machine.stateMachines) Machine(child.stateMachine);
+                }
+                Machine(layers[index].stateMachine);
+                implicitWriters[index] = hasDefaults;
+            }
+            bool StaticDefaults(int index)
+            {
+                var layer = layers[index]; var machine = layer.stateMachine;
+                if (layer.syncedLayerIndex >= 0 || layer.iKPass || machine == null || machine.stateMachines.Length != 0 ||
+                    machine.behaviours.Length != 0 || machine.anyStateTransitions.Length != 0 || machine.entryTransitions.Length != 0 ||
+                    machine.states.Length != 1 || machine.defaultState != machine.states[0].state) return false;
+                var state = machine.defaultState;
+                if (state == null || state.behaviours.Length != 0 || state.transitions.Length != 0 || state.iKOnFeet ||
+                    state.timeParameterActive || state.speedParameterActive || state.mirrorParameterActive || state.cycleOffsetParameterActive) return false;
+                return state.motion == null || state.motion is AnimationClip clip && AnimationUtility.GetObjectReferenceCurveBindings(clip).Length == 0 &&
+                    AnimationUtility.GetCurveBindings(clip).All(binding => IsConstant(AnimationUtility.GetEditorCurve(clip, binding)));
+            }
+            var result = new HashSet<int>();
+            foreach (var index in affected)
+            {
+                if (!HasEquivalentConstantStates(controller, index)) continue;
+                var parameters = writers[index];
+                if (parameters.Count > 0)
+                {
+                    if (index > 0 && playable.GetLayerWeight(index) != 1 ||
+                        layers[index].blendingMode != AnimatorLayerBlendingMode.Override ||
+                        metadata.OtherControllers.Any(other => other != null) ||
+                        parameters.Any(name => VrChatParameterDriver.BuiltIn.Contains(name) || metadata.ExternalParameters.Contains(name) ||
+                            dependencies.Drivers.Values.Any(program => program.Operations.Any(operation => operation.Destination == name))) ||
+                        writers.Where((_, other) => other != index).Any(other => other.Overlaps(parameters)) ||
+                        Enumerable.Range(0, layers.Length).Any(other => other != index && implicitWriters[other] && !StaticDefaults(other))) continue;
+                }
+                result.Add(index);
+            }
+            return result;
         }
 
         // Short samples alone cannot prove a fixed pose. Inspect every active
