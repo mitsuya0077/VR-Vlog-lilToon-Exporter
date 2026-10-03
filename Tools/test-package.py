@@ -69,6 +69,27 @@ class PackageTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "Required package files"):
             package.build(self.root, self.root / "invalid.zip")
 
+    def test_only_pinned_dlls_are_allowed(self):
+        for name in package.PINNED_DLLS:
+            self.assertTrue(package.included(name))
+        self.assertFalse(package.included("Editor/arbitrary.dll"))
+        self.assertFalse(package.included("Runtime/BouncyCastle.Cryptography.dll"))
+
+    def test_missing_or_modified_transfer_dependency_fails(self):
+        contents = {"Editor/LanTransfer/VRVlog.LanTransfer.Editor.asmdef": b"{}"}
+        with self.assertRaisesRegex(ValueError, "Pinned LAN transfer dependency"):
+            package.verify_lan_dependencies(contents)
+        for name in package.PINNED_DLLS:
+            contents[name] = b"modified DLL"
+            contents[name + ".meta"] = b"importer"
+        with self.assertRaisesRegex(ValueError, "different SHA-256"):
+            package.verify_lan_dependencies(contents)
+
+    def test_referenced_untracked_transfer_assembly_fails(self):
+        contents = {"Editor/VRVlog.LilToonExporter.Editor.asmdef": b'{"references":["VRVlog.LanTransfer.Editor"]}'}
+        with self.assertRaisesRegex(ValueError, "Required LAN transfer assembly"):
+            package.verify_lan_dependencies(contents)
+
     def test_missing_locale_asset_fails(self):
         self.git("rm", "--cached", "Editor/Locales/ExporterLocale_ko.json")
         with self.assertRaisesRegex(ValueError, "Required package files"):

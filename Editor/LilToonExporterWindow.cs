@@ -163,6 +163,9 @@ namespace VRVlog.LilToonExporter
             using (new EditorGUI.DisabledScope(!canExport))
                 if (GUILayout.Button(ExporterLocalization.T("保存先を選んでVRMを書き出す"), GUILayout.Height(40f))) ExportOneClick();
 
+            using (new EditorGUI.DisabledScope(!canExport || Application.platform != RuntimePlatform.WindowsEditor))
+                if (GUILayout.Button("スマホに送る", GUILayout.Height(32f))) ExportOneClick(true);
+
             EditorGUILayout.Space(6f);
             EditorGUILayout.LabelField(canExport ? "" : ExporterLocalization.T("アバターと作者名を入力してください"), centeredHintStyle);
 
@@ -393,7 +396,7 @@ namespace VRVlog.LilToonExporter
             }
         }
 
-        private void ExportOneClick()
+        private void ExportOneClick(bool sendToPhone = false)
         {
             try { using var resolved = ResolveBlink(); }
             catch (Exception)
@@ -404,7 +407,8 @@ namespace VRVlog.LilToonExporter
                 Repaint();
                 return;
             }
-            outputPath = EditorUtility.SaveFilePanel(ExporterLocalization.T("VRMの保存先"), "", DefaultFileName(), "vrm");
+            outputPath = sendToPhone ? LanTransfer.LanVrmTransferWindow.CreateSnapshotPath()
+                : EditorUtility.SaveFilePanel(ExporterLocalization.T("VRMの保存先"), "", DefaultFileName(), "vrm");
             if (string.IsNullOrEmpty(outputPath)) return;
             lastSavedPath = null;
             lastSavedSummary = null;
@@ -424,7 +428,12 @@ namespace VRVlog.LilToonExporter
                 ExporterLocalization.T("ファイルを上書きしますか？"), targetOutput,
                 ExporterLocalization.T("上書き"), ExporterLocalization.T("キャンセル"))) return;
             ExportRecoverySession session = null;
-            void Completed() => ShowExportCompletion(session.LastSuccess.Bytes, session.LastSuccess.Warnings, targetOutput);
+            void ExportCompleted(byte[] bytes, IEnumerable<string> warnings)
+            {
+                if (sendToPhone) LanTransfer.LanVrmTransferWindow.Show(targetOutput, targetName + ".vrm");
+                else ShowExportCompletion(bytes, warnings, targetOutput);
+            }
+            void Completed() => ExportCompleted(session.LastSuccess.Bytes, session.LastSuccess.Warnings);
             try
             {
                 session = ExportAndSaveNormally(targetAvatar, targetOutput, (options, report, warnings) =>
@@ -433,7 +442,7 @@ namespace VRVlog.LilToonExporter
                     return UniVrmOneClickExporter.Export(targetAvatar, targetName, targetAuthor, warnings, false,
                         PackageVersion(), RequireSupportedLilToon(), false, targetExclusions, null, targetGimmicks, targetBlink, targetPoses,
                         recoveryOptions: options, recoveryReport: report);
-                }, (bytes, warnings) => ShowExportCompletion(bytes, warnings, targetOutput), targetExclusions, targetGimmicks);
+                }, ExportCompleted, targetExclusions, targetGimmicks);
                 if (session != null) ExportFailureWindow.Show(session, Completed);
             }
             catch (Exception exception) { ExportFailureWindow.Show(exception); }
