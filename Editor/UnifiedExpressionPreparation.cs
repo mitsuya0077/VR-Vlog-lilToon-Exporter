@@ -15,7 +15,6 @@ namespace VRVlog.LilToonExporter
     {
         private readonly Dictionary<SkinnedMeshRenderer, string[]> required = new Dictionary<SkinnedMeshRenderer, string[]>();
         private readonly Dictionary<SkinnedMeshRenderer, string[]> effectiveRaw = new Dictionary<SkinnedMeshRenderer, string[]>();
-        private readonly Dictionary<SkinnedMeshRenderer, string[]> effectiveAuthored = new Dictionary<SkinnedMeshRenderer, string[]>();
         private readonly HashSet<string> usableAuthoredNames = new HashSet<string>(StringComparer.Ordinal);
         private readonly HashSet<(string Canonical, SkinnedMeshRenderer Renderer, string Shape, float Weight)> effectiveAuthoredRoutes =
             new HashSet<(string, SkinnedMeshRenderer, string, float)>();
@@ -24,10 +23,22 @@ namespace VRVlog.LilToonExporter
         private readonly HashSet<(string Material, Renderer Renderer, int Slot)> referencedMaterialScopes = new HashSet<(string, Renderer, int)>();
         private readonly HashSet<string> ambiguousMaterials = new HashSet<string>(StringComparer.Ordinal);
         private readonly Dictionary<SkinnedMeshRenderer, Dictionary<string, string>> selectedRawRoutes = new Dictionary<SkinnedMeshRenderer, Dictionary<string, string>>();
+        private readonly Dictionary<(SkinnedMeshRenderer Renderer, string Shape), float> capturedWeights =
+            new Dictionary<(SkinnedMeshRenderer, string), float>();
+        // Preserve baselines for every potentially selected raw channel and
+        // declared authored UE morph. Unrelated body/clothing keys never affect
+        // this guard and need no arbitrary baseline after renderer merging.
+        private readonly HashSet<(SkinnedMeshRenderer Renderer, string Shape)> baselineChannels =
+            new HashSet<(SkinnedMeshRenderer, string)>();
+        private readonly bool declaresUnified;
+        private readonly Func<SkinnedMeshRenderer, int, float> neutralWeight;
         private readonly GameObject avatar;
         private readonly Func<Transform, bool> excluded;
         private readonly bool suppressSharedTextureEmission, suppressHdrTextureEmission;
         internal const string LostTracking = "Modular Avatar / NDMF の処理で Unified Expressions の追跡用変形が失われました。メッシュや BlendShape を変更する追加ツールの設定を確認してください。";
+
+        internal const string ConflictingMergedRoutes = "Modular Avatar / NDMF のメッシュ統合で同じ追跡名に異なる BlendShape が対応しました。元の追跡設定を統一してから書き出してください。";
+        internal const string ConflictingMergedWeights = "Modular Avatar / NDMF のメッシュ統合で同じ BlendShape の元の初期値が異なります。元の形を一意に保存できないため、初期値を統一してから書き出してください。";
 
         internal bool SupportsUnified { get; private set; }
 
@@ -36,17 +47,28 @@ namespace VRVlog.LilToonExporter
             new UnifiedExpressionPreparation(source, excluded, suppressSharedTextureEmission, suppressHdrTextureEmission).SupportsUnified;
 
         internal UnifiedExpressionPreparation(GameObject clone, Func<Transform, bool> excluded = null,
-            bool suppressSharedTextureEmission = false, bool suppressHdrTextureEmission = false)
+            bool suppressSharedTextureEmission = false, bool suppressHdrTextureEmission = false,
+            Func<SkinnedMeshRenderer, int, float> neutralWeight = null)
         {
             avatar = clone;
             this.excluded = excluded;
             this.suppressSharedTextureEmission = suppressSharedTextureEmission;
             this.suppressHdrTextureEmission = suppressHdrTextureEmission;
+            this.neutralWeight = neutralWeight ?? ((skin, index) => skin.GetBlendShapeWeight(index));
             var renderers = ExportRendererSelection.Enumerate(clone)
                 .Where(renderer => excluded?.Invoke(renderer.transform) != true).ToArray();
             var meshes = renderers.OfType<SkinnedMeshRenderer>()
                 .Where(skin => skin.sharedMesh != null).ToDictionary(skin => skin, skin =>
                     Enumerable.Range(0, skin.sharedMesh.blendShapeCount).Select(skin.sharedMesh.GetBlendShapeName).ToArray());
+            foreach (var pair in meshes)
+                for (var index = 0; index < pair.Value.Length; index++)
+                {
+                    var shape = pair.Value[index];
+                    capturedWeights[(pair.Key, shape)] = this.neutralWeight(pair.Key, index);
+                    // Shared raw aliases may become eligible when a build adds
+                    // explicit UE evidence, so retain them even before that gate.
+                    if (UnifiedExpressionRegistry.TryCanonicalize(shape, out _)) baselineChannels.Add((pair.Key, shape));
+                }
             var materialMap = renderers.SelectMany(renderer => renderer.sharedMaterials).Where(material => material != null)
                 .GroupBy(material => material.name, StringComparer.Ordinal).ToDictionary(group => group.Key, group => group.First(), StringComparer.Ordinal);
             var materialSlots = renderers.SelectMany(renderer => renderer.sharedMaterials.Select((material, slot) =>
@@ -65,8 +87,8 @@ namespace VRVlog.LilToonExporter
             omittedMaterials.ExceptWith(materials);
             var clips = clone.GetComponent<Vrm10Instance>()?.Vrm?.Expression?.CustomClips?.Where(clip => clip != null).ToArray()
                 ?? Array.Empty<VRM10Expression>();
-            var supportsUnified = VrmUnifiedExpressions.HasEvidence(meshes.Values.SelectMany(names => names).Concat(clips.Select(clip => clip.name)));
-            if (!supportsUnified) return;
+            declaresUnified = VrmUnifiedExpressions.HasEvidence(meshes.Values.SelectMany(names => names).Concat(clips.Select(clip => clip.name)));
+            if (!declaresUnified) return;
             var reserved = new HashSet<string>(StringComparer.Ordinal);
             var coverage = new Dictionary<SkinnedMeshRenderer, HashSet<string>>();
             var globalCoverage = new HashSet<string>(StringComparer.Ordinal);
@@ -98,6 +120,7 @@ namespace VRVlog.LilToonExporter
                     if (binding.Index < 0 || binding.Index >= names.Length) continue;
                     if (!authoredShapes.TryGetValue(skin, out var shapes)) authoredShapes.Add(skin, shapes = new HashSet<string>(StringComparer.Ordinal));
                     shapes.Add(names[binding.Index]);
+                    baselineChannels.Add((skin, names[binding.Index]));
                 }
                 if (!hasScopedMorph && (RetainedColors(clip, omittedMaterials).Any() || RetainedUV(clip, omittedMaterials).Any()))
                     globalCoverage.Add(canonical);
@@ -126,13 +149,13 @@ namespace VRVlog.LilToonExporter
             // disabled route and an inert/fully resting raw shape cannot alone
             // waive the ordinary missing-blink safeguard.
             SupportsUnified = VrmUnifiedExpressions.HasEvidence(usableAuthored.Concat(selected.SelectMany(pair =>
-                pair.Value.Values.Where(index => AvatarBaseShape.HasUsableRawEndpoint(pair.Key, index))
+                pair.Value.Values.Where(index => RawUsable(pair.Key, index))
                     .Select(index => meshes[pair.Key][index]))));
             if (SupportsUnified)
             {
                 foreach (var pair in selected)
                 {
-                    var shapes = pair.Value.Values.Where(index => AvatarBaseShape.HasUsableRawEndpoint(pair.Key, index))
+                    var shapes = pair.Value.Values.Where(index => RawUsable(pair.Key, index))
                         .Select(index => meshes[pair.Key][index]).ToArray();
                     if (shapes.Length > 0) effectiveRaw.Add(pair.Key, shapes);
                 }
@@ -145,18 +168,10 @@ namespace VRVlog.LilToonExporter
                     {
                         var target = Target(clone, binding.RelativePath);
                         var skin = target == null ? null : target.GetComponent<SkinnedMeshRenderer>();
-                        if (binding.Weight > 0 && AvatarBaseShape.HasUsableMorphEndpoint(skin, binding.Index))
+                        if (binding.Weight > 0 && AvatarBaseShape.HasUsableMorphEndpoint(skin.sharedMesh, binding.Index,
+                                this.neutralWeight(skin, binding.Index), binding.Weight * 100f))
                             effectiveAuthoredRoutes.Add((canonical, skin, skin.sharedMesh.GetBlendShapeName(binding.Index), binding.Weight));
                     }
-                }
-                foreach (var skin in meshes.Keys)
-                {
-                    var shapes = usableClips.SelectMany(clip => EffectiveMorphs(clip, clone, excluded))
-                        .Where(binding => binding.Weight > 0 &&
-                            (string.IsNullOrEmpty(binding.RelativePath) ? clone.transform : clone.transform.Find(binding.RelativePath)) == skin.transform &&
-                            AvatarBaseShape.HasUsableMorphEndpoint(skin, binding.Index))
-                        .Select(binding => meshes[skin][binding.Index]).Distinct(StringComparer.Ordinal).ToArray();
-                    if (shapes.Length > 0) effectiveAuthored.Add(skin, shapes);
                 }
             }
             if (!VrmUnifiedExpressions.HasEvidence(usableAuthored
@@ -169,7 +184,7 @@ namespace VRVlog.LilToonExporter
             }
         }
 
-        private static bool IsUsable(VRM10Expression clip, GameObject clone, IDictionary<string, Material> materials,
+        private bool IsUsable(VRM10Expression clip, GameObject clone, IDictionary<string, Material> materials,
             IDictionary<SkinnedMeshRenderer, string[]> meshes, Func<Transform, bool> excluded, ISet<string> omittedMaterials,
             bool suppressSharedTextureEmission, bool suppressHdrTextureEmission)
         {
@@ -188,7 +203,9 @@ namespace VRVlog.LilToonExporter
                 // VRM1 keeps the first binding to each renderer/index. Later
                 // duplicates remain validated and preserved but cannot enable
                 // a route whose first surviving binding deliberately disables it.
-                positiveMorph |= targets.Add((skin, binding.Index)) && binding.Weight > 0 && AvatarBaseShape.HasUsableMorphEndpoint(skin, binding.Index);
+                positiveMorph |= targets.Add((skin, binding.Index)) && binding.Weight > 0 &&
+                    AvatarBaseShape.HasUsableMorphEndpoint(skin.sharedMesh, binding.Index,
+                        neutralWeight(skin, binding.Index), binding.Weight * 100f);
             }
             foreach (var binding in RetainedColors(clip, omittedMaterials))
                 if (!materials.ContainsKey(binding.MaterialName) || !Enum.IsDefined(typeof(MaterialColorType), binding.BindType) ||
@@ -269,7 +286,111 @@ namespace VRVlog.LilToonExporter
         private static bool HasBindings(VRM10Expression clip, GameObject clone, Func<Transform, bool> excluded, ISet<string> omittedMaterials) =>
             RetainedMorphs(clip, clone, excluded).Any() || RetainedColors(clip, omittedMaterials).Any() || RetainedUV(clip, omittedMaterials).Any();
 
-        internal void Verify(bool requireUsableEvidence = false)
+        private bool RawUsable(SkinnedMeshRenderer skin, int index) => skin != null && skin.sharedMesh != null &&
+            index >= 0 && index < skin.sharedMesh.blendShapeCount &&
+            AvatarBaseShape.HasUsableRawEndpoint(skin.sharedMesh, index, neutralWeight(skin, index));
+
+        private float CapturedWeight(SkinnedMeshRenderer skin, int index) =>
+            capturedWeights.TryGetValue((skin, skin.sharedMesh.GetBlendShapeName(index)), out var weight)
+                ? weight : skin.GetBlendShapeWeight(index);
+
+        // A build pass can intentionally change serialized weights before FX
+        // establishes neutral. Protect the selected channels and their geometry
+        // against the captured reference, then assess output usability anew.
+        internal void VerifyIdentityAndDeformation() => Verify(false, true);
+
+        internal void RebindPrepared(Func<SkinnedMeshRenderer, SkinnedMeshRenderer> replacement)
+        {
+            if (replacement == null) throw new ArgumentNullException(nameof(replacement));
+            var mapped = new Dictionary<SkinnedMeshRenderer, SkinnedMeshRenderer>();
+            SkinnedMeshRenderer Resolve(SkinnedMeshRenderer old)
+            {
+                if (!mapped.TryGetValue(old, out var current)) mapped.Add(old, current = replacement(old));
+                return current;
+            }
+            SkinnedMeshRenderer Map(SkinnedMeshRenderer old)
+            {
+                var current = Resolve(old);
+                if (current == null) throw new InvalidOperationException(NdmfExportPreparation.UnknownRendererRelocation);
+                return current;
+            }
+            Dictionary<SkinnedMeshRenderer, string[]> Remap(Dictionary<SkinnedMeshRenderer, string[]> values)
+            {
+                var result = new Dictionary<SkinnedMeshRenderer, string[]>();
+                foreach (var pair in values)
+                {
+                    var current = Map(pair.Key);
+                    result[current] = result.TryGetValue(current, out var previous)
+                        ? previous.Concat(pair.Value).Distinct(StringComparer.Ordinal).ToArray() : pair.Value;
+                }
+                return result;
+            }
+            var nextRequired = Remap(required);
+            var nextEffectiveRaw = Remap(effectiveRaw);
+            var nextRaw = new Dictionary<SkinnedMeshRenderer, Dictionary<string, string>>();
+            foreach (var pair in selectedRawRoutes)
+            {
+                var current = Resolve(pair.Key);
+                if (current == null) continue;
+                if (!nextRaw.TryGetValue(current, out var routes))
+                    nextRaw.Add(current, routes = new Dictionary<string, string>(StringComparer.Ordinal));
+                foreach (var route in pair.Value)
+                {
+                    if (routes.TryGetValue(route.Key, out var shape) && !string.Equals(shape, route.Value, StringComparison.Ordinal))
+                        throw new InvalidOperationException(ConflictingMergedRoutes + ": " + current.name + " / " + route.Key);
+                    routes[route.Key] = route.Value;
+                }
+            }
+            // Shared aliases are speculative until source or prepared output
+            // declares UE. Use structural evidence here: final FX can reopen a
+            // serialized fully-resting channel only after this identity guard.
+            var preparedNames = ExportRendererSelection.Enumerate(avatar).OfType<SkinnedMeshRenderer>()
+                .Where(skin => skin.sharedMesh != null && excluded?.Invoke(skin.transform) != true)
+                .SelectMany(skin => Enumerable.Range(0, skin.sharedMesh.blendShapeCount).Select(skin.sharedMesh.GetBlendShapeName));
+            var preparedClips = avatar.GetComponent<Vrm10Instance>()?.Vrm?.Expression?.CustomClips
+                ?.Where(clip => clip != null).Select(clip => clip.name) ?? Enumerable.Empty<string>();
+            var preserveBaselines = declaresUnified || VrmUnifiedExpressions.HasEvidence(preparedNames.Concat(preparedClips));
+            var nextWeights = new Dictionary<(SkinnedMeshRenderer Renderer, string Shape), float>();
+            foreach (var pair in capturedWeights)
+            {
+                if (!preserveBaselines || !baselineChannels.Contains(pair.Key)) continue;
+                var current = Resolve(pair.Key.Renderer);
+                if (current == null) continue;
+                var key = (current, pair.Key.Shape);
+                if (nextWeights.TryGetValue(key, out var weight) && !weight.Equals(pair.Value))
+                    throw new InvalidOperationException(ConflictingMergedWeights + ": " + current.name + " / " + pair.Key.Shape);
+                nextWeights[key] = pair.Value;
+            }
+            var nextAuthored = new HashSet<(string Canonical, SkinnedMeshRenderer Renderer, string Shape, float Weight)>(
+                effectiveAuthoredRoutes.Select(route => (route.Canonical, Map(route.Renderer), route.Shape, route.Weight)));
+            Renderer MaterialTarget(Renderer renderer) => renderer is SkinnedMeshRenderer skin ? Map(skin) : renderer;
+            var nextMaterialScopes = materialScopes.ToDictionary(pair => pair.Key, pair => {
+                var scope = pair.Value;
+                // An unselected omitted material scope does not require relocation.
+                var current = scope.Renderer is SkinnedMeshRenderer skin ? Resolve(skin) : null;
+                return current != null ? (Renderer: (Renderer)current, scope.Slot) : scope;
+            }, StringComparer.Ordinal);
+            var nextReferencedScopes = new HashSet<(string Material, Renderer Renderer, int Slot)>(
+                referencedMaterialScopes.Select(scope => (scope.Material, MaterialTarget(scope.Renderer), scope.Slot)));
+
+            // Publish only once every original route has a compatible destination.
+            // Equal baselines can share one final channel; conflicting origins cannot.
+            void Replace<TKey, TValue>(Dictionary<TKey, TValue> target, Dictionary<TKey, TValue> values)
+            {
+                target.Clear(); foreach (var pair in values) target.Add(pair.Key, pair.Value);
+            }
+            Replace(required, nextRequired); Replace(effectiveRaw, nextEffectiveRaw);
+            Replace(selectedRawRoutes, nextRaw); Replace(capturedWeights, nextWeights);
+            baselineChannels.Clear(); baselineChannels.UnionWith(nextWeights.Keys);
+            effectiveAuthoredRoutes.Clear(); effectiveAuthoredRoutes.UnionWith(nextAuthored);
+            Replace(materialScopes, nextMaterialScopes);
+            referencedMaterialScopes.Clear(); referencedMaterialScopes.UnionWith(nextReferencedScopes);
+        }
+
+
+        internal void Verify(bool requireUsableEvidence = false) => Verify(requireUsableEvidence, false);
+
+        private void Verify(bool requireUsableEvidence, bool capturedBaseline)
         {
             foreach (var pair in required)
             {
@@ -278,14 +399,25 @@ namespace VRVlog.LilToonExporter
                     pair.Value.Any(name => skin.sharedMesh.GetBlendShapeIndex(name) < 0))
                     throw new InvalidOperationException(LostTracking);
             }
-            VerifyEffective(effectiveRaw, AvatarBaseShape.HasUsableRawEndpoint);
-            VerifyEffective(effectiveAuthored, AvatarBaseShape.HasUsableMorphEndpoint);
-            // Automatic blink was resolved against the source before appearance
-            // snapshots. Carry its requirement across that earlier stage too.
+            Func<SkinnedMeshRenderer, int, float> weight = (skin, index) =>
+                capturedBaseline ? CapturedWeight(skin, index) : skin.GetBlendShapeWeight(index);
+            VerifyEffective(effectiveRaw, (skin, index) => index >= 0 &&
+                AvatarBaseShape.HasUsableRawEndpoint(skin.sharedMesh, index, weight(skin, index)));
+            foreach (var route in effectiveAuthoredRoutes)
+            {
+                var skin = route.Renderer;
+                var index = skin == null || skin.sharedMesh == null ? -1 : skin.sharedMesh.GetBlendShapeIndex(route.Shape);
+                if (skin == null || !skin.enabled || !skin.gameObject.activeInHierarchy || index < 0 ||
+                    !AvatarBaseShape.HasUsableMorphEndpoint(skin.sharedMesh, index, weight(skin, index), route.Weight * 100f))
+                    throw new InvalidOperationException(LostTracking);
+            }
+            // Output verification uses the current neutral. Identity verification
+            // uses the captured baseline while build passes establish that neutral.
             if (SupportsUnified || requireUsableEvidence)
             {
                 if (avatar == null || !avatar.activeInHierarchy) throw new InvalidOperationException(LostTracking);
-                var current = new UnifiedExpressionPreparation(avatar, excluded, suppressSharedTextureEmission, suppressHdrTextureEmission);
+                var current = new UnifiedExpressionPreparation(avatar, excluded, suppressSharedTextureEmission, suppressHdrTextureEmission,
+                    capturedBaseline ? CapturedWeight : (Func<SkinnedMeshRenderer, int, float>)null);
                 if (!current.SupportsUnified || usableAuthoredNames.Any(name => !current.usableAuthoredNames.Contains(name)) ||
                     effectiveAuthoredRoutes.Any(route => !current.effectiveAuthoredRoutes.Contains(route)) ||
                     effectiveMaterialRoutes.Any(route => !current.effectiveMaterialRoutes.Contains(route)) ||

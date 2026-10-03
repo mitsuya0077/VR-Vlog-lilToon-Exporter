@@ -24,11 +24,8 @@ namespace VRVlog.LilToonExporter
         internal static byte[] Add(byte[] bytes, VrmTrackingProfile profile)
         {
             if (profile == null) return bytes;
-            var entries = profile.expressions ?? Array.Empty<TrackingExpression>();
-            if (entries.Length != Names.Length || entries.Any(e => e == null) ||
-                entries.Select(e => e.name).Distinct(StringComparer.Ordinal).Count() != Names.Length ||
-                Names.Any(n => entries.All(e => e.name != n)))
-                throw new InvalidOperationException("追跡設定にはARKit標準52項目を一度ずつ設定してください。");
+            Validate(profile);
+            var entries = profile.expressions;
 
             var glb = GlbDocument.Read(bytes);
             var extensions = Obj(glb.Json, "extensions", false);
@@ -42,13 +39,10 @@ namespace VRVlog.LilToonExporter
             {
                 if (custom.ContainsKey(entry.name))
                     throw new InvalidOperationException("既存のVRM表情と追跡名が重複しています: " + entry.name);
-                if (entry.morphs == null || entry.morphs.Length == 0)
-                    throw new InvalidOperationException("追跡表情にシェイプキーがありません: " + entry.name);
                 var binds = new List<object>();
                 foreach (var morph in entry.morphs)
                 {
-                    if (morph == null || string.IsNullOrWhiteSpace(morph.shape) || morph.weight <= 0f || morph.weight > 1f)
-                        throw new InvalidOperationException("追跡表情の設定が不正です: " + entry.name);
+                    ValidateMorph(morph, entry.name);
                     var found = 0;
                     for (var nodeIndex = 0; nodeIndex < nodes.Count; nodeIndex++)
                     {
@@ -78,6 +72,29 @@ namespace VRVlog.LilToonExporter
                 };
             }
             return glb.Write();
+        }
+
+        internal static void Validate(VrmTrackingProfile profile)
+        {
+            if (profile == null) throw new ArgumentNullException(nameof(profile));
+            var entries = profile.expressions ?? Array.Empty<TrackingExpression>();
+            if (entries.Length != Names.Length || entries.Any(e => e == null) ||
+                entries.Select(e => e.name).Distinct(StringComparer.Ordinal).Count() != Names.Length ||
+                Names.Any(n => entries.All(e => e.name != n)))
+                throw new InvalidOperationException("追跡設定にはARKit標準52項目を一度ずつ設定してください。");
+            foreach (var entry in entries)
+            {
+                if (entry.morphs == null || entry.morphs.Length == 0)
+                    throw new InvalidOperationException("追跡表情にシェイプキーがありません: " + entry.name);
+                foreach (var morph in entry.morphs) ValidateMorph(morph, entry.name);
+            }
+        }
+
+        internal static void ValidateMorph(TrackingMorph morph, string expression)
+        {
+            if (morph == null || string.IsNullOrWhiteSpace(morph.shape) ||
+                float.IsNaN(morph.weight) || float.IsInfinity(morph.weight) || morph.weight <= 0f || morph.weight > 1f)
+                throw new InvalidOperationException("追跡表情の設定が不正です: " + expression);
         }
 
         private static Dictionary<string, object> Obj(Dictionary<string, object> parent, string key, bool create)

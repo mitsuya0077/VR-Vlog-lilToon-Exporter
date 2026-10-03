@@ -1,0 +1,9 @@
+{
+  "name": "VRVlog.LanTransfer.Editor",
+  "rootNamespace": "VRVlog.LilToonExporter.LanTransfer",
+  "includePlatforms": ["Editor"],
+  "autoReferenced": false,
+  "overrideReferences": true,
+  "precompiledReferences": ["BouncyCastle.Cryptography.dll", "zxing.dll"],
+  "noEngineReferences": false
+}
