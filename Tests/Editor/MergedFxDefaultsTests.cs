@@ -1,10 +1,16 @@
 using System;
+using System.Collections;
 using System.Collections.Generic;
 using System.Linq;
+using System.Threading.Tasks;
 using NUnit.Framework;
+using UniGLTF;
+using UniVRM10;
 using UnityEditor;
 using UnityEditor.Animations;
 using UnityEngine;
+using UnityEngine.Animations;
+using UnityEngine.Playables;
 using Object = UnityEngine.Object;
 
 namespace VRVlog.LilToonExporter.Tests
@@ -73,6 +79,47 @@ namespace VRVlog.LilToonExporter.Tests
 
         static Dictionary<string, float> Parameters(int value) => new Dictionary<string, float> { ["Menu"] = value };
 
+        // Independent native Animator playback provides the expected result;
+        // it does not use the export sampler or its reconstructed probe graph.
+        static (Dictionary<string, float> Weights, Vector3[] Vertices) NativePose(GameObject source, AnimatorController fx,
+            string path, IDictionary<string, int> parameters)
+        {
+            var copy = Object.Instantiate(source);
+            var graph = PlayableGraph.Create("Weighted FX regression reference");
+            graph.SetTimeUpdateMode(DirectorUpdateMode.Manual);
+            try
+            {
+                foreach (var behaviour in copy.GetComponentsInChildren<Behaviour>(true)) behaviour.enabled = false;
+                var animator = copy.GetComponent<Animator>(); animator.enabled = true;
+                animator.runtimeAnimatorController = null; animator.applyRootMotion = false; animator.cullingMode = AnimatorCullingMode.AlwaysAnimate;
+                var playable = AnimatorControllerPlayable.Create(graph, fx);
+                for (var index = 0; index < fx.layers.Length; index++) playable.SetLayerWeight(index, index == 0 ? 1 : fx.layers[index].defaultWeight);
+                foreach (var parameter in parameters) playable.SetInteger(parameter.Key, parameter.Value);
+                var output = AnimationPlayableOutput.Create(graph, "Face", animator); output.SetSourcePlayable(playable);
+                graph.Play(); graph.Evaluate(0);
+                for (var frame = 0; frame < 8; frame++) graph.Evaluate(.02f);
+                var renderer = copy.transform.Find(path).GetComponent<SkinnedMeshRenderer>();
+                var weights = Enumerable.Range(0, renderer.sharedMesh.blendShapeCount)
+                    .ToDictionary(renderer.sharedMesh.GetBlendShapeName, renderer.GetBlendShapeWeight);
+                return (weights, WorldVertices(renderer));
+            }
+            finally { if (graph.IsValid()) graph.Destroy(); Object.DestroyImmediate(copy); }
+        }
+
+        static Vector3[] WorldVertices(SkinnedMeshRenderer renderer)
+        {
+            var baked = new Mesh();
+            try { renderer.BakeMesh(baked, false); return baked.vertices.Select(renderer.transform.TransformPoint).ToArray(); }
+            finally { Object.DestroyImmediate(baked); }
+        }
+
+        static void AssertVertices(Vector3[] expected, Vector3[] actual)
+        {
+            Assert.That(actual.Length, Is.EqualTo(expected.Length));
+            for (var index = 0; index < expected.Length; index++)
+                Assert.That(Vector3.Distance(expected[index], actual[index]), Is.LessThan(.0005f), "Vertex " + index);
+        }
+
         [TestCase(false)]
         [TestCase(true)]
         public void ConstantIndependentEffectAppliesToNeutralAndSelectedExpression(bool writeDefaults)
@@ -86,6 +133,119 @@ namespace VRVlog.LilToonExporter.Tests
             Assert.That(selected.Single(value => value.Shape == "Face size").Weight, Is.EqualTo(75).Within(.01));
             Assert.That(avatar.GetComponentInChildren<SkinnedMeshRenderer>().GetBlendShapeWeight(2), Is.Zero);
             Assert.That(mesh.blendShapeCount, Is.EqualTo(3));
+        }
+
+        [TestCase(false, false)]
+        [TestCase(false, true)]
+        [TestCase(true, false)]
+        [TestCase(true, true)]
+        public void FractionalStationaryFxUsesPreparedBaseOnceForMenuGestureAndFaceEmo(bool additive, bool writeDefaults)
+        {
+            var descriptorType = AppDomain.CurrentDomain.GetAssemblies().Select(assembly => assembly.GetType("VRC.SDK3.Avatars.Components.VRCAvatarDescriptor"))
+                .FirstOrDefault(type => type != null);
+            if (descriptorType == null) Assert.Ignore("Install the real VRChat SDK for neutral FX integration.");
+            Menu(controller.layers[0].stateMachine, writeDefaults: writeDefaults);
+            Permanent(AddLayer("Weighted permanent"), writeDefaults);
+            var layers = controller.layers; layers[1].defaultWeight = .5f;
+            layers[1].blendingMode = additive ? AnimatorLayerBlendingMode.Additive : AnimatorLayerBlendingMode.Override; controller.layers = layers;
+            var sourceSkin = avatar.GetComponentInChildren<SkinnedMeshRenderer>(); sourceSkin.SetBlendShapeWeight(2, 20);
+            var descriptor = avatar.AddComponent(descriptorType);
+            using (var data = new SerializedObject(descriptor))
+            {
+                data.FindProperty("customizeAnimationLayers").boolValue = true;
+                var descriptorLayers = data.FindProperty("baseAnimationLayers"); descriptorLayers.arraySize = 1;
+                var item = descriptorLayers.GetArrayElementAtIndex(0);
+                var type = item.FindPropertyRelative("type"); type.enumValueIndex = Array.IndexOf(type.enumNames, "FX");
+                item.FindPropertyRelative("isDefault").boolValue = false;
+                item.FindPropertyRelative("animatorController").objectReferenceValue = controller;
+                data.ApplyModifiedPropertiesWithoutUndo();
+            }
+            var neutral = NativePose(avatar, controller, "Face", new Dictionary<string, int> { ["Menu"] = 0 });
+            var expected = NativePose(avatar, controller, "Face", new Dictionary<string, int> { ["Menu"] = 1 });
+            var clip = (AnimationClip)controller.layers[0].stateMachine.states.Single(child => child.state.name == "Selected").state.motion;
+            var registeredClip = Object.Instantiate(clip); registeredClip.name = "Weighted registered face";
+            AssetDatabase.CreateAsset(registeredClip, folder + "/WeightedFaceEmo.anim");
+            var registered = new { Modes = new[] { new { DisplayName = "Weighted registered", ChangeDefaultFace = true,
+                Animation = new { GUID = AssetDatabase.AssetPathToGUID(folder + "/WeightedFaceEmo.anim") } } } };
+            var clone = Object.Instantiate(avatar);
+            try
+            {
+                var bindings = FaceEmoExpressions.CaptureRegistered(clone, registered);
+                var menu = VrChatExpressionSampler.Sample(clone, controller, Parameters(0), Parameters(1));
+                var gesture = new VrChatExpressionMenu.Entry(); VrChatGestureExpressions.ReadClip(clone, clip, gesture);
+                VrChatExpressionSampler.ApplyPermanentOverrides(clone, controller, gesture, 0, writeDefaults);
+                var faceEmo = new VrChatExpressionMenu.Source { Controller = controller }; var serial = 0;
+                FaceEmoExpressions.ReadRegistered(clone, registered, "FaceEmo", faceEmo, ref serial, new HashSet<object>(), 0, bindings: bindings);
+                Assert.That(faceEmo.Entries.Single().Error, Is.Null);
+                foreach (var values in new[] { menu, gesture.Values, faceEmo.Entries.Single().Values })
+                {
+                    Assert.That(values.Single(value => value.Shape == "Pupil removal").Weight, Is.EqualTo(expected.Weights["Pupil removal"]).Within(.01));
+                    Assert.That(values.Single(value => value.Shape == "Face size").Weight, Is.EqualTo(expected.Weights["Face size"]).Within(.01));
+                }
+                Assert.That(clone.GetComponentInChildren<SkinnedMeshRenderer>().GetBlendShapeWeight(2), Is.EqualTo(20), "Analysis must not replace its own input baseline.");
+                VrChatExpressionSampler.ApplyMergedDefaults(avatar, clone);
+                Assert.That(clone.GetComponentInChildren<SkinnedMeshRenderer>().GetBlendShapeWeight(2), Is.EqualTo(neutral.Weights["Pupil removal"]).Within(.01));
+                Assert.That(sourceSkin.GetBlendShapeWeight(2), Is.EqualTo(20));
+                Assert.That(controller.layers[1].defaultWeight, Is.EqualTo(.5f));
+            }
+            finally { Object.DestroyImmediate(clone); }
+        }
+
+        [TestCase(false)]
+        [TestCase(true)]
+        public async Task FractionalStationaryFxGeometrySurvivesOneClickExportAndVrmReimport(bool additive)
+        {
+            var shader = Shader.Find("lilToon");
+            if (shader == null) Assert.Ignore("Install lilToon for the real exporter entry point.");
+            using var fixture = new AttachmentConnectionTests.Fixture();
+            using var menus = new MenuImportSdkRecoveryTests.SdkFixture(fixture.Source);
+            var controls = (IList)VrChatExpressionMenu.Member(menus.Root, "controls"); controls.RemoveAt(1);
+            var fx = (AnimatorController)VrChatExpressionMenu.Read(fixture.Source).Controller;
+            var delta = new Vector3[fixture.Mesh.vertexCount]; delta[0] = Vector3.up * .1f;
+            fixture.Mesh.AddBlendShapeFrame("Pupil removal", 100, delta, new Vector3[delta.Length], new Vector3[delta.Length]);
+            var fixedClip = new AnimationClip { name = "Weighted permanent pupil" };
+            AnimationUtility.SetEditorCurve(fixedClip, EditorCurveBinding.FloatCurve("Front", typeof(SkinnedMeshRenderer), "blendShape.Pupil removal"),
+                AnimationCurve.Constant(0, 1, 100));
+            AssetDatabase.AddObjectToAsset(fixedClip, fx);
+            fx.AddLayer("Weighted permanent pupil");
+            var layers = fx.layers; var layer = layers[layers.Length - 1]; layer.defaultWeight = .5f;
+            layer.blendingMode = additive ? AnimatorLayerBlendingMode.Additive : AnimatorLayerBlendingMode.Override;
+            layer.stateMachine.defaultState = State(layer.stateMachine, "Always", fixedClip); fx.layers = layers;
+            var material = new Material(shader);
+            foreach (var renderer in fixture.Source.GetComponentsInChildren<SkinnedMeshRenderer>()) renderer.sharedMaterial = material;
+            var sourceFront = fixture.Source.transform.Find("Front").GetComponent<SkinnedMeshRenderer>();
+            var beforeMesh = EditorJsonUtility.ToJson(fixture.Mesh);
+            var beforeController = EditorJsonUtility.ToJson(fx);
+            var beforeDescriptor = EditorJsonUtility.ToJson(menus.Descriptor);
+            var expectedNeutral = NativePose(fixture.Source, fx, "Front", new Dictionary<string, int> { ["Face"] = 0, ["GestureRight"] = 0 });
+            var expectedMenu = NativePose(fixture.Source, fx, "Front", new Dictionary<string, int> { ["Face"] = 1, ["GestureRight"] = 0 });
+            var expectedGesture = NativePose(fixture.Source, fx, "Front", new Dictionary<string, int> { ["Face"] = 0, ["GestureRight"] = 2 });
+            Vrm10Instance imported = null;
+            try
+            {
+                var warnings = new List<string>();
+                var bytes = UniVrmOneClickExporter.Export(fixture.Source, "Weighted permanent FX", "Tests", warnings,
+                    blinkOptions: new BlinkExportOptions { Mode = BlinkExportMode.None });
+                imported = await Vrm10.LoadBytesAsync(bytes, canLoadVrm0X: false, awaitCaller: new ImmediateCaller());
+                Assert.That(imported, Is.Not.Null, string.Join("\n", warnings));
+                imported.Runtime.Process();
+                var importedFront = imported.GetComponentsInChildren<SkinnedMeshRenderer>().Single(renderer => renderer.name == "Front");
+                AssertVertices(expectedNeutral.Vertices, WorldVertices(importedFront));
+                foreach (var candidate in new[] { (Name: "Menu face", Pose: expectedMenu), (Name: "Gesture face", Pose: expectedGesture) })
+                {
+                    foreach (var expression in imported.Vrm.Expression.CustomClips)
+                        imported.Runtime.Expression.SetWeight(ExpressionKey.CreateCustom(expression.name), 0);
+                    var selected = imported.Vrm.Expression.CustomClips.Single(expression => expression.name.Contains(candidate.Name));
+                    imported.Runtime.Expression.SetWeight(ExpressionKey.CreateCustom(selected.name), 1);
+                    imported.Runtime.Process();
+                    AssertVertices(candidate.Pose.Vertices, WorldVertices(importedFront));
+                }
+                Assert.That(sourceFront.GetBlendShapeWeight(1), Is.Zero);
+                Assert.That(EditorJsonUtility.ToJson(fixture.Mesh), Is.EqualTo(beforeMesh));
+                Assert.That(EditorJsonUtility.ToJson(fx), Is.EqualTo(beforeController));
+                Assert.That(EditorJsonUtility.ToJson(menus.Descriptor), Is.EqualTo(beforeDescriptor));
+            }
+            finally { if (imported != null) Object.DestroyImmediate(imported.gameObject); Object.DestroyImmediate(material); }
         }
 
         [TestCase(false, false)]

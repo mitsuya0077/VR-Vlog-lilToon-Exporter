@@ -201,11 +201,15 @@ namespace VRVlog.LilToonExporter
                         {
                             if (!requiredMorphs.IsSubsetOf(ExportMorphs(clone)))
                                 throw new InvalidOperationException("Modular Avatar / NDMF の処理で書き出し用の表情が失われました。メッシュや BlendShape を変更する追加ツールの設定を確認してください。");
-                            // Phase-end extension cleanup commits MA's virtual FX
-                            // controller. Evaluate that controller and declare the
-                            // viewer's morph dependencies before mesh optimization.
-                            afterTransforming?.Invoke(lease);
-                            Invoke(() => bridge.Process.Invoke(null, new[] { context, bridge.Optimizing, bridge.Optimizing }));
+                            // Phase-end cleanup commits MA's virtual controller.
+                            // Only export callers with this preparation callback
+                            // can declare/remap morph dependencies for Optimizing.
+                            // Preview callers retain their captured renderer IDs.
+                            if (afterTransforming != null)
+                            {
+                                afterTransforming(lease);
+                                Invoke(() => bridge.Process.Invoke(null, new[] { context, bridge.Optimizing, bridge.Optimizing }));
+                            }
                         }
                     }
                     catch (Exception error) { processError = error; }

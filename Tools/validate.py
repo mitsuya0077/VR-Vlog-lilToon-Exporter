@@ -193,7 +193,7 @@ assert "PackageManagerPackageInfo FindLilToonPackage()" in window
 assert "PackageManagerPackageInfo.GetAllRegisteredPackages()" in window
 assert "Vrm10AppearanceExporter.Export" in one_click
 assert one_click.index("NdmfExportPreparation.ValidateSource(source,") < one_click.index("VrChatExpressionMenu.Read(source,")
-assert one_click.index("VrChatExpressionSampler.ApplyMergedDefaults(source, clone,") < one_click.index("VrChatExpressionSampler.Analyze(clone,") < one_click.index("VrChatExpressionBaker.Bake(null, clone,") < one_click.index("ExportOptimizationBindings.Capture(clone,")
+assert one_click.index("VrChatExpressionSampler.Analyze(clone,") < one_click.index("VrChatExpressionSampler.ApplyMergedDefaults(source, clone,") < one_click.index("expressionBindings.Capture(menu)") < one_click.index("VrChatExpressionBaker.Bake(null, clone,") < one_click.index("ExportOptimizationBindings.Capture(clone,")
 assert one_click.index("optimizerBindings.ValidateAndApply(") < one_click.index("LilToonFullSnapshot.Capture(clone,") < one_click.index("Vrm10AppearanceExporter.Export(")
 assert one_click.index("NdmfExportPreparation.Prepare(source, clone,") < one_click.index("VrChatExpressionBaker.Bake(null, clone,")
 assert one_click.index("SkinnedMeshFallbackWeights.Preserve(clone,") < one_click.index("NdmfExportPreparation.Prepare(source, clone,") < one_click.index("AvatarBaseShape.Preserve(clone, clone,")

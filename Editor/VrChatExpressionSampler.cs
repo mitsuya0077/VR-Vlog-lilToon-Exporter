@@ -69,7 +69,9 @@ namespace VRVlog.LilToonExporter
 
         // Invoke on the committed post-Transforming copy. Native animation
         // evaluation occurs on another disposable copy and writes back weights
-        // only; shared meshes/controllers and the source remain untouched.
+        // only; shared meshes/controllers and the source remain untouched. Call
+        // after Analyze: all expression probes must use the prepared authored
+        // weights rather than evaluating an already blended neutral base again.
         internal static void ApplyMergedDefaults(GameObject source, GameObject clone, ICollection<string> warnings = null,
             VrChatMenuImportPolicy menuPolicy = null, Func<string, bool> excludedPath = null)
         {

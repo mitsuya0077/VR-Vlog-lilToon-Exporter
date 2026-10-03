@@ -116,8 +116,11 @@ namespace VRVlog.LilToonExporter
                     // Sample the FX controller MA actually built, including
                     // permanent overrides, before AAO edits topology or routes.
                     var preparedMenuPolicy = menuPolicy?.WithOwnedCopies(value => transformed.IsolatedCopyOf(value as UnityEngine.Object));
-                    VrChatExpressionSampler.ApplyMergedDefaults(source, clone, warnings, preparedMenuPolicy, PreparedExcludedBinding);
+                    // Every native sample/probe starts from the authored prepared
+                    // weights. Applying a fractional/additive neutral result first
+                    // would blend that already evaluated result a second time.
                     menu = VrChatExpressionSampler.Analyze(clone, PreparedExcludedBinding, preparedMenuPolicy, source, faceEmoBindings);
+                    VrChatExpressionSampler.ApplyMergedDefaults(source, clone, warnings, preparedMenuPolicy, PreparedExcludedBinding);
                     var expressionBindings = new PreparedExpressionBindings(clone, menu);
                     gimmicks.Apply(expressionBindings, menu, warnings);
                     unifiedPreparation?.Verify(blink.RequiresUnifiedEvidence);

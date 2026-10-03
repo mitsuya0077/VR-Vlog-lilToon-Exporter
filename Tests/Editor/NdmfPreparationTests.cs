@@ -58,7 +58,7 @@ namespace VRVlog.LilToonExporter.Tests
                 root.GetComponent<SkinnedMeshRenderer>().sharedMesh = generated;
                 unrelated = new Material(Shader.Find("Unlit/Color"));
             };
-            using (NdmfExportPreparation.ProcessClone(source, clone, Resolve()))
+            using (NdmfExportPreparation.ProcessClone(source, clone, Resolve(), afterTransforming: lease => { }))
             {
                 Assert.AreEqual(2, FakeProcessor.Calls);
                 Assert.AreSame(FakePhase.Start, FakeProcessor.Ranges[0][0]);
@@ -77,6 +77,29 @@ namespace VRVlog.LilToonExporter.Tests
             Assert.IsTrue(original != null);
             Assert.IsTrue(unrelated != null, "Global resource collection must not claim another owner's assets.");
             Assert.AreSame(original, source.GetComponent<SkinnedMeshRenderer>().sharedMesh);
+        }
+
+        [Test]
+        public void CallbackFreePreparationStopsAfterTransformingAndRetainsOwnedAssetLifetime()
+        {
+            FakeProcessor.Action = ReplaceWithGenerated;
+            FakeProcessor.OptimizationAction = root => { throw new InvalidOperationException("Preview must not optimize captured renderers."); };
+            using (NdmfExportPreparation.ProcessClone(source, clone, Resolve()))
+            {
+                Assert.AreEqual(1, FakeProcessor.Calls);
+                Assert.AreEqual(1, FakeProcessor.Ranges.Count);
+                Assert.AreSame(FakePhase.Start, FakeProcessor.Ranges[0][0]);
+                Assert.AreSame(FakePhase.Transforming, FakeProcessor.Ranges[0][1]);
+                Assert.AreEqual(1, FakeContext.Last.FinishCount);
+                Assert.IsTrue(FakeContext.Last.Saver.Disposed);
+                Assert.AreEqual("original-directory", FakeDirectoryScope.Current);
+                Assert.IsTrue(generated != null);
+                Assert.IsTrue(UnityEditor.AssetDatabase.IsValidFolder(FakeContext.Last.AssetPath));
+            }
+            Assert.IsTrue(generated == null);
+            Assert.IsFalse(UnityEditor.AssetDatabase.IsValidFolder(FakeContext.Last.AssetPath));
+            Assert.AreSame(original, source.GetComponent<SkinnedMeshRenderer>().sharedMesh);
+            Assert.IsTrue(original != null);
         }
 
         [Test]
@@ -100,6 +123,9 @@ namespace VRVlog.LilToonExporter.Tests
             }))
             {
                 Assert.AreEqual(1, callbacks);
+                Assert.AreEqual(2, FakeProcessor.Calls);
+                Assert.AreSame(FakePhase.Optimizing, FakeProcessor.Ranges[1][0]);
+                Assert.AreSame(FakePhase.Optimizing, FakeProcessor.Ranges[1][1]);
                 Assert.AreEqual(1, context.FinishCount);
             }
         }
@@ -135,7 +161,7 @@ namespace VRVlog.LilToonExporter.Tests
         {
             FakeProcessor.Action = ReplaceWithGenerated;
             FakeProcessor.OptimizationAction = root => { throw new InvalidOperationException("mesh optimization failed"); };
-            Assert.Throws<InvalidOperationException>(() => NdmfExportPreparation.ProcessClone(source, clone, Resolve()));
+            Assert.Throws<InvalidOperationException>(() => NdmfExportPreparation.ProcessClone(source, clone, Resolve(), afterTransforming: lease => { }));
             Assert.AreEqual(2, FakeProcessor.Calls);
             Assert.AreEqual(1, FakeContext.Last.FinishCount);
             Assert.IsTrue(generated == null);
@@ -453,7 +479,7 @@ namespace VRVlog.LilToonExporter.Tests
                 Assert.IsTrue(inactiveObject != null && !inactiveObject.activeInHierarchy);
             };
             using (NdmfExportPreparation.ProcessClone(source, clone, Resolve())) { }
-            Assert.AreEqual(2, FakeProcessor.Calls);
+            Assert.AreEqual(1, FakeProcessor.Calls);
             Assert.IsTrue(activeSource != null && inactiveSource != null);
             Assert.IsFalse(inactiveSource.gameObject.activeInHierarchy);
             Assert.AreSame(source.transform, inactiveSource.transform.parent);
@@ -511,7 +537,7 @@ namespace VRVlog.LilToonExporter.Tests
             NdmfExportPreparation.ValidateSource(clone);
             FakeProcessor.Action = root => Assert.IsTrue(active != null && middle != null && last != null);
             using (NdmfExportPreparation.ProcessClone(source, clone, Resolve())) { }
-            Assert.AreEqual(2, FakeProcessor.Calls);
+            Assert.AreEqual(1, FakeProcessor.Calls);
             Assert.IsTrue(middle != null && last != null);
         }
 
