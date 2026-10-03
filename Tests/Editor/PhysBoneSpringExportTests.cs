@@ -398,7 +398,7 @@ namespace VRVlog.LilToonExporter.Tests
                 var bytes = UniVrmOneClickExporter.Export(fixture.Source, "Spring test", "Tests", warnings,
                     exporterVersion: full ? "test" : null, lilToonVersion: full ? "2.3.4" : null,
                     blinkOptions: new BlinkExportOptions { Mode = BlinkExportMode.None });
-                var solver = new Vrm10FastSpringboneRuntimeStandalone();
+                using var solver = new Vrm10FastSpringboneRuntimeStandalone();
                 imported = await Vrm10.LoadBytesAsync(bytes, canLoadVrm0X: false, awaitCaller: new ImmediateCaller(), springboneRuntime: solver);
                 Assert.That(imported.SpringBone.Springs.Count, Is.EqualTo(1));
                 Assert.That(imported.GetComponentsInChildren<VRM10SpringBoneCollider>().Length, Is.EqualTo(avatarOptimizer ? 1 : 3),
