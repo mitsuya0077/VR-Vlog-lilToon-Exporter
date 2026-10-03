@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Globalization;
 using System.Linq;
 using UnityEditor;
 using UnityEditor.Animations;
@@ -25,7 +26,15 @@ namespace VRVlog.LilToonExporter
                     if (entry.Error != null) continue;
                     if (EditorUtility.DisplayCancelableProgressBar("VRChatの表情を読み込み中", entry.Name, (float)index / source.Entries.Count))
                         throw new OperationCanceledException();
-                    try { entry.Values.AddRange(Sample(avatar, source.Controller, source.Defaults, entry.Parameters, excludedPath, source, entry.Unevaluated)); }
+                    try
+                    {
+                        var context = FixedExpressionContext.Create(source.Controller, source.Defaults, source);
+                        entry.Values.AddRange(SampleFixed(avatar, source.Controller, source.Defaults, entry.Parameters, excludedPath, source, entry.Unevaluated, context));
+                        if (context.UsedParameters.Count > 0)
+                            entry.Messages.Add("外部入力は通常状態・設定済み初期値で固定表情として保存しました（自動切り替えは再現しません）: " +
+                                string.Join(", ", context.UsedParameters.OrderBy(name => name, StringComparer.Ordinal).Select(name => name + "=" +
+                                    (entry.Parameters.TryGetValue(name, out var selectedValue) ? selectedValue : context.Values[name]).ToString("G9", CultureInfo.InvariantCulture))));
+                    }
                     catch (InvalidOperationException error) { entry.Error = error.Message; }
                 }
                 VrChatGestureExpressions.Add(avatar, source, excludedPath);
@@ -35,20 +44,34 @@ namespace VRVlog.LilToonExporter
             return source;
         }
 
+        // The user-facing export captures one explicit environment. Runtime
+        // VRChat inputs are not required to replay the resulting VRM morphs.
+        internal static List<MorphValue> SampleFixed(GameObject avatar, RuntimeAnimatorController runtime,
+            IDictionary<string, float> defaults, IDictionary<string, float> selected, Func<string, bool> excludedPath = null,
+            VrChatExpressionMenu.Source metadata = null, IList<MorphValue> unevaluated = null, FixedExpressionContext fixedContext = null)
+            => Sample(avatar, runtime, defaults, selected, excludedPath, metadata, unevaluated,
+                fixedContext ?? FixedExpressionContext.Create(runtime, defaults, metadata));
+
         // Stable, discrete, morph-based FX expressions, including deterministic
         // parameter drivers. Each menu is evaluated from its own fresh defaults.
         internal static List<MorphValue> Sample(GameObject avatar, RuntimeAnimatorController runtime,
             IDictionary<string, float> defaults, IDictionary<string, float> selected, Func<string, bool> excludedPath = null,
-            VrChatExpressionMenu.Source metadata = null, IList<MorphValue> unevaluated = null)
+            VrChatExpressionMenu.Source metadata = null, IList<MorphValue> unevaluated = null, FixedExpressionContext fixedContext = null)
         {
+            if (fixedContext != null)
+            {
+                var resolved = new Dictionary<string, float>(defaults, StringComparer.Ordinal);
+                foreach (var input in fixedContext.Values) resolved[input.Key] = input.Value;
+                defaults = resolved;
+            }
             var originalController = ExpressionDependencies.Controller(runtime);
-            var dependencies = ExpressionDependencies.Analyze(runtime, selected.Keys, excludedPath, metadata, defaults, selected);
+            var dependencies = ExpressionDependencies.Analyze(runtime, selected.Keys, excludedPath, metadata, defaults, selected, fixedContext);
             dependencies.Layers.ExceptWith(FindExcludedLayers(originalController, runtime, excludedPath, dependencies.Parameters));
             var affected = dependencies.Layers.OrderBy(i => i).ToArray();
             if (affected.Length == 0) throw new InvalidOperationException("このメニューに対応するFXの表情がありません。");
             var excludedLayers = new HashSet<int>(Enumerable.Range(0, originalController.layers.Length).Except(affected));
             using var evaluation = new ExpressionEvaluationSession(runtime, dependencies, metadata?.ExpressionParameters,
-                !defaults.TryGetValue("IsLocal", out var local) || local != 0);
+                !defaults.TryGetValue("IsLocal", out var local) || local != 0, fixedContext);
             var controller = evaluation.Controller;
             unevaluated = unevaluated ?? new List<MorphValue>();
 
@@ -103,6 +126,8 @@ namespace VRVlog.LilToonExporter
                         throw new InvalidOperationException("表情のアニメーションが静止しません。固定表情のみ取り込めます。");
                 }
                 if (values.Count == 0 && unevaluated.Count == 0) throw new InvalidOperationException("有効な顔のBlendShapeアニメーションがありません。");
+                if (fixedContext != null)
+                    fixedContext.UsedParameters.UnionWith(dependencies.Parameters.Where(fixedContext.Values.ContainsKey));
                 return values;
             }
             finally

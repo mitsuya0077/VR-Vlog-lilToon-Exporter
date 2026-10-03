@@ -45,8 +45,9 @@ namespace VRVlog.LilToonExporter
         }
 
         internal static ExpressionDependencies Analyze(RuntimeAnimatorController runtime, IEnumerable<string> selected,
-            Func<string, bool> excludedPath, VrChatExpressionMenu.Source source = null, IDictionary<string, float> defaults = null, IDictionary<string, float> selection = null)
-            => AnalyzeCore(runtime, selected, excludedPath, source, defaults, selection, null);
+            Func<string, bool> excludedPath, VrChatExpressionMenu.Source source = null, IDictionary<string, float> defaults = null, IDictionary<string, float> selection = null,
+            FixedExpressionContext fixedContext = null)
+            => AnalyzeCore(runtime, selected, excludedPath, source, defaults, selection, null, fixedContext: fixedContext);
 
         internal static IEnumerable<HashSet<EditorCurveBinding>> NeutralRoots(RuntimeAnimatorController runtime, Func<string, bool> excludedPath,
             VrChatExpressionMenu.Source source, ISet<EditorCurveBinding> automatic = null)
@@ -70,7 +71,8 @@ namespace VRVlog.LilToonExporter
 
         private static ExpressionDependencies AnalyzeCore(RuntimeAnimatorController runtime, IEnumerable<string> selected,
             Func<string, bool> excludedPath, VrChatExpressionMenu.Source source, IDictionary<string, float> defaults,
-            IDictionary<string, float> selection, ISet<EditorCurveBinding> neutralMorphs, ISet<EditorCurveBinding> automatic = null)
+            IDictionary<string, float> selection, ISet<EditorCurveBinding> neutralMorphs, ISet<EditorCurveBinding> automatic = null,
+            FixedExpressionContext fixedContext = null)
         {
             var result = new ExpressionDependencies();
             var controller = Controller(runtime);
@@ -106,8 +108,10 @@ namespace VRVlog.LilToonExporter
                 if (defaults != null && selection != null)
                     foreach (var parameter in controller.parameters)
                     {
-                        if (writers.Contains(parameter.name) || VrChatParameterDriver.BuiltIn.Contains(parameter.name) ||
-                            source?.ExternalParameters.Contains(parameter.name) == true || parameter.type == AnimatorControllerParameterType.Trigger) continue;
+                        var suppliedInput = fixedContext?.Values.ContainsKey(parameter.name) == true;
+                        if (writers.Contains(parameter.name) || parameter.type == AnimatorControllerParameterType.Trigger ||
+                            !suppliedInput && (VrChatParameterDriver.BuiltIn.Contains(parameter.name) ||
+                            source?.ExternalParameters.Contains(parameter.name) == true)) continue;
                         var initial = parameter.type == AnimatorControllerParameterType.Bool ? (parameter.defaultBool ? 1f : 0f) :
                             parameter.type == AnimatorControllerParameterType.Int ? parameter.defaultInt : parameter.defaultFloat;
                         if (defaults.TryGetValue(parameter.name, out var supplied)) initial = supplied;
@@ -121,7 +125,10 @@ namespace VRVlog.LilToonExporter
                     if (info[index].FxControl)
                     {
                         HashSet<StateMachineBehaviour> reachedCommands = null;
-                        if (controller.layers[index].syncedLayerIndex < 0 &&
+                        if (fixedContext != null && controller.layers[index].syncedLayerIndex < 0 &&
+                            FixedExpressionContext.TryReachableFxCommands(controller.layers[index].stateMachine, fixedValues, controller.parameters, out var fixedReached))
+                            reachedCommands = fixedReached;
+                        else if (controller.layers[index].syncedLayerIndex < 0 &&
                             TryFixedGateReads(controller.layers[index].stateMachine, controller.parameters, fixedValues, out var reads, out var reached))
                         {
                             info[index].Reads.IntersectWith(reads);
@@ -166,8 +173,10 @@ namespace VRVlog.LilToonExporter
             if (result.Layers.Any(i => controller.layers[i].syncedLayerIndex >= 0))
                 throw new InvalidOperationException("このメニューに影響する同期Animatorレイヤーの表情変換は未対応です。");
             var external = gateExternal.Concat(source?.ExternalParameters ?? Enumerable.Empty<string>())
+                .Concat(fixedContext != null ? VrChatParameterDriver.BuiltIn : Enumerable.Empty<string>())
                 .Concat(neutralMorphs == null ? Enumerable.Empty<string>() : VrChatParameterDriver.BuiltIn.Where(name => !result.NeutralFixedValues.ContainsKey(name)))
-                .Where(result.Parameters.Contains).Distinct().OrderBy(n => n, StringComparer.Ordinal).ToArray();
+                .Where(name => result.Parameters.Contains(name) && fixedContext?.Values.ContainsKey(name) != true)
+                .Distinct().OrderBy(n => n, StringComparer.Ordinal).ToArray();
             if (external.Length > 0)
             {
                 var message = "外部入力に依存する表情の値を確定できません: " + string.Join(", ", external);
