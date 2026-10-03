@@ -243,6 +243,7 @@ namespace VRVlog.LilToonExporter
             var equivalentStates = new HashSet<int>(affected.Concat(dependencies.NativeSupportLayers)
                 .Where(layer => HasEquivalentConstantStates(controller, layer)));
             unevaluated = unevaluated ?? new List<MorphValue>();
+            ValidateNativeSupportMotions(controller, dependencies.NativeSupportLayers, excludedPath);
 
             var scene = EditorSceneManager.NewPreviewScene();
             GameObject clone = null;
@@ -380,6 +381,44 @@ namespace VRVlog.LilToonExporter
         private static void Advance(PlayableGraph graph, int frames, Action afterFrame = null)
         {
             for (var i = 0; i < frames; i++) { graph.Evaluate(1f / 60f); afterFrame?.Invoke(); }
+        }
+
+        // Native evaluation can enter and leave zero-duration states before
+        // clip-info history observes them. Validate all support motions before
+        // evaluation; unrelated morph curves may vary, but callbacks and object
+        // or non-morph changes cannot safely supply a native base pose.
+        private static void ValidateNativeSupportMotions(AnimatorController controller, IEnumerable<int> supportLayers,
+            Func<string, bool> excludedPath)
+        {
+            var machines = new HashSet<AnimatorStateMachine>();
+            var motions = new HashSet<Motion>();
+            void Motion(Motion motion)
+            {
+                if (motion == null || !motions.Add(motion)) return;
+                if (motion is BlendTree tree)
+                {
+                    foreach (var child in tree.children) Motion(child.motion);
+                    return;
+                }
+                if (!(motion is AnimationClip clip)) throw new InvalidOperationException("未対応のAnimator Motionです。");
+                if (AnimationUtility.GetAnimationEvents(clip).Length != 0)
+                    throw new InvalidOperationException("常時適用FXと表情の影響範囲を確定できません。");
+                if (AnimationUtility.GetObjectReferenceCurveBindings(clip).Any(binding => excludedPath?.Invoke(binding.path) != true))
+                    throw new InvalidOperationException("表情への遷移にマテリアル・オブジェクトの差し替えが含まれます。");
+                foreach (var binding in AnimationUtility.GetCurveBindings(clip))
+                {
+                    if (binding.type == typeof(Animator) || excludedPath?.Invoke(binding.path) == true) continue;
+                    if (binding.type != typeof(SkinnedMeshRenderer) || !binding.propertyName.StartsWith("blendShape.", StringComparison.Ordinal))
+                        throw new InvalidOperationException("表情への遷移にBlendShape以外の変化が含まれます: " + binding.propertyName);
+                }
+            }
+            void Machine(AnimatorStateMachine machine)
+            {
+                if (machine == null || !machines.Add(machine)) return;
+                foreach (var child in machine.states) Motion(child.state.motion);
+                foreach (var child in machine.stateMachines) Machine(child.stateMachine);
+            }
+            foreach (var layer in supportLayers) Machine(controller.layers[layer].stateMachine);
         }
 
         private static void RememberBindings(AnimatorControllerPlayable playable, int[] layers, HashSet<EditorCurveBinding> history, HashSet<AnimationClip> visited, Func<string, bool> excludedPath,

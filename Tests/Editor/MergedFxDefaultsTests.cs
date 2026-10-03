@@ -608,6 +608,121 @@ namespace VRVlog.LilToonExporter.Tests
             Assert.That(Enumerable.Range(0, mesh.blendShapeCount).Select(skin.GetBlendShapeWeight), Is.All.Zero);
         }
 
+        // Replay the untouched graph independently. This also proves a
+        // skipped unsafe motion is absent from the final native clip-info set.
+        (int StateHash, bool InTransition, string[] Clips, string[] ObservedClips) NativeBaseStateAfterFourSeconds()
+        {
+            var copy = Object.Instantiate(avatar);
+            var graph = PlayableGraph.Create("Skipped base state reference"); graph.SetTimeUpdateMode(DirectorUpdateMode.Manual);
+            try
+            {
+                foreach (var behaviour in copy.GetComponentsInChildren<Behaviour>(true)) behaviour.enabled = false;
+                var animator = copy.GetComponent<Animator>(); animator.enabled = true;
+                animator.runtimeAnimatorController = null; animator.applyRootMotion = false; animator.fireEvents = false;
+                animator.cullingMode = AnimatorCullingMode.AlwaysAnimate;
+                var playable = AnimatorControllerPlayable.Create(graph, controller);
+                for (var index = 0; index < controller.layers.Length; index++) playable.SetLayerWeight(index, index == 0 ? 1 : controller.layers[index].defaultWeight);
+                var output = AnimationPlayableOutput.Create(graph, "Face", animator); output.SetSourcePlayable(playable);
+                var observed = new HashSet<string>();
+                playable.SetInteger("Menu", 0); graph.Play();
+                for (var frame = 0; frame < 240; frame++)
+                {
+                    graph.Evaluate(1f / 60f);
+                    foreach (var info in playable.GetCurrentAnimatorClipInfo(0).Concat(playable.GetNextAnimatorClipInfo(0)))
+                        if (info.clip != null && info.weight > .00001f) observed.Add(info.clip.name);
+                }
+                return (playable.GetCurrentAnimatorStateInfo(0).shortNameHash, playable.IsInTransition(0),
+                    playable.GetCurrentAnimatorClipInfo(0).Where(info => info.weight > .00001f).Select(info => info.clip.name).ToArray(), observed.ToArray());
+            }
+            finally { if (graph.IsValid()) graph.Destroy(); Object.DestroyImmediate(copy); }
+        }
+
+        [TestCase(false, false, false)]
+        [TestCase(false, false, true)]
+        [TestCase(false, true, false)]
+        [TestCase(false, true, true)]
+        [TestCase(true, false, false)]
+        [TestCase(true, false, true)]
+        [TestCase(true, true, false)]
+        [TestCase(true, true, true)]
+        public void NativeSupportBaseRejectsUnsafeZeroDurationInitialOrIntermediateMotion(bool writeDefaults, bool animationEvent, bool intermediate)
+        {
+            var unsafeClip = Clip("Skipped unsupported base", ("Face size", 90));
+            AnimationUtility.SetEditorCurve(unsafeClip, EditorCurveBinding.FloatCurve("Face", typeof(SkinnedMeshRenderer), "blendShape.Blink"),
+                AnimationCurve.Linear(0, 0, 30, 100));
+            if (animationEvent) AnimationUtility.SetAnimationEvents(unsafeClip, new[] { new AnimationEvent { time = 30, functionName = "UnsupportedFutureCallback" } });
+            else AnimationUtility.SetObjectReferenceCurve(unsafeClip, EditorCurveBinding.PPtrCurve("Face", typeof(SkinnedMeshRenderer), "m_Mesh"),
+                new[] { new ObjectReferenceKeyframe { time = 0, value = mesh } });
+            var safeClip = Clip("Final supported base", ("Face size", 90));
+            AnimationUtility.SetEditorCurve(safeClip, EditorCurveBinding.FloatCurve("Face", typeof(SkinnedMeshRenderer), "blendShape.Blink"),
+                AnimationCurve.Linear(0, 0, 30, 100));
+            var machine = controller.layers[0].stateMachine;
+            var unsafeState = State(machine, "Skipped unsupported", unsafeClip);
+            var steady = State(machine, "Steady supported", safeClip);
+            machine.defaultState = unsafeState;
+            void Immediately(AnimatorState source, AnimatorState target)
+            {
+                var transition = source.AddTransition(target); transition.hasExitTime = false; transition.hasFixedDuration = true; transition.duration = 0;
+                transition.AddCondition(AnimatorConditionMode.Equals, 0, "Menu");
+            }
+            if (intermediate)
+            {
+                var initial = State(machine, "Safe initial", safeClip); machine.defaultState = initial;
+                Immediately(initial, unsafeState);
+            }
+            Immediately(unsafeState, steady);
+            Permanent(AddLayer("Fractional pupil"), writeDefaults);
+            var layers = controller.layers; layers[1].defaultWeight = .5f; controller.layers = layers;
+            var before = EditorJsonUtility.ToJson(controller);
+            var reference = NativeBaseStateAfterFourSeconds();
+            Assert.That(reference.StateHash, Is.EqualTo(Animator.StringToHash(steady.name)));
+            Assert.That(reference.InTransition, Is.False);
+            Assert.That(reference.Clips, Is.EqualTo(new[] { safeClip.name }), "The unsupported state must have disappeared before final native clip inspection.");
+            TestContext.Out.WriteLine("Native post-Evaluate clip history observed unsupported motion: " + reference.ObservedClips.Contains(unsafeClip.name));
+            if (!intermediate) Assert.That(reference.ObservedClips, Does.Not.Contain(unsafeClip.name),
+                "The initial zero-duration witness must bypass post-Evaluate native clip history.");
+            var error = Assert.Throws<InvalidOperationException>(() => VrChatExpressionSampler.SampleDefaults(avatar, controller, Parameters(0)));
+            Assert.That(error.Message, Is.EqualTo(animationEvent ? "常時適用FXと表情の影響範囲を確定できません。" : "表情への遷移にマテリアル・オブジェクトの差し替えが含まれます。"));
+            Assert.That(EditorJsonUtility.ToJson(controller), Is.EqualTo(before));
+            var skin = avatar.GetComponentInChildren<SkinnedMeshRenderer>();
+            Assert.That(skin.sharedMesh, Is.SameAs(mesh));
+            Assert.That(Enumerable.Range(0, mesh.blendShapeCount).Select(skin.GetBlendShapeWeight), Is.All.Zero);
+        }
+
+        [TestCase(false)]
+        [TestCase(true)]
+        public void NativeSupportBaseValidatesNestedAndBlendTreeMotionsConservatively(bool nestedMachine)
+        {
+            var safeClip = Clip("Current supported base", ("Face size", 90));
+            AnimationUtility.SetEditorCurve(safeClip, EditorCurveBinding.FloatCurve("Face", typeof(SkinnedMeshRenderer), "blendShape.Blink"),
+                AnimationCurve.Linear(0, 0, 30, 100));
+            var unsafeClip = Clip("Unobserved unsupported base", ("Face size", 90));
+            AnimationUtility.SetAnimationEvents(unsafeClip, new[] { new AnimationEvent { time = 30, functionName = "UnsupportedFutureCallback" } });
+            var machine = controller.layers[0].stateMachine; var current = State(machine, "Current supported", safeClip); machine.defaultState = current;
+            if (nestedMachine)
+            {
+                var nested = machine.AddStateMachine("Nested unsupported"); nested.defaultState = State(nested, "Unsafe nested", unsafeClip);
+            }
+            else
+            {
+                controller.AddParameter("BaseTree", AnimatorControllerParameterType.Float);
+                var tree = new BlendTree { name = "Support tree", blendType = BlendTreeType.Simple1D, blendParameter = "BaseTree", useAutomaticThresholds = false };
+                AssetDatabase.AddObjectToAsset(tree, controller);
+                tree.children = new[] { new ChildMotion { motion = safeClip, threshold = 0, timeScale = 1 }, new ChildMotion { motion = unsafeClip, threshold = 1, timeScale = 1 } };
+                current.motion = tree;
+            }
+            Permanent(AddLayer("Fractional pupil"));
+            var layers = controller.layers; layers[1].defaultWeight = .5f; controller.layers = layers;
+            var before = EditorJsonUtility.ToJson(controller);
+            var reference = NativeBaseStateAfterFourSeconds();
+            Assert.That(reference.StateHash, Is.EqualTo(Animator.StringToHash(current.name)));
+            Assert.That(reference.Clips, Is.EqualTo(new[] { safeClip.name }));
+            var error = Assert.Throws<InvalidOperationException>(() => VrChatExpressionSampler.SampleDefaults(avatar, controller, Parameters(0)));
+            Assert.That(error.Message, Is.EqualTo("常時適用FXと表情の影響範囲を確定できません。"));
+            Assert.That(EditorJsonUtility.ToJson(controller), Is.EqualTo(before));
+            Assert.That(avatar.GetComponentInChildren<SkinnedMeshRenderer>().GetBlendShapeWeight(2), Is.Zero);
+        }
+
         [TestCase(false)]
         [TestCase(true)]
         public void NeutralFractionalOverrideStillValidatesMovingRequiredBaseMorph(bool writeDefaults)
