@@ -21,6 +21,8 @@ jobs:
       - run: python3 Tools/validate.py
       - run: python3 Tools/check-public-content.py
       - run: python3 Tools/test-package.py
+      - name: Verify explicit AAO source correction safety
+        run: python3 Tools/test-aao-vertex-buffer-patch.py
       - name: Check dependency compatibility
         run: |
           python3 Tools/generate-compatibility.py
