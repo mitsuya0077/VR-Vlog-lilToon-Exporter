@@ -59,7 +59,8 @@ namespace VRVlog.LilToonExporter
             IEnumerable<EditorCurveBinding> initialMorphs = null, bool preserveNativeBasePose = false)
         {
             var result = new ExpressionDependencies();
-            if (initialMorphs != null) result.Morphs.UnionWith(initialMorphs);
+            var requiredMorphs = new HashSet<EditorCurveBinding>(initialMorphs ?? Enumerable.Empty<EditorCurveBinding>());
+            result.Morphs.UnionWith(requiredMorphs);
             var controller = Controller(runtime);
             var unknown = new List<string>();
             var info = Inspect(runtime, excludedPath, result.Drivers, unknown, true);
@@ -116,25 +117,27 @@ namespace VRVlog.LilToonExporter
             }
             var changed = new HashSet<string>(selected, StringComparer.Ordinal);
             var read = new HashSet<string>(StringComparer.Ordinal);
+            // Classify native base support before Write Defaults closure can
+            // promote it into the evaluation graph. An unrelated base motion
+            // stays outside capture even when its native defaults matter.
+            var needsNativeBasePose = preserveNativeBasePose && info.Length > 0 && info[0].HasBindings &&
+                Enumerable.Range(1, Math.Max(0, info.Length - 1)).Any(index =>
+                    controller.layers[index].blendingMode == AnimatorLayerBlendingMode.Override &&
+                    controller.layers[index].defaultWeight > 0 && controller.layers[index].defaultWeight < 1 &&
+                    info[index].Morphs.Overlaps(requiredMorphs));
+            if (needsNativeBasePose)
+            {
+                gateExternal.UnionWith(info[0].Reads.Where(VrChatParameterDriver.BuiltIn.Contains));
+                if (!info[0].Morphs.Overlaps(requiredMorphs))
+                {
+                    result.NativeSupportLayers.Add(0);
+                    read.UnionWith(info[0].Reads);
+                }
+            }
             bool modified;
             do
             {
                 modified = false;
-                // Preserve native base-pose activity for fractional neutral
-                // overrides. Its state parameters still need the same writer
-                // closure and external-input checks as any other dependency.
-                if (preserveNativeBasePose && info.Length > 0 && info[0].HasBindings &&
-                    result.Layers.Any(index => index > 0 && controller.layers[index].blendingMode == AnimatorLayerBlendingMode.Override &&
-                        controller.layers[index].defaultWeight > 0 && controller.layers[index].defaultWeight < 1 &&
-                        info[index].Morphs.Overlaps(result.Morphs)))
-                {
-                    gateExternal.UnionWith(info[0].Reads.Where(VrChatParameterDriver.BuiltIn.Contains));
-                    if (!result.Layers.Contains(0))
-                    {
-                        modified |= result.NativeSupportLayers.Add(0);
-                        foreach (var name in info[0].Reads) modified |= read.Add(name);
-                    }
-                }
                 for (var i = 0; i < info.Length; i++)
                 {
                     var layer = info[i];
@@ -144,12 +147,13 @@ namespace VRVlog.LilToonExporter
                     if (!result.Layers.Contains(i) && !layer.FxControl && !drivenBySelection && !layer.Writes.Overlaps(read) &&
                         !layer.Morphs.Overlaps(result.Morphs) && !defaultsMayReset && !implicitWriter) continue;
                     modified |= result.Layers.Add(i);
-                    result.NativeSupportLayers.Remove(i);
+                    if (drivenBySelection || layer.Morphs.Overlaps(requiredMorphs)) result.NativeSupportLayers.Remove(i);
                     // A layer included only to check implicit defaults is not
                     // evidence that its unrelated drivers were menu selections.
                     if (drivenBySelection) foreach (var name in layer.Writes) modified |= changed.Add(name);
                     foreach (var name in layer.Reads) modified |= read.Add(name);
-                    foreach (var morph in layer.Morphs) modified |= result.Morphs.Add(morph);
+                    if (!result.NativeSupportLayers.Contains(i))
+                        foreach (var morph in layer.Morphs) modified |= result.Morphs.Add(morph);
                 }
             } while (modified);
             if (result.Layers.Count == 0) throw new InvalidOperationException("このメニューに対応するFXの表情がありません。");

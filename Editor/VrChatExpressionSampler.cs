@@ -233,7 +233,7 @@ namespace VRVlog.LilToonExporter
             var omittedLayers = FindExcludedLayers(originalController, runtime, excludedPath, dependencies.Parameters);
             dependencies.Layers.ExceptWith(omittedLayers);
             dependencies.NativeSupportLayers.ExceptWith(omittedLayers);
-            var affected = dependencies.Layers.OrderBy(i => i).ToArray();
+            var affected = dependencies.Layers.Except(dependencies.NativeSupportLayers).OrderBy(i => i).ToArray();
             if (affected.Length == 0) throw new InvalidOperationException("このメニューに対応するFXの表情がありません。");
             var excludedLayers = new HashSet<int>(Enumerable.Range(0, originalController.layers.Length)
                 .Except(affected.Concat(dependencies.NativeSupportLayers)));
@@ -271,7 +271,16 @@ namespace VRVlog.LilToonExporter
                 graph.Play();
                 var history = new HashSet<EditorCurveBinding>();
                 var visitedClips = new HashSet<AnimationClip>();
-                Action remember = () => { evaluation.Check(); RememberBindings(playable, affected, history, visitedClips, excludedPath); };
+                var visitedSupportClips = new HashSet<AnimationClip>();
+                var supportLayers = dependencies.NativeSupportLayers.OrderBy(i => i).ToArray();
+                Action remember = () =>
+                {
+                    evaluation.Check();
+                    RememberBindings(playable, affected, history, visitedClips, excludedPath);
+                    // Support clips retain history safety checks without
+                    // making their unrelated morphs export targets.
+                    RememberBindings(playable, supportLayers, history, visitedSupportClips, excludedPath, dependencies.Morphs);
+                };
                 Advance(graph, 120, remember);
                 evaluation.CheckNeutralFx();
                 SetParameters(playable, controller, selected);
@@ -373,12 +382,15 @@ namespace VRVlog.LilToonExporter
             for (var i = 0; i < frames; i++) { graph.Evaluate(1f / 60f); afterFrame?.Invoke(); }
         }
 
-        private static void RememberBindings(AnimatorControllerPlayable playable, int[] layers, HashSet<EditorCurveBinding> history, HashSet<AnimationClip> visited, Func<string, bool> excludedPath)
+        private static void RememberBindings(AnimatorControllerPlayable playable, int[] layers, HashSet<EditorCurveBinding> history, HashSet<AnimationClip> visited, Func<string, bool> excludedPath,
+            ISet<EditorCurveBinding> capturedMorphs = null)
         {
             foreach (var layer in layers)
                 foreach (var info in playable.GetCurrentAnimatorClipInfo(layer).Concat(playable.GetNextAnimatorClipInfo(layer)))
                 {
                     if (info.clip == null || info.weight <= 0.00001f || !visited.Add(info.clip)) continue;
+                    if (capturedMorphs != null && AnimationUtility.GetAnimationEvents(info.clip).Length != 0)
+                        throw new InvalidOperationException("常時適用FXと表情の影響範囲を確定できません。");
                     if (AnimationUtility.GetObjectReferenceCurveBindings(info.clip).Any(b => excludedPath?.Invoke(b.path) != true))
                         throw new InvalidOperationException("表情への遷移にマテリアル・オブジェクトの差し替えが含まれます。");
                     foreach (var binding in AnimationUtility.GetCurveBindings(info.clip))
@@ -387,7 +399,7 @@ namespace VRVlog.LilToonExporter
                         if (excludedPath?.Invoke(binding.path) == true) continue;
                         if (binding.type != typeof(SkinnedMeshRenderer) || !binding.propertyName.StartsWith("blendShape.", StringComparison.Ordinal))
                             throw new InvalidOperationException("表情への遷移にBlendShape以外の変化が含まれます: " + binding.propertyName);
-                        history.Add(binding);
+                        if (capturedMorphs == null || capturedMorphs.Contains(binding)) history.Add(binding);
                     }
                 }
         }
