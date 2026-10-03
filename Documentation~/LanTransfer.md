@@ -8,6 +8,7 @@ VRM、認証トークン、鍵、QR内容を外部サーバーへ送信しませ
 
 ## 用意するもの
 
+- Windows PC上のUnity Editor。初版の「スマホに送る」はWindows専用で、Mac／Linuxではボタンが無効になり対応環境の説明を表示します。従来のファイル書き出しは引き続き利用できます。
 - 既存Exporterの対応環境を満たすUnityプロジェクト。Unity／lilToon／UniVRMの対応版は[通常の導入ガイド](README.md)に従い、転送のためにUnity版や既存パッケージのpinを変更しないでください。
 - 「スマホに送る」を含むExporterと、「PCから受け取る」を含むiPhone版VR Vlog。既存の配布版に両機能が含まれるか確認してください。
 - 同じLANで機器同士が通信できるPCとiPhone。PCが有線Ethernet、iPhoneが同じルーターのWi-Fiでも利用できます。

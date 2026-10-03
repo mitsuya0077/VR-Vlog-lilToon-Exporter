@@ -165,6 +165,8 @@ namespace VRVlog.LilToonExporter
 
             using (new EditorGUI.DisabledScope(!canExport || Application.platform != RuntimePlatform.WindowsEditor))
                 if (GUILayout.Button("スマホに送る", GUILayout.Height(32f))) ExportOneClick(true);
+            if (Application.platform != RuntimePlatform.WindowsEditor)
+                EditorGUILayout.HelpBox("スマホへの直接転送はWindows版Unity Editorで利用できます。", MessageType.Info);
 
             EditorGUILayout.Space(6f);
             EditorGUILayout.LabelField(canExport ? "" : ExporterLocalization.T("アバターと作者名を入力してください"), centeredHintStyle);

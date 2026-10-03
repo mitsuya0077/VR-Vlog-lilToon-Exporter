@@ -38,6 +38,8 @@ namespace VRVlog.LilToonExporter.LanTransfer
         private readonly Timer expiry;
         private readonly byte[] token;
         private readonly SessionTlsServer tlsIdentity;
+        // Supplied only by the loopback test factory to pause an accepted receipt.
+        private readonly Action beforeReceiptWrite;
         private bool activeDownload;
         private long transferred;
         private TransferState state = TransferState.Waiting;
@@ -56,12 +58,13 @@ namespace VRVlog.LilToonExporter.LanTransfer
         internal double RemainingSeconds => Math.Max(0, (lifetime - clock.Elapsed).TotalSeconds);
         internal bool Terminal => State >= TransferState.Completed;
 
-        private LanVrmTransferServer(string path, string displayName, IPAddress address, TimeSpan timeout, bool loopbackForTests, FileStream ownedSnapshot)
+        private LanVrmTransferServer(string path, string displayName, IPAddress address, TimeSpan timeout, bool loopbackForTests, FileStream ownedSnapshot, Action beforeReceiptWrite)
         {
             if (!LanTransferProtocol.IsPrivateIPv4(address) && !(loopbackForTests && IPAddress.IsLoopback(address)))
                 throw new InvalidOperationException("同じLANのプライベートIPv4アドレスを選んでください。");
             if (timeout <= TimeSpan.Zero || timeout > TimeSpan.FromHours(1)) throw new ArgumentOutOfRangeException(nameof(timeout));
             snapshotPath = path;
+            this.beforeReceiptWrite = beforeReceiptWrite;
             lifetime = timeout;
             Host = address.ToString();
             Id = LanTransferProtocol.Hex(LanTransferProtocol.RandomBytes(16));
@@ -97,10 +100,10 @@ namespace VRVlog.LilToonExporter.LanTransfer
         }
 
         internal static LanVrmTransferServer Start(string path, string displayName, IPAddress address, TimeSpan timeout, FileStream ownedSnapshot = null) =>
-            new LanVrmTransferServer(path, displayName, address, timeout, false, ownedSnapshot);
+            new LanVrmTransferServer(path, displayName, address, timeout, false, ownedSnapshot, null);
 
-        internal static LanVrmTransferServer StartLoopbackForTests(string path, string name, TimeSpan timeout, FileStream ownedSnapshot = null) =>
-            new LanVrmTransferServer(path, name, IPAddress.Loopback, timeout, true, ownedSnapshot);
+        internal static LanVrmTransferServer StartLoopbackForTests(string path, string name, TimeSpan timeout, FileStream ownedSnapshot = null, Action beforeReceiptWrite = null) =>
+            new LanVrmTransferServer(path, name, IPAddress.Loopback, timeout, true, ownedSnapshot, beforeReceiptWrite);
 
         private async Task AcceptLoop()
         {
@@ -205,7 +208,10 @@ namespace VRVlog.LilToonExporter.LanTransfer
                             Qr = null;
                             Array.Clear(token, 0, token.Length);
                         }
-                        try { Reply(stream, 200, "OK"); }
+                        // Once authenticated acceptance wins the gate, expiry cannot
+                        // replace its result. Bound the acknowledgement separately.
+                        deadline.Change(5000, Timeout.Infinite);
+                        try { beforeReceiptWrite?.Invoke(); Reply(stream, 200, "OK"); }
                         finally { Stop(terminal); }
                     }
                     else Reply(stream, 404, "Not Found");
@@ -257,6 +263,7 @@ namespace VRVlog.LilToonExporter.LanTransfer
             lock (gate)
             {
                 if (state >= TransferState.Completed) return;
+                if (state == TransferState.Completing && finalState == TransferState.Expired) return;
                 state = finalState;
                 Qr = null;
                 Array.Clear(token, 0, token.Length);

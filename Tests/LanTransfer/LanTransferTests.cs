@@ -182,6 +182,45 @@ namespace VRVlog.LilToonExporter.LanTransfer.Tests
             }
         }
 
+        [TestCase("/v1/complete", (int)TransferState.Completed)]
+        [TestCase("/v1/cancel", (int)TransferState.Canceled)]
+        public void AcceptedReceiptWinsExpiryBeforeAcknowledgement(string route, int expectedState)
+        {
+            var path = NewSnapshot(FixtureBytes());
+            using (var accepted = new ManualResetEventSlim())
+            using (var releaseAcknowledgement = new ManualResetEventSlim())
+            using (var server = LanVrmTransferServer.StartLoopbackForTests(path, "fixture.vrm", TimeSpan.FromMinutes(1),
+                beforeReceiptWrite: () =>
+                {
+                    accepted.Set();
+                    if (!releaseAcknowledgement.Wait(3000)) throw new IOException("Receipt test timed out.");
+                }))
+            {
+                try
+                {
+                    using (var connection = new Connection(server, false))
+                    {
+                        connection.Send("POST", route, Credentials(server));
+                        Assert.That(accepted.Wait(3000), Is.True, "A real authenticated request must reach acceptance.");
+                        Assert.That(server.State == TransferState.Completing, Is.True);
+                        Assert.That(server.Qr == null, Is.True, "Acceptance immediately invalidates credentials.");
+                        // Invoke the same production callback used by the expiry
+                        // timer exactly while the real TLS response is paused.
+                        server.Stop(TransferState.Expired);
+                        Assert.That(server.State == TransferState.Completing, Is.True,
+                            "Expiry cannot replace an authenticated receipt's accepted result.");
+                        releaseAcknowledgement.Set();
+                        Assert.That(connection.ReadHeader().StartsWith("HTTP/1.1 200"), Is.True,
+                            "An accepted receipt still receives its acknowledgement.");
+                    }
+                    Assert.That(SpinWait.SpinUntil(() => server.State == (TransferState)expectedState && !File.Exists(path), 3000), Is.True);
+                    Assert.That(server.Qr == null, Is.True);
+                    Assert.Throws<SocketException>(() => { using (var socket = new TcpClient()) socket.Connect("127.0.0.1", server.Port); });
+                }
+                finally { releaseAcknowledgement.Set(); }
+            }
+        }
+
         [Test]
         public void UnauthenticatedConnectionLimitAndStopClosePendingSockets()
         {
