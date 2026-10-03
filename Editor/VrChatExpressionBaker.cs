@@ -34,7 +34,7 @@ namespace VRVlog.LilToonExporter
             internal readonly List<Channel> Animation = new List<Channel>();
         }
 
-        private static bool SameCurve(ExpressionAnimationData.Curve first, ExpressionAnimationData.Curve second)
+        internal static bool SameCurve(ExpressionAnimationData.Curve first, ExpressionAnimationData.Curve second)
         {
             if (ReferenceEquals(first, second)) return true;
             if (first == null || second == null || first.PreWrap != second.PreWrap || first.PostWrap != second.PostWrap ||
@@ -48,7 +48,7 @@ namespace VRVlog.LilToonExporter
             return true;
         }
 
-        private static bool ConstantAt(ExpressionAnimationData.Curve curve, float weight)
+        internal static bool ConstantAt(ExpressionAnimationData.Curve curve, float weight)
         {
             if (curve == null) return true;
             curve.Range(out var minimum, out var maximum);

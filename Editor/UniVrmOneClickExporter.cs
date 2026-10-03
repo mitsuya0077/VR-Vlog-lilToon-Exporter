@@ -131,7 +131,7 @@ namespace VRVlog.LilToonExporter
                     suppressHdrTextureEmission: suppressHdrTextureEmission);
                 var neutral = NeutralShapeSnapshot.Capture(clone);
                 using var authoredEndpoints = AuthoredExpressionEndpoints.Capture(clone, neutral, trackingProfile);
-                FaceEmoExpressions.ApplyPreparedDefaultFace(clone, menu, expressionBindings.AuthoringPath, expressionBindings.ExcludesPreparedPath);
+                FaceEmoExpressions.ApplyPreparedDefaultFace(clone, menu, expressionBindings, expressionBindings.ExcludesPreparedPath);
                 expressionBindings.Capture(menu);
                 blink.Bake(clone, temporaryMeshes);
                 AvatarBaseShape.Preserve(clone, clone, temporaryMeshes, warnings);

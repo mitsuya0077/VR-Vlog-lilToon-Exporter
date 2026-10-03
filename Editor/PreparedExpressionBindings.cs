@@ -85,16 +85,23 @@ namespace VRVlog.LilToonExporter
 
         internal string AuthoringPath(string preparedPath)
         {
+            var paths = AuthoringPaths(preparedPath);
+            return paths.Length == 1 ? paths[0] : null;
+        }
+
+        internal string[] AuthoringPaths(string preparedPath)
+        {
             SkinnedMeshRenderer resolved;
             try { resolved = VrChatExpressionSampler.FindRenderer(root, preparedPath ?? ""); }
-            catch (InvalidOperationException) { return null; }
+            catch (InvalidOperationException) { return Array.Empty<string>(); }
             var matches = originalRenderers.Where(pair => pair.Value.Binding.Renderer == resolved && pair.Value.Binding.Renderer.enabled &&
                 pair.Value.Binding.Renderer.gameObject.activeInHierarchy && pair.Value.Binding.Renderer.sharedMesh != null &&
                 (pair.Value.Binding.Renderer.transform == root.transform || pair.Value.Binding.Renderer.transform.IsChildOf(root.transform)) &&
                 string.Equals(AnimationUtility.CalculateTransformPath(pair.Value.Binding.Renderer.transform, root.transform), preparedPath ?? "", StringComparison.Ordinal))
                 .Select(pair => pair.Value).ToArray();
-            if (matches.Length != 1 || originalRenderers.Values.Count(value => value.Path == matches[0].Path) != 1) return null;
-            return matches[0].Path;
+            if (matches.Length == 0 || matches.Any(match => originalRenderers.Values.Count(value => value.Path == match.Path) != 1))
+                return Array.Empty<string>();
+            return matches.Select(match => match.Path).OrderBy(path => path, StringComparer.Ordinal).ToArray();
         }
 
         internal bool ExcludesPreparedPath(string preparedPath)
