@@ -398,33 +398,46 @@ namespace VRVlog.LilToonExporter.Tests
                 var bytes = UniVrmOneClickExporter.Export(fixture.Source, "Spring test", "Tests", warnings,
                     exporterVersion: full ? "test" : null, lilToonVersion: full ? "2.3.4" : null,
                     blinkOptions: new BlinkExportOptions { Mode = BlinkExportMode.None });
-                using var solver = new Vrm10FastSpringboneRuntimeStandalone();
-                imported = await Vrm10.LoadBytesAsync(bytes, canLoadVrm0X: false, awaitCaller: new ImmediateCaller(), springboneRuntime: solver);
-                Assert.That(imported.SpringBone.Springs.Count, Is.EqualTo(1));
-                Assert.That(imported.GetComponentsInChildren<VRM10SpringBoneCollider>().Length, Is.EqualTo(avatarOptimizer ? 1 : 3),
-                    avatarOptimizer ? "AAO must actually merge the two referenced equivalent colliders before VRM conversion." :
-                    "Both authored unreferenced colliders and the converted collider must survive export.");
-                imported.UpdateType = Vrm10Instance.UpdateTypes.None;
-                Assert.That(solver.ReconstructSpringBone(), Is.True);
-                for (var i = 0; i < 30; i++) solver.Process(1f / 60);
-                var joint = imported.SpringBone.Springs.Single().Joints[0].transform;
-                Assert.That(joint.GetComponent<VRM10SpringBoneJoint>().m_pitch, Is.EqualTo(60 * Mathf.Deg2Rad).Within(.001));
-                var rest = joint.localRotation;
-                Assert.That(imported.TryGetBoneTransform(HumanBodyBones.Head, out var importedHead), Is.True);
-                importedHead.localRotation *= Quaternion.Euler(0, 0, 25);
-                solver.Process(1f / 60);
-                Assert.That(Quaternion.Angle(rest, joint.localRotation), Is.GreaterThan(1), "A serialized count alone does not prove secondary motion.");
-                for (var i = 0; i < 240; i++) solver.Process(1f / 60);
-                Assert.That(Quaternion.Angle(rest, joint.localRotation), Is.LessThan(1), "Hair must settle after the parent stops.");
+                var motionSolver = new Vrm10FastSpringboneRuntimeStandalone();
+                using (motionSolver)
+                {
+                    imported = await Vrm10.LoadBytesAsync(bytes, canLoadVrm0X: false, awaitCaller: new ImmediateCaller(), springboneRuntime: motionSolver);
+                    Assert.That(imported.SpringBone.Springs.Count, Is.EqualTo(1));
+                    Assert.That(imported.GetComponentsInChildren<VRM10SpringBoneCollider>().Length, Is.EqualTo(avatarOptimizer ? 1 : 3),
+                        avatarOptimizer ? "AAO must actually merge the two referenced equivalent colliders before VRM conversion." :
+                        "Both authored unreferenced colliders and the converted collider must survive export.");
+                    imported.UpdateType = Vrm10Instance.UpdateTypes.None;
+                    Assert.That(motionSolver.ReconstructSpringBone(), Is.True);
+                    for (var i = 0; i < 30; i++) motionSolver.Process(1f / 60);
+                    var joint = imported.SpringBone.Springs.Single().Joints[0].transform;
+                    Assert.That(joint.GetComponent<VRM10SpringBoneJoint>().m_pitch, Is.EqualTo(60 * Mathf.Deg2Rad).Within(.001));
+                    var rest = joint.localRotation;
+                    Assert.That(imported.TryGetBoneTransform(HumanBodyBones.Head, out var importedHead), Is.True);
+                    importedHead.localRotation *= Quaternion.Euler(0, 0, 25);
+                    motionSolver.Process(1f / 60);
+                    Assert.That(Quaternion.Angle(rest, joint.localRotation), Is.GreaterThan(1), "A serialized count alone does not prove secondary motion.");
+                    for (var i = 0; i < 240; i++) motionSolver.Process(1f / 60);
+                    Assert.That(Quaternion.Angle(rest, joint.localRotation), Is.LessThan(1), "Hair must settle after the parent stops.");
+                }
+                Assert.That(motionSolver.m_bufferCombiner.Combined, Is.Null, "The motion solver must release its combined native buffers.");
                 var importedCollider = imported.SpringBone.Springs.Single().ColliderGroups.Single().Colliders.Single();
                 Assert.That(importedCollider.Radius, Is.EqualTo(.025f).Within(.00001),
                     "Omitted scene-root components must not shift the group's collider index.");
                 var tip = imported.SpringBone.Springs.Single().Joints.Last().transform;
                 importedCollider.Offset = importedCollider.transform.InverseTransformPoint(tip.position + Vector3.right * .01f);
-                Assert.That(solver.ReconstructSpringBone(), Is.True);
-                for (var i = 0; i < 60; i++) solver.Process(1f / 60);
-                Assert.That(Vector3.Distance(tip.position, importedCollider.transform.TransformPoint(importedCollider.Offset)),
-                    Is.GreaterThan(.024f), "Imported sphere must push the hair endpoint outside its radius.");
+                // The pinned UniVRM rebuild backs up the previous buffer after
+                // disposing it. Give the changed collider a cold, owned solver
+                // so no removed model can acquire orphaned backup allocations.
+                var collisionSolver = new Vrm10FastSpringboneRuntimeStandalone();
+                using (collisionSolver)
+                {
+                    await collisionSolver.InitializeAsync(imported, new ImmediateCaller());
+                    Assert.That(collisionSolver.ReconstructSpringBone(), Is.True);
+                    for (var i = 0; i < 60; i++) collisionSolver.Process(1f / 60);
+                    Assert.That(Vector3.Distance(tip.position, importedCollider.transform.TransformPoint(importedCollider.Offset)),
+                        Is.GreaterThan(.024f), "Imported sphere must push the hair endpoint outside its radius.");
+                }
+                Assert.That(collisionSolver.m_bufferCombiner.Combined, Is.Null, "The collision solver must release its combined native buffers.");
                 Assert.That(fixture.Source.GetComponentsInChildren<Transform>().Select(t => t.localPosition), Is.EqualTo(positions));
                 Assert.That(hair.parent.parent, Is.EqualTo(originalParent));
                 Assert.That(sourceSkins.All(skin => skin.sharedMesh == fixture.Mesh), Is.True);

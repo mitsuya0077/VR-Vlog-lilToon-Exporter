@@ -2,10 +2,12 @@ using System;
 using System.Collections.Generic;
 using System.Linq;
 using System.Reflection;
+using System.Text.RegularExpressions;
 using NUnit.Framework;
 using UniGLTF.Extensions.VRMC_vrm;
 using UniVRM10;
 using UnityEngine;
+using UnityEngine.TestTools;
 using Object = UnityEngine.Object;
 
 namespace VRVlog.LilToonExporter.Tests
@@ -38,6 +40,34 @@ namespace VRVlog.LilToonExporter.Tests
             mesh.AddBlendShapeFrame(shape, 100, Enumerable.Repeat(zero ? Vector3.zero : Vector3.forward * .1f, 3).ToArray(), null, null);
             skin.sharedMesh = mesh;
             return skin;
+        }
+
+        static object RegisteredAssetIdentity(object registry, Object asset)
+        {
+            var registryInterface = registry.GetType().GetInterface("nadena.dev.ndmf.IObjectRegistry");
+            var getReference = registryInterface?.GetMethod("GetReference", new[] { typeof(Object), typeof(bool) });
+            Assert.That(getReference, Is.Not.Null);
+            return getReference.Invoke(registry, new object[] { asset, true }) ?? asset;
+        }
+
+        static float PinnedDuplicatePlayback(GameObject root, VRM10Expression clip, string path, float input)
+        {
+            // Execute the installed UniVRM merger on an independent native
+            // renderer; it keeps the first declaration rather than summing them.
+            var mergerType = typeof(Vrm10Instance).Assembly.GetType("UniVRM10.MorphTargetBindingMerger");
+            Assert.That(mergerType, Is.Not.Null);
+            var copy = Object.Instantiate(root);
+            try
+            {
+                var key = new ExpressionKey(ExpressionPreset.happy);
+                LogAssert.Expect(LogType.Warning, new Regex("^Duplicate MorphTargetBinding found:"));
+                var merger = Activator.CreateInstance(mergerType, new object[] {
+                    new Dictionary<ExpressionKey, VRM10Expression> { [key] = clip }, copy.transform });
+                mergerType.GetMethod("AccumulateValue").Invoke(merger, new object[] { key, input });
+                mergerType.GetMethod("Apply").Invoke(merger, null);
+                return copy.transform.Find(path).GetComponent<SkinnedMeshRenderer>().GetBlendShapeWeight(clip.MorphTargetBindings[0].Index);
+            }
+            finally { Object.DestroyImmediate(copy); }
         }
 
         [Test]
@@ -213,6 +243,8 @@ namespace VRVlog.LilToonExporter.Tests
             Assert.That(copied.MorphTargetBindings.Length, Is.EqualTo(2), "Original duplicate declarations must remain intact.");
             Assert.That(copied.MorphTargetBindings.Select(binding => binding.Weight), Is.EqualTo(new[] { firstWeight, .8f }));
             Assert.That(copied.MorphTargetBindings.All(binding => binding.RelativePath == "face" && binding.Index == 0), Is.True);
+            Assert.That(PinnedDuplicatePlayback(source, expression, "face", .5f), Is.EqualTo(firstWeight * 50).Within(.001));
+            Assert.That(PinnedDuplicatePlayback(clone, copied, "face", .5f), Is.EqualTo(firstWeight * 50).Within(.001));
             Assert.That(expression.MorphTargetBindings.Select(binding => binding.Weight), Is.EqualTo(new[] { firstWeight, .8f }));
             Assert.That(source.GetComponent<Vrm10Instance>().Vrm, Is.SameAs(settings));
         }
@@ -251,6 +283,8 @@ namespace VRVlog.LilToonExporter.Tests
                 Assert.That(copied.MorphTargetBindings.Length, Is.EqualTo(2), "Keep both winning-source declarations while omitting the distinct coalesced route.");
                 Assert.That(copied.MorphTargetBindings.Select(binding => binding.Weight), Is.EqualTo(new[] { firstWeight, .8f }));
                 Assert.That(copied.MorphTargetBindings.All(binding => binding.RelativePath == "merged" && binding.Index == 0), Is.True);
+                Assert.That(PinnedDuplicatePlayback(source, expression, "first", .5f), Is.EqualTo(firstWeight * 50).Within(.001));
+                Assert.That(PinnedDuplicatePlayback(clone, copied, "merged", .5f), Is.EqualTo(firstWeight * 50).Within(.001));
             }
             Assert.That(expression.MorphTargetBindings.Select(binding => binding.Weight), Is.EqualTo(new[] { firstWeight, .8f, secondWeight }));
             Assert.That(source.GetComponent<Vrm10Instance>().Vrm, Is.SameAs(settings));
@@ -677,10 +711,9 @@ namespace VRVlog.LilToonExporter.Tests
             var material = Own(new Material(Shader.Find("Unlit/Color")));
             first.sharedMaterial = material; second.sharedMaterial = material;
             var settings = Own(ScriptableObject.CreateInstance<VRM10Object>());
-            var expression = Own(ScriptableObject.CreateInstance<VRM10Expression>()); expression.name = custom ? "authored Custom" : "authored Happy";
+            var expression = Own(ScriptableObject.CreateInstance<VRM10Expression>()); expression.name = custom ? "authored custom(Clone)" : "authored Happy";
             expression.MorphTargetBindings = new[] { new MorphTargetBinding("first", 0, firstWeight), new MorphTargetBinding("second", 0, secondWeight) };
-            if (custom) settings.Expression.CustomClips.Add(expression); else settings.Expression.Happy = expression;
-            source.AddComponent<Vrm10Instance>().Vrm = settings;
+            settings.Expression.AddClip(custom ? ExpressionPreset.custom : ExpressionPreset.happy, expression); source.AddComponent<Vrm10Instance>().Vrm = settings;
             var node = new GameObject("merged"); node.transform.SetParent(source.transform, false); node.AddComponent<SkinnedMeshRenderer>();
             var merge = AddOptimizer(node, "MergeSkinnedMesh", 2);
             merge.GetType().GetProperty("MergeBlendShapes").SetValue(merge, true);
@@ -694,9 +727,15 @@ namespace VRVlog.LilToonExporter.Tests
             var oldFirst = clone.transform.Find("first").GetComponent<SkinnedMeshRenderer>();
             var oldSecond = clone.transform.Find("second").GetComponent<SkinnedMeshRenderer>();
             ExportOptimizationBindings bindings = null;
+            object capturedIdentity = null;
             try
             {
-                using var preparation = NdmfExportPreparation.Prepare(source, clone, afterTransforming: lease => bindings = ExportOptimizationBindings.Capture(clone, objectRegistry: lease.ObjectRegistry));
+                using var preparation = NdmfExportPreparation.Prepare(source, clone, afterTransforming: prepared =>
+                {
+                    var authored = custom ? clone.GetComponent<Vrm10Instance>().Vrm.Expression.CustomClips.Single() : clone.GetComponent<Vrm10Instance>().Vrm.Expression.Happy;
+                    bindings = ExportOptimizationBindings.Capture(clone, objectRegistry: prepared.ObjectRegistry);
+                    capturedIdentity = RegisteredAssetIdentity(prepared.ObjectRegistry, authored);
+                });
                 var routes = clone.GetComponent<ExportOptimizationMarker>().Morphs;
                 Assert.That(oldFirst == null && oldSecond == null, Is.True, "Installed AAO must destroy both original renderer objects.");
                 Assert.That(routes.Length, Is.EqualTo(2));
@@ -704,6 +743,14 @@ namespace VRVlog.LilToonExporter.Tests
                 Assert.That(routes[0].Shape, Is.EqualTo(routes[1].Shape), "The optimizer must really coalesce the authored output properties.");
                 var target = routes[0].Renderer; var meshBeforeApply = target.sharedMesh; var materialsBeforeApply = target.sharedMaterials;
                 var settingsBeforeApply = clone.GetComponent<Vrm10Instance>().Vrm; var copies = 0;
+                var optimizedAuthored = custom ? settingsBeforeApply.Expression.CustomClips.Single() : settingsBeforeApply.Expression.Happy;
+                Assert.That(optimizedAuthored.name, Is.Not.EqualTo(expression.name), "Installed AAO must really rename its copied ScriptableObject.");
+                Assert.That(RegisteredAssetIdentity(preparation.ObjectRegistry, optimizedAuthored), Is.SameAs(capturedIdentity), "The asset registry identity must remain usable after Finish.");
+                var generatedCustom = Own(ScriptableObject.CreateInstance<VRM10Expression>()); generatedCustom.name = "generated custom(Clone)";
+                generatedCustom.MorphTargetBindings = new[] { new MorphTargetBinding(UnityEditor.AnimationUtility.CalculateTransformPath(target.transform, clone.transform), target.sharedMesh.GetBlendShapeIndex(routes[0].Shape), .1f) };
+                settingsBeforeApply.Expression.CustomClips.Insert(0, generatedCustom);
+                var generatedPreset = Own(ScriptableObject.CreateInstance<VRM10Expression>()); generatedPreset.name = expression.name;
+                settingsBeforeApply.Expression.Angry = generatedPreset;
                 if (conflict)
                 {
                     var error = Assert.Throws<InvalidOperationException>(() => bindings.ValidateAndApply((copy, original) => copies++));
@@ -718,15 +765,21 @@ namespace VRVlog.LilToonExporter.Tests
                 {
                     bindings.ValidateAndApply();
                     var result = clone.GetComponent<Vrm10Instance>().Vrm.Expression;
-                    var copied = custom ? result.CustomClips.Single() : result.Happy;
+                    var copied = custom ? result.CustomClips.Single(clip => clip != generatedCustom) : result.Happy;
                     Assert.That(copied, Is.Not.SameAs(expression));
+                    Assert.That(copied, Is.Not.SameAs(optimizedAuthored));
                     Assert.That(copied.name, Is.EqualTo(expression.name));
                     Assert.That(copied.MorphTargetBindings.Length, Is.EqualTo(1));
                     Assert.That(copied.MorphTargetBindings.Single().RelativePath, Is.EqualTo(UnityEditor.AnimationUtility.CalculateTransformPath(target.transform, clone.transform)));
                     Assert.That(copied.MorphTargetBindings.Single().Index, Is.EqualTo(target.sharedMesh.GetBlendShapeIndex(routes[0].Shape)));
                     Assert.That(copied.MorphTargetBindings.Single().Weight, Is.EqualTo(firstWeight));
+                    Assert.That(result.CustomClips.Count, Is.EqualTo(custom ? 2 : 1), "A copied custom must not be appended again, and newly inserted customs must survive.");
+                    Assert.That(result.CustomClips, Does.Contain(generatedCustom));
+                    Assert.That(result.Angry, Is.SameAs(generatedPreset), "An uncaptured preset survives even when its clip name matches a captured slot.");
                 }
                 Assert.That(source.GetComponent<Vrm10Instance>().Vrm, Is.SameAs(settings));
+                Assert.That(settings.Expression.CustomClips.Count, Is.EqualTo(custom ? 1 : 0));
+                Assert.That(settings.Expression.Angry, Is.Null);
                 Assert.That(expression.MorphTargetBindings.Select(binding => binding.RelativePath), Is.EqualTo(new[] { "first", "second" }));
                 Assert.That(expression.MorphTargetBindings.Select(binding => binding.Weight), Is.EqualTo(new[] { firstWeight, secondWeight }));
                 Assert.That(first.sharedMesh, Is.SameAs(firstMesh)); Assert.That(second.sharedMesh, Is.SameAs(secondMesh));
