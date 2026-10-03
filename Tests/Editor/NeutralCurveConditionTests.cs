@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Generic;
 using System.Linq;
 using NUnit.Framework;
 using UnityEditor;
@@ -82,6 +83,18 @@ namespace VRVlog.LilToonExporter.Tests
             transition.AddCondition(AnimatorConditionMode.Less, .5f, "Relay value");
         }
 
+        void AssertPreparedPoseFallback()
+        {
+            var skin = avatar.GetComponentInChildren<SkinnedMeshRenderer>();
+            skin.SetBlendShapeWeight(0, 28);
+            var warnings = new List<string>();
+            var values = NeutralShapeSampler.Sample(avatar, warnings: warnings);
+            Assert.That(values, Is.Empty, "An unproved relay must not freeze a possibly changing face.");
+            Assert.That(warnings, Is.Not.Empty);
+            NeutralShapeSnapshot.Apply(avatar, values);
+            Assert.That(skin.GetBlendShapeWeight(0), Is.EqualTo(28));
+        }
+
         [TestCase(false)]
         [TestCase(true)]
         public void NativeConstantParameterRelayCanProveItsTimedExitFalseWithoutNames(bool staticWriteDefaultsLayer)
@@ -103,7 +116,7 @@ namespace VRVlog.LilToonExporter.Tests
         public void DynamicParameterCurveCannotHideAFutureTimedExit()
         {
             Relay(AnimationCurve.Linear(0, 1, 10, 0));
-            Assert.Throws<NeutralShapeSamplingException>(() => NeutralShapeSampler.Sample(avatar));
+            AssertPreparedPoseFallback();
         }
 
         [Test]
@@ -113,7 +126,7 @@ namespace VRVlog.LilToonExporter.Tests
             var machine = Layer("Competing writer");
             var state = State(machine, "Set relay", null, false);
             ParameterDriverExpressionTests.Driver(state, ParameterDriverExpressionTests.Op("Set", "Relay value", 0));
-            Assert.Throws<NeutralShapeSamplingException>(() => NeutralShapeSampler.Sample(avatar));
+            AssertPreparedPoseFallback();
         }
 
         [Test]
@@ -130,8 +143,7 @@ namespace VRVlog.LilToonExporter.Tests
             var back = second.AddTransition(first);
             back.hasExitTime = true; back.exitTime = .75f; back.duration = 0;
             back.AddCondition(AnimatorConditionMode.Less, .999997f, "Relay value");
-            Assert.Throws<NeutralShapeSamplingException>(() => NeutralShapeSampler.Sample(avatar),
-                "A partial layer must not be rounded to full weight when the exit threshold lies inside that rounding tolerance.");
+            AssertPreparedPoseFallback();
         }
     }
 }

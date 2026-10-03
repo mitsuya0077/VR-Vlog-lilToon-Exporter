@@ -398,9 +398,9 @@ namespace VRVlog.LilToonExporter
             var excludedLayers = new HashSet<int>(Enumerable.Range(0, originalController.layers.Length)
                 .Except(affected.Concat(dependencies.NativeSupportLayers)));
             using var evaluation = new ExpressionEvaluationSession(runtime, dependencies, metadata.ExpressionParameters,
-                !metadata.Defaults.TryGetValue("IsLocal", out var local) || local != 0);
+                !metadata.Defaults.TryGetValue("IsLocal", out var local) || local != 0, neutral: true);
             var controller = evaluation.Controller;
-            ValidateNativeSupportMotions(controller, dependencies.NativeSupportLayers, excludedPath);
+            ValidateNativeSupportMotions(controller, dependencies.NativeSupportLayers, excludedPath, neutral: true);
             var scene = EditorSceneManager.NewPreviewScene();
             GameObject clone = null;
             var graph = default(PlayableGraph);
@@ -425,7 +425,7 @@ namespace VRVlog.LilToonExporter
                 AnimationPlayableOutput.Create(graph, "Neutral shape", animator).SetSourcePlayable(playable);
                 var defaults = new Dictionary<string, float>(metadata.Defaults, StringComparer.Ordinal);
                 foreach (var pair in dependencies.NeutralFixedValues) defaults[pair.Key] = pair.Value;
-                SetParameters(playable, controller, defaults);
+                SetParameters(playable, controller, defaults, neutral: true);
                 graph.Play();
                 var history = new HashSet<EditorCurveBinding>();
                 var visited = new HashSet<AnimationClip>();
@@ -434,8 +434,8 @@ namespace VRVlog.LilToonExporter
                 Action remember = () =>
                 {
                     evaluation.Check();
-                    RememberBindings(playable, affected, history, visited, excludedPath);
-                    RememberBindings(playable, supportLayers, history, visitedSupportClips, excludedPath, dependencies.Morphs);
+                    RememberBindings(playable, affected, history, visited, excludedPath, neutral: true);
+                    RememberBindings(playable, supportLayers, history, visitedSupportClips, excludedPath, dependencies.Morphs, neutral: true);
                 };
                 // Initialize at time zero before a short-lived default state can exit.
                 // Its WD-Off writes remain part of the eventual neutral appearance.
@@ -449,14 +449,14 @@ namespace VRVlog.LilToonExporter
                     neutralFixed: dependencies.NeutralFixedValues, dependencies: dependencies, metadata: metadata);
                 var bindings = ActiveBindings(playable, affected, excludedPath, equivalentStates, neutral: true);
                 var unresolved = new List<MorphValue>();
-                var values = Capture(avatar, clone, history, excludedPath, dependencies.Morphs, unresolved);
+                var values = Capture(avatar, clone, history, excludedPath, dependencies.Morphs, unresolved, neutral: true);
                 for (var checkpoint = 0; checkpoint < 3; checkpoint++)
                 {
                     Advance(graph, 7 + checkpoint, evaluation.Check);
                     var nextBindings = ActiveBindings(playable, affected, excludedPath, equivalentStates, neutral: true);
                     if (!bindings.SetEquals(nextBindings))
                         throw new NeutralShapeSamplingException("初期表情が時間で切り替わるため、基本の顔として保存できません。");
-                    var next = Capture(avatar, clone, history, excludedPath, dependencies.Morphs, unresolved);
+                    var next = Capture(avatar, clone, history, excludedPath, dependencies.Morphs, unresolved, neutral: true);
                     if (values.Count != next.Count || values.Where((value, index) => value.Path != next[index].Path ||
                         value.Shape != next[index].Shape || Math.Abs(value.Weight - next[index].Weight) > .01f).Any())
                         throw new NeutralShapeSamplingException("初期表情のアニメーションが静止しません。");
@@ -547,7 +547,7 @@ namespace VRVlog.LilToonExporter
         // evaluation; unrelated morph curves may vary, but callbacks and object
         // or non-morph changes cannot safely supply a native base pose.
         private static void ValidateNativeSupportMotions(AnimatorController controller, IEnumerable<int> supportLayers,
-            Func<string, bool> excludedPath)
+            Func<string, bool> excludedPath, bool neutral = false)
         {
             var machines = new HashSet<AnimatorStateMachine>();
             var motions = new HashSet<Motion>();
@@ -559,16 +559,16 @@ namespace VRVlog.LilToonExporter
                     foreach (var child in tree.children) Motion(child.motion);
                     return;
                 }
-                if (!(motion is AnimationClip clip)) throw new InvalidOperationException("未対応のAnimator Motionです。");
+                if (!(motion is AnimationClip clip)) throw UnsupportedPose("未対応のAnimator Motionです。", neutral);
                 if (AnimationUtility.GetAnimationEvents(clip).Length != 0)
-                    throw new InvalidOperationException("常時適用FXと表情の影響範囲を確定できません。");
+                    throw UnsupportedPose("常時適用FXと表情の影響範囲を確定できません。", neutral);
                 if (AnimationUtility.GetObjectReferenceCurveBindings(clip).Any(binding => excludedPath?.Invoke(binding.path) != true))
-                    throw new InvalidOperationException("表情への遷移にマテリアル・オブジェクトの差し替えが含まれます。");
+                    throw UnsupportedPose("表情への遷移にマテリアル・オブジェクトの差し替えが含まれます。", neutral);
                 foreach (var binding in AnimationUtility.GetCurveBindings(clip))
                 {
                     if (binding.type == typeof(Animator) || excludedPath?.Invoke(binding.path) == true) continue;
                     if (binding.type != typeof(SkinnedMeshRenderer) || !binding.propertyName.StartsWith("blendShape.", StringComparison.Ordinal))
-                        throw new InvalidOperationException("表情への遷移にBlendShape以外の変化が含まれます: " + binding.propertyName);
+                        throw UnsupportedPose("表情への遷移にBlendShape以外の変化が含まれます: " + binding.propertyName, neutral);
                 }
             }
             void Machine(AnimatorStateMachine machine)
@@ -581,22 +581,22 @@ namespace VRVlog.LilToonExporter
         }
 
         private static void RememberBindings(AnimatorControllerPlayable playable, int[] layers, HashSet<EditorCurveBinding> history, HashSet<AnimationClip> visited, Func<string, bool> excludedPath,
-            ISet<EditorCurveBinding> capturedMorphs = null)
+            ISet<EditorCurveBinding> capturedMorphs = null, bool neutral = false)
         {
             foreach (var layer in layers)
                 foreach (var info in playable.GetCurrentAnimatorClipInfo(layer).Concat(playable.GetNextAnimatorClipInfo(layer)))
                 {
                     if (info.clip == null || info.weight <= 0.00001f || !visited.Add(info.clip)) continue;
                     if (capturedMorphs != null && AnimationUtility.GetAnimationEvents(info.clip).Length != 0)
-                        throw new InvalidOperationException("常時適用FXと表情の影響範囲を確定できません。");
+                        throw UnsupportedPose("常時適用FXと表情の影響範囲を確定できません。", neutral);
                     if (AnimationUtility.GetObjectReferenceCurveBindings(info.clip).Any(b => excludedPath?.Invoke(b.path) != true))
-                        throw new InvalidOperationException("表情への遷移にマテリアル・オブジェクトの差し替えが含まれます。");
+                        throw UnsupportedPose("表情への遷移にマテリアル・オブジェクトの差し替えが含まれます。", neutral);
                     foreach (var binding in AnimationUtility.GetCurveBindings(info.clip))
                     {
                         if (binding.type == typeof(Animator)) continue; // Parameter curves are checked for stability separately.
                         if (excludedPath?.Invoke(binding.path) == true) continue;
                         if (binding.type != typeof(SkinnedMeshRenderer) || !binding.propertyName.StartsWith("blendShape.", StringComparison.Ordinal))
-                            throw new InvalidOperationException("表情への遷移にBlendShape以外の変化が含まれます: " + binding.propertyName);
+                            throw UnsupportedPose("表情への遷移にBlendShape以外の変化が含まれます: " + binding.propertyName, neutral);
                         if (capturedMorphs == null || capturedMorphs.Contains(binding)) history.Add(binding);
                     }
                 }
@@ -747,7 +747,7 @@ namespace VRVlog.LilToonExporter
                     {
                         if (nativeSupportLayers?.Contains(layer) == true && (AnimationUtility.GetAnimationEvents(info.clip).Length != 0 ||
                             AnimationUtility.GetObjectReferenceCurveBindings(info.clip).Any(binding => excludedPath?.Invoke(binding.path) != true)))
-                            throw new InvalidOperationException("常時適用FXと表情の影響範囲を確定できません。");
+                            throw UnsupportedPose("常時適用FXと表情の影響範囲を確定できません。", neutral);
                         foreach (var binding in AnimationUtility.GetCurveBindings(info.clip))
                         {
                             if (excludedPath?.Invoke(binding.path) == true) continue;
@@ -779,7 +779,7 @@ namespace VRVlog.LilToonExporter
                 (k.inTangent == 0 || float.IsInfinity(k.inTangent)) && (k.outTangent == 0 || float.IsInfinity(k.outTangent)));
         }
 
-        private static void SetParameters(AnimatorControllerPlayable playable, AnimatorController controller, IDictionary<string, float> values)
+        private static void SetParameters(AnimatorControllerPlayable playable, AnimatorController controller, IDictionary<string, float> values, bool neutral = false)
         {
             foreach (var parameter in controller.parameters)
             {
@@ -790,7 +790,7 @@ namespace VRVlog.LilToonExporter
                     case AnimatorControllerParameterType.Bool: playable.SetBool(parameter.name, value != 0); break;
                     case AnimatorControllerParameterType.Int: playable.SetInteger(parameter.name, Mathf.RoundToInt(value)); break;
                     case AnimatorControllerParameterType.Float: playable.SetFloat(parameter.name, value); break;
-                    default: throw new InvalidOperationException("Triggerパラメーターの表情は未対応です。");
+                    default: throw UnsupportedPose("Triggerパラメーターの表情は未対応です。", neutral);
                 }
             }
         }
@@ -812,13 +812,13 @@ namespace VRVlog.LilToonExporter
                 {
                     if (info.weight <= 0.00001f || info.clip == null) continue;
                     if (AnimationUtility.GetObjectReferenceCurveBindings(info.clip).Any(b => excludedPath?.Invoke(b.path) != true))
-                        throw new InvalidOperationException("マテリアル・オブジェクトの差し替えを含む表情は未対応です。");
+                        throw UnsupportedPose("マテリアル・オブジェクトの差し替えを含む表情は未対応です。", neutral);
                     foreach (var binding in AnimationUtility.GetCurveBindings(info.clip))
                     {
                         if (binding.type == typeof(Animator)) continue;
                         if (excludedPath?.Invoke(binding.path) == true) continue;
                         if (binding.type != typeof(SkinnedMeshRenderer) || !binding.propertyName.StartsWith("blendShape.", StringComparison.Ordinal))
-                            throw new InvalidOperationException("BlendShape以外の変化を含みます: " + binding.propertyName);
+                            throw UnsupportedPose("BlendShape以外の変化を含みます: " + binding.propertyName, neutral);
                         bindings.Add(binding);
                     }
                 }
@@ -826,8 +826,11 @@ namespace VRVlog.LilToonExporter
             return bindings;
         }
 
+        private static InvalidOperationException UnsupportedPose(string message, bool neutral) => neutral ?
+            new NeutralShapeSamplingException(message) : new InvalidOperationException(message);
+
         private static List<MorphValue> Capture(GameObject source, GameObject clone, IEnumerable<EditorCurveBinding> bindings,
-            Func<string, bool> excludedPath, ISet<EditorCurveBinding> relevant, IList<MorphValue> unevaluated)
+            Func<string, bool> excludedPath, ISet<EditorCurveBinding> relevant, IList<MorphValue> unevaluated, bool neutral = false)
         {
             var owned = new HashSet<EditorCurveBinding>(bindings);
             // WD-Off values can outlive the clips that wrote them. Also capture
@@ -853,7 +856,7 @@ namespace VRVlog.LilToonExporter
                 var original = FindRenderer(source, binding.path);
                 var animated = FindRenderer(clone, binding.path);
                 if (!original.enabled || !original.gameObject.activeInHierarchy)
-                    throw new InvalidOperationException("非表示のRendererを動かす項目は取り込めません: " + binding.path);
+                    throw UnsupportedPose("非表示のRendererを動かす項目は取り込めません: " + binding.path, neutral);
                 var shape = binding.propertyName.Substring("blendShape.".Length);
                 var index = animated.sharedMesh.GetBlendShapeIndex(shape);
                 if (index < 0)

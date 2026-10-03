@@ -135,7 +135,7 @@ namespace VRVlog.LilToonExporter
                         preparedMenuBindings.ExcludesPreparedPath, faceEmoBindings);
                     poses.CollectPrepared(clone, warnings, preparedMenuPolicy);
                     recoveryReport.Stage = "基準形評価";
-                    NeutralShapeSnapshot.Apply(clone, NeutralShapeSampler.Sample(clone, preparedMenuBindings.ExcludesPreparedPath));
+                    NeutralShapeSnapshot.Apply(clone, NeutralShapeSampler.Sample(clone, preparedMenuBindings.ExcludesPreparedPath, warnings));
                     blink.ResolvePreparedNeutral(clone, suppressSharedTextureEmission: suppressSharedTextureEmission,
                         suppressHdrTextureEmission: suppressHdrTextureEmission);
                     var neutral = NeutralShapeSnapshot.Capture(clone);

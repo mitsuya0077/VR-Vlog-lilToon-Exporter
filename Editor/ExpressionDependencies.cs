@@ -76,10 +76,14 @@ namespace VRVlog.LilToonExporter
             VrChatExpressionMenu.Source source, ISet<EditorCurveBinding> automatic = null)
         {
             var unknown = new List<string>();
-            var layers = Inspect(runtime, excludedPath, new Dictionary<StateMachineBehaviour, VrChatParameterDriver.Program>(), unknown, true);
+            var unsupported = new List<string>();
+            var layers = Inspect(runtime, excludedPath, new Dictionary<StateMachineBehaviour, VrChatParameterDriver.Program>(), unknown, true,
+                neutralUnsupported: unsupported);
             if (layers.All(layer => layer.Morphs.Count == 0)) return Array.Empty<HashSet<EditorCurveBinding>>();
             if (unknown.Count > 0)
                 throw new InvalidOperationException("FXの影響範囲を確定できないState Behaviourがあります: " + string.Join(", ", unknown));
+            if (unsupported.Count > 0)
+                throw new NeutralShapeSamplingException("FXの影響範囲を確定できないState Behaviourがあります: " + string.Join(", ", unsupported));
             var fixedValues = FixedNeutralValues(runtime, source, layers, excludedPath);
             layers = Inspect(runtime, excludedPath, new Dictionary<StateMachineBehaviour, VrChatParameterDriver.Program>(),
                 new List<string>(), true, fixedValues);
@@ -102,12 +106,14 @@ namespace VRVlog.LilToonExporter
             result.Morphs.UnionWith(requiredMorphs);
             var controller = Controller(runtime);
             var unknown = new List<string>();
-            var info = Inspect(runtime, excludedPath, result.Drivers, unknown, true);
+            var unsupported = neutralMorphs == null ? null : new List<string>();
+            var info = Inspect(runtime, excludedPath, result.Drivers, unknown, true, neutralUnsupported: unsupported);
             var nativeBaseHasBindings = info.Length > 0 && info[0].HasBindings;
             result.HasFxControls = info.Any(layer => layer.FxControl);
             // Arbitrary behaviours can affect any parameter, layer or scene
             // object. No name/path-based independence claim is safe for them.
             if (unknown.Count > 0) throw new InvalidOperationException("FXの影響範囲を確定できないState Behaviourがあります: " + string.Join(", ", unknown));
+            if (unsupported?.Count > 0) throw new NeutralShapeSamplingException("FXの影響範囲を確定できないState Behaviourがあります: " + string.Join(", ", unsupported));
             if (neutralMorphs != null)
             {
                 foreach (var pair in FixedNeutralValues(runtime, source, info, excludedPath)) result.NeutralFixedValues.Add(pair.Key, pair.Value);
@@ -220,8 +226,47 @@ namespace VRVlog.LilToonExporter
             // Parameters supplied by the menu can be reset by a driver after
             // the selection; never reapply them on every sampled frame.
             result.Parameters.UnionWith(selected);
+            if (neutralMorphs != null)
+            {
+                // Validate actual inputs before a recoverable capability exit
+                // can leave their dependency group at the authored appearance.
+                foreach (var parameter in controller.parameters.Where(parameter => result.Parameters.Contains(parameter.name)))
+                {
+                    var value = parameter.type == AnimatorControllerParameterType.Float ? parameter.defaultFloat : 0f;
+                    if (source != null && source.Defaults.TryGetValue(parameter.name, out var supplied)) value = supplied;
+                    if (float.IsNaN(value) || float.IsInfinity(value)) throw new InvalidOperationException("表情パラメーターに不正な値があります。");
+                }
+                var operations = result.Drivers.Values.SelectMany(program => program.Operations.Select(operation => (program, operation)))
+                    .Where(pair => result.Parameters.Contains(pair.operation.Destination)).ToArray();
+                var invalid = operations.FirstOrDefault(pair => pair.operation.Error != null && pair.operation.Kind != "Random");
+                if (invalid.operation != null)
+                    throw new InvalidOperationException(invalid.program.Location + " / Parameter Driver: " + invalid.operation.Error);
+                var types = controller.parameters.ToDictionary(parameter => parameter.name, parameter => parameter.type, StringComparer.Ordinal);
+                foreach (var pair in operations)
+                {
+                    if (!types.ContainsKey(pair.operation.Destination))
+                        throw new InvalidOperationException(pair.program.Location + " / Parameter Driver: 書き込み先の型を解決できません: " + pair.operation.Destination);
+                    if (pair.operation.Kind == "Copy" && !types.ContainsKey(pair.operation.Source))
+                        throw new InvalidOperationException(pair.program.Location + " / Parameter Driver: Copy元の型を解決できません: " + pair.operation.Source);
+                }
+                var trigger = operations.FirstOrDefault(pair => types[pair.operation.Destination] == AnimatorControllerParameterType.Trigger ||
+                    pair.operation.Kind == "Copy" && types[pair.operation.Source] == AnimatorControllerParameterType.Trigger);
+                if (trigger.operation != null)
+                    throw new NeutralShapeSamplingException(trigger.program.Location + " / Parameter Driver: Triggerは固定表情に変換できません。");
+                var random = operations.FirstOrDefault(pair => pair.operation.Kind == "Random");
+                if (random.operation != null)
+                    throw new NeutralShapeSamplingException(random.program.Location + " / Parameter Driver: Randomは固定表情の値を確定できません。");
+                var booleanAdd = operations.FirstOrDefault(pair => pair.operation.Kind == "Add" &&
+                    controller.parameters.Any(parameter => parameter.name == pair.operation.Destination && parameter.type == AnimatorControllerParameterType.Bool));
+                if (booleanAdd.operation != null)
+                    throw new NeutralShapeSamplingException(booleanAdd.program.Location + " / Parameter Driver: BoolへのAddは未対応です。");
+            }
             if (result.Layers.Concat(result.NativeSupportLayers).Any(i => controller.layers[i].syncedLayerIndex >= 0))
-                throw new InvalidOperationException("このメニューに影響する同期Animatorレイヤーの表情変換は未対応です。");
+            {
+                const string message = "このメニューに影響する同期Animatorレイヤーの表情変換は未対応です。";
+                if (neutralMorphs != null) throw new NeutralShapeSamplingException(message);
+                throw new InvalidOperationException(message);
+            }
             var external = gateExternal.Concat(source?.ExternalParameters ?? Enumerable.Empty<string>())
                 .Concat(fixedContext != null ? VrChatParameterDriver.BuiltIn : Enumerable.Empty<string>())
                 .Concat(neutralMorphs == null ? Enumerable.Empty<string>() : VrChatParameterDriver.BuiltIn.Where(name => !result.NeutralFixedValues.ContainsKey(name)))
@@ -238,17 +283,29 @@ namespace VRVlog.LilToonExporter
                 foreach (var other in source.OtherControllers.Where(c => c != null))
                 {
                     var otherUnknown = new List<string>();
-                    var otherInfo = Inspect(other, null, new Dictionary<StateMachineBehaviour, VrChatParameterDriver.Program>(), otherUnknown);
+                    var otherUnsupported = neutralMorphs == null ? null : new List<string>();
+                    var otherInfo = Inspect(other, null, new Dictionary<StateMachineBehaviour, VrChatParameterDriver.Program>(), otherUnknown,
+                        neutralUnsupported: otherUnsupported);
                     var writes = otherInfo.SelectMany(l => l.Writes).Where(result.Parameters.Contains).Distinct().ToArray();
                     var otherMorphs = neutralMorphs == null ? Array.Empty<string>() : otherInfo.SelectMany(layer => layer.Morphs)
                         .Where(result.Morphs.Contains).Select(binding => binding.path + "/" + binding.propertyName).Distinct().ToArray();
-                    if (writes.Length > 0 || otherUnknown.Count > 0 || otherMorphs.Length > 0)
-                        throw new InvalidOperationException("FX以外のPlayable Layerからの変更を再現できません: " + other.name + " / " +
-                            string.Join(", ", writes.Concat(otherUnknown).Concat(otherMorphs)));
+                    if (neutralMorphs != null && otherUnknown.Count > 0)
+                        throw new InvalidOperationException("FX以外のPlayable Layerに不正なState Behaviourがあります: " + other.name + " / " + string.Join(", ", otherUnknown));
+                    if (writes.Length > 0 || otherUnknown.Count > 0 || otherMorphs.Length > 0 || otherUnsupported?.Count > 0)
+                    {
+                        var message = "FX以外のPlayable Layerからの変更を再現できません: " + other.name + " / " +
+                            string.Join(", ", writes.Concat(otherUnknown).Concat(otherMorphs).Concat(otherUnsupported ?? Enumerable.Empty<string>()));
+                        if (neutralMorphs != null) throw new NeutralShapeSamplingException(message);
+                        throw new InvalidOperationException(message);
+                    }
                 }
             }
             if (unsafeFxCommands.Count > 0)
-                throw new InvalidOperationException(unsafeFxCommands[0].Location + " / VRCPlayableLayerControl: FXの重みを変更する状態は固定表情に変換できません。");
+            {
+                var message = unsafeFxCommands[0].Location + " / VRCPlayableLayerControl: FXの重みを変更する状態は固定表情に変換できません。";
+                if (neutralMorphs != null) throw new NeutralShapeSamplingException(message);
+                throw new InvalidOperationException(message);
+            }
             return result;
         }
 
@@ -325,9 +382,14 @@ namespace VRVlog.LilToonExporter
                 foreach (var other in source.OtherControllers.Where(value => value != null))
                 {
                     var unknown = new List<string>();
-                    var otherLayers = Inspect(other, null, new Dictionary<StateMachineBehaviour, VrChatParameterDriver.Program>(), unknown);
+                    var unsupported = new List<string>();
+                    var otherLayers = Inspect(other, null, new Dictionary<StateMachineBehaviour, VrChatParameterDriver.Program>(), unknown,
+                        neutralUnsupported: unsupported);
+                    if (unknown.Count > 0)
+                        throw new InvalidOperationException("FX以外のPlayable Layerに不正なState Behaviourがあります: " + other.name + " / " + string.Join(", ", unknown));
+                    if (unsupported.Count > 0)
+                        throw new NeutralShapeSamplingException("FX以外のPlayable LayerのState Behaviourを再現できません: " + other.name + " / " + string.Join(", ", unsupported));
                     otherWritten.UnionWith(otherLayers.SelectMany(layer => layer.Writes));
-                    if (unknown.Count > 0) otherWritten.UnionWith(controller.parameters.Select(parameter => parameter.name));
                 }
             var result = new Dictionary<string, float>(StringComparer.Ordinal);
             var initial = new Dictionary<string, float>(StringComparer.Ordinal);
@@ -557,11 +619,12 @@ namespace VRVlog.LilToonExporter
 
         private static Layer[] Inspect(RuntimeAnimatorController runtime, Func<string, bool> excludedPath,
             Dictionary<StateMachineBehaviour, VrChatParameterDriver.Program> drivers, List<string> unknown, bool allowFxControls = false,
-            IDictionary<string, float> neutralFixed = null)
+            IDictionary<string, float> neutralFixed = null, List<string> neutralUnsupported = null)
         {
             var controller = Controller(runtime);
             var replacements = Overrides(runtime);
             var layers = controller.layers;
+            var validateNeutralData = neutralUnsupported != null || neutralFixed != null;
             var result = new Layer[layers.Length];
             for (var index = 0; index < layers.Length; index++)
             {
@@ -601,7 +664,11 @@ namespace VRVlog.LilToonExporter
                         }
                         if (!VrChatParameterDriver.IsDriver(behaviour))
                         {
-                            unknown.Add(path + " / " + (behaviour == null ? "欠けたBehaviour" : behaviour.GetType().Name));
+                            // An arbitrary callback prevents a neutral proof,
+                            // but a missing script or malformed SDK control is
+                            // still invalid data rather than a capability limit.
+                            var target = behaviour == null || IsMalformedSdkControl(behaviour) ? unknown : neutralUnsupported ?? unknown;
+                            target.Add(path + " / " + (behaviour == null ? "欠けたBehaviour" : behaviour.GetType().Name));
                             continue;
                         }
                         var program = VrChatParameterDriver.Read(behaviour, path);
@@ -636,6 +703,14 @@ namespace VRVlog.LilToonExporter
                         {
                             // Animator parameters are global even if a caller
                             // happens to exclude the animator's transform path.
+                            if (validateNeutralData && (binding.type == typeof(Animator) || excludedPath?.Invoke(binding.path) != true))
+                            {
+                                var curve = AnimationUtility.GetEditorCurve(clip, binding);
+                                if (curve != null && curve.keys.Any(key => float.IsNaN(key.time) || float.IsInfinity(key.time) ||
+                                    float.IsNaN(key.value) || float.IsInfinity(key.value) || float.IsNaN(key.inTangent) || float.IsNaN(key.outTangent) ||
+                                    float.IsNaN(key.inWeight) || float.IsInfinity(key.inWeight) || float.IsNaN(key.outWeight) || float.IsInfinity(key.outWeight)))
+                                    throw new InvalidOperationException("FXのアニメーション曲線に不正な値があります: " + clip.name + " / " + binding.path + " / " + binding.propertyName);
+                            }
                             if (binding.type == typeof(Animator)) { info.Writes.Add(binding.propertyName); info.CurveWrites.Add(binding.propertyName); info.HasBindings = true; continue; }
                             if (excludedPath?.Invoke(binding.path) == true) continue;
                             info.HasBindings = true;
@@ -694,6 +769,30 @@ namespace VRVlog.LilToonExporter
                 Visit(layers[sourceIndex].stateMachine, layers[index].name);
             }
             return result;
+        }
+
+        private static bool IsMalformedSdkControl(StateMachineBehaviour behaviour)
+        {
+            var name = behaviour.GetType().FullName;
+            using var data = new SerializedObject(behaviour);
+            bool WrongType(SerializedProperty property, SerializedPropertyType type) => property != null && property.propertyType != type;
+            if (name == "VRC.SDK3.Avatars.Components.VRCAnimatorTemporaryPoseSpace" || name == "VRC.SDKBase.VRC_AnimatorTemporaryPoseSpace")
+            {
+                var enter = data.FindProperty("enterPoseSpace"); var fixedDelay = data.FindProperty("fixedDelay"); var delay = data.FindProperty("delayTime");
+                return WrongType(enter, SerializedPropertyType.Boolean) || WrongType(fixedDelay, SerializedPropertyType.Boolean) ||
+                    WrongType(delay, SerializedPropertyType.Float) || delay != null &&
+                    (float.IsNaN(delay.floatValue) || float.IsInfinity(delay.floatValue) || delay.floatValue < 0);
+            }
+            if (name == "VRC.SDK3.Avatars.Components.VRCAnimatorLocomotionControl" || name == "VRC.SDKBase.VRC_AnimatorLocomotionControl")
+                return WrongType(data.FindProperty("disableLocomotion"), SerializedPropertyType.Boolean);
+            if (name != "VRC.SDK3.Avatars.Components.VRCPlayableLayerControl" && name != "VRC.SDKBase.VRC_PlayableLayerControl") return false;
+            var layer = data.FindProperty("layer"); var weight = data.FindProperty("goalWeight"); var duration = data.FindProperty("blendDuration");
+            // A different SDK schema is an unsupported capability. Reject only
+            // fields we can read and prove malformed in this schema.
+            return WrongType(layer, SerializedPropertyType.Enum) || WrongType(weight, SerializedPropertyType.Float) || WrongType(duration, SerializedPropertyType.Float) ||
+                layer != null && (layer.enumValueIndex < 0 || layer.enumValueIndex >= layer.enumNames.Length) ||
+                weight != null && (float.IsNaN(weight.floatValue) || float.IsInfinity(weight.floatValue) || weight.floatValue < 0 || weight.floatValue > 1) ||
+                duration != null && (float.IsNaN(duration.floatValue) || float.IsInfinity(duration.floatValue) || duration.floatValue < 0);
         }
     }
 }

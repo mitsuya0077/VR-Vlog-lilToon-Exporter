@@ -8,8 +8,9 @@ using UnityEngine;
 
 namespace VRVlog.LilToonExporter
 {
-    // Only known automatic tracking channels may be left live when their
-    // independent FX group cannot provide a stable authored neutral pose.
+    // A valid runtime FX graph need not have a single fixed neutral pose.
+    // These capability limits keep the prepared authored weights available;
+    // malformed data and unresolved target identities remain fatal.
     internal sealed class NeutralShapeSamplingException : InvalidOperationException
     {
         internal NeutralShapeSamplingException(string message, Exception inner = null) : base(message, inner) { }
@@ -17,7 +18,8 @@ namespace VRVlog.LilToonExporter
 
     internal static class NeutralShapeSampler
     {
-        internal static List<VrChatExpressionMenu.MorphValue> Sample(GameObject prepared, Func<string, bool> excludedPath = null)
+        internal static List<VrChatExpressionMenu.MorphValue> Sample(GameObject prepared, Func<string, bool> excludedPath = null,
+            ICollection<string> warnings = null)
         {
             if (prepared == null) throw new ArgumentNullException(nameof(prepared));
             // This reads the prepared FX and parameter defaults without walking
@@ -26,21 +28,38 @@ namespace VRVlog.LilToonExporter
             if (metadata.Controller == null) return new List<VrChatExpressionMenu.MorphValue>();
             var automatic = AutomaticChannels(prepared);
             var completed = new HashSet<string>(StringComparer.Ordinal);
+            var warned = new HashSet<string>(StringComparer.Ordinal);
             var values = new Dictionary<(string Path, string Shape), VrChatExpressionMenu.MorphValue>();
+            void RetainPreparedWeights(NeutralShapeSamplingException error, IEnumerable<EditorCurveBinding> bindings)
+            {
+                var message = "FXの初期表情を固定できない部分は、アバターに設定されたシェイプキーの値を使って書き出します。" +
+                    "実行時に動く表情は初期の形へ固定しません。 " + WithAffected(error, bindings).Message;
+                if (!warned.Add(message)) return;
+                if (warnings != null) warnings.Add(message);
+                else Debug.LogWarning(message);
+            }
+            IEnumerable<EditorCurveBinding> AllMorphBindings() => metadata.Controller.animationClips.SelectMany(AnimationUtility.GetCurveBindings)
+                .Where(binding => binding.type == typeof(SkinnedMeshRenderer) && binding.propertyName.StartsWith("blendShape.", StringComparison.Ordinal) &&
+                    excludedPath?.Invoke(binding.path) != true);
             HashSet<EditorCurveBinding>[] groups;
             try { groups = ExpressionDependencies.NeutralRoots(metadata.Controller, excludedPath, metadata, automatic).ToArray(); }
+            catch (NeutralShapeSamplingException error)
+            {
+                // A callback with unknown effects cannot establish independent
+                // groups. Preserve the complete prepared appearance in this case.
+                RetainPreparedWeights(error, AllMorphBindings());
+                return new List<VrChatExpressionMenu.MorphValue>();
+            }
             catch (InvalidOperationException error)
             {
-                var bindings = metadata.Controller.animationClips.SelectMany(AnimationUtility.GetCurveBindings)
-                    .Where(binding => binding.type == typeof(SkinnedMeshRenderer) && binding.propertyName.StartsWith("blendShape.", StringComparison.Ordinal) &&
-                        excludedPath?.Invoke(binding.path) != true);
-                throw WithAffected(error, bindings);
+                throw WithAffected(error, AllMorphBindings());
             }
             foreach (var roots in groups)
             {
                 ExpressionDependencies dependencies;
                 try { dependencies = ExpressionDependencies.AnalyzeNeutral(metadata.Controller, roots, excludedPath, metadata, automatic); }
                 catch (NeutralShapeSamplingException) when (roots.All(automatic.Contains)) { continue; }
+                catch (NeutralShapeSamplingException error) { RetainPreparedWeights(error, roots); continue; }
                 catch (InvalidOperationException error) { throw WithAffected(error, roots); }
                 var identity = string.Join(",", dependencies.Layers.OrderBy(index => index)) + "|" +
                     string.Join(",", dependencies.NativeSupportLayers.OrderBy(index => index));
@@ -48,6 +67,7 @@ namespace VRVlog.LilToonExporter
                 List<VrChatExpressionMenu.MorphValue> sampled;
                 try { sampled = VrChatExpressionSampler.SampleNeutral(prepared, metadata.Controller, dependencies, metadata, excludedPath); }
                 catch (NeutralShapeSamplingException) when (dependencies.Morphs.All(automatic.Contains)) { continue; }
+                catch (NeutralShapeSamplingException error) { RetainPreparedWeights(error, dependencies.Morphs); continue; }
                 catch (InvalidOperationException error) { throw WithAffected(error, dependencies.Morphs); }
                 foreach (var value in sampled)
                 {

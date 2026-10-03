@@ -200,7 +200,7 @@ namespace VRVlog.LilToonExporter.Tests
 
         [TestCase(false)]
         [TestCase(true)]
-        public void FractionalNeutralChecksUnobservedSupportMotions(bool animationEvent)
+        public void UnsupportedUnobservedSupportMotionsRetainPreparedFractionalPose(bool animationEvent)
         {
             var baseClip = Clip("Automatic base", "Blink");
             AnimationUtility.SetEditorCurve(baseClip, EditorCurveBinding.FloatCurve("Face", typeof(SkinnedMeshRenderer), "blendShape.Blink"),
@@ -214,13 +214,19 @@ namespace VRVlog.LilToonExporter.Tests
             State(machine, "Alternative unsupported motion", unsafeClip);
             FractionalPupil();
             var sourceJson = EditorJsonUtility.ToJson(controller);
-            var error = Assert.Throws<InvalidOperationException>(() => NeutralShapeSampler.Sample(avatar));
-            Assert.That(error.Message, Does.Contain(animationEvent ? "影響範囲" : "差し替え"));
+            var skin = avatar.GetComponentInChildren<SkinnedMeshRenderer>();
+            skin.SetBlendShapeWeight(mesh.GetBlendShapeIndex("Pupil removal"), 20);
+            var warnings = new List<string>();
+            var values = NeutralShapeSampler.Sample(avatar, warnings: warnings);
+            Assert.That(values, Is.Empty);
+            Assert.That(string.Join("\n", warnings), Does.Contain(animationEvent ? "影響範囲" : "差し替え"));
+            NeutralShapeSnapshot.Apply(avatar, values);
+            Assert.That(skin.GetBlendShapeWeight(mesh.GetBlendShapeIndex("Pupil removal")), Is.EqualTo(20));
             Assert.That(EditorJsonUtility.ToJson(controller), Is.EqualTo(sourceJson));
         }
 
         [Test]
-        public void FractionalNeutralRejectsDelayedAutomaticBaseActivityChanges()
+        public void FractionalNeutralRetainsPreparedPoseForDelayedAutomaticBaseActivityChanges()
         {
             var baseClip = Clip("Automatic base", "Blink");
             AnimationUtility.SetEditorCurve(baseClip, EditorCurveBinding.FloatCurve("Face", typeof(SkinnedMeshRenderer), "blendShape.Blink"),
@@ -231,8 +237,14 @@ namespace VRVlog.LilToonExporter.Tests
             var transition = initial.AddTransition(held); transition.hasExitTime = true; transition.exitTime = 30; transition.duration = 0;
             FractionalPupil();
             var sourceJson = EditorJsonUtility.ToJson(controller);
-            var error = Assert.Throws<NeutralShapeSamplingException>(() => NeutralShapeSampler.Sample(avatar));
-            Assert.That(error.Message, Does.Contain("時間で遷移"));
+            var skin = avatar.GetComponentInChildren<SkinnedMeshRenderer>();
+            skin.SetBlendShapeWeight(mesh.GetBlendShapeIndex("Pupil removal"), 20);
+            var warnings = new List<string>();
+            var values = NeutralShapeSampler.Sample(avatar, warnings: warnings);
+            Assert.That(values, Is.Empty);
+            Assert.That(string.Join("\n", warnings), Does.Contain("時間で遷移"));
+            NeutralShapeSnapshot.Apply(avatar, values);
+            Assert.That(skin.GetBlendShapeWeight(mesh.GetBlendShapeIndex("Pupil removal")), Is.EqualTo(20));
             Assert.That(EditorJsonUtility.ToJson(controller), Is.EqualTo(sourceJson));
         }
     }

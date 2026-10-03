@@ -90,6 +90,23 @@ namespace VRVlog.LilToonExporter.Tests
             return machine.defaultState = State(machine, Clip("Open", AnimationCurve.Constant(0, 1, weight)), writeDefaults);
         }
 
+        private string AssertPreparedPoseFallback()
+        {
+            skin.SetBlendShapeWeight(0, 42);
+            skin.SetBlendShapeWeight(1, 18);
+            var sourceJson = EditorJsonUtility.ToJson(controller);
+            var warnings = new List<string>();
+            var values = NeutralShapeSampler.Sample(avatar, warnings: warnings);
+            Assert.That(values, Is.Empty, "An uncertain group cannot invent a neutral endpoint.");
+            Assert.That(warnings, Is.Not.Empty, "Retaining the prepared pose must be reported.");
+            NeutralShapeSnapshot.Apply(avatar, values);
+            Assert.That(skin.GetBlendShapeWeight(0), Is.EqualTo(42));
+            Assert.That(skin.GetBlendShapeWeight(1), Is.EqualTo(18));
+            Assert.That(skin.GetBlendShapeWeight(3), Is.EqualTo(35));
+            Assert.That(EditorJsonUtility.ToJson(controller), Is.EqualTo(sourceJson));
+            return string.Join("\n", warnings);
+        }
+
         [Test]
         public void ConstantStartupWritesIncludeZeroAndLeaveUnwrittenChannelsAlone()
         {
@@ -116,13 +133,13 @@ namespace VRVlog.LilToonExporter.Tests
         }
 
         [Test]
-        public void DelayedGenericMorphAnimationCannotBeFrozenAsNeutral()
+        public void DelayedGenericMorphAnimationKeepsPreparedPoseAndWarns()
         {
             var state = Open();
             AnimationUtility.SetEditorCurve((AnimationClip)state.motion,
                 EditorCurveBinding.FloatCurve("Body", typeof(SkinnedMeshRenderer), "blendShape.Open"),
                 AnimationCurve.Linear(0, 0, 10, 100));
-            Assert.That(Assert.Throws<NeutralShapeSamplingException>(() => NeutralShapeSampler.Sample(avatar)).Message, Does.Contain("時間で変わる"));
+            Assert.That(AssertPreparedPoseFallback(), Does.Contain("時間で変わる").And.Contain("Body / Open"));
         }
 
         [Test]
@@ -143,14 +160,14 @@ namespace VRVlog.LilToonExporter.Tests
         }
 
         [Test]
-        public void AutomaticAnimationSharingTheOpeningChannelIsRejected()
+        public void AutomaticAnimationSharingTheOpeningChannelKeepsPreparedPose()
         {
             Open(); var blink = Layer("Blink also changes opening");
             var clip = Clip("Blink", AnimationCurve.Linear(0, 0, 10, 100));
             AnimationUtility.SetEditorCurve(clip, EditorCurveBinding.FloatCurve("Body", typeof(SkinnedMeshRenderer), "blendShape.Open"),
                 AnimationCurve.Linear(0, 100, 10, 0));
             blink.defaultState = State(blink, clip);
-            Assert.Throws<NeutralShapeSamplingException>(() => NeutralShapeSampler.Sample(avatar));
+            AssertPreparedPoseFallback();
         }
 
         [Test]
@@ -160,8 +177,137 @@ namespace VRVlog.LilToonExporter.Tests
             var selected = State(controller.layers[0].stateMachine, Clip("Open", AnimationCurve.Constant(0, 1, 100)));
             var transition = idle.AddTransition(selected); transition.hasExitTime = false; transition.duration = 0;
             transition.AddCondition(AnimatorConditionMode.Greater, .5f, "Voice");
-            var message = Assert.Throws<NeutralShapeSamplingException>(() => NeutralShapeSampler.Sample(avatar)).Message;
+            var message = AssertPreparedPoseFallback();
             Assert.That(message, Does.Contain("外部入力").And.Contain("Body / Open"));
+        }
+
+        [Test]
+        public void ContactAndVrInputsRetainGenericMorphWithoutLosingIndependentStationaryPose()
+        {
+            Open();
+            var contactType = AppDomain.CurrentDomain.GetAssemblies().Select(assembly =>
+                assembly.GetType("VRC.SDK3.Dynamics.Contact.Components.VRCContactReceiver")).FirstOrDefault(type => type != null);
+            if (contactType == null) Assert.Ignore("Install the real VRChat Contacts SDK.");
+            var contact = avatar.AddComponent(contactType);
+            using (var data = new SerializedObject(contact))
+            {
+                data.FindProperty("parameter").stringValue = "Pet";
+                data.ApplyModifiedPropertiesWithoutUndo();
+            }
+            controller.AddParameter("Pet", AnimatorControllerParameterType.Float);
+            controller.AddParameter("Upright", AnimatorControllerParameterType.Float);
+            controller.AddParameter("VRMode", AnimatorControllerParameterType.Int);
+            controller.AddParameter("Viseme", AnimatorControllerParameterType.Int);
+            controller.AddParameter("Voice", AnimatorControllerParameterType.Float);
+            var machine = Layer("External facial inputs");
+            var idle = State(machine, Clip("Untouched", AnimationCurve.Constant(0, 1, 0))); machine.defaultState = idle;
+            var selected = State(machine, Clip("Untouched", AnimationCurve.Constant(0, 1, 100)));
+            var transition = idle.AddTransition(selected); transition.hasExitTime = false; transition.duration = 0;
+            foreach (var parameter in new[] { "Pet", "Upright", "Voice" })
+                transition.AddCondition(AnimatorConditionMode.Greater, .5f, parameter);
+            foreach (var parameter in new[] { "VRMode", "Viseme" })
+                transition.AddCondition(AnimatorConditionMode.Equals, 1, parameter);
+            var sourceJson = EditorJsonUtility.ToJson(controller);
+            var warnings = new List<string>();
+            var values = NeutralShapeSampler.Sample(avatar, warnings: warnings);
+            Assert.That(values.Select(value => value.Shape), Is.EquivalentTo(new[] { "Open" }));
+            Assert.That(values.Single().Weight, Is.EqualTo(100).Within(.01));
+            var message = string.Join("\n", warnings);
+            Assert.That(message, Does.Contain("Body / Untouched").And.Contain("外部入力"));
+            foreach (var parameter in new[] { "Pet", "Upright", "VRMode", "Viseme", "Voice" })
+                Assert.That(message, Does.Contain(parameter));
+            Assert.That(skin.GetBlendShapeWeight(0), Is.Zero, "Sampling must not alter the prepared object.");
+            NeutralShapeSnapshot.Apply(avatar, values);
+            Assert.That(skin.GetBlendShapeWeight(0), Is.EqualTo(100).Within(.01));
+            Assert.That(skin.GetBlendShapeWeight(3), Is.EqualTo(35), "The authored generic channel survives external inputs.");
+            Assert.That(EditorJsonUtility.ToJson(controller), Is.EqualTo(sourceJson));
+        }
+
+        [Test]
+        public void UnsupportedSyncedNeutralLayerKeepsPreparedPoseAndWarns()
+        {
+            Open(); Layer("Synced neutral");
+            var layers = controller.layers;
+            layers[1].syncedLayerIndex = 0; controller.layers = layers;
+            Assert.That(AssertPreparedPoseFallback(), Does.Contain("同期").And.Contain("Body / Open"));
+        }
+
+        [Test]
+        public void OtherPlayableMorphWriterRetainsPreparedPoseRatherThanBlockingExport()
+        {
+            Open();
+            var other = AnimatorController.CreateAnimatorControllerAtPath(folder + "/Gesture.controller");
+            var state = other.layers[0].stateMachine.AddState("Other playable face");
+            state.motion = Clip("Open", AnimationCurve.Constant(0, 1, 0)); state.writeDefaultValues = false;
+            other.layers[0].stateMachine.defaultState = state;
+            using (var data = new SerializedObject(descriptor))
+            {
+                var layers = data.FindProperty("baseAnimationLayers"); layers.arraySize = 2;
+                var layer = layers.GetArrayElementAtIndex(1);
+                var type = layer.FindPropertyRelative("type"); type.enumValueIndex = Array.IndexOf(type.enumNames, "Gesture");
+                layer.FindPropertyRelative("isDefault").boolValue = false;
+                layer.FindPropertyRelative("animatorController").objectReferenceValue = other;
+                data.ApplyModifiedPropertiesWithoutUndo();
+            }
+            Assert.That(AssertPreparedPoseFallback(), Does.Contain("FX以外").And.Contain("Body / Open"));
+        }
+
+        [Test]
+        public void UnsupportedStateBehaviourRetainsPreparedPoseAndReportsItsType()
+        {
+            var state = Open();
+            var type = AppDomain.CurrentDomain.GetAssemblies().Select(assembly =>
+                assembly.GetType("VRC.SDK3.Avatars.Components.VRCAnimatorLayerControl")).FirstOrDefault(candidate => candidate != null);
+            Assert.That(type, Is.Not.Null);
+            state.AddStateMachineBehaviour(type);
+            Assert.That(AssertPreparedPoseFallback(), Does.Contain("VRCAnimatorLayerControl"));
+        }
+
+        [TestCase(false)]
+        [TestCase(true)]
+        public void HiddenMorphRendererKeepsPreparedPoseAndWarns(bool inactive)
+        {
+            Open();
+            if (inactive) skin.gameObject.SetActive(false);
+            else skin.enabled = false;
+            Assert.That(AssertPreparedPoseFallback(), Does.Contain("非表示").And.Contain("Body / Open"));
+            Assert.That(skin.enabled, Is.EqualTo(inactive));
+            Assert.That(skin.gameObject.activeSelf, Is.EqualTo(!inactive));
+        }
+
+        [TestCase(float.NaN)]
+        [TestCase(float.PositiveInfinity)]
+        [TestCase(float.NegativeInfinity)]
+        public void MalformedDriverNumberRemainsFatalRatherThanBecomingPoseFallback(float value)
+        {
+            controller.AddParameter("Face", AnimatorControllerParameterType.Float);
+            var initial = Open();
+            ParameterDriverExpressionTests.Driver(initial, ParameterDriverExpressionTests.Op("Set", "Face", value));
+            var selected = State(controller.layers[0].stateMachine, Clip("Open", AnimationCurve.Constant(0, 1, 0)));
+            var transition = initial.AddTransition(selected); transition.hasExitTime = false; transition.duration = 0;
+            transition.AddCondition(AnimatorConditionMode.Greater, .5f, "Face");
+            var warnings = new List<string>();
+            var error = Assert.Throws<InvalidOperationException>(() => NeutralShapeSampler.Sample(avatar, warnings: warnings));
+            Assert.That(error.Message, Does.Contain("数値が不正"));
+            Assert.That(warnings, Is.Empty);
+        }
+
+        [TestCase(float.NaN)]
+        [TestCase(float.PositiveInfinity)]
+        [TestCase(float.NegativeInfinity)]
+        public void MalformedCurveNumberCannotBeHiddenByExternalInputFallback(float value)
+        {
+            var state = Open();
+            AnimationUtility.SetEditorCurve((AnimationClip)state.motion,
+                EditorCurveBinding.FloatCurve("Body", typeof(SkinnedMeshRenderer), "blendShape.Open"),
+                AnimationCurve.Constant(0, 1, value));
+            controller.AddParameter("Voice", AnimatorControllerParameterType.Float);
+            var selected = State(controller.layers[0].stateMachine, Clip("Open", AnimationCurve.Constant(0, 1, 0)));
+            var transition = state.AddTransition(selected); transition.hasExitTime = false; transition.duration = 0;
+            transition.AddCondition(AnimatorConditionMode.Greater, .5f, "Voice");
+            var warnings = new List<string>();
+            Assert.Throws<InvalidOperationException>(() => NeutralShapeSampler.Sample(avatar, warnings: warnings));
+            Assert.That(warnings, Is.Empty, "Invalid numbers must be validated before classifying external inputs.");
         }
 
         [Test]
@@ -204,7 +350,7 @@ namespace VRVlog.LilToonExporter.Tests
         // branch states on FACE EMOTE PLAYER. Voice gates are AND transitions.
         [TestCase(false)]
         [TestCase(true)]
-        public void GeneratedFaceEmoStyleNestedFxPrunesProvedInactiveVoiceGatesAndRejectsUnprovedOnes(bool waitByVoice)
+        public void GeneratedFaceEmoStyleNestedFxPrunesInactiveVoiceGatesAndPreservesUnprovedPose(bool waitByVoice)
         {
             Open();
             controller.AddParameter("AFK", AnimatorControllerParameterType.Bool);
@@ -262,7 +408,7 @@ namespace VRVlog.LilToonExporter.Tests
             changed.AddCondition(AnimatorConditionMode.Less, .01f, "Voice");
             if (!waitByVoice) AssertOriginalNestedModePose(mode);
             if (waitByVoice)
-                Assert.That(Assert.Throws<NeutralShapeSamplingException>(() => NeutralShapeSampler.Sample(avatar)).Message, Does.Contain("Voice"));
+                Assert.That(AssertPreparedPoseFallback(), Does.Contain("Voice"));
             else
                 Assert.That(NeutralShapeSampler.Sample(avatar).Single(value => value.Shape == "Open").Weight, Is.EqualTo(70).Within(.01));
         }
@@ -362,15 +508,15 @@ namespace VRVlog.LilToonExporter.Tests
             var externallyChosen = State(root, Clip("Open", AnimationCurve.Constant(0, 1, 0)));
             var voice = root.AddAnyStateTransition(externallyChosen); voice.hasExitTime = false; voice.duration = 0;
             voice.AddCondition(AnimatorConditionMode.Greater, .5f, "Voice");
-            Assert.That(Assert.Throws<NeutralShapeSamplingException>(() => NeutralShapeSampler.Sample(avatar)).Message, Does.Contain("Voice"));
+            Assert.That(AssertPreparedPoseFallback(), Does.Contain("Voice"));
         }
 
         [Test]
-        public void AutomaticBlinkWithWriteDefaultsCanAffectTheOpeningAndIsNotExcluded()
+        public void AutomaticBlinkWithWriteDefaultsRetainsTheEntireCoupledPreparedPose()
         {
             Open(); var blink = Layer("Blink with implicit writes");
             blink.defaultState = State(blink, Clip("Blink", AnimationCurve.Linear(0, 0, 10, 100)), writeDefaults: true);
-            Assert.Throws<NeutralShapeSamplingException>(() => NeutralShapeSampler.Sample(avatar));
+            AssertPreparedPoseFallback();
         }
 
         [Test]
@@ -381,7 +527,7 @@ namespace VRVlog.LilToonExporter.Tests
             var other = State(controller.layers[0].stateMachine, Clip("Open", AnimationCurve.Constant(0, 1, 0)));
             var transition = open.AddTransition(other); transition.hasExitTime = false; transition.duration = 0;
             transition.AddCondition(AnimatorConditionMode.Equals, 1, "Face");
-            Assert.That(Assert.Throws<InvalidOperationException>(() => NeutralShapeSampler.Sample(avatar)).Message, Does.Contain("Random"));
+            Assert.That(AssertPreparedPoseFallback(), Does.Contain("Random"));
         }
 
         [Test]

@@ -20,6 +20,7 @@ namespace VRVlog.LilToonExporter
         private readonly ISet<string> expressionParameters;
         private readonly ExpressionDependencies dependencies;
         private readonly bool defaultLocal;
+        private readonly bool neutral;
         private readonly ISet<string> suppliedInputs;
         private InvalidOperationException failure;
         private int entries;
@@ -29,11 +30,12 @@ namespace VRVlog.LilToonExporter
         internal AnimatorController Controller { get; private set; }
 
         internal ExpressionEvaluationSession(RuntimeAnimatorController runtime, ExpressionDependencies dependencies,
-            ISet<string> expressionParameters, bool defaultLocal = true, FixedExpressionContext fixedContext = null)
+            ISet<string> expressionParameters, bool defaultLocal = true, FixedExpressionContext fixedContext = null, bool neutral = false)
         {
             this.dependencies = dependencies;
             this.expressionParameters = expressionParameters ?? new HashSet<string>();
             this.defaultLocal = defaultLocal;
+            this.neutral = neutral;
             suppliedInputs = fixedContext == null ? null : new HashSet<string>(fixedContext.Values.Keys, StringComparer.Ordinal);
             // The fixed export environment explicitly starts with FX enabled.
             // Every potentially reachable non-unit command is still rejected.
@@ -78,7 +80,7 @@ namespace VRVlog.LilToonExporter
                 if (value == null) return null;
                 if (value is AnimationClip clip) return replacements.TryGetValue(clip, out var replacement) ? replacement : clip;
                 if (copies.TryGetValue(value, out var existing)) return (Motion)existing;
-                if (!(value is BlendTree originalTree)) throw new InvalidOperationException("未対応のAnimator Motionです。");
+                if (!(value is BlendTree originalTree)) throw UnsupportedPose("未対応のAnimator Motionです。");
                 var tree = (BlendTree)Own(new BlendTree { name = value.name }); copies.Add(value, tree);
                 tree.blendType = originalTree.blendType;
                 tree.blendParameter = originalTree.blendParameter; tree.blendParameterY = originalTree.blendParameterY;
@@ -172,14 +174,14 @@ namespace VRVlog.LilToonExporter
             if (!Sessions.TryGetValue(sessionId, out var session) || session.Animator != animator || session.failure != null) return;
             try
             {
-                if (++session.entries > 4096) throw new InvalidOperationException("Parameter Driverの進入回数が上限を超えました。循環する表情は変換できません。");
+                if (++session.entries > 4096) throw session.UnsupportedPose("Parameter Driverの進入回数が上限を超えました。循環する表情は変換できません。");
                 var program = session.programs[programIndex];
                 if (program.FxControl)
                 {
                     // Every observed command must preserve full FX weight.
                     // A transient disable cannot be safely sampled and reset.
                     if (program.FxWeight != 1)
-                        throw new InvalidOperationException(program.Location + " / VRCPlayableLayerControl: FXの重みを変更する状態は固定表情に変換できません。");
+                        throw session.UnsupportedPose(program.Location + " / VRCPlayableLayerControl: FXの重みを変更する状態は固定表情に変換できません。");
                     session.neutralFxObserved = true;
                     return;
                 }
@@ -190,7 +192,7 @@ namespace VRVlog.LilToonExporter
                         case AnimatorControllerParameterType.Bool: return playable.GetBool(name) ? 1 : 0;
                         case AnimatorControllerParameterType.Int: return playable.GetInteger(name);
                         case AnimatorControllerParameterType.Float: return playable.GetFloat(name);
-                        default: throw new InvalidOperationException("Triggerは固定表情に変換できません。");
+                        default: throw session.UnsupportedPose("Triggerは固定表情に変換できません。");
                     }
                 }
                 void Write(string name, double value)
@@ -219,8 +221,11 @@ namespace VRVlog.LilToonExporter
         {
             Check();
             if (dependencies.HasFxControls && !neutralFxObserved)
-                throw new InvalidOperationException("FXの初期状態に重み1を指定するVRCPlayableLayerControlがなく、表情への影響を確定できません。");
+                throw UnsupportedPose("FXの初期状態に重み1を指定するVRCPlayableLayerControlがなく、表情への影響を確定できません。");
         }
+
+        private InvalidOperationException UnsupportedPose(string message) => neutral ?
+            new NeutralShapeSamplingException(message) : new InvalidOperationException(message);
 
         public void Dispose()
         {

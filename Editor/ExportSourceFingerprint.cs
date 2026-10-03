@@ -160,6 +160,15 @@ namespace VRVlog.LilToonExporter
 
         static void SerializedData(Digest hash, Object value, Queue<Object> queue)
         {
+            // Cold clips populate their native editor-curve cache on the first
+            // binding read, without changing authored curves or dirtying the
+            // asset. Settle those read-only caches before the source stamp;
+            // every serialized field, curve, event and setting is still hashed.
+            if (value is AnimationClip clip)
+            {
+                AnimationUtility.GetCurveBindings(clip);
+                AnimationUtility.GetObjectReferenceCurveBindings(clip);
+            }
             using var serialized = new SerializedObject(value);
             using var property = serialized.GetIterator();
             var managed = new HashSet<long>(); var enterChildren = true;
