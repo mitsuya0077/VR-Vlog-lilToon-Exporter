@@ -286,7 +286,22 @@ namespace VRVlog.LilToonExporter.Tests
         [TestCase(true, false, false)]
         [TestCase(true, true, false)]
         [TestCase(true, false, true)]
-        public async Task ActualExportImportsSpringsAndMovesHairWithoutChangingOriginal(bool full, bool modularAvatar, bool rootCollider)
+        public Task ActualExportImportsSpringsAndMovesHairWithoutChangingOriginal(bool full, bool modularAvatar, bool rootCollider) =>
+            ExportImportsSpringsAndMovesHair(full, modularAvatar, rootCollider, false);
+
+        [TestCase(false)]
+        [TestCase(true)]
+        public Task InstalledAvatarOptimizerPreservesSpringMotionAndCollisionsAfterFullExport(bool full)
+        {
+            var optimizer = Sdk("Anatawa12.AvatarOptimizer.TraceAndOptimize");
+            if (optimizer == null) Assert.Ignore("Optional AAO integration requires installed Avatar Optimizer.");
+            Assert.That(Sdk("nadena.dev.ndmf.BuildContext"), Is.Not.Null, "Installed AAO requires its NDMF dependency.");
+            Assert.That(ExportOptimizationMarker.AvatarOptimizerAdapterAvailable, Is.True,
+                "The installed AAO compatibility adapter must compile and register.");
+            return ExportImportsSpringsAndMovesHair(full, false, false, true);
+        }
+
+        async Task ExportImportsSpringsAndMovesHair(bool full, bool modularAvatar, bool rootCollider, bool avatarOptimizer)
         {
             using var fixture = new AttachmentConnectionTests.Fixture();
             var hair = fixture.Source.transform.Find("Independent hair/Head");
@@ -309,18 +324,43 @@ namespace VRVlog.LilToonExporter.Tests
             Set(pb, "immobile", 0f); Set(pb, "limitType", 1); Set(pb, "maxAngleX", 60f);
             var collider = (rootCollider ? fixture.Source : head.gameObject).AddComponent(Sdk("VRC.SDK3.Dynamics.PhysBone.Components.VRCPhysBoneCollider"));
             Set(collider, "radius", .025f); Set(collider, "position", Vector3.left);
+            Component duplicateCollider = null;
+            if (avatarOptimizer)
+            {
+                duplicateCollider = head.gameObject.AddComponent(collider.GetType());
+                Set(duplicateCollider, "radius", .025f); Set(duplicateCollider, "position", Vector3.left);
+                fixture.Source.AddComponent(Sdk("Anatawa12.AvatarOptimizer.TraceAndOptimize"));
+                Assert.That(NdmfExportPreparation.NeedsProcessing(fixture.Source), Is.True,
+                    "AAO authoring alone must start the NDMF build.");
+                Assert.That(fixture.Source.GetComponentsInChildren<SkinnedMeshRenderer>().All(skin =>
+                    skin.bones[0] == hair && skin.sharedMesh.boneWeights.All(weight => weight.boneIndex0 == 0 && weight.weight0 == 1)), Is.True,
+                    "The PhysBone must drive weighted visible geometry, so AAO cannot discard it as unused.");
+            }
             using (var data = new SerializedObject(pb))
             {
-                var list = data.FindProperty("colliders"); list.arraySize = 1;
-                list.GetArrayElementAtIndex(0).objectReferenceValue = collider; data.ApplyModifiedPropertiesWithoutUndo();
+                var list = data.FindProperty("colliders"); list.arraySize = avatarOptimizer ? 2 : 1;
+                list.GetArrayElementAtIndex(0).objectReferenceValue = collider;
+                if (avatarOptimizer) list.GetArrayElementAtIndex(1).objectReferenceValue = duplicateCollider;
+                data.ApplyModifiedPropertiesWithoutUndo();
             }
             foreach (var skin in fixture.Source.GetComponentsInChildren<SkinnedMeshRenderer>()) skin.sharedMaterial.shader = Shader.Find("lilToon");
             // A scene-root collider must survive on an identity child; an
             // exported bone's orphan is serialized even without a group.
-            fixture.Source.AddComponent<VRM10SpringBoneCollider>().Radius = .123f;
-            head.gameObject.AddComponent<VRM10SpringBoneCollider>().Radius = .234f;
+            if (!avatarOptimizer)
+            {
+                fixture.Source.AddComponent<VRM10SpringBoneCollider>().Radius = .123f;
+                head.gameObject.AddComponent<VRM10SpringBoneCollider>().Radius = .234f;
+            }
             var positions = fixture.Source.GetComponentsInChildren<Transform>().Select(t => t.localPosition).ToArray();
             var originalParent = hair.parent.parent;
+            var sourceSkins = fixture.Source.GetComponentsInChildren<SkinnedMeshRenderer>();
+            var sourceBones = sourceSkins.Select(skin => skin.bones).ToArray();
+            var sourceVertices = fixture.Mesh.vertices;
+            var sourceWeights = fixture.Mesh.boneWeights;
+            var sourceBinds = fixture.Mesh.bindposes;
+            var sourcePhysBone = EditorJsonUtility.ToJson(pb);
+            var sourceCollider = EditorJsonUtility.ToJson(collider);
+            var sourceDuplicate = duplicateCollider != null ? EditorJsonUtility.ToJson(duplicateCollider) : null;
             var warnings = new List<string>(); Vrm10Instance imported = null;
             try
             {
@@ -330,7 +370,8 @@ namespace VRVlog.LilToonExporter.Tests
                 var solver = new Vrm10FastSpringboneRuntimeStandalone();
                 imported = await Vrm10.LoadBytesAsync(bytes, canLoadVrm0X: false, awaitCaller: new ImmediateCaller(), springboneRuntime: solver);
                 Assert.That(imported.SpringBone.Springs.Count, Is.EqualTo(1));
-                Assert.That(imported.GetComponentsInChildren<VRM10SpringBoneCollider>().Length, Is.EqualTo(3),
+                Assert.That(imported.GetComponentsInChildren<VRM10SpringBoneCollider>().Length, Is.EqualTo(avatarOptimizer ? 1 : 3),
+                    avatarOptimizer ? "AAO must actually merge the two referenced equivalent colliders before VRM conversion." :
                     "Both authored unreferenced colliders and the converted collider must survive export.");
                 imported.UpdateType = Vrm10Instance.UpdateTypes.None;
                 Assert.That(solver.ReconstructSpringBone(), Is.True);
@@ -355,6 +396,21 @@ namespace VRVlog.LilToonExporter.Tests
                     Is.GreaterThan(.024f), "Imported sphere must push the hair endpoint outside its radius.");
                 Assert.That(fixture.Source.GetComponentsInChildren<Transform>().Select(t => t.localPosition), Is.EqualTo(positions));
                 Assert.That(hair.parent.parent, Is.EqualTo(originalParent));
+                Assert.That(sourceSkins.All(skin => skin.sharedMesh == fixture.Mesh), Is.True);
+                for (var i = 0; i < sourceSkins.Length; i++) Assert.That(sourceSkins[i].bones, Is.EqualTo(sourceBones[i]));
+                Assert.That(fixture.Mesh.vertices, Is.EqualTo(sourceVertices));
+                Assert.That(fixture.Mesh.boneWeights, Is.EqualTo(sourceWeights));
+                Assert.That(fixture.Mesh.bindposes, Is.EqualTo(sourceBinds));
+                Assert.That(EditorJsonUtility.ToJson(pb), Is.EqualTo(sourcePhysBone));
+                Assert.That(EditorJsonUtility.ToJson(collider), Is.EqualTo(sourceCollider));
+                if (avatarOptimizer)
+                {
+                    Assert.That(duplicateCollider != null, Is.True);
+                    Assert.That(EditorJsonUtility.ToJson(duplicateCollider), Is.EqualTo(sourceDuplicate));
+                    Assert.That(fixture.Source.GetComponentsInChildren<Component>().Count(component => component != null &&
+                        component.GetType() == collider.GetType()), Is.EqualTo(2), "Only the disposable clone may merge colliders.");
+                    Assert.That(fixture.Source.GetComponent<ExportOptimizationMarker>(), Is.Null);
+                }
                 Assert.That(fixture.Source.GetComponentsInChildren<VRM10SpringBoneJoint>(), Is.Empty);
                 Assert.That(warnings.Any(w => w.Contains("PhysBone変換:")), Is.True);
                 var artifact = Environment.GetEnvironmentVariable("VRVLOG_SPRING_FIXTURE");
