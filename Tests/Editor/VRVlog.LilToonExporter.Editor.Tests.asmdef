@@ -6,6 +6,7 @@
     "VRVlog.LilToonExporter.Runtime",
     "VRVlog.LilToonExporter.TestFixtures",
     "VRM10",
+    "SpringBoneJobs",
     "UniGLTF",
     "UniGLTF.Utils",
     "VrmLib"
