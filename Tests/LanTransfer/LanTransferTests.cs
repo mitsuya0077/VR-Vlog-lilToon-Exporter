@@ -221,6 +221,48 @@ namespace VRVlog.LilToonExporter.LanTransfer.Tests
             }
         }
 
+        [TestCase("/v1/complete", (int)TransferState.Completed, true)]
+        [TestCase("/v1/cancel", (int)TransferState.Canceled, true)]
+        [TestCase("/v1/complete", (int)TransferState.Completed, false)]
+        [TestCase("/v1/cancel", (int)TransferState.Canceled, false)]
+        public void StoppingAcceptedReceiptKeepsOutcomeAndClosesResources(string route, int expectedState, bool dispose)
+        {
+            var path = NewSnapshot(FixtureBytes());
+            using (var accepted = new ManualResetEventSlim())
+            using (var releaseAcknowledgement = new ManualResetEventSlim())
+            using (var server = LanVrmTransferServer.StartLoopbackForTests(path, "fixture.vrm", TimeSpan.FromMinutes(1),
+                beforeReceiptWrite: () =>
+                {
+                    accepted.Set();
+                    if (!releaseAcknowledgement.Wait(3000)) throw new IOException("Receipt test timed out.");
+                }))
+            {
+                try
+                {
+                    using (var connection = new Connection(server, false))
+                    {
+                        connection.Send("POST", route, Credentials(server));
+                        Assert.That(accepted.Wait(3000), Is.True);
+                        // Exercise the real window-close path, and the other
+                        // external terminal path, before the TLS ACK can write.
+                        if (dispose) server.Dispose();
+                        else server.Stop(TransferState.Failed);
+                        Assert.That(server.State == (TransferState)expectedState, Is.True,
+                            "Explicit cleanup retains the authenticated outcome.");
+                        Assert.That(server.Qr == null, Is.True);
+                        Assert.That(File.Exists(path), Is.False, "Cleanup cannot wait for the paused response.");
+                        Assert.That(connection.PeerClosed, Is.True, "Explicit cleanup closes accepted sockets immediately.");
+                        Assert.Throws<SocketException>(() => { using (var socket = new TcpClient()) socket.Connect("127.0.0.1", server.Port); });
+                        server.Stop(TransferState.Expired);
+                        Assert.That(server.State == (TransferState)expectedState, Is.True,
+                            "Later expiry cannot change the retired result.");
+                        releaseAcknowledgement.Set();
+                    }
+                }
+                finally { releaseAcknowledgement.Set(); }
+            }
+        }
+
         [Test]
         public void UnauthenticatedConnectionLimitAndStopClosePendingSockets()
         {
@@ -271,6 +313,7 @@ namespace VRVlog.LilToonExporter.LanTransfer.Tests
             private readonly TcpClient client;
             private readonly TlsClientProtocol protocol;
             private Stream Stream => protocol.Stream;
+            internal bool PeerClosed => client.Client.Poll(3000000, SelectMode.SelectRead) && client.Available == 0;
             internal Connection(LanVrmTransferServer server, bool wrongPin)
             {
                 client = new TcpClient { ReceiveTimeout = 5000, SendTimeout = 5000 };

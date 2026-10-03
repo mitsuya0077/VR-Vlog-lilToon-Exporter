@@ -41,6 +41,7 @@ namespace VRVlog.LilToonExporter.LanTransfer
         // Supplied only by the loopback test factory to pause an accepted receipt.
         private readonly Action beforeReceiptWrite;
         private bool activeDownload;
+        private TransferState? acceptedOutcome;
         private long transferred;
         private TransferState state = TransferState.Waiting;
         private string message = "iPhoneのVRVlogで「PCから受け取る」を開き、QRを読み取ってください。";
@@ -204,12 +205,13 @@ namespace VRVlog.LilToonExporter.LanTransfer
                         lock (gate)
                         {
                             if (state >= TransferState.Completing || clock.Elapsed >= lifetime) return;
+                            acceptedOutcome = terminal;
                             state = TransferState.Completing;
                             Qr = null;
                             Array.Clear(token, 0, token.Length);
                         }
-                        // Once authenticated acceptance wins the gate, expiry cannot
-                        // replace its result. Bound the acknowledgement separately.
+                        // Acceptance fixes the outcome; expiry allows this bounded
+                        // acknowledgement, while explicit disposal still cleans up.
                         deadline.Change(5000, Timeout.Infinite);
                         try { beforeReceiptWrite?.Invoke(); Reply(stream, 200, "OK"); }
                         finally { Stop(terminal); }
@@ -264,6 +266,9 @@ namespace VRVlog.LilToonExporter.LanTransfer
             {
                 if (state >= TransferState.Completed) return;
                 if (state == TransferState.Completing && finalState == TransferState.Expired) return;
+                // Window closure, local cancellation or a listener failure must
+                // clean up immediately without rewriting an accepted receipt.
+                if (acceptedOutcome.HasValue) finalState = acceptedOutcome.Value;
                 state = finalState;
                 Qr = null;
                 Array.Clear(token, 0, token.Length);

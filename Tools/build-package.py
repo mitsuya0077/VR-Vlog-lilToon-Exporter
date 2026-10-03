@@ -7,7 +7,7 @@ import zipfile
 from pathlib import Path, PurePosixPath
 
 ROOT = Path(__file__).resolve().parents[1]
-ROOT_FILES = {"package.json", "LICENSE", "CHANGELOG.md", "Documentation~/README.md"}
+ROOT_FILES = {"package.json", "LICENSE", "CHANGELOG.md", "Documentation~/README.md", "Documentation~/LanTransfer.md"}
 PACKAGE_SUFFIXES = {".cs", ".asmdef", ".meta", ".shader"}
 LOCALE_ASSETS = {
     f"Editor/Locales/ExporterLocale_{locale}.json"
