@@ -5,6 +5,8 @@ using NUnit.Framework;
 using UnityEditor;
 using UnityEditor.Animations;
 using UnityEngine;
+using UnityEngine.Animations;
+using UnityEngine.Playables;
 using Object = UnityEngine.Object;
 
 namespace VRVlog.LilToonExporter.Tests
@@ -206,6 +208,8 @@ namespace VRVlog.LilToonExporter.Tests
         {
             Open();
             controller.AddParameter("AFK", AnimatorControllerParameterType.Bool);
+            controller.AddParameter("FaceEmo_CN_EMOTE_OVERRIDE", AnimatorControllerParameterType.Bool);
+            controller.AddParameter("FaceEmo_CN_BYPASS", AnimatorControllerParameterType.Bool);
             controller.AddParameter("Voice", AnimatorControllerParameterType.Float);
             controller.AddParameter("GestureLeft", AnimatorControllerParameterType.Int);
             controller.AddParameter("FaceEmo_EM_EMOTE_PRESELECT", AnimatorControllerParameterType.Int);
@@ -237,18 +241,72 @@ namespace VRVlog.LilToonExporter.Tests
             mode.motion.name = "Mode default opening70"; branch.motion.name = "Branch opening20";
             normal.AddEntryTransition(mode).AddCondition(AnimatorConditionMode.Equals, 1, "FaceEmo_SYNC_EM_EMOTE");
             normal.AddEntryTransition(branch).AddCondition(AnimatorConditionMode.Equals, 2, "FaceEmo_SYNC_EM_EMOTE");
-            // The real generator also creates a direct root "in OVERRIDE"
-            // state after its nested machines. Keep a valid root fallback here;
-            // a parent containing no direct state is not that generated graph.
-            player.defaultState = State(player); player.defaultState.name = "in OVERRIDE";
+            // FaceEmo FxGenerator.GenerateFaceEmotePlayerLayer creates both
+            // direct root states with conditional exits. The exit is necessary:
+            // a root fallback without it never enters the selected nested mode.
+            var overriding = State(player); overriding.name = "in OVERRIDE"; player.defaultState = overriding;
+            var bypass = State(player); bypass.name = "BYPASS";
+            var enterOverride = player.AddAnyStateTransition(overriding); enterOverride.hasExitTime = false; enterOverride.duration = 0;
+            enterOverride.AddCondition(AnimatorConditionMode.If, 0, "FaceEmo_CN_EMOTE_OVERRIDE");
+            enterOverride.AddCondition(AnimatorConditionMode.IfNot, 0, "FaceEmo_CN_BYPASS");
+            var leaveOverride = overriding.AddExitTransition(); leaveOverride.hasExitTime = false; leaveOverride.duration = 0;
+            leaveOverride.AddCondition(AnimatorConditionMode.IfNot, 0, "FaceEmo_CN_EMOTE_OVERRIDE");
+            var enterBypass = player.AddAnyStateTransition(bypass); enterBypass.hasExitTime = false; enterBypass.duration = 0;
+            enterBypass.AddCondition(AnimatorConditionMode.If, 0, "FaceEmo_CN_BYPASS");
+            var leaveBypass = bypass.AddExitTransition(); leaveBypass.hasExitTime = false; leaveBypass.duration = 0;
+            leaveBypass.AddCondition(AnimatorConditionMode.IfNot, 0, "FaceEmo_CN_BYPASS");
+            player.AddStateMachineExitTransition(normal); player.AddStateMachineExitTransition(afk);
             var changed = mode.AddExitTransition(); changed.hasExitTime = false; changed.duration = 0;
             changed.AddCondition(AnimatorConditionMode.NotEqual, 1, "FaceEmo_SYNC_EM_EMOTE");
             changed.AddCondition(AnimatorConditionMode.If, 0, "FaceEmo_SYNC_CN_WAIT_FACE_EMOTE_BY_VOICE");
             changed.AddCondition(AnimatorConditionMode.Less, .01f, "Voice");
+            if (!waitByVoice) AssertOriginalNestedModePose(mode);
             if (waitByVoice)
                 Assert.That(Assert.Throws<NeutralShapeSamplingException>(() => NeutralShapeSampler.Sample(avatar)).Message, Does.Contain("Voice"));
             else
                 Assert.That(NeutralShapeSampler.Sample(avatar).Single(value => value.Shape == "Open").Weight, Is.EqualTo(70).Within(.01));
+        }
+
+        // Native routing is checked independently of the exporter's controller
+        // clone. Original VRC drivers do not execute in EditMode, so seed the
+        // same known post-driver values before evaluating the original graph.
+        private void AssertOriginalNestedModePose(AnimatorState mode)
+        {
+            var preview = UnityEditor.SceneManagement.EditorSceneManager.NewPreviewScene();
+            GameObject copy = null;
+            var graph = default(PlayableGraph);
+            try
+            {
+                copy = Object.Instantiate(avatar); copy.hideFlags = HideFlags.HideAndDontSave;
+                UnityEngine.SceneManagement.SceneManager.MoveGameObjectToScene(copy, preview);
+                foreach (var component in copy.GetComponentsInChildren<Behaviour>(true)) component.enabled = false;
+                var animator = copy.GetComponent<Animator>(); animator.runtimeAnimatorController = null; animator.enabled = true;
+                animator.cullingMode = AnimatorCullingMode.AlwaysAnimate; animator.applyRootMotion = false; animator.fireEvents = false;
+                copy.SetActive(true);
+                graph = PlayableGraph.Create("Generated FaceEmo fixture native routing");
+                graph.SetTimeUpdateMode(DirectorUpdateMode.Manual);
+                var playable = AnimatorControllerPlayable.Create(graph, controller);
+                AnimationPlayableOutput.Create(graph, "Original FaceEmo fixture", animator).SetSourcePlayable(playable);
+                playable.SetBool("AFK", false); playable.SetFloat("Voice", 0); playable.SetInteger("GestureLeft", 0);
+                playable.SetInteger("FaceEmo_EM_EMOTE_PRESELECT", 0); playable.SetInteger("FaceEmo_SYNC_EM_EMOTE", 1);
+                playable.SetBool("FaceEmo_SYNC_CN_WAIT_FACE_EMOTE_BY_VOICE", false);
+                playable.SetBool("FaceEmo_CN_EMOTE_OVERRIDE", false); playable.SetBool("FaceEmo_CN_BYPASS", false);
+                graph.Play(); graph.Evaluate(0f);
+                for (var frame = 0; frame < 120; frame++) graph.Evaluate(1f / 60f);
+                var layer = Array.FindIndex(controller.layers, value => value.name == "[ USER EDIT ] FACE EMOTE PLAYER");
+                Assert.That(playable.IsInTransition(layer), Is.False, "The original generated topology must settle.");
+                Assert.That(playable.GetCurrentAnimatorStateInfo(layer).fullPathHash,
+                    Is.EqualTo(Animator.StringToHash(controller.layers[layer].name + ".Not AFK." + mode.name)),
+                    "The original graph must select the Mode state before testing the exporter's private clone.");
+                Assert.That(copy.transform.Find("Body").GetComponent<SkinnedMeshRenderer>().GetBlendShapeWeight(0),
+                    Is.EqualTo(70).Within(.01f), "The original Mode clip controls opening above the common default.");
+            }
+            finally
+            {
+                if (graph.IsValid()) graph.Destroy();
+                if (copy != null) Object.DestroyImmediate(copy);
+                UnityEditor.SceneManagement.EditorSceneManager.ClosePreviewScene(preview);
+            }
         }
 
         [Test]

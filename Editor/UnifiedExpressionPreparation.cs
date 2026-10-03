@@ -25,11 +25,19 @@ namespace VRVlog.LilToonExporter
         private readonly Dictionary<SkinnedMeshRenderer, Dictionary<string, string>> selectedRawRoutes = new Dictionary<SkinnedMeshRenderer, Dictionary<string, string>>();
         private readonly Dictionary<(SkinnedMeshRenderer Renderer, string Shape), float> capturedWeights =
             new Dictionary<(SkinnedMeshRenderer, string), float>();
+        // Preserve baselines for every potentially selected raw channel and
+        // declared authored UE morph. Unrelated body/clothing keys never affect
+        // this guard and need no arbitrary baseline after renderer merging.
+        private readonly HashSet<(SkinnedMeshRenderer Renderer, string Shape)> baselineChannels =
+            new HashSet<(SkinnedMeshRenderer, string)>();
         private readonly Func<SkinnedMeshRenderer, int, float> neutralWeight;
         private readonly GameObject avatar;
         private readonly Func<Transform, bool> excluded;
         private readonly bool suppressSharedTextureEmission, suppressHdrTextureEmission;
         internal const string LostTracking = "Modular Avatar / NDMF の処理で Unified Expressions の追跡用変形が失われました。メッシュや BlendShape を変更する追加ツールの設定を確認してください。";
+
+        internal const string ConflictingMergedRoutes = "Modular Avatar / NDMF のメッシュ統合で同じ追跡名に異なる BlendShape が対応しました。元の追跡設定を統一してから書き出してください。";
+        internal const string ConflictingMergedWeights = "Modular Avatar / NDMF のメッシュ統合で同じ BlendShape の元の初期値が異なります。元の形を一意に保存できないため、初期値を統一してから書き出してください。";
 
         internal bool SupportsUnified { get; private set; }
 
@@ -53,7 +61,13 @@ namespace VRVlog.LilToonExporter
                     Enumerable.Range(0, skin.sharedMesh.blendShapeCount).Select(skin.sharedMesh.GetBlendShapeName).ToArray());
             foreach (var pair in meshes)
                 for (var index = 0; index < pair.Value.Length; index++)
-                    capturedWeights[(pair.Key, pair.Value[index])] = this.neutralWeight(pair.Key, index);
+                {
+                    var shape = pair.Value[index];
+                    capturedWeights[(pair.Key, shape)] = this.neutralWeight(pair.Key, index);
+                    // Shared raw aliases may become eligible when a build adds
+                    // explicit UE evidence, so retain them even before that gate.
+                    if (UnifiedExpressionRegistry.TryCanonicalize(shape, out _)) baselineChannels.Add((pair.Key, shape));
+                }
             var materialMap = renderers.SelectMany(renderer => renderer.sharedMaterials).Where(material => material != null)
                 .GroupBy(material => material.name, StringComparer.Ordinal).ToDictionary(group => group.Key, group => group.First(), StringComparer.Ordinal);
             var materialSlots = renderers.SelectMany(renderer => renderer.sharedMaterials.Select((material, slot) =>
@@ -105,6 +119,7 @@ namespace VRVlog.LilToonExporter
                     if (binding.Index < 0 || binding.Index >= names.Length) continue;
                     if (!authoredShapes.TryGetValue(skin, out var shapes)) authoredShapes.Add(skin, shapes = new HashSet<string>(StringComparer.Ordinal));
                     shapes.Add(names[binding.Index]);
+                    baselineChannels.Add((skin, names[binding.Index]));
                 }
                 if (!hasScopedMorph && (RetainedColors(clip, omittedMaterials).Any() || RetainedUV(clip, omittedMaterials).Any()))
                     globalCoverage.Add(canonical);
@@ -286,47 +301,82 @@ namespace VRVlog.LilToonExporter
         internal void RebindPrepared(Func<SkinnedMeshRenderer, SkinnedMeshRenderer> replacement)
         {
             if (replacement == null) throw new ArgumentNullException(nameof(replacement));
+            var mapped = new Dictionary<SkinnedMeshRenderer, SkinnedMeshRenderer>();
+            SkinnedMeshRenderer Resolve(SkinnedMeshRenderer old)
+            {
+                if (!mapped.TryGetValue(old, out var current)) mapped.Add(old, current = replacement(old));
+                return current;
+            }
             SkinnedMeshRenderer Map(SkinnedMeshRenderer old)
             {
-                var current = replacement(old);
+                var current = Resolve(old);
                 if (current == null) throw new InvalidOperationException(NdmfExportPreparation.UnknownRendererRelocation);
                 return current;
             }
-            void Remap(Dictionary<SkinnedMeshRenderer, string[]> values)
+            Dictionary<SkinnedMeshRenderer, string[]> Remap(Dictionary<SkinnedMeshRenderer, string[]> values)
             {
-                var entries = values.ToArray(); values.Clear();
-                foreach (var pair in entries) values.Add(Map(pair.Key), pair.Value);
-            }
-            Remap(required); Remap(effectiveRaw);
-            var raw = selectedRawRoutes.ToArray(); selectedRawRoutes.Clear();
-            foreach (var pair in raw)
-            {
-                var current = replacement(pair.Key);
-                if (current != null) selectedRawRoutes.Add(current, pair.Value);
-            }
-            var weights = capturedWeights.ToArray(); capturedWeights.Clear();
-            foreach (var pair in weights)
-            {
-                var current = replacement(pair.Key.Renderer);
-                if (current != null) capturedWeights.Add((current, pair.Key.Shape), pair.Value);
-            }
-            var authored = effectiveAuthoredRoutes.ToArray(); effectiveAuthoredRoutes.Clear();
-            foreach (var route in authored) effectiveAuthoredRoutes.Add((route.Canonical, Map(route.Renderer), route.Shape, route.Weight));
-            Renderer MaterialTarget(Renderer renderer) => renderer is SkinnedMeshRenderer skin ? Map(skin) : renderer;
-            foreach (var key in materialScopes.Keys.ToArray())
-            {
-                var scope = materialScopes[key];
-                // Only selected ambiguous authored material scopes require
-                // relocation proof; an unrelated omitted renderer is optional.
-                if (scope.Renderer is SkinnedMeshRenderer skin)
+                var result = new Dictionary<SkinnedMeshRenderer, string[]>();
+                foreach (var pair in values)
                 {
-                    var current = replacement(skin);
-                    if (current != null) materialScopes[key] = (current, scope.Slot);
+                    var current = Map(pair.Key);
+                    result[current] = result.TryGetValue(current, out var previous)
+                        ? previous.Concat(pair.Value).Distinct(StringComparer.Ordinal).ToArray() : pair.Value;
+                }
+                return result;
+            }
+            var nextRequired = Remap(required);
+            var nextEffectiveRaw = Remap(effectiveRaw);
+            var nextRaw = new Dictionary<SkinnedMeshRenderer, Dictionary<string, string>>();
+            foreach (var pair in selectedRawRoutes)
+            {
+                var current = Resolve(pair.Key);
+                if (current == null) continue;
+                if (!nextRaw.TryGetValue(current, out var routes))
+                    nextRaw.Add(current, routes = new Dictionary<string, string>(StringComparer.Ordinal));
+                foreach (var route in pair.Value)
+                {
+                    if (routes.TryGetValue(route.Key, out var shape) && !string.Equals(shape, route.Value, StringComparison.Ordinal))
+                        throw new InvalidOperationException(ConflictingMergedRoutes + ": " + current.name + " / " + route.Key);
+                    routes[route.Key] = route.Value;
                 }
             }
-            var scopes = referencedMaterialScopes.ToArray(); referencedMaterialScopes.Clear();
-            foreach (var scope in scopes) referencedMaterialScopes.Add((scope.Material, MaterialTarget(scope.Renderer), scope.Slot));
+            var nextWeights = new Dictionary<(SkinnedMeshRenderer Renderer, string Shape), float>();
+            foreach (var pair in capturedWeights)
+            {
+                if (!baselineChannels.Contains(pair.Key)) continue;
+                var current = Resolve(pair.Key.Renderer);
+                if (current == null) continue;
+                var key = (current, pair.Key.Shape);
+                if (nextWeights.TryGetValue(key, out var weight) && !weight.Equals(pair.Value))
+                    throw new InvalidOperationException(ConflictingMergedWeights + ": " + current.name + " / " + pair.Key.Shape);
+                nextWeights[key] = pair.Value;
+            }
+            var nextAuthored = new HashSet<(string Canonical, SkinnedMeshRenderer Renderer, string Shape, float Weight)>(
+                effectiveAuthoredRoutes.Select(route => (route.Canonical, Map(route.Renderer), route.Shape, route.Weight)));
+            Renderer MaterialTarget(Renderer renderer) => renderer is SkinnedMeshRenderer skin ? Map(skin) : renderer;
+            var nextMaterialScopes = materialScopes.ToDictionary(pair => pair.Key, pair => {
+                var scope = pair.Value;
+                // An unselected omitted material scope does not require relocation.
+                var current = scope.Renderer is SkinnedMeshRenderer skin ? Resolve(skin) : null;
+                return current != null ? (Renderer: (Renderer)current, scope.Slot) : scope;
+            }, StringComparer.Ordinal);
+            var nextReferencedScopes = new HashSet<(string Material, Renderer Renderer, int Slot)>(
+                referencedMaterialScopes.Select(scope => (scope.Material, MaterialTarget(scope.Renderer), scope.Slot)));
+
+            // Publish only once every original route has a compatible destination.
+            // Equal baselines can share one final channel; conflicting origins cannot.
+            void Replace<TKey, TValue>(Dictionary<TKey, TValue> target, Dictionary<TKey, TValue> values)
+            {
+                target.Clear(); foreach (var pair in values) target.Add(pair.Key, pair.Value);
+            }
+            Replace(required, nextRequired); Replace(effectiveRaw, nextEffectiveRaw);
+            Replace(selectedRawRoutes, nextRaw); Replace(capturedWeights, nextWeights);
+            baselineChannels.Clear(); baselineChannels.UnionWith(nextWeights.Keys);
+            effectiveAuthoredRoutes.Clear(); effectiveAuthoredRoutes.UnionWith(nextAuthored);
+            Replace(materialScopes, nextMaterialScopes);
+            referencedMaterialScopes.Clear(); referencedMaterialScopes.UnionWith(nextReferencedScopes);
         }
+
 
         internal void Verify(bool requireUsableEvidence = false) => Verify(requireUsableEvidence, false);
 
