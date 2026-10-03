@@ -72,7 +72,7 @@ namespace VRVlog.LilToonExporter
             recoveryReport.Stage = "表情メニュー読込";
             var menu = VrChatExpressionSampler.Analyze(source, exclusions.ContainsPath, menuPolicy);
             exclusions.FilterExpressions(menu, warnings);
-            var sourceBlink = BlinkExportSession.Resolve(source, blinkOptions, exclusions.Contains, suppressSharedTextureEmission, suppressHdrTextureEmission);
+            var sourceBlink = BlinkExportSession.CaptureForExport(source, blinkOptions, exclusions.Contains, suppressSharedTextureEmission, suppressHdrTextureEmission);
             using var poses = new PoseExportSession(source, poseOptions, exclusions.Contains, menuPolicy);
             recoveryReport.Stage = "コピー作成";
             var clone = UnityEngine.Object.Instantiate(source);
@@ -86,7 +86,7 @@ namespace VRVlog.LilToonExporter
                 var recovery = recoveryOptions == null || recoveryOptions.Actions.Count == 0 ? null : new ExportRecoveryCopySession(source, clone, temporaryMaterials, recoveryOptions, recoveryReport, bakeOptions);
                 using var blink = sourceBlink.ForClone(source, clone);
                 using var gimmicks = new ExportGimmickSession(source, clone, gimmickOptions);
-                var expressionBindings = new PreparedExpressionBindings(clone, menu);
+                using var expressionBindings = new PreparedExpressionBindings(clone, menu, excludedPath: exclusions.ContainsPath);
                 MaAppearanceSnapshot.Apply(source, clone, temporaryMeshes, exclusions, warnings);
                 PoseExportSession.RemoveAplFromCopy(source, clone);
                 recovery?.Apply(warnings);
@@ -103,23 +103,45 @@ namespace VRVlog.LilToonExporter
                     SkinnedMeshFallbackWeights.Preserve(clone, temporaryMeshes, warnings, fixedRootJoints);
                 var unifiedPreparation = trackingProfile == null ? new UnifiedExpressionPreparation(clone, suppressSharedTextureEmission: suppressSharedTextureEmission, suppressHdrTextureEmission: suppressHdrTextureEmission) : null;
                 recoveryReport.Stage = "ビルド処理";
+                expressionBindings.CaptureAuthoredExpressions();
                 using var preparation = NdmfExportPreparation.Prepare(source, clone, warnings, (copy, original) =>
                 {
                     recoveryReport.Track(copy, original);
                     recovery?.Track(copy, original);
                 });
+                expressionBindings.RebindPrepared(preparation.PreparedRendererFor);
+                expressionBindings.RebindAuthoredExpressions(preparation.IsolatedCopyOf);
+                blink.RebindPrepared(preparation.PreparedRendererFor);
+                unifiedPreparation?.RebindPrepared(preparation.PreparedRendererFor);
                 gimmicks.Apply(expressionBindings, menu, warnings);
-                unifiedPreparation?.Verify(blink.RequiresUnifiedEvidence);
+                blink.VerifyPreparedIdentity(clone);
+                unifiedPreparation?.VerifyIdentityAndDeformation();
                 recoveryReport.Stage = "状態確定";
                 // Unsaved menu assets are deliberately isolated before NDMF
                 // runs. Preserve branch identity through those exact copies,
                 // while still rejecting a menu replaced by a plugin.
                 var preparedMenuPolicy = menuPolicy?.WithOwnedCopies(value => preparation.IsolatedCopyOf(value as UnityEngine.Object));
                 poses.CollectPrepared(clone, warnings, preparedMenuPolicy);
+                // Evaluate the final FX defaults after authoring passes. A mesh
+                // can be closed at weight zero and opened by a startup state;
+                // serialized renderer weights alone are not its neutral face.
+                recoveryReport.Stage = "基準形評価";
+                NeutralShapeSnapshot.Apply(clone, NeutralShapeSampler.Sample(clone, expressionBindings.ExcludesPreparedPath));
+                blink.ResolvePreparedNeutral(clone, suppressSharedTextureEmission: suppressSharedTextureEmission,
+                    suppressHdrTextureEmission: suppressHdrTextureEmission);
+                var neutral = NeutralShapeSnapshot.Capture(clone);
+                using var authoredEndpoints = AuthoredExpressionEndpoints.Capture(clone, neutral, trackingProfile);
+                FaceEmoExpressions.ApplyPreparedDefaultFace(clone, menu, expressionBindings, expressionBindings.ExcludesPreparedPath);
                 expressionBindings.Capture(menu);
                 blink.Bake(clone, temporaryMeshes);
                 AvatarBaseShape.Preserve(clone, clone, temporaryMeshes, warnings);
+                authoredEndpoints.Bake(temporaryMeshes);
                 var expressions = VrChatExpressionBaker.Bake(null, clone, menu, temporaryMeshes, warnings, expressionBindings);
+                // The pre-build verifier already checked authoring losses. From
+                // this point the intentionally rebased/generated endpoints are
+                // the reference, rather than the old static weights and routes.
+                unifiedPreparation = trackingProfile == null ? new UnifiedExpressionPreparation(clone,
+                    suppressSharedTextureEmission: suppressSharedTextureEmission, suppressHdrTextureEmission: suppressHdrTextureEmission) : null;
                 // Authoring passes may restore source material references. Reapply
                 // only the selected, source-identity recipe to the owned copy.
                 recovery?.Apply();
@@ -160,7 +182,7 @@ namespace VRVlog.LilToonExporter
                 recoveryReport.Stage = "出力検査";
                 exported = ExportSkinRoots.Repair(exported, warnings);
                 exported = blink.Apply(VrmExpressionBindings.AddMissing(VrmMenuExpressions.Add(exported, expressions), warnings, inferBlink: false));
-                if (trackingProfile != null) exported = VrmTrackingExpressions.Add(exported, trackingProfile);
+                if (trackingProfile != null) exported = VrmTrackingExpressions.Add(exported, authoredEndpoints.TrackingProfile);
                 else exported = VrmUnifiedExpressions.Add(exported, warnings);
                 if (exporterVersion != null)
                 {
