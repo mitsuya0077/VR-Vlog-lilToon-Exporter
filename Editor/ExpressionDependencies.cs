@@ -669,7 +669,13 @@ namespace VRVlog.LilToonExporter
                         var state = child.state;
                         if (reached != null && !reached.States.Contains(state)) continue;
                         info.WriteDefaults |= state.writeDefaultValues;
-                        Behaviours(state.behaviours, path + "/" + state.name, true);
+                        // Synced slots may replace the source state's callbacks
+                        // independently of its motion. Use the effective list
+                        // for both dropped-driver checks and dependency closure;
+                        // an intentionally empty override must stay empty.
+                        var behaviours = layers[index].syncedLayerIndex < 0 ? state.behaviours :
+                            controller.GetStateEffectiveBehaviours(state, index) ?? Array.Empty<StateMachineBehaviour>();
+                        Behaviours(behaviours, path + "/" + state.name, true);
                         Conditions(state.transitions);
                         if (state.timeParameterActive) ReadParameter(state.timeParameter);
                         if (state.speedParameterActive) ReadParameter(state.speedParameter);

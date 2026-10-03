@@ -220,6 +220,74 @@ namespace VRVlog.LilToonExporter.Tests
             AssertUnchanged(sourceJson, meshJson, probes);
         }
 
+        [TestCase(false)]
+        [TestCase(true)]
+        public void SelectedSyncedSlotChecksEffectiveOverrideDriversWithoutChangingSourceBehaviours(bool relevant)
+        {
+            controller.AddParameter("Unused driver destination", AnimatorControllerParameterType.Int);
+            var driver = ParameterDriverExpressionTests.Driver(selected,
+                ParameterDriverExpressionTests.Op("Set", relevant ? "Face" : "Unused driver destination", 1));
+            selected.behaviours = Array.Empty<StateMachineBehaviour>();
+            var layers = controller.layers; layers[1].syncedLayerIndex = 0; controller.layers = layers;
+            controller.SetStateEffectiveMotion(lower, selected.motion, 1);
+            controller.SetStateEffectiveMotion(alternate, selected.motion, 1);
+            controller.SetStateEffectiveBehaviours(lower, 1, new[] { driver });
+            Assert.That(lower.behaviours, Is.Empty, "The driver exists only in the selected synced slot's effective override.");
+            Assert.That(controller.GetStateEffectiveBehaviours(lower, 1), Is.EqualTo(new[] { driver }));
+            var expected = relevant ? Native(controller, new Dictionary<string, float> { ["Face"] = 1 }) : Native(controller);
+            Assert.That(expected, Is.EqualTo(relevant ? 70 : 55).Within(.01),
+                "Relevant callbacks are checked through their declared target-value counterfactual, without invoking SDK client delegates.");
+            var sourceAssets = AssetDatabase.LoadAllAssetsAtPath(folder + "/FX.controller").ToDictionary(asset => asset, asset => EditorJsonUtility.ToJson(asset));
+            var entry = new VrChatExpressionMenu.Entry(); VrChatGestureExpressions.ReadClip(avatar, (AnimationClip)selected.motion, entry);
+            var sourceJson = EditorJsonUtility.ToJson(controller); var meshJson = EditorJsonUtility.ToJson(mesh); var probes = ProbeObjects();
+            if (relevant)
+            {
+                var error = Assert.Throws<InvalidOperationException>(() => VrChatExpressionSampler.ApplyPermanentOverrides(avatar, controller, entry, 1));
+                Assert.That(error.Message, Does.Contain("Parameter Driver").And.Contain("Face"));
+                Assert.That(entry.Values.Single().Weight, Is.EqualTo(80));
+            }
+            else
+            {
+                VrChatExpressionSampler.ApplyPermanentOverrides(avatar, controller, entry, 1);
+                Assert.That(entry.Values.Single().Weight, Is.EqualTo(expected).Within(.01));
+            }
+            Assert.That(lower.behaviours, Is.Empty);
+            Assert.That(controller.GetStateEffectiveBehaviours(lower, 1), Is.EqualTo(new[] { driver }));
+            foreach (var pair in sourceAssets) Assert.That(EditorJsonUtility.ToJson(pair.Key), Is.EqualTo(pair.Value), pair.Key.name);
+            AssertUnchanged(sourceJson, meshJson, probes);
+        }
+
+        [Test]
+        public void RetainedSyncedOverrideDriverCannotBePrunedWithItsUnrelatedMotion()
+        {
+            var driver = ParameterDriverExpressionTests.Driver(selected, ParameterDriverExpressionTests.Op("Set", "Face", 1));
+            selected.behaviours = Array.Empty<StateMachineBehaviour>();
+            var blink = new AnimationClip { name = "Unrelated retained blink" };
+            AnimationUtility.SetEditorCurve(blink, EditorCurveBinding.FloatCurve("Face", typeof(SkinnedMeshRenderer), "blendShape.Blink"),
+                AnimationCurve.Constant(0, 1, 100));
+            AssetDatabase.AddObjectToAsset(blink, controller);
+            controller.AddLayer("Retained synced blink"); var layers = controller.layers;
+            layers[2].defaultWeight = 1; layers[2].syncedLayerIndex = 0; controller.layers = layers;
+            controller.SetStateEffectiveMotion(lower, blink, 2); controller.SetStateEffectiveMotion(alternate, blink, 2);
+            controller.SetStateEffectiveBehaviours(lower, 2, new[] { driver });
+            Assert.That(lower.behaviours, Is.Empty);
+            Assert.That(controller.GetStateEffectiveBehaviours(lower, 2), Is.EqualTo(new[] { driver }));
+            // Face=1 is the declared callback result. Its native lower pose
+            // changes the fractional player's output even though the retained
+            // synced layer's own motion writes only the independent blink.
+            Assert.That(Native(controller, new Dictionary<string, float> { ["Face"] = 1 }), Is.EqualTo(70).Within(.01));
+            var sourceAssets = AssetDatabase.LoadAllAssetsAtPath(folder + "/FX.controller").ToDictionary(asset => asset, asset => EditorJsonUtility.ToJson(asset));
+            var entry = new VrChatExpressionMenu.Entry(); VrChatGestureExpressions.ReadClip(avatar, (AnimationClip)selected.motion, entry);
+            var sourceJson = EditorJsonUtility.ToJson(controller); var meshJson = EditorJsonUtility.ToJson(mesh); var probes = ProbeObjects();
+            var error = Assert.Throws<InvalidOperationException>(() => VrChatExpressionSampler.ApplyPermanentOverrides(avatar, controller, entry, 1));
+            Assert.That(error.Message, Does.Contain("同期Animatorレイヤー"), "Effective driver dependencies must reach the existing unsupported-sync guard before playback.");
+            Assert.That(entry.Values.Single().Weight, Is.EqualTo(80));
+            Assert.That(lower.behaviours, Is.Empty);
+            Assert.That(controller.GetStateEffectiveBehaviours(lower, 2), Is.EqualTo(new[] { driver }));
+            foreach (var pair in sourceAssets) Assert.That(EditorJsonUtility.ToJson(pair.Key), Is.EqualTo(pair.Value), pair.Key.name);
+            AssertUnchanged(sourceJson, meshJson, probes);
+        }
+
         [TestCase("external")]
         [TestCase("parameter curve")]
         [TestCase("other controller")]
