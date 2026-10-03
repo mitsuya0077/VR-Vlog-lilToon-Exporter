@@ -189,6 +189,9 @@ namespace VRVlog.LilToonExporter
             Action<Material, Material> materialCopyObserver = null, Action<NdmfExportPreparation> afterTransforming = null)
         {
             RequireOwnedCopy(source, clone);
+            // Relevance must see MA's effective targets before it decides
+            // whether an inactive dependent authoring tag can be discarded.
+            ResolveMaSceneReferences(clone);
             if (!NeedsProcessing(clone))
             {
                 PruneUnusedAuthoring(clone);
@@ -210,8 +213,8 @@ namespace VRVlog.LilToonExporter
             RequireOwnedCopy(source, clone);
             // NDMF processes inactive tags too. Remove only irrelevant tags on
             // our copy before dependency safety checks or any canonical pass.
-            PruneUnusedAuthoring(clone);
             ResolveMaSceneReferences(clone);
+            PruneUnusedAuthoring(clone);
             var lease = new NdmfExportPreparation();
             var sourceAssets = Dependencies(source);
             var cloneAssets = Dependencies(clone);

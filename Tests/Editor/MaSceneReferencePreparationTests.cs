@@ -269,6 +269,84 @@ namespace VRVlog.LilToonExporter.Tests
             }
         }
 
+        [Test]
+        public void ActiveMaPathReferenceRetainsTheRequiredInactiveAuthoringBeforePruning()
+        {
+            CreateFixture();
+            var toggleType = InstalledType(MaNamespace + "ModularAvatarObjectToggle");
+            var entryType = InstalledType(MaNamespace + "ToggledObject");
+            var referenceType = InstalledType(MaNamespace + "AvatarObjectReference");
+            if (toggleType == null || entryType == null)
+                Assert.Ignore("Install MA's object toggle to test an inactive GameObject dependency.");
+
+            var inactiveWardrobe = Child(source.transform, "inactive wardrobe", Vector3.zero);
+            inactiveWardrobe.gameObject.SetActive(false);
+            var inactiveMerge = inactiveWardrobe.gameObject.AddComponent(merge.GetType());
+            var mode = merge.GetType().GetField("LockMode");
+            if (mode != null) mode.SetValue(inactiveMerge, Enum.Parse(mode.FieldType, "NotLocked"));
+            SetRawReference(inactiveMerge, "mergeTarget", mainRig.gameObject, "MainRig");
+
+            var toggle = Child(source.transform, "active toggle setting", Vector3.zero).gameObject.AddComponent(toggleType);
+            var entry = Activator.CreateInstance(entryType);
+            entryType.GetField("Object").SetValue(entry, Activator.CreateInstance(referenceType));
+            entryType.GetField("Active").SetValue(entry, true);
+            ((IList)toggleType.GetProperty("Objects").GetValue(toggle)).Add(entry);
+            const string toggleReference = "m_objects.Array.data[0].Object";
+            SetRawReference(toggle, toggleReference, externalRig.gameObject, "inactive wardrobe");
+
+            clone = Object.Instantiate(source);
+            var copiedWardrobe = clone.transform.Find("inactive wardrobe");
+            var copiedInactiveMerge = copiedWardrobe.GetComponent(merge.GetType());
+            ResetFakeBridge();
+            NdmfPreparationTests.FakeProcessor.Action = root =>
+            {
+                Assert.That(copiedInactiveMerge != null, Is.True,
+                    "Resolve the active toggle's MA path before pruning the inactive target's required authoring.");
+                Assert.That(copiedWardrobe.GetComponent(merge.GetType()), Is.SameAs(copiedInactiveMerge));
+                Assert.That(copiedWardrobe.gameObject.activeInHierarchy, Is.False);
+                AssertRawReference(root.transform.Find("active toggle setting").GetComponent(toggleType),
+                    toggleReference, copiedWardrobe.gameObject, "inactive wardrobe");
+            };
+            using (NdmfExportPreparation.ProcessClone(source, clone, FakeBridge()))
+            {
+                AssertRawReference(toggle, toggleReference, externalRig.gameObject, "inactive wardrobe");
+                AssertRawReference(inactiveMerge, "mergeTarget", mainRig.gameObject, "MainRig");
+                Assert.That(inactiveWardrobe.parent, Is.SameAs(source.transform));
+                Assert.That(inactiveWardrobe.gameObject.activeInHierarchy, Is.False);
+                Assert.That(inactiveMerge != null, Is.True);
+            }
+            Assert.That(NdmfPreparationTests.FakeProcessor.Calls, Is.EqualTo(1));
+        }
+
+        [Test]
+        public void EarlyResolutionOfAnUnusedInactiveUnresolvedMaTagStillAllowsItToBePruned()
+        {
+            CreateFixture();
+            var unused = Child(source.transform, "unused inactive wardrobe", Vector3.zero);
+            unused.gameObject.SetActive(false);
+            var unusedMerge = unused.gameObject.AddComponent(merge.GetType());
+            var mode = merge.GetType().GetField("LockMode");
+            if (mode != null) mode.SetValue(unusedMerge, Enum.Parse(mode.FieldType, "NotLocked"));
+            SetRawReference(unusedMerge, "mergeTarget", externalRig.gameObject, "missing rig");
+            clone = Object.Instantiate(source);
+            var copiedUnused = clone.transform.Find("unused inactive wardrobe");
+            ResetFakeBridge();
+            NdmfPreparationTests.FakeProcessor.Action = root =>
+            {
+                Assert.That(copiedUnused != null, Is.True);
+                Assert.That(copiedUnused.GetComponent(merge.GetType()), Is.Null);
+                Assert.That(copiedUnused.gameObject.activeInHierarchy, Is.False);
+            };
+            using (NdmfExportPreparation.ProcessClone(source, clone, FakeBridge()))
+            {
+                AssertRawReference(unusedMerge, "mergeTarget", externalRig.gameObject, "missing rig");
+                Assert.That(unusedMerge != null, Is.True);
+                Assert.That(unused.parent, Is.SameAs(source.transform));
+                Assert.That(unused.gameObject.activeInHierarchy, Is.False);
+            }
+            Assert.That(NdmfPreparationTests.FakeProcessor.Calls, Is.EqualTo(1));
+        }
+
         static void ResetFakeBridge()
         {
             NdmfPreparationTests.FakeContext.Last = null;
