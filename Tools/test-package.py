@@ -16,6 +16,36 @@ def load(name):
 
 package = load("build-package")
 public = load("check-public-content")
+unity_meta = load("unity_meta")
+
+
+class UnityMetaTests(unittest.TestCase):
+    def setUp(self):
+        self.temp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.temp.cleanup)
+        self.root = Path(self.temp.name)
+        self.meta = self.root / "Example.cs.meta"
+
+    def test_valid_guid_and_bom_are_accepted(self):
+        self.meta.write_text("fileFormatVersion: 2\nguid: 0123456789ABCDEF0123456789abcdef\n", encoding="utf-8-sig")
+        unity_meta.validate_meta_guids(self.root)
+
+    def test_malformed_guid_reports_ignored_asset(self):
+        # The first fixture reproduced Unity omitting NeutralShapeSampler.cs.
+        for value in ("720af334c68d4a34b80e68321e35ff148", "a" * 31, "g" * 32, "", "a" * 32 + "\nguid: " + "b" * 32):
+            with self.subTest(value=value):
+                self.meta.write_text("fileFormatVersion: 2\nguid: " + value + "\n", encoding="utf-8")
+                with self.assertRaisesRegex(ValueError, "Invalid Unity GUID in Example.cs.meta"):
+                    unity_meta.validate_meta_guids(self.root)
+        self.meta.write_text("fileFormatVersion: 2\n", encoding="utf-8")
+        with self.assertRaisesRegex(ValueError, "Invalid Unity GUID in Example.cs.meta"):
+            unity_meta.validate_meta_guids(self.root)
+
+    def test_duplicate_guid_reports_both_assets(self):
+        self.meta.write_text("guid: " + "a" * 32 + "\n", encoding="utf-8")
+        (self.root / "Other.cs.meta").write_text("guid: " + "A" * 32 + "\n", encoding="utf-8")
+        with self.assertRaisesRegex(ValueError, "Duplicate Unity GUID: Example.cs.meta and Other.cs.meta"):
+            unity_meta.validate_meta_guids(self.root)
 
 
 class PackageTests(unittest.TestCase):

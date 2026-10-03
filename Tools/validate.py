@@ -2,8 +2,10 @@
 import json
 import re
 from pathlib import Path
+from unity_meta import validate_meta_guids
 
 root = Path(__file__).resolve().parents[1]
+validate_meta_guids(root)
 package = json.loads((root / "package.json").read_text(encoding="utf-8"))
 schema = json.loads(
     (root / "Schema/VRVLOG_materials_liltoon.schema.json").read_text(encoding="utf-8")

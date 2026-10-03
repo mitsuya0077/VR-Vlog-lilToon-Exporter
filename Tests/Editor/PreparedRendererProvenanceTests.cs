@@ -175,6 +175,35 @@ namespace VRVlog.LilToonExporter.Tests
                 .Invoke(registry, new object[] { sibling, false }), Is.Null, "Inspection must not create provenance entries.");
         }
 
+        [TestCase(false)]
+        [TestCase(true)]
+        public void RegisteredReplacementTakesPriorityOverRetainedDisabledOriginal(bool ambiguous)
+        {
+            Skin(source, "Face", Mesh("UE/EyeClosed", "UE/JawOpen"));
+            prepared = Object.Instantiate(source);
+            var old = prepared.GetComponentInChildren<SkinnedMeshRenderer>();
+            var guard = new UnifiedExpressionPreparation(prepared);
+            var registry = Registry();
+            var replacement = Skin(prepared, "Prepared face", old.sharedMesh);
+            Register(registry, old, replacement);
+            if (ambiguous) Register(registry, old, Skin(prepared, "Second replacement", old.sharedMesh));
+            old.enabled = false;
+            using var preparation = Capture(prepared, registry);
+            Assert.That(old, Is.Not.Null, "NDMF may retain the old disabled component until later cleanup.");
+            if (ambiguous)
+            {
+                Assert.That(preparation.PreparedRendererFor(old), Is.Null);
+                Assert.That(Assert.Throws<InvalidOperationException>(() => guard.RebindPrepared(preparation.PreparedRendererFor)).Message,
+                    Is.EqualTo(NdmfExportPreparation.UnknownRendererRelocation));
+            }
+            else
+            {
+                Assert.That(preparation.PreparedRendererFor(old), Is.SameAs(replacement));
+                guard.RebindPrepared(preparation.PreparedRendererFor);
+                Assert.DoesNotThrow(() => guard.VerifyIdentityAndDeformation());
+            }
+        }
+
         [Test]
         public void RegisteredReplacementRejectsAmbiguousSerializedPathDespiteUniqueProvenance()
         {

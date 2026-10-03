@@ -35,9 +35,9 @@ namespace VRVlog.LilToonExporter
         internal SkinnedMeshRenderer PreparedRendererFor(SkinnedMeshRenderer original)
         {
             if (ReferenceEquals(original, null)) return null;
-            if (original != null) return original;
             if (ambiguousRendererReplacements.Contains(original)) return null;
-            return rendererReplacements.TryGetValue(original, out var current) ? current : null;
+            if (rendererReplacements.TryGetValue(original, out var current)) return current;
+            return original != null ? original : null;
         }
 
         // NDMF's registry records provenance for diagnostic references. Read its
@@ -55,6 +55,9 @@ namespace VRVlog.LilToonExporter
                 var original = reference?.GetType().GetProperty("Object", BindingFlags.Public | BindingFlags.Instance)?.GetValue(reference)
                     as SkinnedMeshRenderer;
                 if (ReferenceEquals(original, null)) continue;
+                // A build can retain the original disabled component. Its own
+                // diagnostic reference is not a competing replacement.
+                if (ReferenceEquals(original, current)) continue;
                 if (rendererReplacements.TryGetValue(original, out var previous) && !ReferenceEquals(previous, current))
                 {
                     ambiguousRendererReplacements.Add(original);
