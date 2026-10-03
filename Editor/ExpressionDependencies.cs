@@ -42,6 +42,17 @@ namespace VRVlog.LilToonExporter
             return result;
         }
 
+        // A reduced probe controller has no authored state callbacks. Validate
+        // those callbacks on the original graph before reconstruction so layer
+        // controls cannot silently turn a permanent effect on, off or down.
+        internal static void ValidateProbeBehaviours(RuntimeAnimatorController runtime, Func<string, bool> excludedPath)
+        {
+            var unknown = new List<string>();
+            Inspect(runtime, excludedPath, new Dictionary<StateMachineBehaviour, VrChatParameterDriver.Program>(), unknown);
+            if (unknown.Count > 0)
+                throw new InvalidOperationException("FXの影響範囲を確定できないState Behaviourがあります: " + string.Join(", ", unknown));
+        }
+
         internal static ExpressionDependencies Analyze(RuntimeAnimatorController runtime, IEnumerable<string> selected,
             Func<string, bool> excludedPath, VrChatExpressionMenu.Source source = null, IDictionary<string, float> defaults = null, IDictionary<string, float> selection = null,
             IEnumerable<EditorCurveBinding> initialMorphs = null)

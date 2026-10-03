@@ -97,6 +97,10 @@ namespace VRVlog.LilToonExporter
             VrChatExpressionMenu.Entry entry, int? layerIndex = null, bool writeDefaults = false, Func<string, bool> excludedPath = null)
         {
             if (runtime == null || entry.Error != null || entry.Values.Count == 0) return;
+            // Inspect the authored graph before any early exit: a layer control
+            // can enable a stationary layer whose serialized default weight is
+            // zero, as well as disable one that the probe would otherwise keep.
+            ExpressionDependencies.ValidateProbeBehaviours(runtime, excludedPath);
             var stationaryBindings = StationaryBindings(avatar, runtime, excludedPath);
             if (stationaryBindings.Count == 0) return;
             var permanent = ExpressionDependencies.StationaryLayers(runtime, excludedPath);

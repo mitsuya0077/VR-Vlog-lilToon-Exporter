@@ -478,6 +478,53 @@ namespace VRVlog.LilToonExporter.Tests
             Assert.That(entry.Values.Single(value => value.Shape == "Pupil removal").Weight, Is.Zero);
         }
 
+        [TestCase(false, 0f)]
+        [TestCase(true, 0f)]
+        [TestCase(false, 1f)]
+        [TestCase(true, 1f)]
+        public void DirectClipProbeRejectsOriginalAnimatorLayerControlInsteadOfUsingDefaultWeight(bool standalone, float goalWeight)
+        {
+            var type = AppDomain.CurrentDomain.GetAssemblies().Select(assembly => assembly.GetType("VRC.SDK3.Avatars.Components.VRCAnimatorLayerControl"))
+                .FirstOrDefault(candidate => candidate != null);
+            if (type == null) Assert.Ignore("Install the real VRChat SDK for animator layer-control integration.");
+            var machine = controller.layers[0].stateMachine;
+            Menu(machine, true);
+            Permanent(AddLayer("Permanent pupil"));
+            var layers = controller.layers;
+            layers[1].defaultWeight = 1 - goalWeight;
+            controller.layers = layers;
+            var selected = machine.states.Single(child => child.state.name == "Selected").state;
+            var controlling = standalone ? machine.defaultState : selected;
+            var control = controlling.AddStateMachineBehaviour(type);
+            using (var data = new SerializedObject(control))
+            {
+                var playable = data.FindProperty("playable");
+                Assert.That(playable, Is.Not.Null);
+                Assert.That(playable.propertyType, Is.EqualTo(SerializedPropertyType.Enum));
+                var targetPlayable = Array.IndexOf(playable.enumNames, "FX");
+                Assert.That(targetPlayable, Is.GreaterThanOrEqualTo(0));
+                playable.enumValueIndex = targetPlayable;
+                data.FindProperty("layer").intValue = 1;
+                data.FindProperty("goalWeight").floatValue = goalWeight;
+                data.FindProperty("blendDuration").floatValue = 0;
+                data.ApplyModifiedPropertiesWithoutUndo();
+            }
+            var clip = (AnimationClip)selected.motion;
+            AnimationUtility.SetEditorCurve(clip, EditorCurveBinding.FloatCurve("Face", typeof(SkinnedMeshRenderer), "blendShape.Pupil removal"),
+                AnimationCurve.Linear(0, 0, 1, 80));
+            var entry = new VrChatExpressionMenu.Entry();
+            VrChatGestureExpressions.ReadClip(avatar, clip, entry);
+            var error = Assert.Throws<InvalidOperationException>(() =>
+                VrChatExpressionSampler.ApplyPermanentOverrides(avatar, controller, entry, standalone ? (int?)null : 0));
+            Assert.That(error.Message, Does.Contain("影響範囲").And.Contain("VRCAnimatorLayerControl").And.Contain(controlling.name));
+            Assert.That(entry.Values.Single(value => value.Shape == "Pupil removal").Weight, Is.Zero,
+                "The entry must not be partially rewritten using the wrong stationary layer weight.");
+            Assert.That(entry.Animation.Single(value => value.Shape == "Pupil removal").Curve.Evaluate(.5), Is.EqualTo(40).Within(.01));
+            Assert.That(avatar.GetComponentInChildren<SkinnedMeshRenderer>().GetBlendShapeWeight(2), Is.Zero);
+            Assert.That(controller.layers[1].defaultWeight, Is.EqualTo(1 - goalWeight));
+            Assert.That(controlling.behaviours, Does.Contain(control));
+        }
+
         [Test]
         public void ExcludedPermanentTargetDoesNotBecomeANeutralSamplingRoot()
         {
