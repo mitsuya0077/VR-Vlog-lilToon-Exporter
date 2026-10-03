@@ -6,6 +6,7 @@ using NUnit.Framework;
 using UniGLTF;
 using UniVRM10;
 using UnityEditor;
+using UnityEditor.Animations;
 using UnityEngine;
 using Object = UnityEngine.Object;
 
@@ -33,6 +34,35 @@ namespace VRVlog.LilToonExporter.Tests
             else if (value is AnimationCurve curve) p.animationCurveValue = curve;
             else if (value is Object reference) p.objectReferenceValue = reference;
             data.ApplyModifiedPropertiesWithoutUndo();
+        }
+
+        // A generic AAO avatar uses its root Animator controller, unlike a
+        // VRChat descriptor or authored Vrm10Instance. Give the synthetic
+        // generic fixture a real idle controller without altering AAO settings.
+        sealed class StaticAnimatorController : IDisposable
+        {
+            internal readonly AnimatorController Controller;
+            readonly Animator animator;
+            readonly RuntimeAnimatorController previous;
+            readonly AnimatorStateMachine machine;
+            readonly AnimatorState idle;
+
+            internal StaticAnimatorController(Animator target)
+            {
+                animator = target; previous = target.runtimeAnimatorController;
+                Controller = new AnimatorController { name = "PhysBone generic fixture controller" };
+                Controller.AddLayer("Base Layer");
+                machine = Controller.layers[0].stateMachine;
+                idle = machine.AddState("Idle"); idle.writeDefaultValues = false;
+                machine.defaultState = idle;
+                animator.runtimeAnimatorController = Controller;
+            }
+
+            public void Dispose()
+            {
+                if (animator != null) animator.runtimeAnimatorController = previous;
+                Object.DestroyImmediate(idle); Object.DestroyImmediate(machine); Object.DestroyImmediate(Controller);
+            }
         }
 
         [TestCase(0, 2)]
@@ -304,6 +334,7 @@ namespace VRVlog.LilToonExporter.Tests
         async Task ExportImportsSpringsAndMovesHair(bool full, bool modularAvatar, bool rootCollider, bool avatarOptimizer)
         {
             using var fixture = new AttachmentConnectionTests.Fixture();
+            using var controller = avatarOptimizer ? new StaticAnimatorController(fixture.Source.GetComponent<Animator>()) : null;
             var hair = fixture.Source.transform.Find("Independent hair/Head");
             var head = fixture.Source.GetComponent<Animator>().GetBoneTransform(HumanBodyBones.Head);
             if (modularAvatar)
@@ -405,6 +436,8 @@ namespace VRVlog.LilToonExporter.Tests
                 Assert.That(EditorJsonUtility.ToJson(collider), Is.EqualTo(sourceCollider));
                 if (avatarOptimizer)
                 {
+                    Assert.That(fixture.Source.GetComponent<Animator>().runtimeAnimatorController, Is.SameAs(controller.Controller));
+                    Assert.That(controller.Controller.layers.Single().stateMachine.states.Single().state.name, Is.EqualTo("Idle"));
                     Assert.That(duplicateCollider != null, Is.True);
                     Assert.That(EditorJsonUtility.ToJson(duplicateCollider), Is.EqualTo(sourceDuplicate));
                     Assert.That(fixture.Source.GetComponentsInChildren<Component>().Count(component => component != null &&

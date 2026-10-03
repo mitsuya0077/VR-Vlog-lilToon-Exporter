@@ -3,6 +3,7 @@ using System.Collections.Generic;
 using System.Globalization;
 using System.Linq;
 using System.Reflection;
+using System.Text.RegularExpressions;
 using System.Threading.Tasks;
 using NUnit.Framework;
 using UniGLTF;
@@ -10,6 +11,7 @@ using UniGLTF.Extensions.VRMC_vrm;
 using UniVRM10;
 using UnityEditor;
 using UnityEngine;
+using UnityEngine.TestTools;
 using Object = UnityEngine.Object;
 
 namespace VRVlog.LilToonExporter.Tests
@@ -243,6 +245,68 @@ namespace VRVlog.LilToonExporter.Tests
 
         static string[] ExportFolders() => AssetDatabase.GetSubFolders("Assets")
             .Where(path => path.StartsWith("Assets/VRVlogExportTemp-", StringComparison.Ordinal)).ToArray();
+
+        [Test]
+        public void InstalledAvatarOptimizerFailureAbortsFullExportAndCleansOwnedAssets()
+        {
+            RequirePackages();
+            var shader = Shader.Find("lilToon");
+            if (shader == null) Assert.Ignore("Install lilToon for the real one-click exporter failure regression.");
+            using var fixture = new AttachmentConnectionTests.Fixture();
+            var animator = fixture.Source.GetComponent<Animator>();
+            Assert.That(animator.runtimeAnimatorController, Is.Null);
+            Assert.That(fixture.Source.GetComponent<Vrm10Instance>(), Is.Null,
+                "The generic fixture intentionally has no platform expression provider or valid root controller.");
+            foreach (var skin in fixture.Source.GetComponentsInChildren<SkinnedMeshRenderer>())
+                skin.sharedMaterial.shader = shader;
+            var optimizer = fixture.Source.AddComponent(Installed("Anatawa12.AvatarOptimizer.TraceAndOptimize"));
+            Assert.That(NdmfExportPreparation.NeedsProcessing(fixture.Source), Is.True);
+
+            var originalAvatar = animator.avatar;
+            var originalOptimizer = EditorJsonUtility.ToJson(optimizer);
+            var originalComponents = fixture.Source.GetComponentsInChildren<Component>(true);
+            var skins = fixture.Source.GetComponentsInChildren<SkinnedMeshRenderer>();
+            var originalBones = skins.Select(skin => skin.bones).ToArray();
+            var originalMaterials = skins.Select(skin => skin.sharedMaterials).ToArray();
+            var originalVertices = fixture.Mesh.vertices;
+            var originalTriangles = fixture.Mesh.triangles;
+            var originalWeights = fixture.Mesh.boneWeights;
+            var originalBindposes = fixture.Mesh.bindposes;
+            var temporaryFolders = ExportFolders();
+            byte[] bytes = null;
+
+            // AAO and NDMF both report the pass exception, but NDMF deduplicates
+            // the same exception. Expect this specific failure instead of hiding logs.
+            LogAssert.Expect(LogType.Exception, new Regex(
+                @"^ArgumentNullException: Value cannot be null\.[\r\n]+Parameter name: runtimeController\b"));
+            var error = Assert.Throws<InvalidOperationException>(() => bytes = UniVrmOneClickExporter.Export(
+                fixture.Source, "AAO failure regression", "Tests", exporterVersion: "aao-failure-regression",
+                lilToonVersion: "2.3.4", blinkOptions: new BlinkExportOptions { Mode = BlinkExportMode.None }));
+
+            Assert.That(bytes, Is.Null, "A failed optimization must never produce an apparently usable VRM.");
+            StringAssert.Contains("AAO: Avatar Optimizer", error.Message);
+            StringAssert.Contains("Parse Animator", error.Message);
+            StringAssert.Contains("runtimeController", error.Message);
+            Assert.That(error.InnerException, Is.TypeOf<ArgumentNullException>());
+            Assert.That(((ArgumentNullException)error.InnerException).ParamName, Is.EqualTo("runtimeController"));
+            Assert.That(animator.avatar, Is.SameAs(originalAvatar));
+            Assert.That(animator.runtimeAnimatorController, Is.Null);
+            Assert.That(EditorJsonUtility.ToJson(optimizer), Is.EqualTo(originalOptimizer));
+            Assert.That(fixture.Source.GetComponentsInChildren<Component>(true), Is.EqualTo(originalComponents));
+            for (var index = 0; index < skins.Length; index++)
+            {
+                Assert.That(skins[index].sharedMesh, Is.SameAs(fixture.Mesh));
+                Assert.That(skins[index].bones, Is.EqualTo(originalBones[index]));
+                Assert.That(skins[index].sharedMaterials, Is.EqualTo(originalMaterials[index]));
+            }
+            Assert.That(fixture.Mesh.vertices, Is.EqualTo(originalVertices));
+            Assert.That(fixture.Mesh.triangles, Is.EqualTo(originalTriangles));
+            Assert.That(fixture.Mesh.boneWeights, Is.EqualTo(originalWeights));
+            Assert.That(fixture.Mesh.bindposes, Is.EqualTo(originalBindposes));
+            Assert.That(fixture.Source.GetComponent<ExportOptimizationMarker>(), Is.Null);
+            Assert.That(ExportFolders(), Is.EquivalentTo(temporaryFolders),
+                "A failed native optimizer build must release every exporter temporary asset folder.");
+        }
 
         static string[] TriangleSignatures(Renderer renderer, int[] selected = null)
         {
