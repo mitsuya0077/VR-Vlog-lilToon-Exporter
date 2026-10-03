@@ -222,17 +222,57 @@ namespace VRVlog.LilToonExporter
             if (curve == null) throw new InvalidOperationException("表情アニメーションの曲線を読み取れません。");
             string Wrap(WrapMode mode) => mode == WrapMode.Loop ? "loop" : mode == WrapMode.PingPong ? "pingPong" : "clamp";
             var result = new ExpressionAnimationData.Curve { PreWrap = Wrap(curve.preWrapMode), PostWrap = Wrap(curve.postWrapMode) };
-            foreach (var k in curve.keys)
-                result.Keys.Add(new ExpressionAnimationData.Key
-                {
-                    Time = k.time, Value = k.value,
-                    InTangent = float.IsInfinity(k.inTangent) ? (double?)null : k.inTangent,
-                    OutTangent = float.IsInfinity(k.outTangent) ? (double?)null : k.outTangent,
-                    InWeight = (k.weightedMode & WeightedMode.In) != 0 ? k.inWeight : 1.0 / 3,
-                    OutWeight = (k.weightedMode & WeightedMode.Out) != 0 ? k.outWeight : 1.0 / 3
-                });
+            result.Keys.AddRange(ReadCurveKeys(curve));
             result.Validate();
             return result;
+        }
+
+        internal static bool HasInvalidCurveNumbers(AnimationCurve curve)
+        {
+            if (curve == null) return false;
+            bool Finite(double value) => !double.IsNaN(value) && !double.IsInfinity(value);
+            // Neutral inspection shares the numeric interpretation below but
+            // does not apply the portable animation format's size/range limits.
+            return ReadCurveKeys(curve).Any(k => !Finite(k.Time) || !Finite(k.Value) ||
+                !Finite(k.InWeight) || !Finite(k.OutWeight) ||
+                k.InTangent.HasValue && !Finite(k.InTangent.Value) ||
+                k.OutTangent.HasValue && !Finite(k.OutTangent.Value));
+        }
+
+        internal static bool IsConstantCurve(AnimationCurve curve)
+        {
+            if (curve == null || curve.length == 0) return true;
+            var keys = ReadCurveKeys(curve).ToArray();
+            return keys.All(k => k.Value == keys[0].Value &&
+                (!k.InTangent.HasValue || k.InTangent.Value == 0) &&
+                (!k.OutTangent.HasValue || k.OutTangent.Value == 0));
+        }
+
+        private static IEnumerable<ExpressionAnimationData.Key> ReadCurveKeys(AnimationCurve curve)
+        {
+            var keys = curve.keys;
+            for (var index = 0; index < keys.Length; index++)
+            {
+                var k = keys[index];
+                var hasPrevious = index > 0;
+                var hasNext = index < keys.Length - 1;
+                var incomingStep = hasPrevious && (float.IsInfinity(keys[index - 1].outTangent) || float.IsInfinity(k.inTangent));
+                var outgoingStep = hasNext && (float.IsInfinity(k.outTangent) || float.IsInfinity(keys[index + 1].inTangent));
+                // Only adjacent keys define interpolation segments, including
+                // when time loops or reverses. CGE's generated proxy clips can
+                // carry NaN in the unused first incoming tangent. Normalize
+                // unused metadata in this copy without changing authored keys.
+                // A stepped segment uses neither Bezier handle nor weight,
+                // including the opposite handle when only one side is stepped.
+                yield return new ExpressionAnimationData.Key
+                {
+                    Time = k.time, Value = k.value,
+                    InTangent = !hasPrevious ? 0 : incomingStep ? (double?)null : k.inTangent,
+                    OutTangent = !hasNext ? 0 : outgoingStep ? (double?)null : k.outTangent,
+                    InWeight = hasPrevious && !incomingStep && (k.weightedMode & WeightedMode.In) != 0 ? k.inWeight : 1.0 / 3,
+                    OutWeight = hasNext && !outgoingStep && (k.weightedMode & WeightedMode.Out) != 0 ? k.outWeight : 1.0 / 3
+                };
+            }
         }
 
         private static bool IsGesture(string name) => name == "GestureLeft" || name == "GestureRight";

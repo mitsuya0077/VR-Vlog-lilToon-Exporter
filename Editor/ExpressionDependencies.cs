@@ -703,12 +703,16 @@ namespace VRVlog.LilToonExporter
                         {
                             // Animator parameters are global even if a caller
                             // happens to exclude the animator's transform path.
-                            if (validateNeutralData && (binding.type == typeof(Animator) || excludedPath?.Invoke(binding.path) != true))
+                            if (validateNeutralData && !binding.isPPtrCurve &&
+                                (binding.type == typeof(Animator) || excludedPath?.Invoke(binding.path) != true))
                             {
                                 var curve = AnimationUtility.GetEditorCurve(clip, binding);
-                                if (curve != null && curve.keys.Any(key => float.IsNaN(key.time) || float.IsInfinity(key.time) ||
-                                    float.IsNaN(key.value) || float.IsInfinity(key.value) || float.IsNaN(key.inTangent) || float.IsNaN(key.outTangent) ||
-                                    float.IsNaN(key.inWeight) || float.IsInfinity(key.inWeight) || float.IsNaN(key.outWeight) || float.IsInfinity(key.outWeight)))
+                                // A declared float binding must have readable keys.
+                                // Unity may return an empty curve for non-finite
+                                // authored values; do not let it pass as a static
+                                // curve before dependency pruning or fallback.
+                                // Object-reference bindings use a separate API.
+                                if (curve == null || curve.length == 0 || VrChatGestureExpressions.HasInvalidCurveNumbers(curve))
                                     throw new InvalidOperationException("FXのアニメーション曲線に不正な値があります: " + clip.name + " / " + binding.path + " / " + binding.propertyName);
                             }
                             if (binding.type == typeof(Animator)) { info.Writes.Add(binding.propertyName); info.CurveWrites.Add(binding.propertyName); info.HasBindings = true; continue; }
@@ -722,8 +726,10 @@ namespace VRVlog.LilToonExporter
                                     var curve = AnimationUtility.GetEditorCurve(clip, binding);
                                     if (curve != null)
                                     {
-                                        VrChatGestureExpressions.ReadCurve(curve).Range(out var minimum, out var maximum);
-                                        info.DynamicMorph |= minimum != maximum;
+                                        // Neutral discovery evaluates native clips rather than
+                                        // exporting their animation data. Finite static curves
+                                        // need no portable key-count, time or value limits.
+                                        info.DynamicMorph |= !VrChatGestureExpressions.IsConstantCurve(curve);
                                     }
                                 }
                             }

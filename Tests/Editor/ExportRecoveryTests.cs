@@ -382,6 +382,30 @@ namespace VRVlog.LilToonExporter.Tests
             finally { Object.DestroyImmediate(texture); }
         }
 
+        [TestCase("環境確認", "environment")]
+        [TestCase("原本検査", "source-validation")]
+        [TestCase("表情メニュー読込", "expression-menu")]
+        [TestCase("コピー作成", "copy")]
+        [TestCase("ビルド処理", "preparation")]
+        [TestCase("基準形評価", "neutral")]
+        [TestCase("状態確定", "appearance")]
+        [TestCase("材質保存", "material-snapshot")]
+        [TestCase("揺れ物変換", "physbone")]
+        [TestCase("VRM変換", "vrm")]
+        [TestCase("出力検査", "output-validation")]
+        [TestCase("完了", "complete")]
+        [TestCase("PRIVATE_STAGE_983", "other")]
+        public void SharedDiagnosticClassifiesExportStagesWithoutExposingStageOrErrorDetails(string stage, string expected)
+        {
+            var privatePath = Path.Combine(Path.GetTempPath(), "private-stage-input-983", "avatar.fbx");
+            var report = ExportRecoveryReport.FromException(null, new InvalidOperationException(privatePath), stage);
+            var text = report.BuildSupportText().Replace("\r\n", "\n");
+            Assert.That(text, Does.Contain("\nStage: " + expected + "\n"));
+            Assert.That(text, Does.Not.Contain(stage));
+            Assert.That(text, Does.Not.Contain(privatePath));
+            Assert.That(text, Does.Not.Contain("private-stage-input-983"));
+        }
+
         [Test]
         public void SharedDiagnosticDoesNotContainPrivateErrorPathsOrAvatarNames()
         {

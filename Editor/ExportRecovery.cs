@@ -267,6 +267,7 @@ namespace VRVlog.LilToonExporter
                 case "表情メニュー読込": return "expression-menu";
                 case "コピー作成": return "copy";
                 case "ビルド処理": return "preparation";
+                case "基準形評価": return "neutral";
                 case "状態確定": return "appearance";
                 case "材質保存": return "material-snapshot";
                 case "揺れ物変換": return "physbone";

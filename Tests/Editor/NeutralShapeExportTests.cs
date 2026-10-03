@@ -14,11 +14,16 @@ namespace VRVlog.LilToonExporter.Tests
 {
     public sealed class NeutralShapeExportTests
     {
-        [TestCase(false, false)]
-        [TestCase(true, false)]
-        [TestCase(false, true)]
-        [TestCase(true, true)]
-        public async Task UncertainGenericNeutralStillExportsStationaryPoseAndAuthoredExpression(bool fullLilToon, bool timeVarying)
+        [TestCase(false, false, false)]
+        [TestCase(true, false, false)]
+        [TestCase(false, true, false)]
+        [TestCase(true, true, false)]
+        [TestCase(false, false, true)]
+        [TestCase(true, false, true)]
+        [TestCase(false, true, true)]
+        [TestCase(true, true, true)]
+        public async Task RuntimeNeutralAndGeneratedProxyExportPreserveStationaryPoseAndAuthoredExpression(
+            bool fullLilToon, bool timeVarying, bool generatedProxy)
         {
             var descriptorType = AppDomain.CurrentDomain.GetAssemblies().Select(assembly =>
                 assembly.GetType("VRC.SDK3.Avatars.Components.VRCAvatarDescriptor")).FirstOrDefault(type => type != null);
@@ -70,7 +75,24 @@ namespace VRVlog.LilToonExporter.Tests
                 var runtime = layers[1].stateMachine;
                 var initial = State(runtime, "Runtime neutral", Clip("Runtime neutral", "Reactive face", timeVarying ?
                     AnimationCurve.Linear(0, 0, 10, 100) : AnimationCurve.Constant(0, 1, 0)));
-                if (!timeVarying)
+                if (generatedProxy)
+                {
+                    controller.AddParameter(NeutralShapeSamplerTests.GestureWeightProxy, AnimatorControllerParameterType.Float);
+                    var tree = new BlendTree { name = "Face controlled by generated proxy", blendType = BlendTreeType.Simple1D,
+                        blendParameter = NeutralShapeSamplerTests.GestureWeightProxy, useAutomaticThresholds = false };
+                    tree.AddChild(Clip("Proxy face zero", "Reactive face", AnimationCurve.Constant(0, 1, 0)), 0);
+                    tree.AddChild(Clip("Proxy face full", "Reactive face", AnimationCurve.Constant(0, 1, 100)), 1);
+                    AssetDatabase.AddObjectToAsset(tree, controller); initial.motion = tree;
+                    var proxy = new AnimationClip { name = "Generated gesture weight proxy" };
+                    AnimationUtility.SetEditorCurve(proxy, EditorCurveBinding.FloatCurve("", typeof(Animator),
+                        NeutralShapeSamplerTests.GestureWeightProxy), NeutralShapeSamplerTests.GeneratedProxyCurve("firstIn", linear: timeVarying));
+                    AssetDatabase.AddObjectToAsset(proxy, controller);
+                    NeutralShapeSamplerTests.AssertNativeProxyMetadata(proxy, "firstIn", linear: timeVarying);
+                    controller.AddLayer("Generated proxy writer"); layers = controller.layers;
+                    layers[2].defaultWeight = 1; controller.layers = layers;
+                    State(layers[2].stateMachine, "Generated proxy", proxy);
+                }
+                if (!timeVarying && !generatedProxy)
                 {
                     controller.AddParameter("Voice", AnimatorControllerParameterType.Float);
                     var selected = State(runtime, "Voice chooses face", Clip("Reactive endpoint", "Reactive face", AnimationCurve.Constant(0, 1, 100)));
@@ -94,15 +116,18 @@ namespace VRVlog.LilToonExporter.Tests
                     exporterVersion: fullLilToon ? "neutral-compatibility-regression" : null,
                     lilToonVersion: fullLilToon ? "2.3.4" : null,
                     blinkOptions: new BlinkExportOptions { Mode = BlinkExportMode.None });
-                Assert.That(warnings.Any(warning => warning.Contains("Reactive face") &&
+                if (generatedProxy && !timeVarying)
+                    Assert.That(warnings.Any(warning => warning.Contains("FXの初期表情を固定できない")), Is.False, string.Join("\n", warnings));
+                else Assert.That(warnings.Any(warning => warning.Contains("Reactive face") &&
                     warning.Contains(timeVarying ? "時間で変わる" : "Voice")), Is.True, string.Join("\n", warnings));
                 imported = await Vrm10.LoadBytesAsync(bytes, canLoadVrm0X: false, awaitCaller: new ImmediateCaller());
                 imported.Runtime.Process();
                 var importedSkins = imported.GetComponentsInChildren<SkinnedMeshRenderer>();
                 Assert.That(importedSkins, Has.Length.EqualTo(skins.Length));
+                var expectedReactiveWeight = generatedProxy && !timeVarying ? 50 : 35;
                 foreach (var skin in importedSkins)
-                    Assert.That(Vector3.Distance(skin.sharedMesh.vertices[0], vertices[0] + new Vector3(.02f * .35f, .03f, 0)),
-                        Is.LessThan(.00001), "The stationary FX opening and authored runtime weight must both survive the neutral export.");
+                    Assert.That(Vector3.Distance(skin.sharedMesh.vertices[0], vertices[0] + new Vector3(.02f * expectedReactiveWeight / 100, .03f, 0)),
+                        Is.LessThan(.00001), "The independent opening and either proved proxy pose or retained authored runtime weight must survive export.");
                 var expression = imported.Vrm.Expression.CustomClips.Single(clip => clip.name == authored.name);
                 Assert.That(expression.MorphTargetBindings, Has.Length.EqualTo(skins.Length));
                 imported.Runtime.Expression.SetWeight(ExpressionKey.CreateCustom(authored.name), 1);

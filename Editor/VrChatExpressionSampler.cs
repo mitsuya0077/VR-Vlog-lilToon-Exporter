@@ -772,12 +772,7 @@ namespace VRVlog.LilToonExporter
         }
 
         internal static bool IsConstant(AnimationCurve curve)
-        {
-            if (curve == null || curve.length == 0) return true;
-            var keys = curve.keys;
-            return keys.All(k => k.value == keys[0].value &&
-                (k.inTangent == 0 || float.IsInfinity(k.inTangent)) && (k.outTangent == 0 || float.IsInfinity(k.outTangent)));
-        }
+            => VrChatGestureExpressions.IsConstantCurve(curve);
 
         private static void SetParameters(AnimatorControllerPlayable playable, AnimatorController controller, IDictionary<string, float> values, bool neutral = false)
         {

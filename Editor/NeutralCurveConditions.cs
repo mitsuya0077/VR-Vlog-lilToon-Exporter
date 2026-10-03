@@ -91,10 +91,9 @@ namespace VRVlog.LilToonExporter
             value = 0;
             if (curve == null || curve.length == 0) return false;
             value = curve.keys[0].value;
-            if (float.IsNaN(value) || float.IsInfinity(value)) return false;
-            var constant = value;
-            return curve.keys.All(key => Finite(key.time) && key.value == constant && (key.inTangent == 0 || float.IsInfinity(key.inTangent)) &&
-                (key.outTangent == 0 || float.IsInfinity(key.outTangent)));
+            if (!Finite(value)) return false;
+            return !VrChatGestureExpressions.HasInvalidCurveNumbers(curve) &&
+                VrChatGestureExpressions.IsConstantCurve(curve);
         }
 
         static bool Finite(float value) => !float.IsNaN(value) && !float.IsInfinity(value);
