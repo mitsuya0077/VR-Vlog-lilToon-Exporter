@@ -111,10 +111,11 @@ namespace VRVlog.LilToonExporter
         // Direct clips (including moving gestures) bypass menu parameter
         // sampling. Probe their scalar animation properties through the same
         // native layer blending, then transform their curves by that response.
-        // Permanent layers contain only stationary morph curves, so this
+        // Required contributing layers must provide a fixed pose, so this
         // response is affine and preserves weighted/stepped tangent timing.
         internal static void ApplyPermanentOverrides(GameObject avatar, RuntimeAnimatorController runtime,
-            VrChatExpressionMenu.Entry entry, int? layerIndex = null, bool writeDefaults = false, Func<string, bool> excludedPath = null)
+            VrChatExpressionMenu.Entry entry, int? layerIndex = null, bool writeDefaults = false, Func<string, bool> excludedPath = null,
+            VrChatExpressionMenu.Source metadata = null)
         {
             if (runtime == null || entry.Error != null || entry.Values.Count == 0) return;
             // Inspect the authored graph before any early exit: a layer control
@@ -126,6 +127,7 @@ namespace VRVlog.LilToonExporter
             var originalController = ExpressionDependencies.Controller(runtime);
             var originalLayers = originalController.layers;
             var replacements = ExpressionDependencies.Overrides(runtime);
+            var nativeSlot = layerIndex.HasValue && layerIndex.Value > 0;
             // Constant parameter/empty clips can still impose Write Defaults.
             // Keep proven equivalent layers in their authored slots even when
             // none of their explicit bindings name a stationary morph.
@@ -137,7 +139,7 @@ namespace VRVlog.LilToonExporter
                     if (replacements.TryGetValue(clip, out var replacement)) clip = replacement;
                     if (AnimationUtility.GetCurveBindings(clip).All(binding => binding.type == typeof(Animator))) parameterLayers.Add(index, clip);
                 }
-            if (stationaryBindings.Count == 0 && parameterLayers.Count == 0) return;
+            if (stationaryBindings.Count == 0 && parameterLayers.Count == 0 && !nativeSlot) return;
             if (layerIndex.HasValue && (layerIndex.Value < 0 || layerIndex.Value >= originalLayers.Length))
                 throw new InvalidOperationException("表情のFXレイヤーを特定できません。");
             if (layerIndex.HasValue && originalLayers[layerIndex.Value].blendingMode == AnimatorLayerBlendingMode.Additive)
@@ -172,26 +174,54 @@ namespace VRVlog.LilToonExporter
                             avatarMask = original?.avatarMask, blendingMode = original?.blendingMode ?? AnimatorLayerBlendingMode.Override,
                             defaultWeight = weight, syncedLayerIndex = -1, iKPass = false };
                     }
-                    // FaceEmo's registered clips are standalone expressions.
-                    // They form the base; the prepared avatar's permanent FX
-                    // layers remain above them. Gestures retain their FX slot.
-                    if (!layerIndex.HasValue) layers.Add(Layer(null, clip, false, 1));
-                    for (var index = 0; index < originalLayers.Length; index++)
+                    if (nativeSlot)
                     {
-                        var original = originalLayers[index];
-                        var selected = layerIndex == index;
-                        permanent.TryGetValue(index, out var fixedClip);
-                        if (fixedClip != null && !AnimationUtility.GetCurveBindings(fixedClip).Any(stationaryBindings.Contains)) fixedClip = null;
-                        if (parameterLayers.TryGetValue(index, out var parameterClip)) fixedClip = parameterClip;
-                        var motion = selected ? clip : fixedClip;
-                        layers.Add(Layer(original, motion, selected ? writeDefaults : motion != null && original.stateMachine.defaultState.writeDefaultValues,
-                            motion == null ? 0 : index == 0 ? 1 : original.defaultWeight));
+                        // A fractional authored slot blends with the evaluated
+                        // lower pose, including stable default states that have
+                        // other possible transitions. Preserve their graph;
+                        // dependency analysis and fixed-pose checks decide which
+                        // layers can safely support this scalar response.
+                        layers.AddRange(originalLayers);
+                        var original = originalLayers[layerIndex.Value];
+                        layers[layerIndex.Value] = Layer(original, clip, writeDefaults, original.defaultWeight);
+                    }
+                    else
+                    {
+                        // Standalone registered clips form the base below the
+                        // permanent FX layers. Keep their authored direct-clip
+                        // contract, as well as clips in the original base slot.
+                        if (!layerIndex.HasValue) layers.Add(Layer(null, clip, false, 1));
+                        for (var index = 0; index < originalLayers.Length; index++)
+                        {
+                            var original = originalLayers[index];
+                            var selected = layerIndex == index;
+                            permanent.TryGetValue(index, out var fixedClip);
+                            if (fixedClip != null && !AnimationUtility.GetCurveBindings(fixedClip).Any(stationaryBindings.Contains)) fixedClip = null;
+                            if (parameterLayers.TryGetValue(index, out var parameterClip)) fixedClip = parameterClip;
+                            var motion = selected ? clip : fixedClip;
+                            layers.Add(Layer(original, motion, selected ? writeDefaults : motion != null && original.stateMachine.defaultState.writeDefaultValues,
+                                motion == null ? 0 : index == 0 ? 1 : original.defaultWeight));
+                        }
                     }
                     controller.layers = layers.ToArray();
+                    RuntimeAnimatorController probeRuntime = controller;
+                    if (nativeSlot && replacements.Count > 0)
+                    {
+                        var overrides = new AnimatorOverrideController(controller)
+                        { name = "VRVlog expression effective override probe", hideFlags = HideFlags.HideAndDontSave };
+                        owned.Add(overrides);
+                        var pairs = new List<KeyValuePair<AnimationClip, AnimationClip>>();
+                        overrides.GetOverrides(pairs);
+                        for (var index = 0; index < pairs.Count; index++)
+                            if (replacements.TryGetValue(pairs[index].Key, out var replacement))
+                                pairs[index] = new KeyValuePair<AnimationClip, AnimationClip>(pairs[index].Key, replacement);
+                        overrides.ApplyOverrides(pairs);
+                        probeRuntime = overrides;
+                    }
                     var seeds = new HashSet<EditorCurveBinding>(stationaryBindings);
                     seeds.UnionWith(AnimationUtility.GetCurveBindings(clip));
-                    return Evaluate(avatar, controller, new Dictionary<string, float>(), new Dictionary<string, float>(), excludedPath,
-                        null, new List<MorphValue>(), seeds);
+                    return Evaluate(avatar, probeRuntime, metadata?.Defaults ?? new Dictionary<string, float>(), new Dictionary<string, float>(), excludedPath,
+                        metadata, new List<MorphValue>(), seeds, preserveNativeBasePose: nativeSlot);
                 }
                 var zero = Probe(0).ToDictionary(value => (value.Path, value.Shape));
                 var full = Probe(100).ToDictionary(value => (value.Path, value.Shape));
