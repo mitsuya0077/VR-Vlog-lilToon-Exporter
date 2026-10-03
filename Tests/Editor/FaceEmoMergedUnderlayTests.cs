@@ -32,7 +32,7 @@ namespace VRVlog.LilToonExporter.Tests
             Assert.That(sampled.Single(value => value.Shape == "Mouth").Weight, Is.EqualTo(80).Within(.001f));
             f.ApplyCommon(menu);
             Assert.That(entry.Error, Is.Null);
-            Assert.That(entry.Values.Where(value => value.Shape == "Mouth"), Has.Count.EqualTo(1));
+            Assert.That(entry.Values.Count(value => value.Shape == "Mouth"), Is.EqualTo(1));
             Assert.That(entry.Values.Single(value => value.Shape == "Mouth").Weight, Is.EqualTo(20));
             Assert.That(entry.Values.Where(value => value.Shape == "Open").Select(value => value.Path),
                 Is.EquivalentTo(openingZero ? new[] { "Front" } : new[] { "Front", "Back" }));
@@ -89,7 +89,7 @@ namespace VRVlog.LilToonExporter.Tests
             else
             {
                 FaceEmoExpressions.ComposeCommonValues(f.Avatar.Copy, menu, input, f.Bindings);
-                Assert.That(entry.Values.Where(value => value.Shape == "Open"), Has.Count.EqualTo(2));
+                Assert.That(entry.Values.Count(value => value.Shape == "Open"), Is.EqualTo(2));
                 Assert.That(entry.Values.Where(value => value.Shape == "Open").Select(value => value.Path), Is.EquivalentTo(new[] { "Front", "Back" }));
                 f.Bindings.Capture(menu); AvatarBaseShape.Preserve(f.Avatar.Copy, f.Avatar.Copy, f.Owned, null);
                 Assert.That(f.Bake(menu).Single().Targets, Has.Count.EqualTo(1));
@@ -123,7 +123,7 @@ namespace VRVlog.LilToonExporter.Tests
             var curve = Curve(); var animated = new VrChatExpressionMenu.AnimatedMorph { Path = "Front", Shape = "Open", Curve = curve };
             entry.Animation.Add(animated); f.Prepare(menu); f.ApplyCommon(menu);
             Assert.That(entry.Error, Is.Null);
-            Assert.That(entry.Values.Where(value => value.Shape == "Open"), Has.Count.EqualTo(1));
+            Assert.That(entry.Values.Count(value => value.Shape == "Open"), Is.EqualTo(1));
             Assert.That(entry.Values.Single(value => value.Shape == "Open").Path, Is.EqualTo("Front"));
             Assert.That(entry.Animation.Single(), Is.SameAs(animated)); Assert.That(animated.Curve, Is.SameAs(curve));
             f.Bindings.Capture(menu); AvatarBaseShape.Preserve(f.Avatar.Copy, f.Avatar.Copy, f.Owned, null);
@@ -138,7 +138,9 @@ namespace VRVlog.LilToonExporter.Tests
         {
             using var f = new Fixture(); var menu = Branch(); f.Prepare(menu);
             var values = menu.Entries.Single().Values.ToArray();
-            var duplicate = f.Merged.gameObject.AddComponent<SkinnedMeshRenderer>(); duplicate.sharedMesh = f.Avatar.Mesh;
+            var duplicate = new GameObject(f.Merged.name);
+            duplicate.transform.SetParent(f.Merged.transform.parent, false);
+            duplicate.AddComponent<SkinnedMeshRenderer>().sharedMesh = f.Avatar.Mesh;
             Assert.That(f.Bindings.AuthoringPaths("Prepared/Merged"), Is.Empty);
             f.ApplyCommon(menu);
             Assert.That(menu.Entries.Single().Error, Is.Not.Null);
@@ -254,6 +256,9 @@ namespace VRVlog.LilToonExporter.Tests
                 // own layer; mode/branch states are alternatives on PLAYER.
                 var common = Clip("Common DEFAULT FACE"); SetCurve(common, "Prepared/Merged", "Open", 100); SetCurve(common, "Prepared/Merged", "Mouth", 40);
                 var layers = controller.layers; layers[0].name = "[ USER EDIT ] DEFAULT FACE"; layers[0].defaultWeight = 1; controller.layers = layers;
+                // Native state hashes use the root machine name. Match the
+                // source generator's layer/machine names after renaming base.
+                layers[0].stateMachine.name = layers[0].name;
                 var state = layers[0].stateMachine.AddState("DEFAULT"); state.motion = common; state.writeDefaultValues = false; layers[0].stateMachine.defaultState = state;
                 controller.AddLayer("[ USER EDIT ] FACE EMOTE PLAYER"); layers = controller.layers; layers[1].defaultWeight = 1; controller.layers = layers;
                 var mode = Clip("Alternative mode default"); SetCurve(mode, "Prepared/Merged", "Open", 50); SetCurve(mode, "Prepared/Merged", "Mouth", 80);
@@ -263,6 +268,7 @@ namespace VRVlog.LilToonExporter.Tests
                 foreach (var value in menu.Entries.First().Values)
                     SetCurve(branch, value.Path == "Front" || value.Path == "Back" ? "Prepared/Merged" : value.Path, value.Shape, value.Weight);
                 var branchState = layers[1].stateMachine.AddState("Branch"); branchState.motion = branch; branchState.writeDefaultValues = false;
+                Assert.That(controller.layers.All(layer => layer.name == layer.stateMachine.name), Is.True);
             }
             internal void Pose(float open, float mouth)
             { Merged.SetBlendShapeWeight(0, open); Merged.SetBlendShapeWeight(1, mouth); Merged.SetBlendShapeWeight(2, 40); }
