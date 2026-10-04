@@ -443,6 +443,44 @@ namespace VRVlog.LilToonExporter.Tests
             Assert.IsTrue(original != null);
         }
 
+        [Test]
+        public void AuthoredNdmfRootMarkerRetainsItsProcessingSemantics()
+        {
+            var rootType = InstalledType("nadena.dev.ndmf.runtime.components.NDMFAvatarRoot");
+            if (rootType == null) Assert.Ignore("Install NDMF to test its real avatar root marker.");
+            var sourceMarker = source.AddComponent(rootType);
+            var cloneMarker = clone.AddComponent(rootType);
+            Assert.IsTrue(NdmfExportPreparation.NeedsProcessing(source));
+            NdmfExportPreparation.ValidateCopy(source, clone);
+            Assert.IsTrue(NdmfExportPreparation.NeedsProcessing(clone),
+                "Only a marker inserted by export preparation may be ignored as infrastructure.");
+            Assert.AreSame(sourceMarker, source.GetComponent(rootType));
+            Assert.AreSame(cloneMarker, clone.GetComponent(rootType));
+            Assert.AreEqual(0, FakeProcessor.Calls);
+        }
+
+        [Test]
+        public void InjectedCopyRootDoesNotRetainAnUnusedInactiveWardrobeAcrossValidationAndPreparation()
+        {
+            var rootType = InstalledType("nadena.dev.ndmf.runtime.components.NDMFAvatarRoot");
+            if (rootType == null) Assert.Ignore("Install NDMF to test its real avatar root marker.");
+            var sourceTag = AddMerge(source, "unused wardrobe", false, null, false);
+            var cloneTag = AddMerge(clone, "unused wardrobe", false, null, false);
+            Assert.IsNull(source.GetComponent(rootType));
+            Assert.IsNull(clone.GetComponent(rootType));
+            NdmfExportPreparation.ValidateCopy(source, clone);
+            var injectedMarker = clone.GetComponent(rootType);
+            Assert.IsNotNull(injectedMarker);
+            Assert.IsFalse(NdmfExportPreparation.NeedsProcessing(clone));
+            using (NdmfExportPreparation.Prepare(source, clone)) { }
+            Assert.AreEqual(0, FakeProcessor.Calls);
+            Assert.IsTrue(cloneTag == null && sourceTag != null);
+            Assert.AreSame(injectedMarker, clone.GetComponent(rootType));
+            Assert.IsNull(source.GetComponent(rootType));
+            Assert.IsFalse(NdmfExportPreparation.NeedsProcessing(clone));
+            Assert.AreSame(original, source.GetComponent<SkinnedMeshRenderer>().sharedMesh);
+        }
+
         [TestCase(false)]
         [TestCase(true)]
         public void UnusedInactiveWardrobeDoesNotRequireNdmfOrValidateItsTarget(bool staleExternalTarget)
@@ -682,8 +720,9 @@ namespace VRVlog.LilToonExporter.Tests
             }
         }
 
-        [Test]
-        public void InstalledModularAvatarRejectsTargetOutsideSelectedSubtreeBeforeCloning()
+        [TestCase(false)]
+        [TestCase(true)]
+        public void InstalledModularAvatarRejectsTargetOutsideSelectedSubtreeBeforeCloning(bool deferUnresolvedTargets)
         {
             var mergeType = InstalledType("nadena.dev.modular_avatar.core.ModularAvatarMergeArmature");
             var rootType = InstalledType("nadena.dev.ndmf.runtime.components.NDMFAvatarRoot");
@@ -694,14 +733,20 @@ namespace VRVlog.LilToonExporter.Tests
                 wholeAvatar.AddComponent(rootType);
                 source.transform.SetParent(wholeAvatar.transform);
                 var target = Child(wholeAvatar.transform, "outside-selected-subtree", Vector3.zero);
+                // A detached copy would have a same-named internal path. The
+                // effective authored target must still be rejected before that
+                // fallback can hide an outside-selected-subtree connection.
+                var sameNamedInternal = Child(source.transform, "outside-selected-subtree", Vector3.zero);
                 var merge = source.AddComponent(mergeType);
                 DisableFixturePosePreview(merge);
                 var reference = mergeType.GetField("mergeTarget").GetValue(merge);
                 reference.GetType().GetMethod("Set", new[] { typeof(GameObject) }).Invoke(reference, new object[] { target.gameObject });
-                var error = Assert.Throws<InvalidOperationException>(() => NdmfExportPreparation.ValidateSource(source));
+                var error = Assert.Throws<InvalidOperationException>(() => NdmfExportPreparation.ValidateSource(source,
+                    deferUnresolvedTargets: deferUnresolvedTargets));
                 StringAssert.Contains("外にあります", error.Message);
                 Assert.AreSame(wholeAvatar.transform, source.transform.parent);
                 Assert.AreSame(wholeAvatar.transform, target.parent);
+                Assert.AreSame(source.transform, sameNamedInternal.parent);
             }
             finally
             {

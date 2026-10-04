@@ -65,7 +65,9 @@ namespace VRVlog.LilToonExporter
             foreach (var finding in findings.Where(f => f.Renderer == null))
                 if (automaticRoots.Contains(finding.Target)) warnings?.Add("補助ギミックを省略: " + finding.Target.name + " — " + finding.Reason);
                 else if (finding.Unit == GimmickExclusionUnit.Review) warnings?.Add("自動除外せず保持: " + finding.Target.name + " — " + finding.Reason);
-            NdmfExportPreparation.ValidateSource(source, exclusions.Contains);
+            // Preserve rejection of effective external/excluded source targets.
+            // Only unresolved getters wait for the selected root on the copy.
+            NdmfExportPreparation.ValidateSource(source, exclusions.Contains, deferUnresolvedTargets: true);
             // Re-read the live assets on every export; a preview is never a stale
             // cached source of expression weights after the user edits a clip.
             var menuPolicy = ExportRecoveryReport.MenuImportPolicy(source, recoveryOptions);
@@ -85,6 +87,11 @@ namespace VRVlog.LilToonExporter
             AuthoredExpressionEndpoints authoredEndpoints = null;
             try
             {
+                // MA resolves against the selected avatar after detaching its
+                // owned copy, just as NDMF does when it creates BuildContext.
+                // Source getters can use an enclosing root or no root at all.
+                NdmfExportPreparation.ValidateCopy(source, clone,
+                    target => exclusions.ContainsCopyTransform(clone, target));
                 var recovery = recoveryOptions == null || recoveryOptions.Actions.Count == 0 ? null : new ExportRecoveryCopySession(source, clone, temporaryMaterials, recoveryOptions, recoveryReport, bakeOptions);
                 using var blink = sourceBlink.ForClone(source, clone);
                 using var gimmicks = new ExportGimmickSession(source, clone, gimmickOptions);

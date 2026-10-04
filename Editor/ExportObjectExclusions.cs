@@ -44,6 +44,19 @@ namespace VRVlog.LilToonExporter
         internal bool Contains(Transform transform) => transform != null && roots.Any(root => transform == root || transform.IsChildOf(root));
         internal bool HasAny => roots.Count != 0;
 
+        internal bool ContainsCopyTransform(GameObject clone, Transform target)
+        {
+            if (target == null || clone == null || (target != clone.transform && !target.IsChildOf(clone.transform))) return false;
+            // Before any copy hierarchy mutation, sibling routes preserve exact
+            // source identity even when several objects have the same name.
+            var route = new Stack<int>();
+            for (var current = target; current != clone.transform; current = current.parent)
+                route.Push(current.GetSiblingIndex());
+            var original = source.transform;
+            while (route.Count != 0) original = original.GetChild(route.Pop());
+            return Contains(original);
+        }
+
         internal bool ContainsPath(string path)
         {
             if (roots.Count == 0 || path == null) return false;
