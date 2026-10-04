@@ -357,6 +357,36 @@ namespace VRVlog.LilToonExporter.Tests
             finally { UnityEditor.AssetDatabase.DeleteAsset(assetPath); }
         }
 
+        [Test]
+        public void ReferencedChildRendererStillIsolatesItsOwnUnsavedMeshBeforeProcessing()
+        {
+            var childMesh = MakeMesh("child-owned-morph");
+            var sourceRenderer = Child(source.transform, "child renderer", Vector3.zero).gameObject.AddComponent<SkinnedMeshRenderer>();
+            var cloneRenderer = Child(clone.transform, "child renderer", Vector3.zero).gameObject.AddComponent<SkinnedMeshRenderer>();
+            sourceRenderer.sharedMesh = cloneRenderer.sharedMesh = childMesh;
+            source.AddComponent<NdmfSharedAssetHolder>().Renderer = sourceRenderer;
+            clone.AddComponent<NdmfSharedAssetHolder>().Renderer = cloneRenderer;
+            var before = childMesh.vertices;
+            Mesh copiedMesh = null;
+            try
+            {
+                FakeProcessor.Action = root =>
+                {
+                    copiedMesh = root.GetComponent<NdmfSharedAssetHolder>().Renderer.GetComponent<SkinnedMeshRenderer>().sharedMesh;
+                    Assert.AreNotSame(childMesh, copiedMesh);
+                    copiedMesh.vertices = new[] { Vector3.down, Vector3.down, Vector3.down };
+                };
+                using (NdmfExportPreparation.ProcessClone(source, clone, Resolve()))
+                {
+                    Assert.AreSame(childMesh, sourceRenderer.sharedMesh);
+                    CollectionAssert.AreEqual(before, childMesh.vertices);
+                }
+                Assert.IsTrue(copiedMesh == null);
+                Assert.IsTrue(childMesh != null);
+            }
+            finally { Object.DestroyImmediate(childMesh); }
+        }
+
         [TestCase(false)]
         [TestCase(true)]
         public void SharedSettingsPointingIntoOriginalAvatarStopBeforeAnyPass(bool componentReference)
