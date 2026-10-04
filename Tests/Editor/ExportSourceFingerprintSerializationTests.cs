@@ -10,6 +10,49 @@ namespace VRVlog.LilToonExporter.Tests
 {
     public sealed class ExportSourceFingerprintSerializationTests
     {
+        [TestCase("floatCurve")]
+        [TestCase("objectReference")]
+        [TestCase("animationEvent")]
+        [TestCase("clipSettings")]
+        public void AuthoredImportedClipChangesRemainGuardedAfterItsEditorCacheWarms(string change)
+        {
+            using var f = new SourceFingerprintTests.ColdAnimationClipFixture();
+            Assert.That(f.EditorCurveCount(), Is.Zero);
+            var stamp = ExportRecoverySourceStamp.Capture(f.Source);
+            AnimationUtility.GetCurveBindings(f.Clip);
+            AnimationUtility.GetObjectReferenceCurveBindings(f.Clip);
+            Assert.That(f.EditorCurveCount(), Is.GreaterThan(0));
+            Assert.That(stamp.Matches(f.Source), Is.True, "The initial read-only cache expansion must remain current.");
+            switch (change)
+            {
+                case "floatCurve":
+                    var curve = AnimationUtility.GetEditorCurve(f.Clip, f.FloatBinding);
+                    var key = curve[1]; key.value += 5; curve.MoveKey(1, key);
+                    AnimationUtility.SetEditorCurve(f.Clip, f.FloatBinding, curve);
+                    break;
+                case "objectReference":
+                    AnimationUtility.SetObjectReferenceCurve(f.Clip, f.ObjectBinding,
+                        new[] { new ObjectReferenceKeyframe { time = 0, value = f.OtherMaterial } });
+                    break;
+                case "animationEvent":
+                    var events = AnimationUtility.GetAnimationEvents(f.Clip);
+                    Assert.That(events, Has.Length.EqualTo(1));
+                    events[0].intParameter++;
+                    AnimationUtility.SetAnimationEvents(f.Clip, events);
+                    break;
+                case "clipSettings":
+                    var settings = AnimationUtility.GetAnimationClipSettings(f.Clip);
+                    settings.loopTime = !settings.loopTime;
+                    AnimationUtility.SetAnimationClipSettings(f.Clip, settings);
+                    break;
+                default: Assert.Fail(change); break;
+            }
+            Assert.That(stamp.Matches(f.Source), Is.False, "Warming native caches must not hide an authored clip change: " + change);
+            Assert.That(ExportRecoverySourceStamp.Capture(f.Source).Matches(f.Source), Is.True);
+            Assert.That(f.Source.GetComponent<Animator>().runtimeAnimatorController, Is.SameAs(f.Controller));
+            Assert.That(f.Controller.layers[0].stateMachine.defaultState.motion, Is.SameAs(f.Clip));
+        }
+
         [TestCase("bool")][TestCase("int")][TestCase("signed64")][TestCase("unsigned64")]
         [TestCase("doubleUlp")][TestCase("doubleSignedZero")][TestCase("float")][TestCase("char")]
         [TestCase("enum")][TestCase("layerMask")][TestCase("hash128")][TestCase("color")]

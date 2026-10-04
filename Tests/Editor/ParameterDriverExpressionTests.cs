@@ -343,6 +343,37 @@ namespace VRVlog.LilToonExporter.Tests
             Assert.That(context.UsedParameters.Contains(parameter), Is.False);
         }
 
+        [TestCase("EyeHeightAsMeters", false)]
+        [TestCase("EyeHeightAsPercent", false)]
+        [TestCase("EyeHeightAsMeters", true)]
+        [TestCase("EyeHeightAsPercent", true)]
+        public void FixedExplicitUnusedEyeHeightIsNotReportedAsAFaceInput(string parameter, bool unrelatedReader)
+        {
+            controller.AddParameter(new AnimatorControllerParameter
+            {
+                name = parameter, type = AnimatorControllerParameterType.Float, defaultFloat = 1
+            });
+            metadata.Defaults[parameter] = 1;
+            Gate().motion = Clip("Menu face", 75);
+            if (unrelatedReader)
+            {
+                controller.AddParameter("Unrelated motion value", AnimatorControllerParameterType.Float);
+                var clip = new AnimationClip { name = "Unrelated parameter motion" };
+                AnimationUtility.SetEditorCurve(clip, EditorCurveBinding.FloatCurve("", typeof(Animator), "Unrelated motion value"),
+                    AnimationCurve.Constant(0, 1, 0));
+                AssetDatabase.AddObjectToAsset(clip, controller);
+                var machine = Layer("Unrelated height reader");
+                var idle = State(machine, "Unrelated idle", clip); machine.defaultState = idle;
+                var alternate = State(machine, "Unrelated alternate", clip);
+                Transition(idle, alternate, parameter, .5f, AnimatorConditionMode.Greater);
+            }
+            var context = FixedExpressionContext.Create(controller, metadata.Defaults, metadata);
+            context.Values[parameter] = 0;
+            Assert.That(SampleFixed(context).Single(value => value.Shape == "Face size").Weight, Is.EqualTo(75).Within(.01));
+            Assert.That(context.UsedParameters.Contains(parameter), Is.False,
+                "Supplying an input cannot make a declaration or an unrelated layer a reported facial assumption.");
+        }
+
         [TestCase("EyeHeightAsMeters", 0f, 0f)]
         [TestCase("EyeHeightAsMeters", 1f, 75f)]
         [TestCase("EyeHeightAsPercent", 0f, 0f)]

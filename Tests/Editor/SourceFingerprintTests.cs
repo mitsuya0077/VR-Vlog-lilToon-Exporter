@@ -2,9 +2,11 @@ using System;
 using System.Linq;
 using System.Diagnostics;
 using System.IO;
+using System.Text.RegularExpressions;
 using NUnit.Framework;
 using Unity.Collections;
 using UnityEditor;
+using UnityEditor.Animations;
 using UnityEngine;
 using UnityEngine.Rendering;
 using Object = UnityEngine.Object;
@@ -13,6 +15,30 @@ namespace VRVlog.LilToonExporter.Tests
 {
     public sealed class SourceFingerprintTests
     {
+        [Test]
+        public void ImportedColdClipFingerprintStaysCurrentAfterReadOnlyCurveInspection()
+        {
+            using var fixture = new ColdAnimationClipFixture();
+            Assert.That(fixture.EditorCurveCount(), Is.Zero, "The imported fixture must start with an unpopulated editor curve cache.");
+            var fileBefore = File.ReadAllBytes(fixture.AbsoluteClipPath);
+            var dependencyBefore = AssetDatabase.GetAssetDependencyHash(fixture.ClipPath);
+            Assert.That(EditorUtility.IsDirty(fixture.Clip), Is.False);
+            Assert.That(fixture.EditorCurveCount(), Is.Zero, "The first fingerprint must still encounter the cold imported state.");
+            var stamp = ExportRecoverySourceStamp.Capture(fixture.Source);
+            var floats = AnimationUtility.GetCurveBindings(fixture.Clip);
+            var objects = AnimationUtility.GetObjectReferenceCurveBindings(fixture.Clip);
+            Assert.That(floats, Does.Contain(fixture.FloatBinding));
+            Assert.That(objects, Does.Contain(fixture.ObjectBinding));
+            Assert.That(fixture.EditorCurveCount(), Is.GreaterThan(0), "Exercise Unity's lazy editor cache population rather than an already empty clip.");
+            Assert.That(stamp.Matches(fixture.Source), Is.True, "A read-only native curve query must not invalidate the captured export input.");
+            Assert.That(stamp.Matches(fixture.Source), Is.True, "Repeated reads must use the same effective clip state.");
+            Assert.That(EditorUtility.IsDirty(fixture.Clip), Is.False);
+            Assert.That(AssetDatabase.GetAssetDependencyHash(fixture.ClipPath), Is.EqualTo(dependencyBefore));
+            Assert.That(File.ReadAllBytes(fixture.AbsoluteClipPath), Is.EqualTo(fileBefore));
+            Assert.That(fixture.Source.GetComponent<Animator>().runtimeAnimatorController, Is.SameAs(fixture.Controller));
+            Assert.That(fixture.Controller.layers[0].stateMachine.defaultState.motion, Is.SameAs(fixture.Clip));
+        }
+
         [Test]
         public void FreshImplicitSkinnedBoundsStayCurrentThroughActualPreviewRendering()
         {
@@ -380,6 +406,76 @@ namespace VRVlog.LilToonExporter.Tests
             {
                 Object.DestroyImmediate(source); Object.DestroyImmediate(custom); Object.DestroyImmediate(material); Object.DestroyImmediate(replacement);
                 Object.DestroyImmediate(initial); Object.DestroyImmediate(replacementTexture);
+            }
+        }
+
+        internal sealed class ColdAnimationClipFixture : IDisposable
+        {
+            internal readonly GameObject Source = new GameObject("Cold animation fingerprint source", typeof(Animator));
+            internal readonly EditorCurveBinding FloatBinding = EditorCurveBinding.FloatCurve("Body", typeof(SkinnedMeshRenderer), "blendShape.Fingerprint face");
+            internal readonly EditorCurveBinding ObjectBinding = EditorCurveBinding.PPtrCurve("Body", typeof(SkinnedMeshRenderer), "m_Materials.Array.data[0]");
+            internal AnimationClip Clip;
+            internal AnimatorController Controller;
+            internal Material FirstMaterial, OtherMaterial;
+            internal string ClipPath, AbsoluteClipPath;
+            string folder;
+
+            internal ColdAnimationClipFixture()
+            {
+                try
+                {
+                    var name = "__ColdClipFingerprint_" + Guid.NewGuid().ToString("N");
+                    AssetDatabase.CreateFolder("Assets", name); folder = "Assets/" + name;
+                    FirstMaterial = new Material(Shader.Find("Hidden/InternalErrorShader"));
+                    OtherMaterial = new Material(Shader.Find("Hidden/InternalErrorShader"));
+                    AssetDatabase.CreateAsset(FirstMaterial, folder + "/First.mat");
+                    AssetDatabase.CreateAsset(OtherMaterial, folder + "/Other.mat");
+                    var authored = new AnimationClip { name = "Synthetic cold imported curve" };
+                    AnimationUtility.SetEditorCurve(authored, FloatBinding, AnimationCurve.Linear(0, 10, 1, 70));
+                    AnimationUtility.SetObjectReferenceCurve(authored, ObjectBinding,
+                        new[] { new ObjectReferenceKeyframe { time = 0, value = FirstMaterial } });
+                    AnimationUtility.SetAnimationEvents(authored,
+                        new[] { new AnimationEvent { time = .25f, functionName = "FingerprintFixtureEvent", intParameter = 11 } });
+                    ClipPath = folder + "/Cold.anim";
+                    AbsoluteClipPath = Path.GetFullPath(ClipPath);
+                    AssetDatabase.CreateAsset(authored, ClipPath);
+                    AssetDatabase.SaveAssetIfDirty(authored);
+                    var yaml = File.ReadAllText(AbsoluteClipPath);
+                    Assert.That(Regex.IsMatch(yaml, @"(?m)^  m_FloatCurves:\s*\r?\n  -"), Is.True,
+                        "The fixture needs real serialized native float curves, not only an editor cache.");
+                    var cache = new Regex(@"(?ms)^  m_EditorCurves:.*?(?=^  m_[A-Za-z0-9_]+:|\z)");
+                    Assert.That(cache.Matches(yaml), Has.Count.EqualTo(1));
+                    var newline = yaml.Contains("\r\n") ? "\r\n" : "\n";
+                    var coldYaml = cache.Replace(yaml, "  m_EditorCurves: []" + newline, 1);
+                    // Retain every authored/native field. Removing this redundant
+                    // cache is a valid imported clip state used by shipped clips.
+                    Resources.UnloadAsset(authored);
+                    File.WriteAllText(AbsoluteClipPath, coldYaml);
+                    AssetDatabase.ImportAsset(ClipPath, ImportAssetOptions.ForceUpdate | ImportAssetOptions.ForceSynchronousImport);
+                    Clip = AssetDatabase.LoadAssetAtPath<AnimationClip>(ClipPath);
+                    Assert.That(Clip, Is.Not.Null);
+                    Controller = AnimatorController.CreateAnimatorControllerAtPath(folder + "/Input.controller");
+                    var state = Controller.layers[0].stateMachine.AddState("Authored cold clip");
+                    state.motion = Clip; state.writeDefaultValues = false;
+                    Controller.layers[0].stateMachine.defaultState = state;
+                    Source.GetComponent<Animator>().runtimeAnimatorController = Controller;
+                    Assert.That(EditorCurveCount(), Is.Zero, "Referencing the clip must leave it cold until the first fingerprint.");
+                }
+                catch { Dispose(); throw; }
+            }
+
+            internal int EditorCurveCount()
+            {
+                using var data = new SerializedObject(Clip);
+                var cache = data.FindProperty("m_EditorCurves");
+                Assert.That(cache, Is.Not.Null);
+                return cache.arraySize;
+            }
+
+            public void Dispose()
+            {
+                if (Source != null) Object.DestroyImmediate(Source);
+                if (folder != null) AssetDatabase.DeleteAsset(folder);
             }
         }
 

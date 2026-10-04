@@ -62,4 +62,10 @@ namespace UnityEngine
         public void RecalculateBounds() { }
     }
 }
+namespace VRVlog.LilToonExporter
+{
+    // Menu traversal host tests carry this unused Editor-only evidence field.
+    // Native binding/skinning proof is exercised by the Unity behavior tests.
+    internal sealed class AncillaryExpressionGeometry { }
+}
 #endif

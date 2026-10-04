@@ -23,6 +23,7 @@ namespace VRVlog.LilToonExporter.Tests
 
         internal static void Run(Action<bool, string> check)
         {
+            EndpointContributionChecks(check);
             AuthorEndpointChecks(check);
             LeadingNeutralFrameChecks(check);
             NegativeIntermediateFrameChecks(check);
@@ -113,6 +114,34 @@ namespace VRVlog.LilToonExporter.Tests
                 UnityEngine.Object.DestroyImmediate(source);
                 UnityEngine.Object.DestroyImmediate(target);
             }
+        }
+
+        private static void EndpointContributionChecks(Action<bool, string> check)
+        {
+            var source = Create(); var baked = Create();
+            try
+            {
+                var ear = new[] { Vector3.zero, new Vector3(1, 0, 0), Vector3.zero };
+                source.AddBlendShapeFrame("Appendage", 100, ear, null, null);
+                var rest = new[] { 0f, 0f, 0f }; var pose = new[] { 75f, 0f, 0f };
+                var changed = AvatarBaseShape.ExpressionVertexChanges(source, rest, pose);
+                check(changed[0] && !changed[1] && !changed[2], "A captured unused zero channel contributes no geometry to a facial endpoint.");
+                AvatarBaseShape.AppendExpression(source, baked, "Reference endpoint", rest, pose);
+                var vertices = new Vector3[source.vertexCount]; var normals = new Vector3[source.vertexCount]; var tangents = new Vector3[source.vertexCount];
+                baked.GetBlendShapeFrameVertices(baked.blendShapeCount - 1, 0, vertices, normals, tangents);
+                for (var vertex = 0; vertex < changed.Length; vertex++)
+                    check(changed[vertex] == (vertices[vertex].x != 0 || vertices[vertex].y != 0 || vertices[vertex].z != 0 ||
+                        normals[vertex].x != 0 || normals[vertex].y != 0 || normals[vertex].z != 0 ||
+                        tangents[vertex].x != 0 || tangents[vertex].y != 0 || tangents[vertex].z != 0),
+                        "Relevance uses the actual composed endpoint position, normal and tangent data.");
+                rest[2] = 25;
+                check(AvatarBaseShape.ExpressionVertexChanges(source, rest, pose)[1], "Restoring a nonzero final neutral to zero has a real appendage contribution.");
+                source.AddBlendShapeFrame("Intermediate appendage", 50, ear, null, null);
+                source.AddBlendShapeFrame("Intermediate appendage", 100, new Vector3[source.vertexCount], null, null);
+                check(!AvatarBaseShape.AnimatedVertexChanges(source, 3, 0, 100)[1] && AvatarBaseShape.AnimatedVertexChanges(source, 3, 0, 50)[1],
+                    "An intermediate frame contributes animated geometry even when both endpoint deltas are zero.");
+            }
+            finally { UnityEngine.Object.DestroyImmediate(source); UnityEngine.Object.DestroyImmediate(baked); }
         }
 
         private static void LeadingNeutralFrameChecks(Action<bool, string> check)

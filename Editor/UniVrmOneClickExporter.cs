@@ -75,8 +75,8 @@ namespace VRVlog.LilToonExporter
             var sourceBlink = BlinkExportSession.CaptureForExport(source, blinkOptions, exclusions.Contains, suppressSharedTextureEmission, suppressHdrTextureEmission);
             using var poses = new PoseExportSession(source, poseOptions, exclusions.Contains, menuPolicy);
             recoveryReport.Stage = "コピー作成";
-            var clone = UnityEngine.Object.Instantiate(source);
-            clone.name = source.name;
+            using var exportCopy = new ExportCopyScene(source);
+            var clone = exportCopy.Copy;
             var temporaryMaterials = new List<Material>();
             var temporaryMeshes = new List<Mesh>();
             var temporaryTextures = new List<Texture2D>();
@@ -116,7 +116,7 @@ namespace VRVlog.LilToonExporter
                 {
                     expressionBindings.RebindPrepared(transformed.PreparedRendererFor);
                     expressionBindings.RebindAuthoredExpressions(transformed.IsolatedCopyOf);
-                    faceEmoBindings?.RebindPrepared(transformed.PreparedRendererFor);
+                    faceEmoBindings?.RebindPrepared(transformed.PreparedRendererFor, transformed.IsolatedCopyOf, transformed.PreparedClipFor);
                     blink.RebindPrepared(transformed.PreparedRendererFor);
                     unifiedPreparation?.RebindPrepared(transformed.PreparedRendererFor);
                     blink.VerifyPreparedIdentity(clone);
@@ -135,7 +135,7 @@ namespace VRVlog.LilToonExporter
                         preparedMenuBindings.ExcludesPreparedPath, faceEmoBindings);
                     poses.CollectPrepared(clone, warnings, preparedMenuPolicy);
                     recoveryReport.Stage = "基準形評価";
-                    NeutralShapeSnapshot.Apply(clone, NeutralShapeSampler.Sample(clone, preparedMenuBindings.ExcludesPreparedPath));
+                    NeutralShapeSnapshot.Apply(clone, NeutralShapeSampler.Sample(clone, preparedMenuBindings.ExcludesPreparedPath, warnings));
                     blink.ResolvePreparedNeutral(clone, suppressSharedTextureEmission: suppressSharedTextureEmission,
                         suppressHdrTextureEmission: suppressHdrTextureEmission);
                     var neutral = NeutralShapeSnapshot.Capture(clone);
@@ -226,7 +226,7 @@ namespace VRVlog.LilToonExporter
             {
                 optimizerBindings?.Dispose();
                 authoredEndpoints?.Dispose();
-                UnityEngine.Object.DestroyImmediate(clone);
+                exportCopy.Dispose();
                 foreach (var material in temporaryMaterials) UnityEngine.Object.DestroyImmediate(material);
                 foreach (var mesh in temporaryMeshes) UnityEngine.Object.DestroyImmediate(mesh);
                 foreach (var texture in temporaryTextures) UnityEngine.Object.DestroyImmediate(texture);

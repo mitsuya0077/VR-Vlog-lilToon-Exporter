@@ -24,6 +24,7 @@ namespace VRVlog.LilToonExporter
         private readonly Dictionary<SkinnedMeshRenderer, (string Path, Binding Binding)> originalRenderers =
             new Dictionary<SkinnedMeshRenderer, (string, Binding)>();
         private readonly GameObject root;
+        internal GameObject Root => root;
         private readonly Dictionary<Renderer, bool> excludedRenderers = new Dictionary<Renderer, bool>();
         private readonly HashSet<string> excludedAuthoringPaths = new HashSet<string>(StringComparer.Ordinal);
         private readonly List<Object> ownedAssets = new List<Object>();
@@ -263,6 +264,11 @@ namespace VRVlog.LilToonExporter
                                        string.Join(", ", missing.OrderBy(v => v.Path, StringComparer.Ordinal).ThenBy(v => v.Shape, StringComparer.Ordinal).Select(v => v.Path + "/" + v.Shape)));
                 if (entry.Animation.Count == 0) { entry.Duration = 0; entry.Loop = false; }
                 if (entry.Values.Count == 0) entry.Error = "参照を解決した結果、有効な顔のBlendShapeがないため、この表情を省略しました。";
+                if (entry.Error == null && entry.AncillaryGeometry != null)
+                {
+                    try { entry.AncillaryGeometry.Validate(entry, this); }
+                    catch (AncillaryExpressionGeometryException error) { entry.Error = error.Message; }
+                }
             }
         }
 

@@ -175,6 +175,12 @@ namespace VRVlog.LilToonExporter
         internal static void AppendExpression(Mesh source, Mesh target, string name, float[] rest, float[] expression)
         {
             if (ReferenceEquals(source, target)) throw new ArgumentException("The source mesh must remain unchanged.");
+            var delta = ExpressionDeltas(source, rest, expression);
+            target.AddBlendShapeFrame(name, 100f, delta.Vertices, delta.Normals, delta.Tangents);
+        }
+
+        private static Deltas ExpressionDeltas(Mesh source, float[] rest, float[] expression)
+        {
             if (rest.Length != source.blendShapeCount || expression.Length != rest.Length)
                 throw new ArgumentException("BlendShape weight count mismatch.");
             var delta = new Deltas(source.vertexCount);
@@ -192,7 +198,7 @@ namespace VRVlog.LilToonExporter
                     delta.Tangents[v] += after.Tangents[v] - before.Tangents[v];
                 }
             }
-            target.AddBlendShapeFrame(name, 100f, delta.Vertices, delta.Normals, delta.Tangents);
+            return delta;
         }
 
         sealed class Deltas
@@ -209,6 +215,12 @@ namespace VRVlog.LilToonExporter
         internal static void AppendAnimatedShape(Mesh source, Mesh target, string name, int shape, double initial, double weight)
         {
             if (ReferenceEquals(source, target)) throw new ArgumentException("The source mesh must remain unchanged.");
+            var after = AnimatedDeltas(source, shape, initial, weight);
+            target.AddBlendShapeFrame(name, 100f, after.Vertices, after.Normals, after.Tangents);
+        }
+
+        private static Deltas AnimatedDeltas(Mesh source, int shape, double initial, double weight)
+        {
             var before = Evaluate(source, shape, initial);
             var after = Evaluate(source, shape, weight);
             for (var v = 0; v < source.vertexCount; v++)
@@ -217,7 +229,25 @@ namespace VRVlog.LilToonExporter
                 after.Normals[v] -= before.Normals[v];
                 after.Tangents[v] -= before.Tangents[v];
             }
-            target.AddBlendShapeFrame(name, 100f, after.Vertices, after.Normals, after.Tangents);
+            return after;
+        }
+
+        internal static bool[] ExpressionVertexChanges(Mesh source, float[] rest, float[] expression) =>
+            ChangedVertices(ExpressionDeltas(source, rest, expression));
+
+        internal static bool[] AnimatedVertexChanges(Mesh source, int shape, double initial, double weight) =>
+            ChangedVertices(AnimatedDeltas(source, shape, initial, weight));
+
+        private static bool[] ChangedVertices(Deltas deltas)
+        {
+            var result = new bool[deltas.Vertices.Length];
+            for (var vertex = 0; vertex < result.Length; vertex++)
+            {
+                if (!Finite(deltas.Vertices[vertex]) || !Finite(deltas.Normals[vertex]) || !Finite(deltas.Tangents[vertex]))
+                    throw new InvalidOperationException("表情のBlendShape頂点差分が不正です。");
+                result[vertex] = Nonzero(deltas.Vertices[vertex]) || Nonzero(deltas.Normals[vertex]) || Nonzero(deltas.Tangents[vertex]);
+            }
+            return result;
         }
 
         private static bool SpansZero(Mesh mesh, int shape)

@@ -61,7 +61,20 @@ namespace VRVlog.LilToonExporter
                 {
                     if (excludedPath?.Invoke(binding.path) == true || binding.type != typeof(SkinnedMeshRenderer) ||
                         !binding.propertyName.StartsWith("blendShape.", StringComparison.Ordinal)) continue;
-                    var curve = VrChatGestureExpressions.ReadCurve(AnimationUtility.GetEditorCurve(clip, binding));
+                    var nativeCurve = AnimationUtility.GetEditorCurve(clip, binding);
+                    if (!composeValues)
+                    {
+                        // The prepared PLAYER probe consumes this curve in
+                        // Unity. No portable animation data is emitted for its
+                        // common constant underlay, so portable duration/key
+                        // limits must not discard every registered expression.
+                        if (nativeCurve == null || nativeCurve.length == 0 || VrChatGestureExpressions.HasInvalidCurveNumbers(nativeCurve))
+                            throw new InvalidOperationException("FaceEmoの共通DEFAULT FACEの曲線を読み取れません: " + binding.path + " / " + binding.propertyName);
+                        if (!VrChatGestureExpressions.IsConstantCurve(nativeCurve))
+                            throw new InvalidOperationException("FaceEmoの共通DEFAULT FACEが時間で変化します: " + binding.path + " / " + binding.propertyName);
+                        continue;
+                    }
+                    var curve = VrChatGestureExpressions.ReadCurve(nativeCurve);
                     curve.Range(out var minimum, out var maximum);
                     if (minimum != maximum)
                         throw new InvalidOperationException("FaceEmoの共通DEFAULT FACEが時間で変化します: " + binding.path + " / " + binding.propertyName);
@@ -181,6 +194,39 @@ namespace VRVlog.LilToonExporter
             }
         }
 
+        // Preview and prepared export must identify the same authored slot;
+        // neither guesses a state from its name or from matching morph curves.
+        private static (int? Layer, AnimatorStateMachine Machine, bool WriteDefaults) RegisteredPlayer(RuntimeAnimatorController runtime)
+        {
+            if (runtime == null) return (null, null, false);
+            var layers = ExpressionDependencies.Controller(runtime).layers;
+            var players = Enumerable.Range(0, layers.Length)
+                .Where(index => layers[index].name == "[ USER EDIT ] FACE EMOTE PLAYER").ToArray();
+            if (players.Length > 1 || players.Length == 0 && layers.Any(layer => layer.name == "[ USER EDIT ] DEFAULT FACE"))
+                throw new InvalidOperationException("FaceEmoの表情FXレイヤーを一意に特定できません。");
+            if (players.Length == 0) return (null, null, false);
+            var layer = layers[players[0]];
+            if (layer.syncedLayerIndex >= 0 || layer.stateMachine == null || layer.blendingMode != AnimatorLayerBlendingMode.Override)
+                throw new InvalidOperationException("FaceEmoの表情FXレイヤーの合成方法を確定できません。");
+            var visited = new HashSet<AnimatorStateMachine>();
+            var defaults = new HashSet<bool>();
+            void Visit(AnimatorStateMachine machine)
+            {
+                if (machine == null || !visited.Add(machine))
+                    throw new InvalidOperationException("FaceEmoの表情FXレイヤーを一意に特定できません。");
+                foreach (var state in machine.states)
+                {
+                    if (state.state == null) throw new InvalidOperationException("FaceEmoの表情FX状態を取得できません。");
+                    if (state.state.motion != null) defaults.Add(state.state.writeDefaultValues);
+                }
+                foreach (var child in machine.stateMachines) Visit(child.stateMachine);
+            }
+            Visit(layer.stateMachine);
+            if (defaults.Count != 1)
+                throw new InvalidOperationException("FaceEmoの表情FXのWrite Defaultsを一意に確定できません。");
+            return (players[0], layer.stateMachine, defaults.Single());
+        }
+
         // FaceEmo's GUID clips are outside the FX controller rewritten by MA.
         // Remember their targets on our copy before Transforming moves them;
         // evaluate the clips only after the merged FX controller is available.
@@ -196,6 +242,7 @@ namespace VRVlog.LilToonExporter
                 internal AnimatorStateMachine Machine;
                 internal int? Layer;
                 internal bool WriteDefaults;
+                internal AnimationClip SelectedClip;
             }
             private readonly Dictionary<VrChatExpressionMenu.Entry, DeferredEntry> deferredEntries =
                 new Dictionary<VrChatExpressionMenu.Entry, DeferredEntry>();
@@ -207,6 +254,8 @@ namespace VRVlog.LilToonExporter
             }
             private readonly Dictionary<AnimationClip, Dictionary<EditorCurveBinding, Target>> targets =
                 new Dictionary<AnimationClip, Dictionary<EditorCurveBinding, Target>>();
+            private Func<UnityEngine.Object, UnityEngine.Object> isolatedCopy;
+            private Func<AnimationClip, RuntimeAnimatorController, int?, AnimationClip> preparedClip;
 
             internal BindingSnapshot(GameObject clone, Func<string, bool> excludedPath = null, Func<string, bool> preparedExcludedPath = null,
                 bool deferPermanentOverrides = false)
@@ -215,9 +264,12 @@ namespace VRVlog.LilToonExporter
                 DeferPermanentOverrides = deferPermanentOverrides;
             }
 
-            internal void RebindPrepared(Func<SkinnedMeshRenderer, SkinnedMeshRenderer> replacement)
+            internal void RebindPrepared(Func<SkinnedMeshRenderer, SkinnedMeshRenderer> replacement,
+                Func<UnityEngine.Object, UnityEngine.Object> isolatedCopy = null,
+                Func<AnimationClip, RuntimeAnimatorController, int?, AnimationClip> preparedClip = null)
             {
                 if (replacement == null) throw new ArgumentNullException(nameof(replacement));
+                this.isolatedCopy = isolatedCopy; this.preparedClip = preparedClip;
                 var mapped = new Dictionary<SkinnedMeshRenderer, SkinnedMeshRenderer>();
                 foreach (var target in targets.Values.SelectMany(paths => paths.Values))
                     for (var index = 0; index < target.Matches.Length; index++)
@@ -229,40 +281,16 @@ namespace VRVlog.LilToonExporter
                         }
             }
 
-            internal void Defer(VrChatExpressionMenu.Entry entry, RuntimeAnimatorController runtime)
+            internal void Defer(VrChatExpressionMenu.Entry entry, RuntimeAnimatorController runtime, AnimationClip selectedClip)
             {
-                var captured = new DeferredEntry { Runtime = runtime };
-                if (runtime != null)
-                {
-                    var layers = ExpressionDependencies.Controller(runtime).layers;
-                    var players = Enumerable.Range(0, layers.Length)
-                        .Where(index => layers[index].name == "[ USER EDIT ] FACE EMOTE PLAYER").ToArray();
-                    if (players.Length > 1 || players.Length == 0 && layers.Any(layer => layer.name == "[ USER EDIT ] DEFAULT FACE"))
-                        throw new InvalidOperationException("FaceEmoの表情FXレイヤーを一意に特定できません。");
-                    if (players.Length == 1)
-                    {
-                        var layer = layers[players[0]];
-                        if (layer.syncedLayerIndex >= 0 || layer.stateMachine == null || layer.blendingMode != AnimatorLayerBlendingMode.Override)
-                            throw new InvalidOperationException("FaceEmoの表情FXレイヤーの合成方法を確定できません。");
-                        var visited = new HashSet<AnimatorStateMachine>();
-                        var defaults = new HashSet<bool>();
-                        void Visit(AnimatorStateMachine machine)
-                        {
-                            if (machine == null || !visited.Add(machine))
-                                throw new InvalidOperationException("FaceEmoの表情FXレイヤーを一意に特定できません。");
-                            foreach (var state in machine.states)
-                            {
-                                if (state.state == null) throw new InvalidOperationException("FaceEmoの表情FX状態を取得できません。");
-                                if (state.state.motion != null) defaults.Add(state.state.writeDefaultValues);
-                            }
-                            foreach (var child in machine.stateMachines) Visit(child.stateMachine);
-                        }
-                        Visit(layer.stateMachine);
-                        if (defaults.Count != 1)
-                            throw new InvalidOperationException("FaceEmoの表情FXのWrite Defaultsを一意に確定できません。");
-                        captured.Layer = players[0]; captured.Machine = layer.stateMachine; captured.WriteDefaults = defaults.Single();
-                    }
-                }
+                var mapped = isolatedCopy?.Invoke(selectedClip) as AnimationClip;
+                var captured = new DeferredEntry { Runtime = runtime, SelectedClip = mapped != null ? mapped : selectedClip };
+                var player = RegisteredPlayer(runtime);
+                captured.Layer = player.Layer; captured.Machine = player.Machine; captured.WriteDefaults = player.WriteDefaults;
+                if (captured.Layer.HasValue && preparedClip != null)
+                    // Missing or ambiguous plugin provenance must not fall back
+                    // to a guessed clip identity and its state-entry callbacks.
+                    captured.SelectedClip = preparedClip(selectedClip, runtime, captured.Layer);
                 deferredEntries.Add(entry, captured);
             }
 
@@ -280,8 +308,8 @@ namespace VRVlog.LilToonExporter
                             (captured.Layer.Value >= ExpressionDependencies.Controller(source.Controller).layers.Length ||
                              ExpressionDependencies.Controller(source.Controller).layers[captured.Layer.Value].stateMachine != captured.Machine))
                             throw new InvalidOperationException("FaceEmoの表情FXレイヤーが評価前に変わりました。");
-                        VrChatExpressionSampler.ApplyPermanentOverrides(prepared, captured.Runtime, entry,
-                            captured.Layer, captured.WriteDefaults, PreparedExcludedPath, metadata: source);
+                        VrChatExpressionSampler.ApplyFixedPermanentOverrides(prepared, captured.Runtime, entry,
+                            captured.Layer, captured.WriteDefaults, PreparedExcludedPath, metadata: source, selectedClip: captured.SelectedClip);
                     }
                     catch (InvalidOperationException error) { entry.Error = error.Message; }
                 }
@@ -548,9 +576,13 @@ namespace VRVlog.LilToonExporter
                 entry.Name = path + " / " + clip.name;
                 if (bindings == null) VrChatGestureExpressions.ReadClip(avatar, clip, entry, excludedPath);
                 else bindings.ReadClip(avatar, clip, entry);
-                if (bindings?.DeferPermanentOverrides == true) bindings.Defer(entry, source.Controller);
-                else VrChatExpressionSampler.ApplyPermanentOverrides(avatar, source.Controller, entry,
-                    excludedPath: bindings == null ? excludedPath : bindings.PreparedExcludedPath, metadata: source);
+                if (bindings?.DeferPermanentOverrides == true) bindings.Defer(entry, source.Controller, clip);
+                else
+                {
+                    var player = RegisteredPlayer(source.Controller);
+                    VrChatExpressionSampler.ApplyFixedPermanentOverrides(avatar, source.Controller, entry, player.Layer, player.WriteDefaults,
+                        excludedPath: bindings == null ? excludedPath : bindings.PreparedExcludedPath, metadata: source, selectedClip: clip);
+                }
             }
             catch (InvalidOperationException error) { entry.Error = error.Message; }
             source.Entries.Add(entry);

@@ -1,9 +1,12 @@
 using System;
+using System.Collections.Generic;
 using System.Linq;
 using NUnit.Framework;
 using UnityEditor;
 using UnityEditor.Animations;
 using UnityEngine;
+using UnityEngine.Animations;
+using UnityEngine.Playables;
 using Object = UnityEngine.Object;
 
 namespace VRVlog.LilToonExporter.Tests
@@ -70,16 +73,69 @@ namespace VRVlog.LilToonExporter.Tests
             return state;
         }
 
-        void Relay(AnimationCurve curve)
+        AnimationClip Relay(AnimationCurve curve, string parameter = "Relay value", float threshold = .5f)
         {
-            controller.AddParameter("Relay value", AnimatorControllerParameterType.Float);
-            var clip = Clip("Relay value", "", typeof(Animator), "Relay value", curve);
+            controller.AddParameter(parameter, AnimatorControllerParameterType.Float);
+            var clip = Clip(parameter, "", typeof(Animator), parameter, curve);
             var machine = Layer("Parameter lifecycle");
             var first = State(machine, "Startup", clip, true);
             var second = State(machine, "Different state", clip, true);
             var transition = first.AddTransition(second);
             transition.hasExitTime = true; transition.exitTime = .75f; transition.duration = 0;
-            transition.AddCondition(AnimatorConditionMode.Less, .5f, "Relay value");
+            transition.AddCondition(AnimatorConditionMode.Less, threshold, parameter);
+            return clip;
+        }
+
+        void AssertPreparedPoseFallback()
+        {
+            var skin = avatar.GetComponentInChildren<SkinnedMeshRenderer>();
+            skin.SetBlendShapeWeight(0, 28);
+            var warnings = new List<string>();
+            var values = NeutralShapeSampler.Sample(avatar, warnings: warnings);
+            Assert.That(values, Is.Empty, "An unproved relay must not freeze a possibly changing face.");
+            Assert.That(warnings, Is.Not.Empty);
+            NeutralShapeSnapshot.Apply(avatar, values);
+            Assert.That(skin.GetBlendShapeWeight(0), Is.EqualTo(28));
+        }
+
+        float NativeRelayValue(string parameter)
+        {
+            var nativeAvatar = new GameObject("Independent native relay baseline", typeof(Animator));
+            var nativeMesh = Object.Instantiate(mesh);
+            var graph = default(PlayableGraph);
+            try
+            {
+                var body = new GameObject("Body", typeof(SkinnedMeshRenderer));
+                body.transform.SetParent(nativeAvatar.transform, false);
+                body.GetComponent<SkinnedMeshRenderer>().sharedMesh = nativeMesh;
+                var animator = nativeAvatar.GetComponent<Animator>();
+                animator.cullingMode = AnimatorCullingMode.AlwaysAnimate;
+                animator.applyRootMotion = false; animator.fireEvents = false;
+                graph = PlayableGraph.Create("Independent native relay baseline");
+                graph.SetTimeUpdateMode(DirectorUpdateMode.Manual);
+                // Use the original controller, without exporter inspection or
+                // controller copying, to establish the actual parameter value.
+                var playable = AnimatorControllerPlayable.Create(graph, controller);
+                AnimationPlayableOutput.Create(graph, "Native relay", animator).SetSourcePlayable(playable);
+                graph.Play(); graph.Evaluate(0);
+                var values = new List<float>();
+                for (var frame = 1; frame <= 144; frame++)
+                {
+                    graph.Evaluate(1f / 60);
+                    var value = playable.GetFloat(parameter);
+                    Assert.That(float.IsNaN(value) || float.IsInfinity(value), Is.False);
+                    if (frame == 120 || frame == 127 || frame == 135 || frame == 144) values.Add(value);
+                }
+                Assert.That(values, Has.Count.EqualTo(4));
+                Assert.That(values.All(value => Math.Abs(value - values[0]) <= .00001f), Is.True,
+                    "The original native relay must be stationary at the neutral sampling checkpoints.");
+                return values[0];
+            }
+            finally
+            {
+                if (graph.IsValid()) graph.Destroy();
+                Object.DestroyImmediate(nativeAvatar); Object.DestroyImmediate(nativeMesh);
+            }
         }
 
         [TestCase(false)]
@@ -99,11 +155,83 @@ namespace VRVlog.LilToonExporter.Tests
                 "The post-native proof must not overwrite the authoring startup default.");
         }
 
+        [TestCase("firstIn")]
+        [TestCase("lastOut")]
+        [TestCase("singleKey")]
+        [TestCase("disabledWeights")]
+        [TestCase("endpointWeights")]
+        [TestCase("stepPairedIn")]
+        [TestCase("stepOutWeight")]
+        [TestCase("stepInWeight")]
+        public void NativeGeneratedRelayMetadataCanProveItsTimedExitFalse(string metadata)
+        {
+            var parameter = NeutralShapeSamplerTests.GestureWeightProxy;
+            var clip = Relay(NeutralShapeSamplerTests.GeneratedProxyCurve(metadata), parameter, .25f);
+            NeutralShapeSamplerTests.AssertNativeProxyMetadata(clip, metadata);
+            var original = EditorJsonUtility.ToJson(clip);
+            var warnings = new List<string>();
+            var values = NeutralShapeSampler.Sample(avatar, warnings: warnings);
+            Assert.That(values.Single(value => value.Shape == "Opening").Weight, Is.EqualTo(100).Within(.01));
+            Assert.That(warnings, Is.Empty, "A natively constant relay must not trigger the timed-pose fallback.");
+            Assert.That(controller.parameters.Single(value => value.name == parameter).defaultFloat, Is.Zero,
+                "The native relay value must be observed without replacing its startup default.");
+            NeutralShapeSamplerTests.AssertNativeProxyMetadata(clip, metadata);
+            Assert.That(EditorJsonUtility.ToJson(clip), Is.EqualTo(original), "The source clip metadata must remain intact.");
+        }
+
+        [Test]
+        public void NativeFractionalGeneratedRelayCannotProveTimedExitFalse()
+        {
+            const string metadata = "firstIn";
+            var parameter = NeutralShapeSamplerTests.GestureWeightProxy;
+            const float threshold = .375f;
+            var clip = Relay(NeutralShapeSamplerTests.GeneratedProxyCurve(metadata), parameter, threshold);
+            var layers = controller.layers;
+            layers[1].defaultWeight = .5f; controller.layers = layers;
+            var machine = layers[1].stateMachine;
+            var first = machine.defaultState;
+            var second = machine.states.Select(value => value.state).Single(value => value != first);
+            var back = second.AddTransition(first);
+            back.hasExitTime = true; back.exitTime = .75f; back.duration = 0;
+            back.AddCondition(AnimatorConditionMode.Less, threshold, parameter);
+            NeutralShapeSamplerTests.AssertNativeProxyMetadata(clip, metadata);
+            var curve = AnimationUtility.GetEditorCurve(clip, EditorCurveBinding.FloatCurve("", typeof(Animator), parameter));
+            var native = NativeRelayValue(parameter);
+            Assert.That(Math.Abs(native - curve.Evaluate(.5f)), Is.GreaterThan(.00001f),
+                "The negative fixture must establish a real native parameter mismatch before testing fallback.");
+            Assert.That(native, Is.LessThan(threshold), "Both native timed gates must remain reachable.");
+            var original = EditorJsonUtility.ToJson(clip);
+            AssertPreparedPoseFallback();
+            Assert.That(controller.parameters.Single(value => value.name == parameter).defaultFloat, Is.Zero,
+                "The native mismatch must not be hidden by changing the startup default.");
+            NeutralShapeSamplerTests.AssertNativeProxyMetadata(clip, metadata);
+            Assert.That(EditorJsonUtility.ToJson(clip), Is.EqualTo(original), "The source clip metadata must remain intact.");
+        }
+
+        [TestCase("firstOut")]
+        [TestCase("lastIn")]
+        [TestCase("firstOutWeight")]
+        [TestCase("lastInWeight")]
+        public void UsedInvalidRelayMetadataCannotProveItsTimedExitFalse(string metadata)
+        {
+            var clip = Relay(NeutralShapeSamplerTests.GeneratedProxyCurve(metadata),
+                NeutralShapeSamplerTests.GestureWeightProxy, .25f);
+            NeutralShapeSamplerTests.AssertNativeProxyMetadata(clip, metadata, evaluate: false);
+            var skin = avatar.GetComponentInChildren<SkinnedMeshRenderer>();
+            skin.SetBlendShapeWeight(0, 28);
+            var error = Assert.Throws<InvalidOperationException>(() => NeutralShapeSampler.Sample(avatar));
+            Assert.That(error.Message, Does.Contain("曲線に不正な値"));
+            Assert.That(error, Is.Not.InstanceOf<NeutralShapeSamplingException>(),
+                "Invalid used metadata must remain an error rather than the optional prepared-pose fallback.");
+            Assert.That(skin.GetBlendShapeWeight(0), Is.EqualTo(28));
+            NeutralShapeSamplerTests.AssertNativeProxyMetadata(clip, metadata, evaluate: false);
+        }
+
         [Test]
         public void DynamicParameterCurveCannotHideAFutureTimedExit()
         {
             Relay(AnimationCurve.Linear(0, 1, 10, 0));
-            Assert.Throws<NeutralShapeSamplingException>(() => NeutralShapeSampler.Sample(avatar));
+            AssertPreparedPoseFallback();
         }
 
         [Test]
@@ -113,7 +241,7 @@ namespace VRVlog.LilToonExporter.Tests
             var machine = Layer("Competing writer");
             var state = State(machine, "Set relay", null, false);
             ParameterDriverExpressionTests.Driver(state, ParameterDriverExpressionTests.Op("Set", "Relay value", 0));
-            Assert.Throws<NeutralShapeSamplingException>(() => NeutralShapeSampler.Sample(avatar));
+            AssertPreparedPoseFallback();
         }
 
         [Test]
@@ -130,8 +258,7 @@ namespace VRVlog.LilToonExporter.Tests
             var back = second.AddTransition(first);
             back.hasExitTime = true; back.exitTime = .75f; back.duration = 0;
             back.AddCondition(AnimatorConditionMode.Less, .999997f, "Relay value");
-            Assert.Throws<NeutralShapeSamplingException>(() => NeutralShapeSampler.Sample(avatar),
-                "A partial layer must not be rounded to full weight when the exit threshold lies inside that rounding tolerance.");
+            AssertPreparedPoseFallback();
         }
     }
 }

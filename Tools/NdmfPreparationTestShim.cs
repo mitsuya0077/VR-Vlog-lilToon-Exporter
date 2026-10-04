@@ -78,6 +78,7 @@ namespace UnityEngine
     public class Texture : Object { }
     public class Material : Object { public Shader shader; public Color color; public Material(Shader shader) { this.shader = shader; } }
     public class AnimationClip : Object { public float frameRate; }
+    public class RuntimeAnimatorController : Object { }
     public class Mesh : Object
     {
         public Vector3[] vertices; public int[] triangles; public Matrix4x4[] bindposes; public BoneWeight[] boneWeights;
@@ -187,6 +188,38 @@ namespace UnityEditor.PackageManager
 {
     public class PackageInfo { public string version; public static PackageInfo FindForAssembly(Assembly assembly) => null; }
 }
+namespace VRVlog.LilToonExporter
+{
+    // The host runner covers the optional registry reflection adapter, not
+    // Unity's effective controller graph. A test must explicitly supply this
+    // protocol hook; no graph or clip-identity result is emulated by default.
+    internal static class PreparedAnimationClipIdentity
+    {
+        internal static Func<UnityEngine.AnimationClip, UnityEngine.AnimationClip,
+            UnityEngine.RuntimeAnimatorController, int,
+            Func<UnityEngine.AnimationClip, UnityEngine.AnimationClip>, UnityEngine.AnimationClip> HostProtocolResolver;
+
+        internal static UnityEngine.AnimationClip Resolve(UnityEngine.AnimationClip original,
+            UnityEngine.AnimationClip isolated, UnityEngine.RuntimeAnimatorController runtime, int layerIndex,
+            Func<UnityEngine.AnimationClip, UnityEngine.AnimationClip> origin) => HostProtocolResolver != null
+                ? HostProtocolResolver(original, isolated, runtime, layerIndex, origin)
+                : throw new NotSupportedException("Native registered clip identity requires installed-package Unity tests.");
+    }
+}
+namespace nadena.dev.ndmf
+{
+    // Exact API name/signature is needed by the production reflection adapter.
+    // This fixture models only read-only reference lookup, not NDMF execution.
+    public interface IObjectRegistry
+    {
+        HostObjectReference GetReference(UnityEngine.Object value, bool create);
+    }
+    public sealed class HostObjectReference
+    {
+        public UnityEngine.Object Object { get; }
+        public HostObjectReference(UnityEngine.Object value) { Object = value; }
+    }
+}
 // Authoring metadata adapter only; the real pipeline tests still require the
 // installed NDMFAvatarRoot and canonical NDMF classes and remain skipped here.
 namespace nadena.dev.modular_avatar.core
@@ -231,6 +264,57 @@ namespace NUnit.Framework
 }
 public static class NdmfPreparationHostTests
 {
+    sealed class ClipRegistry : nadena.dev.ndmf.IObjectRegistry
+    {
+        internal UnityEngine.AnimationClip Original, Current;
+        internal UnityEngine.Object Requested;
+        internal bool Create, Throw;
+        internal int Calls;
+        public nadena.dev.ndmf.HostObjectReference GetReference(UnityEngine.Object value, bool create)
+        {
+            Calls++; Requested = value; Create = create;
+            if (Throw) throw new InvalidOperationException("lookup protocol failed");
+            return value == Current ? new nadena.dev.ndmf.HostObjectReference(Original) : null;
+        }
+    }
+
+    static void PreparedClipRegistryAdapterUsesExactReadOnlyLookup()
+    {
+        var original = new UnityEngine.AnimationClip { name = "Registered source" };
+        var current = new UnityEngine.AnimationClip { name = "Renamed committed clip" };
+        var runtime = new UnityEngine.RuntimeAnimatorController();
+        var registry = new ClipRegistry { Original = original, Current = current };
+        using var preparation = new VRVlog.LilToonExporter.NdmfExportPreparation();
+        typeof(VRVlog.LilToonExporter.NdmfExportPreparation)
+            .GetProperty("ObjectRegistry", BindingFlags.NonPublic | BindingFlags.Instance).SetValue(preparation, registry);
+        VRVlog.LilToonExporter.PreparedAnimationClipIdentity.HostProtocolResolver = (source, isolated, controller, layer, origin) =>
+        {
+            NUnit.Framework.Assert.AreSame(original, source);
+            NUnit.Framework.Assert.AreSame(original, isolated);
+            NUnit.Framework.Assert.AreSame(runtime, controller);
+            NUnit.Framework.Assert.AreEqual(7, layer);
+            NUnit.Framework.Assert.AreSame(original, origin(current));
+            return current;
+        };
+        try
+        {
+            NUnit.Framework.Assert.AreSame(current, preparation.PreparedClipFor(original, runtime, 7));
+            NUnit.Framework.Assert.AreSame(current, registry.Requested);
+            NUnit.Framework.Assert.IsFalse(registry.Create);
+            NUnit.Framework.Assert.AreEqual(1, registry.Calls);
+            NUnit.Framework.Assert.IsNull(preparation.PreparedClipFor(original, runtime, null));
+            NUnit.Framework.Assert.AreEqual(1, registry.Calls);
+            registry.Throw = true;
+            var error = NUnit.Framework.Assert.Throws<InvalidOperationException>(() => preparation.PreparedClipFor(original, runtime, 7));
+            NUnit.Framework.Assert.AreEqual("lookup protocol failed", error.Message);
+            NUnit.Framework.Assert.IsFalse(registry.Create);
+        }
+        finally
+        {
+            VRVlog.LilToonExporter.PreparedAnimationClipIdentity.HostProtocolResolver = null;
+        }
+    }
+
     public static void Run()
     {
         var type = typeof(VRVlog.LilToonExporter.Tests.NdmfPreparationTests); int passed = 0, skipped = 0;
@@ -247,6 +331,8 @@ public static class NdmfPreparationHostTests
                 finally { test.TearDown(); }
             }
         }
+        PreparedClipRegistryAdapterUsesExactReadOnlyLookup();
+        Console.WriteLine("Prepared clip registry host adapter passed: exact read-only lookup and exception propagation. Native slot identity requires Unity tests.");
         Console.WriteLine($"NDMF preparation host checks passed: {passed} cases / {NUnit.Framework.Assert.Assertions} assertions; {skipped} installed-package Unity tests skipped. Asset graph adapter, not Unity/MA validation.");
     }
 }
