@@ -51,6 +51,7 @@ namespace UnityEngine
         public T AddComponent<T>() where T : Component, new() { var value = new T { gameObject = this }; components.Add(value); return value; }
         public Component AddComponent(Type type) { var value = (Component)Activator.CreateInstance(type); value.gameObject = this; components.Add(value); return value; }
         public T GetComponent<T>() where T : Component => components.OfType<T>().FirstOrDefault(x => x != null);
+        public Component GetComponent(Type type) => components.FirstOrDefault(x => x != null && type.IsInstanceOfType(x));
         public T[] GetComponentsInChildren<T>(bool includeInactive) where T : Component => components.OfType<T>()
             .Concat(transform.children.SelectMany(c => c.gameObject.GetComponentsInChildren<T>(includeInactive))).Where(x => x != null).ToArray();
     }
@@ -145,6 +146,7 @@ namespace UnityEditor
     {
         readonly Object target;
         public SerializedObject(Object target) { this.target = target; }
+        public SerializedProperty FindProperty(string name) => null;
         public SerializedProperty GetIterator() => new SerializedProperty(target);
         public bool ApplyModifiedPropertiesWithoutUndo() => true;
         public void Dispose() { }

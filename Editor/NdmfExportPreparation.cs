@@ -2,6 +2,7 @@ using System;
 using System.Collections.Generic;
 using System.Linq;
 using System.Reflection;
+using System.Runtime.CompilerServices;
 using VRVlog.LilToonExporter.Compatibility;
 using UnityEditor;
 using UnityEngine;
@@ -26,6 +27,11 @@ namespace VRVlog.LilToonExporter
         // Keep the optional public registry available to the preparation callback.
         internal object ObjectRegistry { get; private set; }
         private const string MaNamespace = "nadena.dev.modular_avatar.core.";
+        // Weak keys keep reference-context markers scoped to owned copies.
+        // Authored NDMF markers retain their existing processing semantics.
+        private static readonly ConditionalWeakTable<GameObject, CopyAvatarRoot> copyAvatarRoots =
+            new ConditionalWeakTable<GameObject, CopyAvatarRoot>();
+        private sealed class CopyAvatarRoot { internal Component Marker; }
         internal const string UnknownRendererRelocation = "Modular Avatar / NDMF の処理で表情の対象Rendererが変わりましたが、元の変形との対応を一意に確定できません。統合・分割ツールの設定を確認してください。";
         private const string CompatibilityMessage =
             "アバターの準備に必要な NDMF API を利用できません。NDMF " + DependencyPolicy.NdmfMinimum + " 以降の 1.x が必要です。確認済み構成: MA " + DependencyPolicy.ModularAvatarReference + " / NDMF " + DependencyPolicy.NdmfReference + "。" + DependencyPolicy.Recovery;
@@ -83,7 +89,7 @@ namespace VRVlog.LilToonExporter
         {
             var components = avatar.GetComponentsInChildren<Component>(true)
                 .Where(component => component != null && excluded?.Invoke(component.transform) != true).ToArray();
-            var tags = components.Where(component => IsAuthoringTag(component.GetType())).ToArray();
+            var tags = components.Where(component => IsAuthoringTag(component.GetType()) && !IsCopyAvatarRoot(avatar, component)).ToArray();
             if (tags.Length == 0) return new HashSet<Component>();
             var byTransform = components.GroupBy(component => component.transform).ToDictionary(group => group.Key, group => group.ToArray());
             var required = new HashSet<Transform>();
@@ -140,9 +146,12 @@ namespace VRVlog.LilToonExporter
         {
             var retained = RelevantAuthoring(clone);
             foreach (var component in clone.GetComponentsInChildren<Component>(true))
-                if (component != null && IsAuthoringTag(component.GetType()) && !retained.Contains(component))
+                if (component != null && IsAuthoringTag(component.GetType()) && !IsCopyAvatarRoot(clone, component) && !retained.Contains(component))
                     Object.DestroyImmediate(component);
         }
+
+        private static bool IsCopyAvatarRoot(GameObject clone, Component component) =>
+            copyAvatarRoots.TryGetValue(clone, out var root) && ReferenceEquals(root.Marker, component);
 
         private static string FollowingProperty(Component component)
         {
@@ -165,10 +174,35 @@ namespace VRVlog.LilToonExporter
             var getter = component.GetType().GetProperty(property, BindingFlags.Instance | BindingFlags.Public);
             if (getter == null) throw new InvalidOperationException(CompatibilityMessage);
             var value = Invoke(() => getter.GetValue(component));
+            // MA's runtime reference getter rejects an empty path before
+            // checking the serialized direct target. Its inspector can still
+            // resolve that exact authored target. Read it without editing the
+            // source; the owned copy will restore MA's path before processing.
+            if (value == null && property == "mergeTargetObject")
+                value = ReadMaDirectTargetWithoutPath(component);
             return value is GameObject gameObject ? gameObject.transform : value as Transform;
         }
 
-        internal static void ValidateSource(GameObject source, Func<Transform, bool> excluded = null)
+        private static GameObject ReadMaDirectTargetWithoutPath(Component component)
+        {
+            var type = FindType(MaNamespace + "AvatarObjectReference");
+            var resolve = type?.GetMethod("Get", BindingFlags.Public | BindingFlags.Static, null,
+                new[] { typeof(SerializedProperty) }, null);
+            if (resolve?.ReturnType != typeof(GameObject)) return null;
+            using (var serialized = new SerializedObject(component))
+            {
+                var reference = serialized.FindProperty("mergeTarget");
+                if (reference == null) return null;
+                var path = reference.FindPropertyRelative("referencePath");
+                var direct = reference.FindPropertyRelative("targetObject");
+                if (path?.propertyType != SerializedPropertyType.String || !string.IsNullOrEmpty(path.stringValue) ||
+                    direct?.propertyType != SerializedPropertyType.ObjectReference || !(direct.objectReferenceValue is GameObject target)) return null;
+                var resolved = Invoke(() => resolve.Invoke(null, new object[] { reference })) as GameObject;
+                return resolved == target ? resolved : null;
+            }
+        }
+
+        internal static void ValidateSource(GameObject source, Func<Transform, bool> excluded = null, bool deferUnresolvedTargets = false)
         {
             if (source == null) throw new ArgumentNullException(nameof(source));
             foreach (var component in RelevantAuthoring(source, excluded))
@@ -177,7 +211,11 @@ namespace VRVlog.LilToonExporter
                 if (property == null) continue;
                 var target = ReadFollowingTarget(component, property);
                 if (target == null)
-                    throw new InvalidOperationException(component.name + ": Modular Avatar の追従先を取得できません。Merge Armature / Bone Proxy の対象を設定してから書き出してください。");
+                {
+                    if (deferUnresolvedTargets) continue; // Validate against the explicit root on the owned copy.
+                    throw new InvalidOperationException(ScenePath(component.transform) + " (" + component.GetType().Name +
+                        "): Modular Avatar の追従先を取得できません。Merge Armature / Bone Proxy の対象を設定してから書き出してください。");
+                }
                 if (target != source.transform && !target.IsChildOf(source.transform))
                     throw new InvalidOperationException(component.name + ": Modular Avatar の追従先が選択したアバターの外にあります。アバター全体を選ぶか、追従先を同じアバター内に設定してください。");
                 if (excluded?.Invoke(target) == true)
@@ -185,10 +223,31 @@ namespace VRVlog.LilToonExporter
             }
         }
 
+        internal static void ValidateCopy(GameObject source, GameObject clone, Func<Transform, bool> excluded = null)
+        {
+            RequireOwnedCopy(source, clone);
+            EnsureCopyAvatarRoot(clone);
+            ResolveMaSceneReferences(clone);
+            ValidateSource(clone, excluded);
+        }
+
+        private static void EnsureCopyAvatarRoot(GameObject clone)
+        {
+            // BuildContext adds this marker too, but MA's getters need the
+            // explicit export root before our preflight and pruning run.
+            if (!clone.GetComponentsInChildren<Component>(true).Any(component => component != null && IsMaTag(component.GetType()))) return;
+            var marker = FindType("nadena.dev.ndmf.runtime.components.NDMFAvatarRoot");
+            if (marker == null) return; // The bridge reports a missing NDMF installation.
+            if (!typeof(Component).IsAssignableFrom(marker)) throw new InvalidOperationException(CompatibilityMessage);
+            if (clone.GetComponent(marker) == null)
+                copyAvatarRoots.GetValue(clone, _ => new CopyAvatarRoot()).Marker = clone.AddComponent(marker);
+        }
+
         internal static NdmfExportPreparation Prepare(GameObject source, GameObject clone, ICollection<string> warnings = null,
             Action<Material, Material> materialCopyObserver = null, Action<NdmfExportPreparation> afterTransforming = null)
         {
             RequireOwnedCopy(source, clone);
+            EnsureCopyAvatarRoot(clone);
             // Relevance must see MA's effective targets before it decides
             // whether an inactive dependent authoring tag can be discarded.
             ResolveMaSceneReferences(clone);
@@ -211,6 +270,7 @@ namespace VRVlog.LilToonExporter
             Action<NdmfExportPreparation> afterTransforming = null)
         {
             RequireOwnedCopy(source, clone);
+            EnsureCopyAvatarRoot(clone);
             // NDMF processes inactive tags too. Remove only irrelevant tags on
             // our copy before dependency safety checks or any canonical pass.
             ResolveMaSceneReferences(clone);
@@ -416,6 +476,19 @@ namespace VRVlog.LilToonExporter
             foreach (var component in clone.GetComponentsInChildren<Component>(true))
             {
                 if (component == null || !IsMaTag(component.GetType())) continue;
+                if (FollowingProperty(component) == "mergeTargetObject")
+                {
+                    var target = ReadMaDirectTargetWithoutPath(component);
+                    if (target != null && IsWithinCopy(target.transform, clone))
+                    {
+                        // Use the same public authoring API as MA's inspector,
+                        // including its avatar-root sentinel and cache update.
+                        var reference = component.GetType().GetField("mergeTarget", BindingFlags.Instance | BindingFlags.Public)?.GetValue(component);
+                        var set = reference?.GetType().GetMethod("Set", new[] { typeof(GameObject) });
+                        if (set == null) throw new InvalidOperationException(CompatibilityMessage);
+                        Invoke(() => { set.Invoke(reference, new object[] { target }); return null; });
+                    }
+                }
                 using (var serialized = new SerializedObject(component))
                 {
                     var property = serialized.GetIterator();

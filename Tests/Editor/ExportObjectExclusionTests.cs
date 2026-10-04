@@ -11,6 +11,35 @@ namespace VRVlog.LilToonExporter.Tests
     public sealed class ExportObjectExclusionTests
     {
         [Test]
+        public void CopyPreflightUsesExactExcludedIdentityForDuplicateNames()
+        {
+            var source = new GameObject("avatar");
+            GameObject clone = null;
+            var external = new GameObject("outside");
+            try
+            {
+                Child(source, "Same");
+                var excluded = Child(source, "Same");
+                Child(excluded, "Nested");
+                using var exclusions = new ExportObjectExclusions(source, new[] { excluded });
+                clone = Object.Instantiate(source);
+                Assert.That(exclusions.ContainsCopyTransform(clone, clone.transform.GetChild(0)), Is.False);
+                Assert.That(exclusions.ContainsCopyTransform(clone, clone.transform.GetChild(1)), Is.True);
+                Assert.That(exclusions.ContainsCopyTransform(clone, clone.transform.GetChild(1).GetChild(0)), Is.True);
+                Assert.That(exclusions.ContainsCopyTransform(clone, clone.transform), Is.False);
+                Assert.That(exclusions.ContainsCopyTransform(clone, external.transform), Is.False);
+                Assert.That(exclusions.ContainsCopyTransform(clone, null), Is.False);
+                Assert.That(source.transform.childCount, Is.EqualTo(2));
+            }
+            finally
+            {
+                if (clone != null) Object.DestroyImmediate(clone);
+                Object.DestroyImmediate(source);
+                Object.DestroyImmediate(external);
+            }
+        }
+
+        [Test]
         public void DuplicateNamesAndNestedExclusionsRemoveOnlySelectedCloneObjects()
         {
             var source = new GameObject("avatar");
