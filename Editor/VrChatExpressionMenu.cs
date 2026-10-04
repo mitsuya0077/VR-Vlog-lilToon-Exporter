@@ -118,6 +118,7 @@ namespace VRVlog.LilToonExporter
             // exist yet. Recheck these references after authoring preparation.
             internal readonly List<MorphValue> Unevaluated = new List<MorphValue>();
             internal readonly List<string> Messages = new List<string>();
+            internal AncillaryExpressionGeometry AncillaryGeometry = null;
         }
 
         internal sealed class AnimatedMorph
@@ -137,6 +138,9 @@ namespace VRVlog.LilToonExporter
             internal readonly List<string> Messages = new List<string>();
             internal int VisitedMenus;
             internal int VisitedControls;
+            // Only the complete export pipeline supplies the final neutral and
+            // validates this evidence before a generated expression is baked.
+            internal bool DeferAncillaryGeometryValidation = false;
         }
 
         internal const int MaximumCandidates = 256, MaximumMenuVisits = 512, MaximumDepth = 16, MaximumControlVisits = 8192;

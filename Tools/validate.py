@@ -17,6 +17,7 @@ injector = (root / "Editor/LilToonGlbExtension.cs").read_text(encoding="utf-8")
 reader = (root / "Editor/LilToonMaterialReader.cs").read_text(encoding="utf-8")
 window = (root / "Editor/LilToonExporterWindow.cs").read_text(encoding="utf-8")
 one_click = (root / "Editor/UniVrmOneClickExporter.cs").read_text(encoding="utf-8")
+export_copy_scene = (root / "Editor/ExportCopyScene.cs").read_text(encoding="utf-8")
 recovery = (root / "Editor/ExportRecovery.cs").read_text(encoding="utf-8")
 fingerprint = (root / "Editor/ExportSourceFingerprint.cs").read_text(encoding="utf-8")
 recovery_session = (root / "Editor/ExportRecoverySession.cs").read_text(encoding="utf-8")
@@ -81,7 +82,7 @@ assert "must be an array" in injector and "must be an object" in injector
 assert "Validate(output, extension.materials.Count)" in injector
 assert "ExportRendererSelection.Enumerate(avatar)" in injector
 assert "ExportRendererSelection.Enumerate(clone)" in one_click
-assert one_click.index("ExportRendererSelection.RequireActiveRoot(source)") < one_click.index("UnityEngine.Object.Instantiate(source)")
+assert one_click.index("ExportRendererSelection.RequireActiveRoot(source)") < one_click.index("new ExportCopyScene(source)")
 assert "_MainTex" in reader and "_UseShadow" in reader and "_UseOutline" in reader
 assert "特殊シェーダーは標準lilToonとして近似しました" in reader
 assert 'const string optionalPrefix = "[Optional]";' in reader
@@ -205,9 +206,14 @@ assert one_click.count("SkinnedMeshFallbackWeights.Preserve(clone, temporaryMesh
 assert "new ExportAttachmentSession(source, clone, fixedRootJoints: fixedRootJoints)" in one_click
 assert one_click.index("Vrm10AppearanceExporter.Export(") < one_click.index("ExportSkinRoots.Repair(exported,")
 assert "new MobileTextureSerializer(warnings)" in one_click
-assert "UnityEngine.Object.Instantiate(source)" in one_click
+assert "Object.Instantiate(source, staging.transform, false)" in export_copy_scene
+assert export_copy_scene.index("SceneManager.MoveGameObjectToScene(staging, scene)") < export_copy_scene.index("Object.Instantiate(source,")
+assert "EditorUtility.CreateGameObjectWithHideFlags" in export_copy_scene
+assert "EditorSceneManager.NewPreviewScene()" in export_copy_scene
 assert "ReplaceLilToonMaterials(clone" in one_click
-assert "DestroyImmediate(clone)" in one_click
+assert "exportCopy.Dispose()" in one_click
+assert "Object.DestroyImmediate(Copy)" in export_copy_scene
+assert "EditorSceneManager.ClosePreviewScene(scene)" in export_copy_scene
 assert "MToon10Meta.UnityShaderName" in one_click
 assert "CreateMToonFallback(source, created, warnings, suppressSharedTextureEmission, textures, outlineMasks)" in one_click
 assert "created.Add(material)" in one_click
@@ -334,7 +340,7 @@ assert 'bool ExcludedBinding(string path) => exclusions.ContainsPath(path) || gi
 assert 'new PreparedExpressionBindings(clone, menu, excludedPath: ExcludedBinding)' in one_click
 assert 'VrChatExpressionSampler.Analyze(clone, expressionBindings.ExcludesPreparedPath,' in one_click
 assert one_click.index('FaceEmoExpressions.Capture(source, clone, ExcludedBinding,') < one_click.index('NdmfExportPreparation.Prepare(source, clone,')
-assert 'faceEmoBindings?.RebindPrepared(transformed.PreparedRendererFor);' in one_click
+assert 'faceEmoBindings?.RebindPrepared(transformed.PreparedRendererFor, transformed.IsolatedCopyOf, transformed.PreparedClipFor);' in one_click
 assert 'new PoseExportSession(source, poseOptions, exclusions.Contains, menuPolicy)' in one_click
 assert 'SkipVrChatMenus' in recovery and 'ExcludeMenuBranch' in recovery
 assert one_click.index('AvatarBaseShape.Preserve(clone, clone,') < one_click.index('VrChatExpressionBaker.Bake(') < one_click.index('Vrm10AppearanceExporter.Export(')

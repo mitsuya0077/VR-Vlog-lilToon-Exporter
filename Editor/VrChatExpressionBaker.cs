@@ -64,6 +64,8 @@ namespace VRVlog.LilToonExporter
             var plans = new List<Plan>();
             foreach (var entry in menu.Entries.Where(value => value.Error == null))
             {
+                if (entry.AncillaryGeometry != null && !entry.AncillaryGeometry.IsValidatedFor(entry))
+                    throw new InvalidOperationException("表情の付随アニメーションと最終基準形の影響範囲が未検証です。");
                 var origins = new Dictionary<(string Path, string Shape), Channel>();
                 Channel Origin(string path, string shape)
                 {

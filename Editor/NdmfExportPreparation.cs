@@ -35,6 +35,22 @@ namespace VRVlog.LilToonExporter
         internal Object IsolatedCopyOf(Object original) => original != null && isolatedAssets.TryGetValue(original, out var copy)
             ? copy : original;
 
+        internal AnimationClip PreparedClipFor(AnimationClip original, RuntimeAnimatorController runtime, int? layerIndex)
+        {
+            if (original == null || !layerIndex.HasValue) return null;
+            var isolated = IsolatedCopyOf(original) as AnimationClip;
+            var registry = ObjectRegistry;
+            var contract = registry?.GetType().GetInterfaces().FirstOrDefault(type => type.FullName == "nadena.dev.ndmf.IObjectRegistry");
+            var getReference = contract?.GetMethod("GetReference", new[] { typeof(Object), typeof(bool) });
+            AnimationClip Origin(AnimationClip current)
+            {
+                if (getReference == null) return null;
+                var reference = Invoke(() => getReference.Invoke(registry, new object[] { current, false }));
+                return reference?.GetType().GetProperty("Object", BindingFlags.Public | BindingFlags.Instance)?.GetValue(reference) as AnimationClip;
+            }
+            return PreparedAnimationClipIdentity.Resolve(original, isolated, runtime, layerIndex.Value, Origin);
+        }
+
         internal SkinnedMeshRenderer PreparedRendererFor(SkinnedMeshRenderer original)
         {
             if (ReferenceEquals(original, null)) return null;

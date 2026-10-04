@@ -157,7 +157,10 @@ namespace VRVlog.LilToonExporter
                 else
                 {
                     var empty = (AnimatorStateMachine)Own(new AnimatorStateMachine { name = layers[i].name });
-                    var idle = empty.AddState("Unrelated layer"); Own(idle); idle.writeDefaultValues = false;
+                    // Editor AddState registers global Undo even on a private
+                    // graph, marking the active authored scene modified.
+                    var idle = (AnimatorState)Own(new AnimatorState { name = "Unrelated layer", writeDefaultValues = false });
+                    empty.states = new[] { new ChildAnimatorState { state = idle, position = new Vector3(200, 0, 0) } };
                     empty.defaultState = idle;
                     layers[i].stateMachine = empty;
                     layers[i].syncedLayerIndex = -1;

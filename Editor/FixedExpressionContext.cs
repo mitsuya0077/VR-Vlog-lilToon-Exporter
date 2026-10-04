@@ -12,6 +12,8 @@ namespace VRVlog.LilToonExporter
     {
         internal readonly Dictionary<string, float> Values = new Dictionary<string, float>(StringComparer.Ordinal);
         internal readonly HashSet<string> UsedParameters = new HashSet<string>(StringComparer.Ordinal);
+        internal readonly Dictionary<string, float> ReportedInputs = new Dictionary<string, float>(StringComparer.Ordinal);
+        internal float ReportedValue(string name) => Values.TryGetValue(name, out var value) ? value : ReportedInputs[name];
 
         private static readonly Dictionary<string, float> Normal = new Dictionary<string, float>(StringComparer.Ordinal)
         {
