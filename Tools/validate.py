@@ -26,7 +26,7 @@ listing = json.loads((root / "source.json").read_text(encoding="utf-8"))
 
 assert package["name"] == "com.vrvlog.liltoon-vrm-exporter"
 assert package["unity"] == "2022.3"
-assert package["version"] == "0.11.11-beta.5"
+assert package["version"] == "0.11.11-beta.6"
 assert one_click.index("AvatarBaseShape.Preserve(clone, clone,") < one_click.index("Vrm10AppearanceExporter.Export(")
 assert "foreach (var mesh in temporaryMeshes) UnityEngine.Object.DestroyImmediate(mesh);" in one_click
 assert package["vpmDependencies"] == {
@@ -352,7 +352,7 @@ assert (root / "Tests/Editor/ExportRecoverySessionTests.cs").is_file()
 assert one_click.index('MaAppearanceSnapshot.Apply(source, clone,') < one_click.index('LilToonMainTextureBaker.ValidateAvatar(clone,') < one_click.index('NdmfExportPreparation.Prepare(source, clone,')
 assert 'LilToonMainTextureBaker.ApplyOmissions(clone, temporaryMaterials, warnings, bakeOptions);' in one_click
 assert 'fullSnapshot.Inject(exported, exporterVersion, lilToonVersion)' in one_click
-assert one_click.index('LilToonFullSnapshot.Capture(clone,suppressSharedTextureEmission,suppressHdrTextureEmission, warnings)') < one_click.index('LilToonMainTextureBaker.Prepare(clone,')
+assert one_click.index('LilToonFullSnapshot.Capture(clone,suppressSharedTextureEmission,suppressHdrTextureEmission, warnings, animationSource: source)') < one_click.index('LilToonMainTextureBaker.Prepare(clone,')
 assert 'fullSnapshot?.Bind(converter, model, storage);' in one_click
 assert 'blink.Bind(converter, model, storage);' in one_click
 assert 'excludedExpressions' not in window and 'DrawExpressions' not in window

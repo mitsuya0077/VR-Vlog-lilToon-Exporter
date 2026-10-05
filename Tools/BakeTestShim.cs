@@ -83,6 +83,9 @@ namespace UnityEngine
         public Vector2[] uv = Array.Empty<Vector2>();
         public int[][] indices = Array.Empty<int[]>();
         public bool unreadable;
+        // Empty-renderer eligibility is covered by real-Unity regression tests.
+        public int vertexCount => throw new NotSupportedException();
+        public uint GetIndexCount(int submesh) => throw new NotSupportedException();
         public int subMeshCount => indices.Length;
         public int[] GetIndices(int subMesh)
         {

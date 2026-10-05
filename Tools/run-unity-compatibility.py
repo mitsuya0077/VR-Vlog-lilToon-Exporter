@@ -11,9 +11,100 @@ from pathlib import Path
 
 NAMESPACE = 'VRVlog.LilToonExporter.Tests.'
 PROFILES = ('compatibility', 'exporter-behavior', 'exporter-integration')
-# Run each whole class. Named cases also prevent a removed regression or one lost
+# Run whole classes, or named methods of suites shared with optional integration.
+# Named cases also prevent a removed regression or one lost
 # parameter variant from turning a smaller, passing XML into release evidence.
 BEHAVIOR_CASES = {
+    'AppearanceRecoveryTests': {
+        'ActiveOrKeywordEnabledLayersKeepTheOriginalDynamicImageDiagnostic': 3,
+        'EmptyMeshDoesNotCreateAFullBindingOrRemoveItsBone': 4,
+        'FullExportAcceptsAnInactiveDynamicLayerWithoutEditingSourceAppearance': 1,
+        'LiveOrConsumedMaterialAnimationPreventsInactiveTextureOmission': 4,
+        'MaterialPropertyBlockPreventsInactiveTextureOmission': 1,
+        'NonemptyUnsupportedTopologyIsNotClassifiedAsEmpty': 1,
+        'SupportedImageInAnInactiveLayerIsStillStored': 1,
+        'UnsupportedImageInAProvenInactiveLayerKeepsEveryMaterialProperty': 16,
+        'UnsupportedImagesOutsideTheProvenLayerSetAreNotOmitted': 2,
+    },
+    'BlinkExportTests': {
+        'ACompleteBilateralShapeCanCoverAnIncompleteAlternativePair': 1,
+        'ACompleteRendererPairKeepsPriorityOverAlternatePartialFamilies': 1,
+        'ACompleteUnifiedPairDoesNotAdoptAnUnrelatedLegacyPartial': 1,
+        'ACompleteUnifiedPairIncludesCompatibleOneSidedEyelashes': 4,
+        'APartialEyelashPairCannotBeHiddenByAnotherRenderersBlink': 2,
+        'AUnifiedPartialKeepsPriorityOverMultipleLegacyPartialFamilies': 1,
+        'ActualExportPreservesAuthoredClipsIncludingExplicitEmpty': 2,
+        'ActualUniVrmExportBindsGeneratedTargetsToTheirFinalNodes': 2,
+        'AllBlinkRenderersMustSupportTheIndividualPair': 1,
+        'AllPartialFamiliesRemainAvailableForTheirMatchingOtherRenderer': 2,
+        'AmbiguousOrPartialNamesNeedAnExplicitChoice': 3,
+        'CompatibleMergedAutomaticBlinkKeepsOneBindingAndTheSourceEndpoint': 2,
+        'CompleteUnifiedBlinkPairWinsBeforeAnEarlierLegacySingleSide': 1,
+        'ConflictingMergedAutomaticEndpointsLeaveEverySourceBindingUsable': 2,
+        'CrossRendererLegacyPairsDoNotHideAnUnmatchedThirdRenderer': 1,
+        'CrossRendererLegacySidesCannotMixNameFamilies': 1,
+        'DescriptorBlinkUsesOnlyTheClosedSlotAndValidatesMissingIndices': 1,
+        'DisjointMergedAutomaticBlinkChannelsKeepBothSidesAndTheirEndpoints': 1,
+        'DuplicateSemanticNamesAreNotGuessed': 1,
+        'EmptyAuthoredVrmClipIsPreservedUnlessExplicitlyOverridden': 1,
+        'ExplicitBindingsRequireExactNamesAndRejectRepeatedChannels': 1,
+        'ExplicitManualChoiceResolvesCaseDistinctAliasesAndBakesTheSelectedChannel': 2,
+        'ExplicitTrackingMarkerKeepsPartialBlinkValidation': 1,
+        'EyeSpacingNeverWinsOverAnEyelidShape': 1,
+        'FailedAutomaticSetupOffersAnEmptyManualRowWithoutGuessing': 1,
+        'InertPreferredUnifiedAliasCannotSelectTheMovingLowerAlias': 1,
+        'InertUnifiedClosureCannotWaiveMissingBlinkForSharedJaw': 2,
+        'InertUnifiedClosureIsNotSelectedAlongsideUsableExplicitJaw': 4,
+        'LeftAndRightMustBelongToOneNameFamily': 1,
+        'LegacyEyesOnDifferentRenderersResolveWithoutTrackingEvidence': 5,
+        'ManualAdjustmentCopiesTheResolvedBindingsWithoutChangingTheAutomaticResult': 1,
+        'ManualChoiceOverridesInferenceAndRejectsForeignOrRemovedShapes': 1,
+        'MergedBlinkRetainsDeformationChecksForEveryCapturedReference': 2,
+        'MergedManualBlinkCoalescesOnlyMatchingClosureAmounts': 2,
+        'MergingIndependentLeftAndRightBlinkCannotTurnThemIntoOneSharedChannel': 1,
+        'MissingMergedBlinkRendererCannotPartiallyPublishEndpointRelocation': 1,
+        'NoneProducesAnInertBindingWithoutDestroyingAuthoredMorphs': 1,
+        'PairOnlyEyelashesContributeToTheBilateralFallback': 1,
+        'PartialClosureIsBakedRelativeToTheAuthoredRestWithoutTouchingSource': 1,
+        'PartialUnifiedBlinkWinsOverLegacyPartialBeforeCrossRendererPairing': 1,
+        'PartialUnifiedClosureDoesNotInventBilateralBlink': 1,
+        'PreviewOwnsItsCopyAndCleansItUpWithoutChangingTheSource': 1,
+        'PreviewRendersOpenClosedAndOpenWithinOneUpdateWithoutChangingSource': 1,
+        'PreviewUsesTheBilateralPresetAndFallsBackOnlyWhenItIsAbsent': 2,
+        'SourceRendererIdentitySurvivesRenameAndSiblingReorder': 1,
+        'StatusClearsAnEarlierSuccessWhenTheLiveBindingBecomesInvalid': 1,
+        'StatusReusesScansUntilExpiryOrARelevantSettingChanges': 1,
+        'TheFirstCompatiblePartialFamilyOwnsEachRenderer': 1,
+        'UnifiedEyesOnDifferentRenderersFormOneBilateralClosure': 1,
+    },
+    'LegacyBlinkMenuRoundTripTests': {
+        'SplitLegacyBlinkAndDistinctNamedMenusKeepTheirAppearanceAfterReimport': 2,
+    },
+    'PhysBoneSpringExportTests': {
+        'AParentTailCannotShareTheChildOwnersFirstJoint': 1,
+        'AbsentSdkAndRigidModelsRemainValidWithoutInventedSprings': 1,
+        'ActualExportImportsNestedOwnersWithoutSharedJointsOrChangedAppearance': 2,
+        'ActualExportImportsSpringsAndMovesHairWithoutChangingOriginal': 4,
+        'AuthoredRootColliderSurvivesWithoutAnyPhysBoneOrSdkDependency': 1,
+        'BranchesAndVirtualEndpointsHaveOneOwnerAndKeepSource': 3,
+        'CurvesCollidersAndLimitsUseRealSdkSerializedValues': 1,
+        'EmptyOrTruncatedSerializedSpringsPreventSaving': 1,
+        'ExistingTerminalFieldsAndVerificationBaselinesAreProtected': 1,
+        'ExistingVrmSettingsWinAndRemovedExplicitRootsDoNotAnimateTheBody': 1,
+        'GeneratedEndpointsDoNotTurnAnInertNestedPhysBoneIntoAnotherDriver': 1,
+        'IgnoredSubtreesDisabledBonesAndOverlappingOwnersAreExplicit': 1,
+        'InactiveExplicitRootsChildrenAndColliderRootsAreSkipped': 1,
+        'MalformedPhysBoneDataStillStopsConversion': 3,
+        'NestedOwnersKeepRestShapeForcesAndCollidersRegardlessOfComponentTraversal': 2,
+        'PreexistingVrmImplicitJointsAndTerminalsWinWhileDisjointSegmentsSurvive': 1,
+        'SameRootPrefersAttachedComponentThenStableComponentOrder': 2,
+        'ZeroLengthPairsKeepBonesAndOriginalDepthForTheRemainingChain': 1,
+    },
+    'SourceFingerprintCacheTests': {
+        'ColdClipEditorCacheDoesNotInvalidateButNativeCurveEditsDo': 1,
+        'MaterialDefaultCachePopulationDoesNotInvalidateButAnEffectiveEditDoes': 3,
+        'UnknownSavedMaterialPropertiesAndTextureTransformsStillInvalidate': 1,
+    },
     'AdditionalPlayableCallbackTests': {
         'DormantSdkFxWeightCommandsPermitNeutralAndFixedSelectionWithoutSourceMutation': 4,
         'DormantNestedFxWeightCommandsAndTheirExitRestoresArePruned': 2,
@@ -239,13 +330,22 @@ def required_regressions(supported, profile):
     if profile != 'compatibility':
         required.update(BEHAVIOR_CASES)
     if profile == 'exporter-integration':
-        required.update(INTEGRATION_CASES)
+        for suite, methods in INTEGRATION_CASES.items():
+            required[suite] = {**required.get(suite, {}), **methods}
     return required
 
 
 def profile_filters(supported, profile):
     required = required_regressions(supported, profile)
-    return [NAMESPACE + suite for suite in dict.fromkeys([*compatibility_counts(supported), *required])]
+    filters = []
+    for suite in dict.fromkeys([*compatibility_counts(supported), *required]):
+        if profile == 'exporter-behavior' and suite in INTEGRATION_CASES:
+            # Shared suites have optional installed-tool cases. Select every
+            # required behavior method, without silently accepting skipped ones.
+            filters.extend(NAMESPACE + suite + '.' + method for method in required[suite])
+        else:
+            filters.append(NAMESPACE + suite)
+    return filters
 
 
 def validate_result(xml, supported, profile='compatibility'):
@@ -269,7 +369,7 @@ def validate_result(xml, supported, profile='compatibility'):
         found = [c for c in cases if c.get('classname') == 'VRVlog.LilToonExporter.Tests.' + suite]
         if len(found) != count:
             raise SystemExit('Required compatibility suite has missing or unexpected cases: ' + suite)
-    allowed = set(profile_filters(supported, profile))
+    allowed = {NAMESPACE + suite for suite in [*compatibility_counts(supported), *required]}
     if any(c.get('classname') not in allowed for c in cases):
         raise SystemExit('Unexpected test classes in Unity validation profile: ' + profile)
     if tree.get('result') != 'Passed' or any(c.get('result') != 'Passed' for c in cases):

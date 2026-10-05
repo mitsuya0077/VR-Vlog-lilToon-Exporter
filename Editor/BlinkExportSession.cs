@@ -103,19 +103,22 @@ namespace VRVlog.LilToonExporter
                         UnifiedExpressionPreparation.HasUsableEvidence(source, excluded, suppressSharedTextureEmission, suppressHdrTextureEmission);
                     var completePairs = true;
                     var partialFamilies = new Dictionary<int, List<BlinkShapeBinding>[]>();
+                    var requiredPartialRenderers = new HashSet<SkinnedMeshRenderer>();
                     foreach (var pair in rendererNames)
                     {
                         var renderer = pair.Key;
                         var names = pair.Value;
                         Func<int, bool> usable = deferAutomaticUsability ? null :
                             index => AvatarBaseShape.HasUsableRawEndpoint(renderer.sharedMesh, index, renderer.GetBlendShapeWeight(index));
-                        var resolved = BlinkShapeNames.Resolve(names, result.allowMissingAutomaticBlink,
+                        // A complete named pair can span two renderers even on
+                        // avatars without Unified Expression tracking evidence.
+                        var resolved = BlinkShapeNames.Resolve(names, true,
                             usable);
                         if (resolved[0] == -2)
                             throw new InvalidOperationException("閉眼用の名前が重複しています。「確認・調整」で設定してください。");
-                        if (resolved[0] < 0 && resolved[1] == BlinkShapeNames.PartialPair)
-                            throw new InvalidOperationException("閉眼用の左右がそろっていません: " + renderer.name + "。「確認・調整」で設定してください。");
                         var completePair = resolved[1] >= 0 && resolved[2] >= 0;
+                        if (!result.allowMissingAutomaticBlink && resolved[0] < 0 && !completePair &&
+                            (resolved[1] >= 0 || resolved[2] >= 0)) requiredPartialRenderers.Add(renderer);
                         if (resolved[0] >= 0 && !completePair) completePairs = false;
                         for (var slot = 0; slot < resolved.Length; slot++)
                         {
@@ -125,7 +128,7 @@ namespace VRVlog.LilToonExporter
                             result.CaptureCandidate(binding);
                             if (slot == 0 || completePair) result.Slots[slot].Add(binding);
                         }
-                        if (!completePair && result.allowMissingAutomaticBlink)
+                        if (!completePair)
                             foreach (var candidate in BlinkShapeNames.PartialCandidates(names, usable))
                             {
                                 var binding = new BlinkShapeBinding { Renderer = renderer, Shape = names[candidate.Index] };
@@ -138,8 +141,7 @@ namespace VRVlog.LilToonExporter
                                 sides[candidate.Slot - 1].Add(binding);
                             }
                     }
-                    // UE evidence allows incomplete renderer candidates, but
-                    // cannot make unrelated legacy closure families compatible.
+                    // Only matching name families can supply the other eye.
                     var claimedPartialRenderers = new HashSet<SkinnedMeshRenderer>();
                     foreach (var family in partialFamilies.OrderBy(pair => pair.Key))
                     {
@@ -152,6 +154,9 @@ namespace VRVlog.LilToonExporter
                             claimedPartialRenderers.UnionWith(sides.SelectMany(side => side).Select(binding => binding.Renderer));
                         }
                     }
+                    var unmatched = requiredPartialRenderers.FirstOrDefault(renderer => !claimedPartialRenderers.Contains(renderer));
+                    if (unmatched != null)
+                        throw new InvalidOperationException("閉眼用の左右がそろっていません: " + unmatched.name + "。「確認・調整」で設定してください。");
                     // Resolve bilateral closure across the avatar: UE models
                     // may put their left and right eyes on different renderers.
                     if (result.Slots[1].Count > 0 && result.Slots[2].Count > 0)
@@ -387,7 +392,7 @@ namespace VRVlog.LilToonExporter
                 // A no-op standard binding prevents a viewer's raw-name blink
                 // fallback from driving the original morphs when blinking is off.
                 var renderer = ExportRendererSelection.Enumerate(clone).OfType<SkinnedMeshRenderer>()
-                    .FirstOrDefault(r => r.sharedMesh != null && r.sharedMesh.vertexCount > 0);
+                    .FirstOrDefault(r => ExportRendererSelection.HasGeometry(r.sharedMesh));
                 if (renderer == null) return;
                 var mesh = Object.Instantiate(renderer.sharedMesh); owned.Add(mesh); renderer.sharedMesh = mesh;
                 var name = "__VRVlog_BlinkNone_" + Guid.NewGuid().ToString("N");
