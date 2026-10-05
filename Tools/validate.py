@@ -231,10 +231,17 @@ assert "--disable-build-servers" in listing_workflow
 assert "--maxcpucount:1" in listing_workflow
 assert "${{ env.pathToCi }}/.nuke/temp" not in listing_workflow
 assert "pull_request:" in listing_workflow
-assert "package.json, source.json" in listing_workflow
+assert "  pull_request:\n  release:" in listing_workflow
+for listing_path in (".github/workflows/build-listing.yml", "package.json", "source.json",
+                     "Tools/check-listing.py", "Tools/test-listing.py"):
+    assert f'"{listing_path}"' in listing_workflow
+assert 'path.startswith("Website/")' in listing_workflow
 assert "\n  push:" not in listing_workflow
 assert "check-listing-builder:" in listing_workflow
-assert "if: github.event_name == 'pull_request'" in listing_workflow
+assert "if: github.event_name == 'pull_request' && needs.changes.outputs.relevant == 'true'" in listing_workflow
+assert "\n    needs: changes\n" in listing_workflow
+assert "if: ${{ always() && github.event_name == 'pull_request' }}" in listing_workflow
+assert "needs: [changes, check-listing-builder]" in listing_workflow
 assert "github.event.release.draft == false" in listing_workflow
 assert "types: [published, released]" in listing_workflow
 assert listing_workflow.index("github.event.release.draft == false") < listing_workflow.index("environment:")
