@@ -80,10 +80,13 @@ def build(root, output):
     if not any(name.startswith("Editor/") and name.endswith(".cs") for name in names):
         raise ValueError("Package has no Editor source")
     output.parent.mkdir(parents=True, exist_ok=True)
-    with zipfile.ZipFile(output, "w", compression=zipfile.ZIP_DEFLATED) as archive:
+    # Stored entries avoid platform/zlib-dependent DEFLATE bytes. Pin the
+    # creator OS too: Python otherwise emits different Windows/Unix headers.
+    with zipfile.ZipFile(output, "w", compression=zipfile.ZIP_STORED) as archive:
         for name, content in contents.items():
             entry = zipfile.ZipInfo(name, date_time=(2020, 1, 1, 0, 0, 0))
-            entry.compress_type = zipfile.ZIP_DEFLATED
+            entry.create_system = 3
+            entry.compress_type = zipfile.ZIP_STORED
             entry.external_attr = 0o100644 << 16
             archive.writestr(entry, content)
     return names
