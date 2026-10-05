@@ -1017,7 +1017,7 @@ namespace VRVlog.LilToonExporter
                                 !requiredParameterCurves.Contains(binding.propertyName))
                             {
                                 var parameterCurve = AnimationUtility.GetEditorCurve(info.clip, binding);
-                                if (parameterCurve != null && parameterCurve.length > 0) VrChatGestureExpressions.ReadCurve(parameterCurve);
+                                ValidateNativeParameterCurve(parameterCurve, layers[layer].name + " / " + info.clip.name + " / " + binding.propertyName);
                                 continue;
                             }
                             // An uncaptured support/appearance morph may target
@@ -1036,6 +1036,38 @@ namespace VRVlog.LilToonExporter
                                 layers[layer].name + " / " + info.clip.name + " / " + binding.path + " / " + binding.propertyName);
                         }
                     }
+            }
+        }
+
+        // These curves stay inside Unity; they are never serialized into the
+        // portable expression-animation format. Validate the data Unity uses,
+        // not that format's key-count, time or morph-range limits. Generators
+        // can leave NaN on the first incoming or last outgoing tangent: neither
+        // belongs to an interpolation segment, including with loop/ping-pong.
+        internal static void ValidateNativeParameterCurve(AnimationCurve curve, string context)
+        {
+            if (curve == null || curve.length == 0) return;
+            bool Finite(float value) => !float.IsNaN(value) && !float.IsInfinity(value);
+            void Invalid(int index, string field) => throw new InvalidOperationException(string.Format(ExporterLocalization.T(
+                "FXの内部パラメーター曲線が不正です（{0}、キー {1}、{2}）。"), context, index, field));
+            var keys = curve.keys;
+            for (var index = 0; index < keys.Length; index++)
+            {
+                var key = keys[index];
+                if (!Finite(key.time) || index > 0 && key.time <= keys[index - 1].time) Invalid(index, "time");
+                if (!Finite(key.value)) Invalid(index, "value");
+                if (index > 0)
+                {
+                    if (float.IsNaN(key.inTangent)) Invalid(index, "inTangent");
+                    if ((key.weightedMode & WeightedMode.In) != 0 &&
+                        (!Finite(key.inWeight) || key.inWeight < 0 || key.inWeight > 1)) Invalid(index, "inWeight");
+                }
+                if (index < keys.Length - 1)
+                {
+                    if (float.IsNaN(key.outTangent)) Invalid(index, "outTangent");
+                    if ((key.weightedMode & WeightedMode.Out) != 0 &&
+                        (!Finite(key.outWeight) || key.outWeight < 0 || key.outWeight > 1)) Invalid(index, "outWeight");
+                }
             }
         }
 
