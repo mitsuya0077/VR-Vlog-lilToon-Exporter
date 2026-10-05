@@ -19,6 +19,7 @@ namespace VRVlog.LilToonExporter
             internal readonly HashSet<string> CurveWrites = new HashSet<string>(StringComparer.Ordinal);
             internal readonly HashSet<EditorCurveBinding> Morphs = new HashSet<EditorCurveBinding>();
             internal readonly HashSet<AnimationClip> Clips = new HashSet<AnimationClip>();
+            internal readonly List<VrChatParameterDriver.Program> DriverPrograms = new List<VrChatParameterDriver.Program>();
             internal readonly Dictionary<StateMachineBehaviour, VrChatParameterDriver.Program> FxCommands = new Dictionary<StateMachineBehaviour, VrChatParameterDriver.Program>();
             internal bool WriteDefaults, HasBindings, EmptyMotion, FxControl, DynamicMorph, Timed, NonMorphBindings;
         }
@@ -436,7 +437,7 @@ namespace VRVlog.LilToonExporter
             }
         }
 
-        private static Dictionary<string, float> FixedNeutralValues(RuntimeAnimatorController runtime, VrChatExpressionMenu.Source source, Layer[] layers,
+        internal static Dictionary<string, float> FixedNeutralValues(RuntimeAnimatorController runtime, VrChatExpressionMenu.Source source, Layer[] layers,
             Func<string, bool> excludedPath, FixedExpressionContext fixedContext = null)
         {
             var controller = Controller(runtime);
@@ -804,7 +805,7 @@ namespace VRVlog.LilToonExporter
             return true;
         }
 
-        private static Layer[] Inspect(RuntimeAnimatorController runtime, Func<string, bool> excludedPath,
+        internal static Layer[] Inspect(RuntimeAnimatorController runtime, Func<string, bool> excludedPath,
             Dictionary<StateMachineBehaviour, VrChatParameterDriver.Program> drivers, List<string> unknown, bool allowFxControls = false,
             IDictionary<string, float> neutralFixed = null, List<string> knownSdkControls = null, int? fxLayerCount = null)
         {
@@ -863,6 +864,7 @@ namespace VRVlog.LilToonExporter
                             continue;
                         }
                         var program = VrChatParameterDriver.Read(behaviour, path);
+                        info.DriverPrograms.Add(program);
                         if (!drivers.ContainsKey(behaviour)) drivers.Add(behaviour, program);
                         if (program.Error != null) { unknown.Add(path + " / Parameter Driver: " + program.Error); continue; }
                         foreach (var op in program.Operations)

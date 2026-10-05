@@ -42,9 +42,12 @@ namespace VRVlog.LilToonExporter
                 throw WithAffected(error, bindings);
             }
             var plan = NeutralShapePlan.Create(prepared, metadata.Controller, groups, excludedPath, requiredMorphs, warnings, metadata, fixedContext);
+            var randomRestLayers = NeutralRandomRest.Preserve(metadata.Controller, metadata, plan, excludedPath, fixedContext);
+            var randomRestMorphs = new HashSet<EditorCurveBinding>(plan.TemporalMorphs);
             foreach (var roots in groups)
             {
                 roots.IntersectWith(plan.CommittedMorphs);
+                roots.ExceptWith(randomRestMorphs);
                 if (roots.Count == 0) continue;
                 ExpressionDependencies dependencies;
                 try { dependencies = ExpressionDependencies.AnalyzeNeutral(metadata.Controller, roots, excludedPath, metadata, automatic, fixedContext,
@@ -52,6 +55,8 @@ namespace VRVlog.LilToonExporter
                 catch (NeutralShapeSamplingException error) when (roots.All(automatic.Contains) &&
                     error.DependencyMorphs != null && error.DependencyMorphs.All(automatic.Contains)) { continue; }
                 catch (InvalidOperationException error) { throw WithAffected(error, roots); }
+                dependencies.Layers.ExceptWith(randomRestLayers);
+                dependencies.NativeSupportLayers.ExceptWith(randomRestLayers);
                 var identity = string.Join(",", dependencies.Layers.OrderBy(index => index)) + "|" +
                     string.Join(",", dependencies.NativeSupportLayers.OrderBy(index => index)) + "|" +
                     string.Join(",", dependencies.Morphs.OrderBy(binding => binding.path, StringComparer.Ordinal)
