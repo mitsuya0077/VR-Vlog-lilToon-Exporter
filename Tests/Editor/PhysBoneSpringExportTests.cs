@@ -321,14 +321,20 @@ namespace VRVlog.LilToonExporter.Tests
 
         [TestCase(false)]
         [TestCase(true)]
-        public Task InstalledAvatarOptimizerPreservesSpringMotionAndCollisionsAfterFullExport(bool full)
+        public async Task InstalledAvatarOptimizerPreservesSpringMotionAndCollisionsAfterFullExport(bool full)
         {
+            if (!UnityEditor.PackageManager.PackageInfo.GetAllRegisteredPackages().Any(package =>
+                package.name == "com.anatawa12.avatar-optimizer"))
+                Assert.Ignore("Optional AAO integration requires the real registered Avatar Optimizer package.");
             var optimizer = Sdk("Anatawa12.AvatarOptimizer.TraceAndOptimize");
-            if (optimizer == null) Assert.Ignore("Optional AAO integration requires installed Avatar Optimizer.");
+            Assert.That(optimizer, Is.Not.Null, "The installed AAO package must load its real component assembly.");
             Assert.That(Sdk("nadena.dev.ndmf.BuildContext"), Is.Not.Null, "Installed AAO requires its NDMF dependency.");
             Assert.That(ExportOptimizationMarker.AvatarOptimizerAdapterAvailable, Is.True,
                 "The installed AAO compatibility adapter must compile and register.");
-            return ExportImportsSpringsAndMovesHair(full, false, false, true);
+            // UTF 1.4.6 cannot handle a synchronously thrown IgnoreException in
+            // a Task-returning test. An async test reports the real missing
+            // dependency instead of returning null to its task wrapper.
+            await ExportImportsSpringsAndMovesHair(full, false, false, true);
         }
 
         async Task ExportImportsSpringsAndMovesHair(bool full, bool modularAvatar, bool rootCollider, bool avatarOptimizer)

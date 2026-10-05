@@ -2,35 +2,287 @@
 import argparse
 import json
 import os
+import re
 import subprocess
 import time
 import xml.etree.ElementTree as ET
 from pathlib import Path
 
 
-def validate_result(xml, supported):
-    tree = ET.parse(xml).getroot()
-    cases = tree.findall('.//test-case')
-    required = ['ActualInstalledPackagesMatchRequestedTestEnvironment']
-    if supported:
-        required.append('SupportedBackendPreservesMeshesMorphsAndMaterialBindingsOnReimport')
-    for name in required:
-        found = [c for c in cases if name in c.get('fullname', '')]
-        expected_count = 2 if name.startswith('SupportedBackend') else 1
-        if len(found) != expected_count or any(c.get('result') != 'Passed' for c in found):
-            raise SystemExit('Required real-package test did not pass: ' + name)
+NAMESPACE = 'VRVlog.LilToonExporter.Tests.'
+PROFILES = ('compatibility', 'exporter-behavior', 'exporter-integration')
+# Run each whole class. Named cases also prevent a removed regression or one lost
+# parameter variant from turning a smaller, passing XML into release evidence.
+BEHAVIOR_CASES = {
+    'AdditionalPlayableCallbackTests': {
+        'DormantSdkFxWeightCommandsPermitNeutralAndFixedSelectionWithoutSourceMutation': 4,
+        'DormantNestedFxWeightCommandsAndTheirExitRestoresArePruned': 2,
+        'ReachableSdkFxWeightCommandsRemainUnsupported': 7,
+        'ReachableInstantAndTimedSdkCommandsAreNotExecutedOrIgnored': 4,
+        'EveryRawParameterWriterPreventsDormantCommandProof': 7,
+        'ConflictingThirdPlayableParameterTypeCannotCertifyAConstant': 2,
+        'ExplicitChangedNormalInputCannotPruneAnAdditionalCommand': 1,
+        'LegacySamplingWithoutNormalInputContextRetainsDormantCommands': 1,
+        'GenuineUnknownCallbacksInvalidateTheWholeAdditionalProof': 2,
+        'UnresolvedOrMalformedAnimatorLayerCommandsNeverAuthorizePruning': 11,
+        'UnprovedTypedGateInputsDoNotHideCommands': 2,
+    },
+    'TemporalNeutralShapeTests': {
+        'TemporalRestKeepsPreparedWeightAndReconstructsTheIndependentConstant': 3,
+        'MixedIdleKeepsAllSeventeenTemporalAndSamplesAllOneHundredFifteenStaticChannels': 1,
+        'InactiveAlternateTemporalClipDoesNotChangeTheActiveConstantCapture': 1,
+        'TemporalCaptureKeepsIndependentNativeOverrideAdditiveAndWriteDefaults': 4,
+        'OnlyAFullUnmaskedExplicitConstantOverrideDominatesTheLowerTemporalCurve': 6,
+        'PreservingTheLastTemporalRootDoesNotWaiveDynamicGraphGuards': 4,
+        'DirectFixedExpressionSamplingStillRejectsItsActualTemporalCurve': 1,
+        'TemporalRequiredEndpointExportsPreparedRestAndTheExactAuthoredProgram': 2,
+    },
+    'NeutralShapeSamplerTests': {
+        'DelayedGenericMorphAnimationKeepsPreparedRestInsteadOfASampledPhase': 1,
+        'AutomaticAnimationSharingTheOpeningChannelKeepsItsPreparedRest': 1,
+        'AutomaticBlinkWithWriteDefaultsKeepsTheFullNativeClosureAndConstantRest': 1,
+        'CurrentCapHairAndMaskStayTogetherWhileIndependentFaceAndPermanentMorphReconstruct': 2,
+        'SharedCustomAppearanceControlKeepsSeparateVisibilityAndMaskTogetherWithoutClaimingGenericResetFace': 6,
+        'AppearanceOwnershipPrunesOnlyProvedNormalExternalBranches': 7,
+        'OptionalUnboundOrUnexportedMorphCannotPoisonIndependentFaceReconstruction': 7,
+        'AppearanceSupportCannotDisableTheCommittedRendererOrItsAncestor': 2,
+        'IndependentTransformSupportCapturesNativeMorphScalarsAndKeepsPreparedPose': 3,
+        'IndependentTransformSupportKeepsNativeScalarAcrossOverlappingMorphFrames': 6,
+        'IndependentTransformOnSixthSkinInfluenceKeepsNativeScalarAndPreparedBone': 1,
+        'IndependentTransformSupportStillRejectsUnknownPropertyComponents': 4,
+        'MissingTypedRendererComponentCannotClaimOrBlockARequiredMorph': 2,
+        'DisjointAdditiveVisibilityOrMaterialSupportKeepsNativeMorphMathAndPreparedAppearance': 2,
+        'ExplicitRequiredMorphCannotBeSeparatedFromItsAppearanceConfiguration': 1,
+        'NeutralUsesTheSameNormalVrChatInputsAsMenuSampling': 4,
+        'NeutralContactUsesTheAuthoredDefaultWithoutReceivingLiveInput': 4,
+        'DormantAfkActionCannotChangeTheNormalNeutralFace': 2,
+        'UnsavedNonMenuSignalWithOnlyDormantOtherPlayableWritersDoesNotOwnTheNormalFace': 2,
+        'SavedExposedUnprovedOrWrittenCustomSignalRetainsItsAppearanceAlternatives': 17,
+        'TransientOwnershipProofRetainsUnknownMetadataAndExplicitOrRemoteInputs': 5,
+        'CompleteMenuInputInventoryHandlesSharedCyclicAndEmptyOptionalSdkInputs': 3,
+        'FixedMenuStillRejectsActivationIncludingHarmlessNeutralBindings': 2,
+    },
+    'ParameterDriverExpressionTests': {
+        'FixedMenuPrunesDormantAfkActionButRejectsExplicitlySelectedAfk': 2,
+        'FixedContactInputUsesAuthoredDefaultAndAllowsExplicitSelectionOverride': 1,
+        'AnotherPlayableWriterInvalidatesFalseAndGuardProof': 1,
+    },
+    'MergedFxDefaultsTests': {
+        'DirectGestureProbeUsesNormalAndAuthoredContactInputs': 5,
+        'DirectGestureProbeStillRejectsUnresolvedExternalInputs': 2,
+        'DirectScalarSupportKeepsPreparedInfluencingBoneAndWardrobeMorphs': 2,
+        'DirectScalarSupportCannotDisableTheCapturedRenderer': 1,
+        'DirectScalarProbeDefersUnknownAuthoredChannelsToPreparedResolution': 4,
+        'ProvenBaseStateRetainsItsCallbackAndTheDynamicUpperNativeGraph': 1,
+        'InactiveProvenStateKeepsAuthoredClipUnlessItsCallbacksAffectRetainedGraph': 3,
+        'ProvenMovingDirectClipKeepsNativeSupportWithoutAnUnrelatedUpperExpressionReset': 4,
+        'ProvenMovingDirectClipStillHonorsAProvenPermanentUpperOverride': 2,
+        'ProvenMovingDirectClipRetainsTheConfiguredSingleStateBlendTreeSupport': 1,
+        'SourceFrameRangePolicyPreservesNativeClampedGeometryAndUnlimitedAuthoredMath': 2,
+        'FractionalStationaryFxGeometrySurvivesOneClickExportAndVrmReimport': 2,
+        'NeutralAdditiveDisjointMorphGroupsMatchTheAuthoredNativeController': 4,
+        'NeutralAdditiveAutomaticSupportKeepsNativeDefaultsWithoutBakingMovingBlink': 1,
+        'InstalledMaReparentsFaceEmoRendererAndMergesPermanentPupilFxBeforeEvaluation': 1,
+    },
+    'DirectExpressionNativeLayersTests': {
+        'FractionalPlayerBlendsWithTheEvaluatedLowerDefaultAcrossPossibleTransitions': 2,
+        'GestureRegistrationRetainsTheExactStatesDriverAndEffectiveClip': 2,
+        'InvalidSelectedStateProvenanceCannotRewriteTheDirectEntry': 3,
+        'SharedGestureClipKeepsDistinctNativeOutcomesFromItsSelectedCallbacks': 1,
+    },
+    'FaceEmoPreparedFxIntegrationTests': {
+        'RegisteredPlayerCallbacksFollowExactOrProvedRetargetedClipProvenance': 3,
+        'RegisteredPlayerRejectsAmbiguousMissingOrChangedCallbackProvenance': 4,
+        'RegisteredPlayerRejectsOriginalIdentityWithDifferentEffectiveOverride': 1,
+        'RegisteredPlayerReadsRegistryProvenPreparedAugmentationAndExactCallbacks': 2,
+        'RegisteredPlayerRejectsUnprovedOrAmbiguousPreparedAugmentation': 4,
+        'RegisteredPlayerRejectsPreparedMotionChangesBeforeDeferredEvaluation': 2,
+    },
+    'MergedFixedNeutralSamplingTests': {
+        'FractionalNeutralRetainsNativeBaseActivityAndLeavesAutomaticBlinkLive': 4,
+        'FractionalNeutralRejectsDelayedAutomaticBaseActivityChanges': 1,
+        'FractionalNeutralDistinguishesDisconnectedAndReachableUnsupportedSupportMotions': 4,
+    },
+    'NeutralCurveConditionTests': {
+        'DynamicParameterCurveCannotHideAFutureTimedExit': 1,
+        'CompetingParameterDriverPreventsTheRelayProof': 1,
+    },
+    'NeutralShapeEndpointTests': {
+        'PreparedSnapshotRetainsIdentityMeshAndExplicitZeroWithoutChangingSource': 1,
+        'InvalidAuthorIndexCannotAddressNewlyAppendedBlinkOrExpressionChannel': 2,
+        'ExplicitEndpointsSupportNegativeZeroAndAboveHundred': 3,
+        'ProfileWeightsAreAbsoluteSourceEndpointsAndMapEachRendererIndependently': 2,
+    },
+    'PreparedNeutralEligibilityTests': {
+        'PreBuildGuardAllowsWeightChangesButStillProtectsDeformation': 1,
+        'PreparedPathMappingCannotChooseBetweenAmbiguousOriginalOrCurrentPaths': 1,
+    },
+    'PreparedNeutralExportTests': {
+        'IndependentLoopOnTheInfluencingSkinBoneKeepsPreparedGeometryAndAuthoredEndpoints': 1,
+        'OneClickManualBlinkCannotFreezeOnlyTheMorphHalfOfAWardrobeConfiguration': 1,
+        'OneClickKeepsSourceTrackingObligationsWhenThePreparedCopyNoLongerHasTheMarker': 1,
+        'AutomaticBlinkUsesFxOpenNeutralWhenSerializedUnifiedClosureIsFullyClosed': 2,
+        'NdmfGeneratedShapeAndReboundFxUsePreparedMeshAndRendererPathInRealVrm': 8,
+    },
+    'NeutralShapePipelineTests': {
+        'NeutralAndAbsoluteEndpointRoundTripWithLargeSharedMeshes': 4,
+    },
+    'NeutralShapeExportTests': {
+        'FxDefaultOpeningShapeSurvivesExportWithoutAnExpressionMenu': 6,
+    },
+    'UnifiedExpressionExportTests': {
+        'MissingBlinkRequiresUsableUnifiedRoute': 26,
+        'ClampedNegativeRestKeepsNativeGeometryAndProvidesMovingUnifiedBlinkFallback': 2,
+    },
+    'MaSceneReferencePreparationTests': {
+        'InstalledMaResolvesStaleDirectTargetAndMergesOnlyTheOwnedAvatar': 2,
+        'OrdinaryExternalComponentReferencesRemainRejectedWithTheExactField': 2,
+        'ActiveMaPathReferenceRetainsTheRequiredInactiveAuthoringBeforePruning': 1,
+    },
+    'NdmfPreparationTests': {
+        'ExportPreparationRunsBetweenCanonicalPhasesOnTheSameUnfinishedContext': 1,
+        'PreparationFailureSkipsOptimizationAndStillFinishesAndCleansUp': 1,
+        'OptimizationFailureStillFinishesAndCleansUp': 1,
+    },
+}
+INTEGRATION_CASES = {
+    # The integration project must install the official MeshDeleterWithTexture
+    # package. Synthetic sharedMesh replacement alone is not its integration
+    # evidence, and an absent optional package must fail this explicit profile.
+    'MeshDeleterIntegrationTests': {
+        'DeletedSharedMeshAndMorphSurviveOneClickExportAndReimport': 4,
+    },
+    'MaDeletionExportTests': {
+        'InstalledDeletionSurvivesOneClickAndLiveMorphsRegardlessOfPreviewSettings': 6,
+    },
+    'MaPermanentAppearanceExportTests': {
+        'MergedPermanentPupilHideSurvivesVrmReloadBlinkAndMenuGeometry': 4,
+    },
+    'AppearancePreparationTests': {
+        'PreparedRestAndMovedRendererKeepExpressionEndpointsWithoutDoubling': 2,
+        'InstalledMaResolvesShapeMaterialAndVisibilityBeforeBaseShape': 2,
+        'InstalledMeshCutterPreservesMorphsAndSourceMesh': 2,
+        'ExcludedRulesCannotChangeRetainedAppearanceAndSimulatorOverridesStillMap': 2,
+        'ExclusionsPreserveSimulatorMenuSelectionForAutomaticAndNamedParameters': 4,
+    },
+    'InstalledNdmfNeutralExportTests': {
+        'InstalledModularAvatarRetargetsMovedRendererDefaultFxAndAuthoredEndpointInRealVrm': 2,
+        'InstalledModularAvatarReplacementUsesFinalRendererKeyForNeutralWithoutAnAuthoredRoute': 1,
+    },
+    'InstalledAaoNeutralEndpointExportTests': {
+        'MaskMergeAndTraceKeepFxNeutralAuthoredEndpointsTrackingAndDeferredBlink': 3,
+    },
+    'NdmfBlinkPreparationTests': {
+        'InstalledAaoMergeKeepsTheSelectedRendererInCallbackFreeBlinkPreview': 1,
+        'InstalledAaoMergeStillOptimizesAndRemapsBlinkForTheExportCallback': 1,
+    },
+    'PhysBoneSpringExportTests': {
+        'InstalledAvatarOptimizerPreservesSpringMotionAndCollisionsAfterFullExport': 2,
+    },
+}
+# Pin the new deletion combinations as well as their counts. A missing real
+# tool or preview-disabled case cannot be replaced by a different parameter
+# variant while retaining the same number of passing tests.
+INTEGRATION_VARIANTS = {
+    'MeshDeleterIntegrationTests': {
+        'DeletedSharedMeshAndMorphSurviveOneClickExportAndReimport': (
+            'False,False', 'False,True', 'True,False', 'True,True'),
+    },
+    'MaDeletionExportTests': {
+        'InstalledDeletionSurvivesOneClickAndLiveMorphsRegardlessOfPreviewSettings': (
+            'False,0', 'False,1', 'False,2', 'True,0', 'True,1', 'True,2'),
+    },
+    'MaPermanentAppearanceExportTests': {
+        'MergedPermanentPupilHideSurvivesVrmReloadBlinkAndMenuGeometry': (
+            'False,False', 'False,True', 'True,False', 'True,True'),
+    },
+}
+
+
+def compatibility_counts(supported):
     counts = {'DependencyEnvironmentTests': 1, 'DependencyStartupTests': 1}
     if supported:
         counts.update(DependencyRoundTripTests=2, RendererSelectionTests=4, SkinnedMeshFallbackWeightTests=12)
-    for suite, count in counts.items():
+    return counts
+
+
+def required_regressions(supported, profile):
+    if profile not in PROFILES:
+        raise SystemExit('Unknown Unity validation profile: ' + profile)
+    if profile != 'compatibility' and not supported:
+        raise SystemExit('Exporter behavior/integration profiles require a supported real UniVRM environment')
+    required = {
+        'DependencyEnvironmentTests': {'ActualInstalledPackagesMatchRequestedTestEnvironment': 1},
+        'DependencyStartupTests': {'MenuResolvesBackendWithoutInitializationRegistration': 1},
+    }
+    if supported:
+        required['DependencyRoundTripTests'] = {'SupportedBackendPreservesMeshesMorphsAndMaterialBindingsOnReimport': 2}
+    if profile != 'compatibility':
+        required.update(BEHAVIOR_CASES)
+    if profile == 'exporter-integration':
+        required.update(INTEGRATION_CASES)
+    return required
+
+
+def profile_filters(supported, profile):
+    required = required_regressions(supported, profile)
+    return [NAMESPACE + suite for suite in dict.fromkeys([*compatibility_counts(supported), *required])]
+
+
+def validate_result(xml, supported, profile='compatibility'):
+    required = required_regressions(supported, profile)
+    tree = ET.parse(xml).getroot()
+    cases = tree.findall('.//test-case')
+    names = [c.get('fullname') for c in cases]
+    if any(not name for name in names) or len(set(names)) != len(names):
+        raise SystemExit('Missing or duplicate Unity test identities')
+    for suite, methods in required.items():
+        for method, expected_count in methods.items():
+            name = NAMESPACE + suite + '.' + method
+            found = [c for c in cases if c.get('classname') == NAMESPACE + suite and
+                     (c.get('fullname') == name or c.get('fullname', '').startswith(name + '('))]
+            if len(found) != expected_count or any(c.get('result') != 'Passed' for c in found):
+                raise SystemExit('Required real-Unity regression did not pass (expected ' + str(expected_count) + ' cases): ' + name)
+            variants = INTEGRATION_VARIANTS.get(suite, {}).get(method) if profile == 'exporter-integration' else None
+            if variants is not None and {c.get('fullname') for c in found} != {name + '(' + args + ')' for args in variants}:
+                raise SystemExit('Required real-Unity parameter combinations did not pass: ' + name)
+    for suite, count in compatibility_counts(supported).items():
         found = [c for c in cases if c.get('classname') == 'VRVlog.LilToonExporter.Tests.' + suite]
         if len(found) != count:
             raise SystemExit('Required compatibility suite has missing or unexpected cases: ' + suite)
-    if len(cases) != sum(counts.values()):
-        raise SystemExit('Unexpected test cases in compatibility run')
+    allowed = set(profile_filters(supported, profile))
+    if any(c.get('classname') not in allowed for c in cases):
+        raise SystemExit('Unexpected test classes in Unity validation profile: ' + profile)
     if tree.get('result') != 'Passed' or any(c.get('result') != 'Passed' for c in cases):
-        raise SystemExit('Failed or skipped compatibility tests; see ' + str(xml))
+        raise SystemExit('Failed or skipped real-Unity tests; see ' + str(xml))
     return cases
+
+
+def source_identity(root):
+    """Identify the runner checkout, not an unverified package in the test project."""
+    root = root.resolve()
+    identity = {'packageVersion': None, 'gitCommit': None, 'gitDirty': None}
+    try:
+        identity['packageVersion'] = json.loads((root / 'package.json').read_text(encoding='utf-8-sig'))['version']
+    except (OSError, ValueError, KeyError):
+        pass
+    # Do not identify a source archive using an unrelated ancestor repository.
+    def git(*args):
+        result = subprocess.run(['git', '-c', 'safe.directory=' + str(root), '-C', str(root), *args],
+                                capture_output=True, text=True, timeout=10)
+        return result.stdout.strip() if result.returncode == 0 else None
+    try:
+        top = git('rev-parse', '--show-toplevel')
+        if top is not None and Path(top).resolve() == root:
+            commit = git('rev-parse', 'HEAD')
+            if commit is not None and re.fullmatch(r'[0-9a-f]{40,64}', commit):
+                identity['gitCommit'] = commit
+                status = git('status', '--porcelain', '--untracked-files=normal')
+                if status is not None:
+                    identity['gitDirty'] = bool(status)
+    except (OSError, subprocess.SubprocessError):
+        pass
+    return identity
 
 
 def main():
@@ -41,22 +293,20 @@ def main():
     parser.add_argument('--expect-unity', default='2022.3.62f3')
     parser.add_argument('--output', required=True, type=Path)
     parser.add_argument('--timeout', type=int, default=900)
+    parser.add_argument('--profile', choices=PROFILES, default='compatibility',
+                        help='Compatibility only (default), generated exporter behavior, or behavior plus installed AAO/NDMF integration')
     args = parser.parse_args()
+    root = Path(__file__).resolve().parents[1]
+    config = json.loads((root / 'Compatibility/dependencies.json').read_text(encoding='utf-8'))
+    supported = args.expect_univrm in config['uniVrm']['versions']
+    filters = profile_filters(supported, args.profile)
+    identity_before = source_identity(root)
     output = args.output.resolve()
     output.mkdir(parents=True, exist_ok=True)
     # Unique result names prevent an earlier successful XML from satisfying a failed run.
     stamp = str(time.time_ns())
     xml = output / (stamp + '.xml')
     log = output / (stamp + '.log')
-    root = Path(__file__).resolve().parents[1]
-    config = json.loads((root / 'Compatibility/dependencies.json').read_text(encoding='utf-8'))
-    supported = args.expect_univrm in config['uniVrm']['versions']
-    filters = ['VRVlog.LilToonExporter.Tests.DependencyEnvironmentTests',
-               'VRVlog.LilToonExporter.Tests.DependencyStartupTests']
-    if supported:
-        filters.extend(['VRVlog.LilToonExporter.Tests.DependencyRoundTripTests',
-                        'VRVlog.LilToonExporter.Tests.RendererSelectionTests',
-                        'VRVlog.LilToonExporter.Tests.SkinnedMeshFallbackWeightTests'])
     env = dict(os.environ, VRVLOG_TEST_UNIVRM=args.expect_univrm, VRVLOG_TEST_UNITY=args.expect_unity)
     command = [str(args.unity.resolve()), '-batchmode', '-projectPath', str(args.project.resolve()),
                '-runTests', '-testPlatform', 'EditMode', '-testFilter', ';'.join(filters),
@@ -67,8 +317,12 @@ def main():
     result = subprocess.run(command, env=env, timeout=args.timeout, **flags)
     if result.returncode != 0 or not xml.exists():
         raise SystemExit('Unity failed or produced no test result. See ' + str(log))
-    cases = validate_result(xml, supported)
-    report = {'expectedUniVrm': args.expect_univrm, 'unity': args.expect_unity, 'tests': len(cases), 'result': 'Passed',
+    cases = validate_result(xml, supported, args.profile)
+    identity_after = source_identity(root)
+    if any(identity_before[key] != identity_after[key] for key in ('packageVersion', 'gitCommit')):
+        raise SystemExit('Runner package version or Git commit changed during Unity validation')
+    report = {'profile': args.profile, 'expectedUniVrm': args.expect_univrm, 'unity': args.expect_unity,
+              'tests': len(cases), 'result': 'Passed', 'runnerSource': identity_before,
               'seconds': round(time.monotonic() - started), 'xml': xml.name, 'log': log.name}
     (output / (stamp + '.json')).write_text(json.dumps(report, indent=2) + '\n', encoding='utf-8')
     print(json.dumps(report))

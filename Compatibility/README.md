@@ -69,6 +69,195 @@ claim that every avatar or every combination is verified.
 6. Record exact versions, editor, source commits, results and remaining limits.
    Review the PR and required checks before changing the supported matrix.
 
+## Exporter behavior and integration regression profiles
+
+Dependency compatibility alone does not prove the one-click export pipeline.
+Before releasing changes to neutral sampling, expression endpoints or preparation,
+run the generated-fixture behavior profile in a separate, explicitly pinned project:
+
+```text
+python3 Tools/run-unity-compatibility.py --profile exporter-behavior --unity UNITY_EXECUTABLE --project INTEGRATION_TEST_PROJECT --expect-univrm 0.131.0 --expect-unity 2022.3.22f1 --output TEST_RESULTS
+```
+
+The default `compatibility` profile still requires the same 20 real-package cases
+in a supported environment, or two diagnostic cases in a missing/unsupported one.
+Both exporter profiles require a supported real UniVRM environment, the packages
+listed in step 3, and the actual VRChat SDK, Modular Avatar and NDMF. Use the
+reviewed authoring reference versions in `dependencies.json`; pin and record the
+actual SDK version as well. These test prerequisites do not make MA/NDMF mandatory
+dependencies for ordinary exporter users. The runner installs or changes nothing.
+
+The behavior profile selects these complete classes in addition to compatibility:
+
+- `NeutralShapeSamplerTests`, `ParameterDriverExpressionTests`, `MergedFxDefaultsTests`
+- `DirectExpressionNativeLayersTests`, `MergedFixedNeutralSamplingTests`, `NeutralCurveConditionTests`
+- `NeutralShapeEndpointTests`, `PreparedNeutralEligibilityTests`, `PreparedNeutralExportTests`
+- `NeutralShapePipelineTests`, `NeutralShapeExportTests`, `UnifiedExpressionExportTests`
+- `MaSceneReferencePreparationTests`, `NdmfPreparationTests`
+- `FaceEmoPreparedFxIntegrationTests`
+- `AdditionalPlayableCallbackTests`
+- `TemporalNeutralShapeTests`
+
+They cover fixed external inputs and dormant Action branches; whole prepared
+appearance versus independent neutral morphs; native Additive/Override and Write
+Defaults behavior; native source-frame clamping versus unlimited explicit endpoint
+arithmetic; scalar sampling with independent Transform support on influencing
+skin bones; absolute endpoints;
+blink eligibility after preparation; renderer mapping; source-reference ownership;
+phase ordering and cleanup; and real export/reimport. Native Animator evaluation
+and source geometry provide independent expectations. Required cases also cover
+optional missing/unexported roots, normal-external ownership pruning, direct or
+reachable Copy-linked appearance controls (including transitive range conversion),
+and source tracking obligations after preparation removes an authoring marker.
+Direct gesture probes also require normal VRChat inputs and authored contact
+defaults to match native sampling, while unresolved external inputs remain rejected.
+Registration tests retain the selected state's effective clip and deterministic
+callbacks, reject invalid or ambiguous callback provenance, and keep different
+native outcomes from a shared clip. Identical evaluated registrations remain
+deduplicated. The generated FaceEmo fixtures exercise exact or proved retargeted
+clip identity and reject missing/changed state, motion or callback context.
+An original registered clip identity cannot select a state when its effective
+override supplies different motion data.
+An existing NDMF object-registry origin may prove a uniquely matching augmented
+prepared clip; the actual effective prepared motion and its callbacks then define
+the entry. Missing/wrong/ambiguous origins and deferred clip or override changes
+remain rejected.
+Direct scalar support must keep prepared bone/wardrobe appearance, protect
+captured Renderer activation, and defer unknown authored channels until prepared
+renderer/mesh resolution.
+An active base-state probe must retain its callbacks and dynamic upper graph;
+an inactive slot must retain its authored clip without being force-enabled, and
+reject callbacks that could change the retained graph.
+An exactly identified moving gesture must retain its native lower, Additive and
+Write Defaults support without an unrelated upper expression's reset. A proved
+permanent upper override and a configured single-state BlendTree's native
+contribution remain authoritative. Disconnected unsupported clips
+must not affect neutral sampling, while a future reachable unsupported clip must
+still reject export.
+Copy ownership does not expand through Set/Add/Random or generic reset morphs.
+The transient-input matrix requires an unsaved declared signal with compatible
+types/defaults, no menu input, a raw producer in another playable, no raw FX
+producer, and no producer reachable under that playable's normal external inputs.
+Saved/exposed, unwritten, FX-written, external, unknown, explicitly selected or
+remotely synchronized inputs, and inputs with reachable random writers, must
+retain their appearance alternatives.
+The actual SDK serialized menu inventory covers shared/cyclic pages and null
+optional inputs; missing required submenus or unknown data cannot prove absence.
+The influencing-bone loop regression compares native scalar sampling with real
+export/reimport geometry at the retained prepared pose and explicit authored
+endpoints. Probe Transform animation must remain on the native graph, but its
+pose must not be copied into the prepared avatar. Bone or vertex overlap alone
+does not prove that a Transform curve changes a BlendShape weight.
+The unclamped source-range case preserves the explicit arithmetic contract; it
+does not claim that Editor BakeMesh is a native oracle for an unclamped player.
+Run the native clamped-range and negative-rest geometry cases through the
+GPU-backed batch behavior or integration profile above. An interactive EditMode
+runner can keep the native skinning policy stale after PlayerSettings readback
+changes, even while Editor updates and Camera.Render complete. The shared test
+helper queues four updates and verifies the declared true policy on a fresh
+100-frame BakeMesh sentinel before the full geometry oracle proceeds. A failed
+precondition must not be skipped or replaced with relaxed geometry expectations.
+The required one-click
+additive geometry regression must pass even if it failed on an earlier development
+commit. A known failure is not a release exemption.
+Missing ordinary blink can use only a surviving moving Unified Expression route.
+Disabled, missing, inert and fully closed routes remain rejected. A negative source
+rest normalized by the native clamp policy is covered separately by real reimport
+and native geometry at coefficients 0, 0.5 and 1; the source weight stays intact.
+
+Temporal rest is a separate contract from a selectable animated expression.
+Inspect complete curves on active effective clips after the normal-context,
+dependency and callback checks. Preserve a genuinely varying morph channel's
+prepared authored weight, rather than baking a sampled intermediate phase.
+Reconstruct independent stationary channels through the same native graph,
+including Write Defaults and Additive support. Keep the complete graph and binding
+safety checks even when no stationary scalar remains to capture. This policy
+does not make a varying curve constant, authorize animated Animator parameters or
+unknown callbacks, or add automatic idle playback to the app. Existing selectable
+programs retain their authored curves, duration and loop setting.
+
+The synthetic regression matrix must include a delayed loop whose movement begins
+beyond the sample window, weighted tangent variation, a nonzero prepared rest and
+stationary siblings, partial Override/Additive composition, and source preservation.
+History captured before temporal classification must not restore an excluded
+temporal channel later. Prepared rest and explicit blink/tracking endpoints must
+also survive real export/reimport and optimization. A varying lower writer has a
+bounded dominance proof only when a later included Override layer has exact native
+weight one, no mask or transition, exactly one current effective clip at weight
+one, no next clip and an explicit constant curve for that same binding. Only that
+lower layer/clip/binding is exempt from the curve check; timed state, parameter and
+callback checks still run. Fractional, near-one, Additive, masked or moving upper
+writers do not establish this proof, and finite sample equality alone cannot
+provide it. Conservative
+prepared-rest preservation must be reported, and cannot excuse a missing required
+route, an altered authored endpoint or an inert required blink. A zero residual
+that independently matches an explicitly authored endpoint is not itself a failure.
+
+Additional playable inspection distinguishes structurally valid known SDK effects
+from unknown or malformed callbacks. A known layer-control command without a
+parameter write may be excluded only when typed fixed-input reachability proves
+its branch dormant. Every surviving unsupported command remains a diagnostic.
+Raw writers and cross-controller parameter type conflicts still prevent invariant
+pruning. Test default/entry/timed paths, selected inputs, authored writers, malformed
+command data and unknown callbacks as well as the ordinary dormant AFK branch.
+Neither temporal rest nor additional playable handling may use an avatar or clip
+name as a compatibility exception.
+
+For AAO/NDMF optimization changes, run the integration profile with a pinned actual
+AAO installation too:
+
+```text
+python3 Tools/run-unity-compatibility.py --profile exporter-integration --unity UNITY_EXECUTABLE --project INTEGRATION_TEST_PROJECT --expect-univrm 0.131.0 --expect-unity 2022.3.22f1 --output TEST_RESULTS
+```
+
+It additionally requires `InstalledNdmfNeutralExportTests`,
+`InstalledAaoNeutralEndpointExportTests`, `NdmfBlinkPreparationTests` and
+`PhysBoneSpringExportTests`. These
+exercise the installed processors, moved/replaced renderers, mesh deletion and
+merge, endpoint remapping, and the difference between callback-free preview and
+export optimization, including spring motion and collisions after real export.
+The optional AAO spring fixture checks real package registration before reflection;
+an absent package is a skip, while an installed but unloaded component is a failure.
+Record the exact AAO version and any explicitly applied
+dependency patch; use the fixture's supported configuration API. Missing or
+unsupported integration packages cause required skips and therefore a failed run.
+
+The runner runs each selected class and checks named critical regressions and their
+parameter counts. A missing class/case, duplicate identity, failed/skipped case,
+unexpected class or unsuccessful root result cannot satisfy the gate. Extra tests
+added to a selected class must also pass. XML/log names are fresh per invocation;
+the JSON report records the profile, counts, expected environment and, when
+available, the runner checkout's package version, Git commit and dirty state.
+`runnerSource` identifies the checkout that supplies the runner; it does not prove
+that a different exporter copy installed in the test project has the same source.
+Point the project's local development package at that checkout, or verify the
+installed candidate against it, and record the production ZIP hash separately.
+A dirty checkout's commit alone cannot identify its uncommitted fixes.
+
+These fixtures create their own meshes, controllers and avatars; they require no
+private or purchased avatar. Obtain actual dependency packages from their official
+sources and preserve their pins and licenses. Do not replace SDKs/processors with
+stubs or relabel unsupported packages to obtain a passing integration report.
+`Tools/test-compatibility-tooling.py` uses artificial NUnit XML to test the result
+gate itself; its success is not evidence that Unity behavior passed.
+
+Use an available, appropriately licensed Editor for these runs. No cloud Unity CI
+or license provisioning is introduced by these profiles. Host CI and the release
+workflow run the same AAO patch, LAN and pose checks, but do not launch Unity.
+Keep actual Unity XML and exact tested versions/commits in release review evidence;
+do not substitute a skipped Unity job with a successful source-only check. Repeat
+the relevant profile on the separate 2022.3.62f3 baseline and each supported UniVRM
+version when the change affects that matrix. Existing real-avatar/app/device visual
+checks still apply; generated fixtures do not prove every avatar's appearance.
+
+Development packages must be distinguishable from an already published stable
+version. Assign the next development version before distributing a changed main
+checkout, and prepare the final stable version/changelog only after review and
+required checks. Preserve published tags; the release workflow refuses to replace
+an existing tag. Retest the final version's actual package, and never use an older
+version label or XML to claim that a new candidate was verified. Private avatar
+assets, local paths, logs and screenshots remain outside public packages.
+
 For startup changes, also validate the release ZIP as embedded packages, as used
 by VCC/ALCOM, with the actual VRChat/MA/NDMF packages from a report. The focused
 runner includes a menu test that removes the old startup registration to verify

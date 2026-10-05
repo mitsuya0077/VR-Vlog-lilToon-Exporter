@@ -181,6 +181,123 @@ namespace VRVlog.LilToonExporter
             }
         }
 
+        internal sealed class PlayerSelection
+        {
+            internal RuntimeAnimatorController Runtime;
+            internal AnimatorStateMachine Machine;
+            internal AnimatorState State;
+            internal int? Layer;
+            internal bool WriteDefaults;
+            internal string StateProof;
+            internal AnimationClip Motion;
+            internal ClipProof MotionProof;
+            internal bool ReadPreparedMotion;
+        }
+
+        // A registered GUID proves a clip, not arbitrary callbacks on its
+        // entire PLAYER layer. Retargeted clips may have another identity;
+        // their complete curve/object/timing data must then agree exactly.
+        internal sealed class ClipProof
+        {
+            private readonly Dictionary<EditorCurveBinding, AnimationCurve> curves;
+            private readonly Dictionary<EditorCurveBinding, ObjectReferenceKeyframe[]> objects;
+            private readonly float frameRate, length;
+            private readonly bool looping;
+            private readonly WrapMode wrapMode;
+            internal ClipProof(AnimationClip clip)
+            {
+                curves = AnimationUtility.GetCurveBindings(clip).ToDictionary(binding => binding,
+                    binding => AnimationUtility.GetEditorCurve(clip, binding));
+                objects = AnimationUtility.GetObjectReferenceCurveBindings(clip).ToDictionary(binding => binding,
+                    binding => AnimationUtility.GetObjectReferenceCurve(clip, binding));
+                frameRate = clip.frameRate; length = clip.length; looping = clip.isLooping; wrapMode = clip.wrapMode;
+            }
+            internal bool Matches(AnimationClip clip)
+            {
+                if (clip == null || clip.frameRate != frameRate || clip.length != length || clip.isLooping != looping || clip.wrapMode != wrapMode ||
+                    AnimationUtility.GetAnimationEvents(clip).Length != 0) return false;
+                var bindings = AnimationUtility.GetCurveBindings(clip);
+                if (!new HashSet<EditorCurveBinding>(bindings).SetEquals(curves.Keys)) return false;
+                foreach (var binding in bindings)
+                {
+                    var expected = curves[binding]; var actual = AnimationUtility.GetEditorCurve(clip, binding);
+                    if (expected == null || actual == null || expected.preWrapMode != actual.preWrapMode || expected.postWrapMode != actual.postWrapMode ||
+                        !expected.keys.SequenceEqual(actual.keys)) return false;
+                }
+                var objectBindings = AnimationUtility.GetObjectReferenceCurveBindings(clip);
+                if (!new HashSet<EditorCurveBinding>(objectBindings).SetEquals(objects.Keys)) return false;
+                foreach (var binding in objectBindings)
+                {
+                    var expected = objects[binding]; var actual = AnimationUtility.GetObjectReferenceCurve(clip, binding);
+                    if (expected.Length != actual.Length || expected.Where((value, index) =>
+                        value.time != actual[index].time || value.value != actual[index].value).Any()) return false;
+                }
+                return true;
+            }
+        }
+
+        private static string StateProof(AnimatorState state) => EditorJsonUtility.ToJson(state) + "\n" +
+            string.Join("\n", state.behaviours.Select(behaviour => behaviour == null ? "<missing>" :
+                behaviour.GetType().FullName + " / " + EditorJsonUtility.ToJson(behaviour)));
+
+        private static AnimationClip EffectiveClip(RuntimeAnimatorController runtime, AnimatorState state)
+        {
+            if (!(state?.motion is AnimationClip original)) return null;
+            return ExpressionDependencies.Overrides(runtime).TryGetValue(original, out var replacement) ? replacement : original;
+        }
+
+        private static PlayerSelection ResolvePlayer(RuntimeAnimatorController runtime, AnimationClip registered, AnimationClip prepared,
+            Func<AnimationClip, bool> preparedOrigin = null)
+        {
+            var result = new PlayerSelection { Runtime = runtime };
+            if (runtime == null) return result;
+            var controller = ExpressionDependencies.Controller(runtime);
+            var layers = controller.layers;
+            var players = Enumerable.Range(0, layers.Length).Where(index => layers[index].name == "[ USER EDIT ] FACE EMOTE PLAYER").ToArray();
+            if (players.Length > 1 || players.Length == 0 && layers.Any(layer => layer.name == "[ USER EDIT ] DEFAULT FACE"))
+                throw new InvalidOperationException("FaceEmoの表情FXレイヤーを一意に特定できません。");
+            if (players.Length == 0) return result; // Authored registrations without generated PLAYER remain standalone clips.
+            var layer = layers[players[0]];
+            if (layer.syncedLayerIndex >= 0 || layer.stateMachine == null || layer.blendingMode != AnimatorLayerBlendingMode.Override)
+                throw new InvalidOperationException("FaceEmoの表情FXレイヤーの合成方法を確定できません。");
+            var replacements = ExpressionDependencies.Overrides(runtime);
+            var proof = new ClipProof(prepared);
+            var visited = new HashSet<AnimatorStateMachine>();
+            var states = new HashSet<AnimatorState>();
+            var exact = new List<AnimatorState>(); var equivalent = new List<AnimatorState>();
+            void Visit(AnimatorStateMachine machine)
+            {
+                if (machine == null || !visited.Add(machine)) throw new InvalidOperationException("FaceEmoの表情FX状態の階層が不正です。");
+                foreach (var child in machine.states)
+                {
+                    var state = child.state;
+                    if (state == null || !states.Add(state)) throw new InvalidOperationException("FaceEmoの表情FX状態を一意に取得できません。");
+                    if (!(state.motion is AnimationClip original)) continue;
+                    var clip = replacements.TryGetValue(original, out var replacement) ? replacement : original;
+                    // Original asset identity cannot prove the effective
+                    // motion after AnimatorOverrideController replacement.
+                    // Only the effective registered clip is an exact match;
+                    // an overridden retargeted copy must prove all its data.
+                    if (clip == registered || preparedOrigin?.Invoke(clip) == true) exact.Add(state);
+                    else if (proof.Matches(clip)) equivalent.Add(state);
+                }
+                foreach (var child in machine.stateMachines) Visit(child.stateMachine);
+            }
+            Visit(layer.stateMachine);
+            var matched = exact.Count > 0 ? exact : equivalent;
+            if (matched.Count != 1)
+            {
+                var reason = matched.Select(state => state.writeDefaultValues).Distinct().Count() > 1 ? "Write Defaultsが一致しません" :
+                    matched.Count == 0 ? "登録クリップに対応する状態がありません" : "登録クリップに対応する状態が重複しています";
+                throw new InvalidOperationException("FaceEmoの登録クリップに対応するFX状態を一意に特定できません: " + registered.name + " / " + reason);
+            }
+            result.Layer = players[0]; result.Machine = layer.stateMachine; result.State = matched.Single();
+            result.WriteDefaults = result.State.writeDefaultValues; result.StateProof = StateProof(result.State);
+            result.Motion = EffectiveClip(runtime, result.State); result.MotionProof = new ClipProof(result.Motion);
+            result.ReadPreparedMotion = result.Motion != registered && preparedOrigin?.Invoke(result.Motion) == true;
+            return result;
+        }
+
         // FaceEmo's GUID clips are outside the FX controller rewritten by MA.
         // Remember their targets on our copy before Transforming moves them;
         // evaluate the clips only after the merged FX controller is available.
@@ -190,15 +307,10 @@ namespace VRVlog.LilToonExporter
             private readonly Func<string, bool> originalExcludedPath;
             internal Func<string, bool> PreparedExcludedPath { get; }
             internal bool DeferPermanentOverrides { get; }
-            private sealed class DeferredEntry
-            {
-                internal RuntimeAnimatorController Runtime;
-                internal AnimatorStateMachine Machine;
-                internal int? Layer;
-                internal bool WriteDefaults;
-            }
-            private readonly Dictionary<VrChatExpressionMenu.Entry, DeferredEntry> deferredEntries =
-                new Dictionary<VrChatExpressionMenu.Entry, DeferredEntry>();
+            private readonly Dictionary<VrChatExpressionMenu.Entry, PlayerSelection> deferredEntries =
+                new Dictionary<VrChatExpressionMenu.Entry, PlayerSelection>();
+            private object objectRegistry;
+            private Func<UnityEngine.Object, UnityEngine.Object> isolatedCopyOf;
             private sealed class Target
             {
                 internal Component[] Matches;
@@ -215,9 +327,11 @@ namespace VRVlog.LilToonExporter
                 DeferPermanentOverrides = deferPermanentOverrides;
             }
 
-            internal void RebindPrepared(Func<SkinnedMeshRenderer, SkinnedMeshRenderer> replacement)
+            internal void RebindPrepared(Func<SkinnedMeshRenderer, SkinnedMeshRenderer> replacement,
+                object registry = null, Func<UnityEngine.Object, UnityEngine.Object> isolatedCopyOf = null)
             {
                 if (replacement == null) throw new ArgumentNullException(nameof(replacement));
+                objectRegistry = registry; this.isolatedCopyOf = isolatedCopyOf;
                 var mapped = new Dictionary<SkinnedMeshRenderer, SkinnedMeshRenderer>();
                 foreach (var target in targets.Values.SelectMany(paths => paths.Values))
                     for (var index = 0; index < target.Matches.Length; index++)
@@ -229,42 +343,29 @@ namespace VRVlog.LilToonExporter
                         }
             }
 
-            internal void Defer(VrChatExpressionMenu.Entry entry, RuntimeAnimatorController runtime)
+            private bool PreparedClipHasOrigin(AnimationClip clip, AnimationClip registered)
             {
-                var captured = new DeferredEntry { Runtime = runtime };
-                if (runtime != null)
+                if (clip == null || objectRegistry == null) return false;
+                // NDMF records committed animator clips against the original
+                // asset. Read that existing provenance without creating a
+                // reference; augmented clips need not have identical curves.
+                var contract = objectRegistry.GetType().GetInterfaces().FirstOrDefault(type =>
+                    type.FullName == "nadena.dev.ndmf.IObjectRegistry");
+                var method = contract?.GetMethod("GetReference", new[] { typeof(UnityEngine.Object), typeof(bool) });
+                if (method == null) return false;
+                try
                 {
-                    var layers = ExpressionDependencies.Controller(runtime).layers;
-                    var players = Enumerable.Range(0, layers.Length)
-                        .Where(index => layers[index].name == "[ USER EDIT ] FACE EMOTE PLAYER").ToArray();
-                    if (players.Length > 1 || players.Length == 0 && layers.Any(layer => layer.name == "[ USER EDIT ] DEFAULT FACE"))
-                        throw new InvalidOperationException("FaceEmoの表情FXレイヤーを一意に特定できません。");
-                    if (players.Length == 1)
-                    {
-                        var layer = layers[players[0]];
-                        if (layer.syncedLayerIndex >= 0 || layer.stateMachine == null || layer.blendingMode != AnimatorLayerBlendingMode.Override)
-                            throw new InvalidOperationException("FaceEmoの表情FXレイヤーの合成方法を確定できません。");
-                        var visited = new HashSet<AnimatorStateMachine>();
-                        var defaults = new HashSet<bool>();
-                        void Visit(AnimatorStateMachine machine)
-                        {
-                            if (machine == null || !visited.Add(machine))
-                                throw new InvalidOperationException("FaceEmoの表情FXレイヤーを一意に特定できません。");
-                            foreach (var state in machine.states)
-                            {
-                                if (state.state == null) throw new InvalidOperationException("FaceEmoの表情FX状態を取得できません。");
-                                if (state.state.motion != null) defaults.Add(state.state.writeDefaultValues);
-                            }
-                            foreach (var child in machine.stateMachines) Visit(child.stateMachine);
-                        }
-                        Visit(layer.stateMachine);
-                        if (defaults.Count != 1)
-                            throw new InvalidOperationException("FaceEmoの表情FXのWrite Defaultsを一意に確定できません。");
-                        captured.Layer = players[0]; captured.Machine = layer.stateMachine; captured.WriteDefaults = defaults.Single();
-                    }
+                    var reference = method.Invoke(objectRegistry, new object[] { clip, false });
+                    var origin = reference?.GetType().GetProperty("Object", BindingFlags.Public | BindingFlags.Instance)
+                        ?.GetValue(reference) as UnityEngine.Object;
+                    return origin != null && (origin == registered || origin == isolatedCopyOf?.Invoke(registered));
                 }
-                deferredEntries.Add(entry, captured);
+                catch (TargetInvocationException) { return false; }
+                catch (ArgumentException) { return false; }
             }
+
+            internal void Defer(VrChatExpressionMenu.Entry entry, PlayerSelection selected)
+                => deferredEntries.Add(entry, selected);
 
             internal void ApplyDeferredOverrides(GameObject prepared, VrChatExpressionMenu.Source source)
             {
@@ -278,10 +379,13 @@ namespace VRVlog.LilToonExporter
                     {
                         if (captured.Runtime != source.Controller || captured.Layer.HasValue &&
                             (captured.Layer.Value >= ExpressionDependencies.Controller(source.Controller).layers.Length ||
-                             ExpressionDependencies.Controller(source.Controller).layers[captured.Layer.Value].stateMachine != captured.Machine))
+                             ExpressionDependencies.Controller(source.Controller).layers[captured.Layer.Value].stateMachine != captured.Machine) ||
+                            captured.State != null && (StateProof(captured.State) != captured.StateProof ||
+                                EffectiveClip(captured.Runtime, captured.State) != captured.Motion ||
+                                !captured.MotionProof.Matches(captured.Motion)))
                             throw new InvalidOperationException("FaceEmoの表情FXレイヤーが評価前に変わりました。");
                         VrChatExpressionSampler.ApplyPermanentOverrides(prepared, captured.Runtime, entry,
-                            captured.Layer, captured.WriteDefaults, PreparedExcludedPath, metadata: source);
+                            captured.Layer, captured.WriteDefaults, PreparedExcludedPath, metadata: source, sourceState: captured.State);
                     }
                     catch (InvalidOperationException error) { entry.Error = error.Message; }
                 }
@@ -304,7 +408,8 @@ namespace VRVlog.LilToonExporter
                     }));
             }
 
-            internal void ReadClip(GameObject avatar, AnimationClip original, VrChatExpressionMenu.Entry entry)
+            internal PlayerSelection ReadClip(GameObject avatar, AnimationClip original, VrChatExpressionMenu.Entry entry,
+                RuntimeAnimatorController runtime = null)
             {
                 if (avatar != clone) throw new InvalidOperationException("FaceEmoの表情参照は書き出し用コピーと一致していません。");
                 if (!targets.TryGetValue(original, out var paths))
@@ -360,14 +465,20 @@ namespace VRVlog.LilToonExporter
                         if (!seen.Add(binding)) throw new InvalidOperationException("FaceEmoの表情参照が処理後に重複しています: " + binding.path + " / " + binding.propertyName);
                         AnimationUtility.SetObjectReferenceCurve(clip, binding, curve.Curve);
                     }
-                    VrChatGestureExpressions.ReadClip(avatar, clip, entry, PreparedExcludedPath);
+                    var selected = ResolvePlayer(runtime, original, clip, candidate => PreparedClipHasOrigin(candidate, original));
+                    // A registry-proven NDMF replacement is authoritative:
+                    // its additional synchronized channels are part of the
+                    // prepared expression, not optional matching evidence.
+                    var read = selected.ReadPreparedMotion ? selected.Motion : clip;
+                    VrChatGestureExpressions.ReadClip(avatar, read, entry, PreparedExcludedPath);
                     if (entry.Animation.Count > 0)
                     {
-                        if (original.length <= 0 || original.length > 600)
+                        if (read.length <= 0 || read.length > 600)
                             throw new InvalidOperationException("表情アニメーションの長さは0秒より長く600秒以下である必要があります: " + original.name);
-                        entry.Duration = original.length;
-                        entry.Loop = original.isLooping;
+                        entry.Duration = read.length;
+                        entry.Loop = read.isLooping;
                     }
+                    return selected;
                 }
                 finally { UnityEngine.Object.DestroyImmediate(clip); }
             }
@@ -546,11 +657,16 @@ namespace VRVlog.LilToonExporter
                 var clip = Resolve(animation);
                 if (clip == null) throw new InvalidOperationException("FaceEmoに登録されたアニメーションGUIDを解決できません。");
                 entry.Name = path + " / " + clip.name;
-                if (bindings == null) VrChatGestureExpressions.ReadClip(avatar, clip, entry, excludedPath);
-                else bindings.ReadClip(avatar, clip, entry);
-                if (bindings?.DeferPermanentOverrides == true) bindings.Defer(entry, source.Controller);
-                else VrChatExpressionSampler.ApplyPermanentOverrides(avatar, source.Controller, entry,
-                    excludedPath: bindings == null ? excludedPath : bindings.PreparedExcludedPath, metadata: source);
+                PlayerSelection selected;
+                if (bindings == null)
+                {
+                    VrChatGestureExpressions.ReadClip(avatar, clip, entry, excludedPath);
+                    selected = ResolvePlayer(source.Controller, clip, clip);
+                }
+                else selected = bindings.ReadClip(avatar, clip, entry, source.Controller);
+                if (bindings?.DeferPermanentOverrides == true) bindings.Defer(entry, selected);
+                else VrChatExpressionSampler.ApplyPermanentOverrides(avatar, source.Controller, entry, selected.Layer, selected.WriteDefaults,
+                    excludedPath: bindings == null ? excludedPath : bindings.PreparedExcludedPath, metadata: source, sourceState: selected.State);
             }
             catch (InvalidOperationException error) { entry.Error = error.Message; }
             source.Entries.Add(entry);

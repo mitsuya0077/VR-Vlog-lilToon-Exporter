@@ -222,6 +222,90 @@ namespace VRVlog.LilToonExporter.Tests
 
         [TestCase(false)]
         [TestCase(true)]
+        public void GestureRegistrationRetainsTheExactStatesDriverAndEffectiveClip(bool overrideClip)
+        {
+            ParameterDriverExpressionTests.Driver(selected, ParameterDriverExpressionTests.Op("Set", "Face", 1));
+            var sibling = State(controller.layers[1].stateMachine, "Same clip different callback", (AnimationClip)selected.motion);
+            ParameterDriverExpressionTests.Driver(sibling, ParameterDriverExpressionTests.Op("Set", "Face", 0));
+            controller.AddParameter("GestureRight", AnimatorControllerParameterType.Int);
+            var transition = controller.layers[1].stateMachine.AddAnyStateTransition(selected);
+            transition.hasExitTime = false; transition.duration = 0;
+            transition.AddCondition(AnimatorConditionMode.Equals, 1, "GestureRight");
+            RuntimeAnimatorController runtime = controller;
+            if (overrideClip)
+            {
+                var overrides = new AnimatorOverrideController(controller);
+                overrides[(AnimationClip)selected.motion] = Clip("Effective registered face", 90);
+                AssetDatabase.CreateAsset(overrides, folder + "/Registered.overrideController"); runtime = overrides;
+            }
+            var expected = Native(runtime, new Dictionary<string, float> { ["Face"] = 1 });
+            Assert.That(expected, Is.EqualTo(overrideClip ? 75 : 70).Within(.01));
+            Assert.That(Native(runtime), Is.EqualTo(overrideClip ? 60 : 55).Within(.01),
+                "Dropping the selected callback produces a distinct native pose.");
+            var sourceAssets = AssetDatabase.LoadAllAssetsAtPath(folder + "/FX.controller")
+                .ToDictionary(asset => asset, asset => EditorJsonUtility.ToJson(asset));
+            var sourceJson = EditorJsonUtility.ToJson(controller); var meshJson = EditorJsonUtility.ToJson(mesh);
+            var runtimeJson = EditorJsonUtility.ToJson(runtime); var probes = ProbeObjects();
+            var metadata = new VrChatExpressionMenu.Source { Controller = runtime };
+            VrChatGestureExpressions.Add(avatar, metadata);
+            Assert.That(metadata.Entries.Count, Is.EqualTo(1));
+            var entry = metadata.Entries.Single();
+            Assert.That(entry.Error, Is.Null);
+            Assert.That(entry.Values.Count, Is.EqualTo(1));
+            Assert.That(entry.Values.Single().Weight, Is.EqualTo(expected).Within(.01));
+            foreach (var pair in sourceAssets) Assert.That(EditorJsonUtility.ToJson(pair.Key), Is.EqualTo(pair.Value), pair.Key.name);
+            Assert.That(EditorJsonUtility.ToJson(runtime), Is.EqualTo(runtimeJson));
+            AssertUnchanged(sourceJson, meshJson, probes);
+        }
+
+        [TestCase("wrong layer")]
+        [TestCase("write defaults")]
+        [TestCase("ancestor callback")]
+        public void InvalidSelectedStateProvenanceCannotRewriteTheDirectEntry(string invalid)
+        {
+            var selectedSource = invalid == "wrong layer" ? lower : selected;
+            if (invalid == "ancestor callback")
+            {
+                var driver = ParameterDriverExpressionTests.Driver(selected, ParameterDriverExpressionTests.Op("Set", "Face", 1));
+                selected.behaviours = Array.Empty<StateMachineBehaviour>();
+                controller.layers[1].stateMachine.behaviours = new[] { driver };
+            }
+            var entry = new VrChatExpressionMenu.Entry(); VrChatGestureExpressions.ReadClip(avatar, (AnimationClip)selected.motion, entry);
+            var sourceJson = EditorJsonUtility.ToJson(controller); var meshJson = EditorJsonUtility.ToJson(mesh); var probes = ProbeObjects();
+            Assert.Throws<InvalidOperationException>(() => VrChatExpressionSampler.ApplyPermanentOverrides(avatar, controller, entry,
+                1, invalid == "write defaults", sourceState: selectedSource));
+            Assert.That(entry.Values.Single().Weight, Is.EqualTo(80));
+            AssertUnchanged(sourceJson, meshJson, probes);
+        }
+
+        [Test]
+        public void SharedGestureClipKeepsDistinctNativeOutcomesFromItsSelectedCallbacks()
+        {
+            ParameterDriverExpressionTests.Driver(selected, ParameterDriverExpressionTests.Op("Set", "Face", 1));
+            var sibling = State(controller.layers[1].stateMachine, "Alternative callback", (AnimationClip)selected.motion);
+            ParameterDriverExpressionTests.Driver(sibling, ParameterDriverExpressionTests.Op("Set", "Face", 0));
+            controller.AddParameter("GestureRight", AnimatorControllerParameterType.Int);
+            foreach (var target in new[] { selected, sibling })
+            {
+                var transition = controller.layers[1].stateMachine.AddAnyStateTransition(target);
+                transition.hasExitTime = false; transition.duration = 0;
+                transition.AddCondition(AnimatorConditionMode.Equals, target == selected ? 1 : 2, "GestureRight");
+            }
+            var expected = new[] { Native(controller), Native(controller, new Dictionary<string, float> { ["Face"] = 1 }) };
+            Assert.That(expected, Is.EqualTo(new[] { 55f, 70f }).Within(.01));
+            var sourceJson = EditorJsonUtility.ToJson(controller); var meshJson = EditorJsonUtility.ToJson(mesh); var probes = ProbeObjects();
+            var source = new VrChatExpressionMenu.Source { Controller = controller };
+            VrChatGestureExpressions.Add(avatar, source);
+            Assert.That(source.Entries.Count, Is.EqualTo(2));
+            Assert.That(source.Entries.Select(entry => entry.Error), Is.All.Null);
+            Assert.That(source.Entries.Select(entry => entry.Id).Distinct().Count(), Is.EqualTo(2));
+            Assert.That(source.Entries.Select(entry => entry.Values.Single().Weight).OrderBy(value => value).ToArray(),
+                Is.EqualTo(expected).Within(.01), "Reusing a clip cannot discard a different callback-dependent pose.");
+            AssertUnchanged(sourceJson, meshJson, probes);
+        }
+
+        [TestCase(false)]
+        [TestCase(true)]
         public void SelectedSyncedSlotChecksEffectiveOverrideDriversWithoutChangingSourceBehaviours(bool relevant)
         {
             controller.AddParameter("Unused driver destination", AnimatorControllerParameterType.Int);
@@ -296,7 +380,14 @@ namespace VRVlog.LilToonExporter.Tests
         {
             var metadata = new VrChatExpressionMenu.Source { Controller = controller };
             var expectedMessage = "時間で変わる";
-            if (dependency == "external") { metadata.ExternalParameters.Add("Face"); expectedMessage = "外部入力"; }
+            if (dependency == "external")
+            {
+                controller.AddParameter("EyeHeightAsMeters", AnimatorControllerParameterType.Float);
+                var transition = lower.transitions.Single();
+                foreach (var condition in transition.conditions) transition.RemoveCondition(condition);
+                transition.AddCondition(AnimatorConditionMode.Greater, .5f, "EyeHeightAsMeters");
+                metadata.ExternalParameters.Add("EyeHeightAsMeters"); expectedMessage = "外部入力";
+            }
             else if (dependency == "moving lower morph")
                 AnimationUtility.SetEditorCurve((AnimationClip)lower.motion,
                     EditorCurveBinding.FloatCurve("Face", typeof(SkinnedMeshRenderer), "blendShape.Face size"), AnimationCurve.Linear(0, 30, 30, 60));
@@ -320,7 +411,7 @@ namespace VRVlog.LilToonExporter.Tests
             }
             var entry = new VrChatExpressionMenu.Entry(); VrChatGestureExpressions.ReadClip(avatar, (AnimationClip)selected.motion, entry);
             var sourceJson = EditorJsonUtility.ToJson(controller); var meshJson = EditorJsonUtility.ToJson(mesh); var probes = ProbeObjects();
-            var error = Assert.Throws<InvalidOperationException>(() =>
+            var error = Assert.Catch<InvalidOperationException>(() =>
                 VrChatExpressionSampler.ApplyPermanentOverrides(avatar, controller, entry, 1, metadata: metadata));
             Assert.That(error.Message, Does.Contain(expectedMessage));
             Assert.That(entry.Values.Single().Weight, Is.EqualTo(80), "Rejected dependencies cannot leave a partially rewritten expression.");

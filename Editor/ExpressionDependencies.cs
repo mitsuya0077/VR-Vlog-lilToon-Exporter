@@ -12,10 +12,13 @@ namespace VRVlog.LilToonExporter
         internal sealed class Layer
         {
             internal readonly HashSet<string> Reads = new HashSet<string>(StringComparer.Ordinal);
+            internal readonly HashSet<string> ControlReads = new HashSet<string>(StringComparer.Ordinal);
+            internal readonly HashSet<(string Source, string Destination)> CopyInputs = new HashSet<(string Source, string Destination)>();
             internal readonly HashSet<string> Writes = new HashSet<string>(StringComparer.Ordinal);
             internal readonly HashSet<string> DriverWrites = new HashSet<string>(StringComparer.Ordinal);
             internal readonly HashSet<string> CurveWrites = new HashSet<string>(StringComparer.Ordinal);
             internal readonly HashSet<EditorCurveBinding> Morphs = new HashSet<EditorCurveBinding>();
+            internal readonly HashSet<AnimationClip> Clips = new HashSet<AnimationClip>();
             internal readonly Dictionary<StateMachineBehaviour, VrChatParameterDriver.Program> FxCommands = new Dictionary<StateMachineBehaviour, VrChatParameterDriver.Program>();
             internal bool WriteDefaults, HasBindings, EmptyMotion, FxControl, DynamicMorph, Timed, NonMorphBindings;
         }
@@ -25,6 +28,11 @@ namespace VRVlog.LilToonExporter
         internal bool HasFxControls;
         internal readonly HashSet<string> Parameters = new HashSet<string>(StringComparer.Ordinal);
         internal readonly HashSet<EditorCurveBinding> Morphs = new HashSet<EditorCurveBinding>();
+        // Output capture can be restricted by a prepared neutral plan. Keep
+        // the complete morph dependency closure for independence diagnostics;
+        // a coupled automatic writer must not become independent just because
+        // its companion channels are outside this particular capture group.
+        internal readonly HashSet<EditorCurveBinding> NeutralDependencyMorphs = new HashSet<EditorCurveBinding>();
         internal readonly Dictionary<StateMachineBehaviour, VrChatParameterDriver.Program> Drivers = new Dictionary<StateMachineBehaviour, VrChatParameterDriver.Program>();
         internal readonly Dictionary<string, float> NeutralFixedValues = new Dictionary<string, float>(StringComparer.Ordinal);
 
@@ -73,29 +81,118 @@ namespace VRVlog.LilToonExporter
                 fixedContext: fixedContext, initialMorphs: initialMorphs, preserveNativeBasePose: preserveNativeBasePose);
 
         internal static IEnumerable<HashSet<EditorCurveBinding>> NeutralRoots(RuntimeAnimatorController runtime, Func<string, bool> excludedPath,
-            VrChatExpressionMenu.Source source, ISet<EditorCurveBinding> automatic = null)
+            VrChatExpressionMenu.Source source, ISet<EditorCurveBinding> automatic = null, FixedExpressionContext fixedContext = null)
         {
             var unknown = new List<string>();
             var layers = Inspect(runtime, excludedPath, new Dictionary<StateMachineBehaviour, VrChatParameterDriver.Program>(), unknown, true);
             if (layers.All(layer => layer.Morphs.Count == 0)) return Array.Empty<HashSet<EditorCurveBinding>>();
             if (unknown.Count > 0)
                 throw new InvalidOperationException("FXの影響範囲を確定できないState Behaviourがあります: " + string.Join(", ", unknown));
-            var fixedValues = FixedNeutralValues(runtime, source, layers, excludedPath);
+            var trackingValues = FixedNeutralValues(runtime, source, layers, excludedPath);
+            var trackingLayers = fixedContext == null ? null : Inspect(runtime, excludedPath,
+                new Dictionary<StateMachineBehaviour, VrChatParameterDriver.Program>(), new List<string>(), true, trackingValues);
+            var fixedValues = fixedContext == null ? trackingValues : FixedNeutralValues(runtime, source, layers, excludedPath, fixedContext);
             layers = Inspect(runtime, excludedPath, new Dictionary<StateMachineBehaviour, VrChatParameterDriver.Program>(),
                 new List<string>(), true, fixedValues);
-            RemoveIndependentAutomaticWriters(layers, automatic, source, fixedValues);
+            RemoveIndependentAutomaticWriters(layers, automatic, source, trackingValues, trackingLayers);
             return layers.Where(layer => layer.Morphs.Count > 0).Select(layer => new HashSet<EditorCurveBinding>(layer.Morphs));
         }
 
         internal static ExpressionDependencies AnalyzeNeutral(RuntimeAnimatorController runtime, ISet<EditorCurveBinding> morphs,
-            Func<string, bool> excludedPath, VrChatExpressionMenu.Source source, ISet<EditorCurveBinding> automatic = null)
-            => AnalyzeCore(runtime, Array.Empty<string>(), excludedPath, source, source.Defaults,
-                new Dictionary<string, float>(), morphs, automatic, initialMorphs: morphs, preserveNativeBasePose: true);
+            Func<string, bool> excludedPath, VrChatExpressionMenu.Source source, ISet<EditorCurveBinding> automatic = null,
+            FixedExpressionContext fixedContext = null, bool preserveCommittedMorphs = false)
+        {
+            var defaults = new Dictionary<string, float>(source.Defaults, StringComparer.Ordinal);
+            if (fixedContext != null)
+                foreach (var input in fixedContext.Values) defaults[input.Key] = input.Value;
+            return AnalyzeCore(runtime, Array.Empty<string>(), excludedPath, source, defaults,
+                new Dictionary<string, float>(), morphs, automatic, fixedContext, initialMorphs: morphs, preserveNativeBasePose: true,
+                preserveCommittedMorphs: preserveCommittedMorphs);
+        }
+
+        // Appearance ownership includes custom menu alternatives. Normal
+        // external inputs and proven transient cross-playable signals may
+        // rule out dormant branches; authored wardrobe defaults alone cannot.
+        internal static Layer[] NormalInputLayers(RuntimeAnimatorController runtime,
+            VrChatExpressionMenu.Source source, FixedExpressionContext fixedContext, Func<string, bool> excludedPath,
+            IDictionary<string, float> selection = null)
+        {
+            var unknown = new List<string>();
+            var raw = Inspect(runtime, excludedPath, new Dictionary<StateMachineBehaviour, VrChatParameterDriver.Program>(), unknown, true);
+            if (fixedContext == null) return raw;
+            var rawOther = new List<Layer>();
+            var declarations = new Dictionary<string, List<AnimatorControllerParameter>>(StringComparer.Ordinal);
+            foreach (var controller in new[] { runtime }.Concat(source?.OtherControllers.Where(value => value != null) ??
+                Enumerable.Empty<RuntimeAnimatorController>()))
+            {
+                foreach (var parameter in Controller(controller).parameters)
+                {
+                    if (!declarations.TryGetValue(parameter.name, out var values))
+                        declarations.Add(parameter.name, values = new List<AnimatorControllerParameter>());
+                    values.Add(parameter);
+                }
+                if (controller != runtime)
+                    rawOther.AddRange(Inspect(controller, null, new Dictionary<StateMachineBehaviour, VrChatParameterDriver.Program>(), unknown,
+                        knownSdkControls: new List<string>(), fxLayerCount: Controller(runtime).layers.Length));
+            }
+            // Unknown callbacks can invalidate every constant. Retain their
+            // complete clip graph so the dependency guards diagnose them.
+            if (unknown.Count > 0) return raw;
+            var fxWritten = new HashSet<string>(raw.SelectMany(layer => layer.Writes), StringComparer.Ordinal);
+            var otherWritten = new HashSet<string>(rawOther.SelectMany(layer => layer.Writes), StringComparer.Ordinal);
+            var written = new HashSet<string>(fxWritten, StringComparer.Ordinal); written.UnionWith(otherWritten);
+            var incompatible = new HashSet<string>(declarations.Where(pair => pair.Value.Select(value => value.type).Distinct().Count() != 1)
+                .Select(pair => pair.Key), StringComparer.Ordinal);
+            var invariant = fixedContext.Values.Where(pair => !written.Contains(pair.Key) && !incompatible.Contains(pair.Key) &&
+                    (selection == null || !selection.TryGetValue(pair.Key, out var selected) || selected == pair.Value))
+                .ToDictionary(pair => pair.Key, pair => pair.Value, StringComparer.Ordinal);
+            if (source?.NeutralInputInventoryComplete == true)
+            {
+                var normalOther = InspectOtherControllers(runtime, source, fixedContext, selection: selection);
+                if (normalOther.All(item => item.Unknown.Count == 0))
+                {
+                    var reachableWrites = new HashSet<string>(normalOther.SelectMany(item => item.Layers).SelectMany(layer => layer.Writes), StringComparer.Ordinal);
+                    var locallyNormal = !written.Contains("IsLocal") && !incompatible.Contains("IsLocal") &&
+                        (selection == null || !selection.TryGetValue("IsLocal", out var selectedLocal) || selectedLocal == 1) &&
+                        (fixedContext.Values.TryGetValue("IsLocal", out var local) ? local == 1 :
+                            source.Defaults.TryGetValue("IsLocal", out local) && local == 1);
+                    foreach (var parameter in Controller(runtime).parameters)
+                    {
+                        var name = parameter.name;
+                        // Only a signal with actual cross-playable producers
+                        // can qualify. Unwritten user options never become an
+                        // ownership constant merely from their default value.
+                        if (!otherWritten.Contains(name) || fxWritten.Contains(name) || reachableWrites.Contains(name) ||
+                            incompatible.Contains(name) || VrChatParameterDriver.BuiltIn.Contains(name) || source.ExternalParameters.Contains(name) ||
+                            source.MenuInputs.Contains(name) || selection?.ContainsKey(name) == true ||
+                            !source.ExpressionParameters.Contains(name) || !source.ParameterPersistence.TryGetValue(name, out var persistence) ||
+                            persistence.Saved || persistence.NetworkSynced && !locallyNormal ||
+                            !source.ExpressionParameterTypes.TryGetValue(name, out var declaredType) || declaredType != parameter.type.ToString() ||
+                            parameter.type == AnimatorControllerParameterType.Trigger) continue;
+                        float Default(AnimatorControllerParameter value) => value.type == AnimatorControllerParameterType.Bool ? (value.defaultBool ? 1 : 0) :
+                            value.type == AnimatorControllerParameterType.Int ? value.defaultInt : value.defaultFloat;
+                        var initial = Default(parameter);
+                        if (!NeutralShapeSnapshot.Finite(initial) || !source.Defaults.TryGetValue(name, out var declaredDefault) ||
+                            !NeutralShapeSnapshot.Finite(declaredDefault) || declaredDefault != initial ||
+                            declarations[name].Any(value => !NeutralShapeSnapshot.Finite(Default(value)) || Default(value) != initial)) continue;
+                        invariant[name] = initial;
+                    }
+                }
+            }
+            return Inspect(runtime, excludedPath, new Dictionary<StateMachineBehaviour, VrChatParameterDriver.Program>(),
+                new List<string>(), true, invariant);
+        }
+
+        internal static HashSet<AnimationClip> NeutralClips(RuntimeAnimatorController runtime, IDictionary<string, float> fixedValues,
+            Func<string, bool> excludedPath) => new HashSet<AnimationClip>(Inspect(runtime, excludedPath,
+                new Dictionary<StateMachineBehaviour, VrChatParameterDriver.Program>(), new List<string>(), true, fixedValues)
+                .SelectMany(layer => layer.Clips));
 
         private static ExpressionDependencies AnalyzeCore(RuntimeAnimatorController runtime, IEnumerable<string> selected,
             Func<string, bool> excludedPath, VrChatExpressionMenu.Source source, IDictionary<string, float> defaults,
             IDictionary<string, float> selection, ISet<EditorCurveBinding> neutralMorphs, ISet<EditorCurveBinding> automatic = null,
-            FixedExpressionContext fixedContext = null, IEnumerable<EditorCurveBinding> initialMorphs = null, bool preserveNativeBasePose = false)
+            FixedExpressionContext fixedContext = null, IEnumerable<EditorCurveBinding> initialMorphs = null, bool preserveNativeBasePose = false,
+            bool preserveCommittedMorphs = false)
         {
             var result = new ExpressionDependencies();
             var requiredMorphs = new HashSet<EditorCurveBinding>(initialMorphs ?? Enumerable.Empty<EditorCurveBinding>());
@@ -103,37 +200,39 @@ namespace VRVlog.LilToonExporter
             var controller = Controller(runtime);
             var unknown = new List<string>();
             var info = Inspect(runtime, excludedPath, result.Drivers, unknown, true);
-            var nativeBaseHasBindings = info.Length > 0 && info[0].HasBindings;
+            var nativeHasBindings = info.Select(layer => layer.HasBindings).ToArray();
             result.HasFxControls = info.Any(layer => layer.FxControl);
             // Arbitrary behaviours can affect any parameter, layer or scene
             // object. No name/path-based independence claim is safe for them.
             if (unknown.Count > 0) throw new InvalidOperationException("FXの影響範囲を確定できないState Behaviourがあります: " + string.Join(", ", unknown));
+            var otherControllers = InspectOtherControllers(runtime, source, fixedContext, defaults, selection);
             if (neutralMorphs != null)
             {
-                foreach (var pair in FixedNeutralValues(runtime, source, info, excludedPath)) result.NeutralFixedValues.Add(pair.Key, pair.Value);
+                var trackingValues = FixedNeutralValues(runtime, source, info, excludedPath);
+                var trackingLayers = fixedContext == null ? null : Inspect(runtime, excludedPath,
+                    new Dictionary<StateMachineBehaviour, VrChatParameterDriver.Program>(), new List<string>(), true, trackingValues);
+                var fixedValues = fixedContext == null ? trackingValues : FixedNeutralValues(runtime, source, info, excludedPath, fixedContext);
+                foreach (var pair in fixedValues) result.NeutralFixedValues.Add(pair.Key, pair.Value);
                 // Keep all driver programs for the private controller copy, but
                 // root neutral dependencies only in reachable default states.
                 info = Inspect(runtime, excludedPath, result.Drivers, new List<string>(), true, result.NeutralFixedValues);
-                // An automatic-only base still contributes native layer
-                // activity to fractional overrides, even when its live morphs
-                // must remain outside the authored neutral roots.
-                nativeBaseHasBindings = info.Length > 0 && info[0].HasBindings;
-                RemoveIndependentAutomaticWriters(info, automatic, source, result.NeutralFixedValues);
+                // Live automatic layers still contribute native defaults to
+                // additive and fractional blending. Remember their activity
+                // before removing their morphs from neutral capture.
+                nativeHasBindings = info.Select(layer => layer.HasBindings).ToArray();
+                RemoveIndependentAutomaticWriters(info, automatic, source, trackingValues, trackingLayers);
             }
             var gateExternal = new HashSet<string>(StringComparer.Ordinal);
             var unsafeFxCommands = new List<VrChatParameterDriver.Program>();
             if (result.HasFxControls)
             {
                 var writers = new HashSet<string>(info.SelectMany(layer => layer.Writes), StringComparer.Ordinal);
-                if (source != null)
-                    foreach (var other in source.OtherControllers.Where(c => c != null))
-                    {
-                        var otherUnknown = new List<string>();
-                        var otherInfo = Inspect(other, null, new Dictionary<StateMachineBehaviour, VrChatParameterDriver.Program>(), otherUnknown);
-                        writers.UnionWith(otherInfo.SelectMany(layer => layer.Writes));
-                        // An arbitrary callback could invalidate any constant.
-                        if (otherUnknown.Count > 0) writers.UnionWith(controller.parameters.Select(p => p.name));
-                    }
+                foreach (var other in otherControllers)
+                {
+                    writers.UnionWith(other.Layers.SelectMany(layer => layer.Writes));
+                    // An arbitrary callback could invalidate any constant.
+                    if (other.Unknown.Count > 0) writers.UnionWith(controller.parameters.Select(p => p.name));
+                }
                 var fixedValues = new Dictionary<string, float>(StringComparer.Ordinal);
                 if (defaults != null && selection != null)
                     foreach (var parameter in controller.parameters)
@@ -174,13 +273,24 @@ namespace VRVlog.LilToonExporter
             }
             var changed = new HashSet<string>(selected, StringComparer.Ordinal);
             var read = new HashSet<string>(StringComparer.Ordinal);
+            bool AdditiveDefaults(int index) => index > 0 && nativeHasBindings[index] &&
+                controller.layers[index].blendingMode == AnimatorLayerBlendingMode.Additive &&
+                controller.layers[index].defaultWeight > 0;
+            // Unity's additive generic-property stream includes authored
+            // defaults for other animated morphs, even with WD Off. A clip
+            // binding only a pupil can therefore add to a base face setting.
+            // Keep disjoint layers as support, rather than baking their live
+            // automatic or unrelated morphs into this dependency root.
+            for (var index = 1; index < info.Length; index++)
+                if (AdditiveDefaults(index) && !info[index].Morphs.Overlaps(requiredMorphs))
+                    result.NativeSupportLayers.Add(index);
             // Classify native base support before Write Defaults closure can
             // promote it into the evaluation graph. An unrelated base motion
             // stays outside capture even when its native defaults matter.
-            var needsNativeBasePose = preserveNativeBasePose && nativeBaseHasBindings &&
+            var needsNativeBasePose = preserveNativeBasePose && info.Length > 0 && nativeHasBindings[0] &&
                 Enumerable.Range(1, Math.Max(0, info.Length - 1)).Any(index =>
-                    controller.layers[index].blendingMode == AnimatorLayerBlendingMode.Override &&
-                    controller.layers[index].defaultWeight > 0 && controller.layers[index].defaultWeight < 1 &&
+                    (AdditiveDefaults(index) || controller.layers[index].blendingMode == AnimatorLayerBlendingMode.Override &&
+                    controller.layers[index].defaultWeight > 0 && controller.layers[index].defaultWeight < 1) &&
                     info[index].Morphs.Overlaps(requiredMorphs));
             if (needsNativeBasePose)
             {
@@ -202,7 +312,7 @@ namespace VRVlog.LilToonExporter
                     var layer = info[i];
                     var drivenBySelection = layer.Reads.Overlaps(changed);
                     var defaultsMayReset = result.Layers.Any(l => info[l].WriteDefaults) && layer.HasBindings;
-                    var implicitWriter = result.Morphs.Count > 0 && (layer.WriteDefaults || layer.EmptyMotion);
+                    var implicitWriter = result.Morphs.Count > 0 && (layer.WriteDefaults || layer.EmptyMotion || AdditiveDefaults(i));
                     if (!result.Layers.Contains(i) && !layer.FxControl && !drivenBySelection && !layer.Writes.Overlaps(read) &&
                         !layer.Morphs.Overlaps(result.Morphs) && !defaultsMayReset && !implicitWriter) continue;
                     modified |= result.Layers.Add(i);
@@ -215,6 +325,17 @@ namespace VRVlog.LilToonExporter
                         foreach (var morph in layer.Morphs) modified |= result.Morphs.Add(morph);
                 }
             } while (modified);
+            if (neutralMorphs != null) result.NeutralDependencyMorphs.UnionWith(result.Morphs);
+            if (preserveCommittedMorphs)
+            {
+                // A neutral plan owns its explicit morph roots. WD, drivers
+                // and additive defaults still require the full native closure,
+                // but they must not promote unrelated appearance channels into
+                // that plan's output. Keep their states as native support.
+                result.Morphs.IntersectWith(requiredMorphs);
+                foreach (var index in result.Layers)
+                    if (!info[index].Morphs.Overlaps(requiredMorphs)) result.NativeSupportLayers.Add(index);
+            }
             if (result.Layers.Count == 0) throw new InvalidOperationException("このメニューに対応するFXの表情がありません。");
             result.Parameters.UnionWith(read);
             // Parameters supplied by the menu can be reset by a driver after
@@ -230,22 +351,17 @@ namespace VRVlog.LilToonExporter
             if (external.Length > 0)
             {
                 var message = "外部入力に依存する表情の値を確定できません: " + string.Join(", ", external);
-                if (neutralMorphs != null) throw new NeutralShapeSamplingException(message);
+                if (neutralMorphs != null) throw new NeutralShapeSamplingException(message, dependencyMorphs: result.NeutralDependencyMorphs);
                 throw new InvalidOperationException(message);
             }
-            if (source != null)
+            foreach (var other in otherControllers)
             {
-                foreach (var other in source.OtherControllers.Where(c => c != null))
-                {
-                    var otherUnknown = new List<string>();
-                    var otherInfo = Inspect(other, null, new Dictionary<StateMachineBehaviour, VrChatParameterDriver.Program>(), otherUnknown);
-                    var writes = otherInfo.SelectMany(l => l.Writes).Where(result.Parameters.Contains).Distinct().ToArray();
-                    var otherMorphs = neutralMorphs == null ? Array.Empty<string>() : otherInfo.SelectMany(layer => layer.Morphs)
-                        .Where(result.Morphs.Contains).Select(binding => binding.path + "/" + binding.propertyName).Distinct().ToArray();
-                    if (writes.Length > 0 || otherUnknown.Count > 0 || otherMorphs.Length > 0)
-                        throw new InvalidOperationException("FX以外のPlayable Layerからの変更を再現できません: " + other.name + " / " +
-                            string.Join(", ", writes.Concat(otherUnknown).Concat(otherMorphs)));
-                }
+                var writes = other.Layers.SelectMany(l => l.Writes).Where(result.Parameters.Contains).Distinct().ToArray();
+                var otherMorphs = neutralMorphs == null && fixedContext == null ? Array.Empty<string>() : other.Layers.SelectMany(layer => layer.Morphs)
+                    .Where(result.Morphs.Contains).Select(binding => binding.path + "/" + binding.propertyName).Distinct().ToArray();
+                if (writes.Length > 0 || other.Unknown.Count > 0 || otherMorphs.Length > 0)
+                    throw new InvalidOperationException("FX以外のPlayable Layerからの変更を再現できません: " + other.Runtime.name + " / " +
+                        string.Join(", ", writes.Concat(other.Unknown).Concat(otherMorphs)));
             }
             if (unsafeFxCommands.Count > 0)
                 throw new InvalidOperationException(unsafeFxCommands[0].Location + " / VRCPlayableLayerControl: FXの重みを変更する状態は固定表情に変換できません。");
@@ -295,19 +411,24 @@ namespace VRVlog.LilToonExporter
         }
 
         private static void RemoveIndependentAutomaticWriters(Layer[] layers, ISet<EditorCurveBinding> automatic,
-            VrChatExpressionMenu.Source source, IDictionary<string, float> fixedValues)
+            VrChatExpressionMenu.Source source, IDictionary<string, float> fixedValues, Layer[] trackingLayers = null)
         {
             if (automatic == null) return;
-            foreach (var layer in layers)
+            for (var index = 0; index < layers.Length; index++)
             {
-                if (layer.Morphs.Count == 0 || !layer.Morphs.All(automatic.Contains) || layer.WriteDefaults || layer.FxControl ||
-                    layer.Writes.Count != 0 || layer.NonMorphBindings) continue;
-                var external = layer.Reads.Any(name => !fixedValues.ContainsKey(name) &&
+                var layer = layers[index];
+                // Classify live tracking before the fixed export environment
+                // selects its quiet input. Otherwise Viseme=0 could turn an
+                // independent lip-sync layer into a baked neutral writer.
+                var tracking = trackingLayers == null ? layer : trackingLayers[index];
+                if (tracking.Morphs.Count == 0 || !tracking.Morphs.All(automatic.Contains) || tracking.WriteDefaults || tracking.FxControl ||
+                    tracking.Writes.Count != 0 || tracking.NonMorphBindings) continue;
+                var external = tracking.Reads.Any(name => !fixedValues.ContainsKey(name) &&
                     (VrChatParameterDriver.BuiltIn.Contains(name) || source?.ExternalParameters.Contains(name) == true));
                 // A timed initializer may write a constant zero and then hold
                 // it forever with WD Off. Keep those writes; the sampler checks
                 // whether its eventual active state still has a timed exit.
-                if (!layer.DynamicMorph && !external) continue;
+                if (!tracking.DynamicMorph && !external) continue;
                 // A live tracking layer may share its automatic channel with a
                 // constant DEFAULT FACE underlay. Its other effects must be
                 // empty before it can be left out of the neutral graph.
@@ -316,32 +437,31 @@ namespace VRVlog.LilToonExporter
         }
 
         private static Dictionary<string, float> FixedNeutralValues(RuntimeAnimatorController runtime, VrChatExpressionMenu.Source source, Layer[] layers,
-            Func<string, bool> excludedPath)
+            Func<string, bool> excludedPath, FixedExpressionContext fixedContext = null)
         {
             var controller = Controller(runtime);
             var written = new HashSet<string>(layers.SelectMany(layer => layer.Writes), StringComparer.Ordinal);
             var otherWritten = new HashSet<string>(StringComparer.Ordinal);
-            if (source != null)
-                foreach (var other in source.OtherControllers.Where(value => value != null))
-                {
-                    var unknown = new List<string>();
-                    var otherLayers = Inspect(other, null, new Dictionary<StateMachineBehaviour, VrChatParameterDriver.Program>(), unknown);
-                    otherWritten.UnionWith(otherLayers.SelectMany(layer => layer.Writes));
-                    if (unknown.Count > 0) otherWritten.UnionWith(controller.parameters.Select(parameter => parameter.name));
-                }
+            foreach (var other in InspectOtherControllers(runtime, source, fixedContext))
+            {
+                otherWritten.UnionWith(other.Layers.SelectMany(layer => layer.Writes));
+                if (other.Unknown.Count > 0) otherWritten.UnionWith(controller.parameters.Select(parameter => parameter.name));
+            }
             var result = new Dictionary<string, float>(StringComparer.Ordinal);
             var initial = new Dictionary<string, float>(StringComparer.Ordinal);
             foreach (var parameter in controller.parameters)
             {
-                if (otherWritten.Contains(parameter.name) || source?.ExternalParameters.Contains(parameter.name) == true ||
+                var suppliedInput = fixedContext?.Values.ContainsKey(parameter.name) == true;
+                if (otherWritten.Contains(parameter.name) || !suppliedInput && source?.ExternalParameters.Contains(parameter.name) == true ||
                     parameter.type == AnimatorControllerParameterType.Trigger) continue;
                 var gesture = parameter.name == "GestureLeft" || parameter.name == "GestureRight" ||
                     parameter.name == "GestureLeftWeight" || parameter.name == "GestureRightWeight";
                 var semanticZero = gesture || parameter.name == "AFK";
-                if (VrChatParameterDriver.BuiltIn.Contains(parameter.name) && !semanticZero && parameter.name != "IsLocal" && parameter.name != "TrackingType") continue;
+                if (!suppliedInput && VrChatParameterDriver.BuiltIn.Contains(parameter.name) && !semanticZero && parameter.name != "IsLocal" && parameter.name != "TrackingType") continue;
                 var value = semanticZero ? 0f : parameter.type == AnimatorControllerParameterType.Bool ? (parameter.defaultBool ? 1f : 0f) :
                     parameter.type == AnimatorControllerParameterType.Int ? parameter.defaultInt : parameter.defaultFloat;
                 if (!semanticZero && source != null && source.Defaults.TryGetValue(parameter.name, out var supplied)) value = supplied;
+                if (suppliedInput) value = fixedContext.Values[parameter.name];
                 if (float.IsNaN(value) || float.IsInfinity(value)) continue;
                 value = parameter.type == AnimatorControllerParameterType.Bool ? (value == 0 ? 0 : 1) :
                     parameter.type == AnimatorControllerParameterType.Int ? Mathf.RoundToInt(value) : value;
@@ -381,6 +501,108 @@ namespace VRVlog.LilToonExporter
             return result;
         }
 
+        private sealed class OtherControllerInspection
+        {
+            internal RuntimeAnimatorController Runtime;
+            internal Layer[] Layers;
+            internal readonly List<string> Unknown = new List<string>();
+            internal readonly List<string> KnownSdkControls = new List<string>();
+        }
+
+        // Other playable layers share the avatar's inputs. A dormant AFK or
+        // station branch cannot write the sampled face when its fixed input
+        // proves the branch unreachable. Keep unknown callbacks and exclude
+        // every authored parameter writer from that proof across all layers.
+        private static List<OtherControllerInspection> InspectOtherControllers(RuntimeAnimatorController runtime,
+            VrChatExpressionMenu.Source source, FixedExpressionContext fixedContext, IDictionary<string, float> defaults = null,
+            IDictionary<string, float> selection = null)
+        {
+            var result = new List<OtherControllerInspection>();
+            if (source == null) return result;
+            foreach (var other in source.OtherControllers.Where(value => value != null))
+            {
+                var item = new OtherControllerInspection { Runtime = other };
+                item.Layers = Inspect(other, null, new Dictionary<StateMachineBehaviour, VrChatParameterDriver.Program>(), item.Unknown,
+                    knownSdkControls: item.KnownSdkControls, fxLayerCount: Controller(runtime).layers.Length);
+                result.Add(item);
+            }
+            void RetainKnownControls()
+            {
+                foreach (var item in result) item.Unknown.AddRange(item.KnownSdkControls);
+            }
+            if (fixedContext == null || result.Count == 0 || result.Any(item => item.Unknown.Count > 0))
+            { RetainKnownControls(); return result; }
+            var fxUnknown = new List<string>();
+            var fx = Inspect(runtime, null, new Dictionary<StateMachineBehaviour, VrChatParameterDriver.Program>(), fxUnknown, true);
+            if (fxUnknown.Count > 0) { RetainKnownControls(); return result; }
+            var written = new HashSet<string>(fx.SelectMany(layer => layer.Writes)
+                .Concat(result.SelectMany(item => item.Layers).SelectMany(layer => layer.Writes)), StringComparer.Ordinal);
+            var declarations = new[] { runtime }.Concat(result.Select(item => item.Runtime))
+                .SelectMany(value => Controller(value).parameters).GroupBy(parameter => parameter.name, StringComparer.Ordinal);
+            var incompatible = new HashSet<string>(declarations.Where(group => group.Select(parameter => parameter.type).Distinct().Count() != 1)
+                .Select(group => group.Key), StringComparer.Ordinal);
+            foreach (var item in result)
+            {
+                var controller = Controller(item.Runtime);
+                var inputs = FixedExpressionContext.Create(item.Runtime, defaults ?? source.Defaults, source);
+                var invariant = new Dictionary<string, float>(StringComparer.Ordinal);
+                foreach (var parameter in controller.parameters)
+                {
+                    if (written.Contains(parameter.name) || incompatible.Contains(parameter.name) ||
+                        parameter.type != AnimatorControllerParameterType.Bool && parameter.type != AnimatorControllerParameterType.Int &&
+                        parameter.type != AnimatorControllerParameterType.Float || !inputs.Values.TryGetValue(parameter.name, out var initial)) continue;
+                    if (fixedContext.Values.TryGetValue(parameter.name, out var supplied)) initial = supplied;
+                    var final = selection != null && selection.TryGetValue(parameter.name, out supplied) ? supplied : initial;
+                    float Normalize(float value) => parameter.type == AnimatorControllerParameterType.Bool ? (value == 0 ? 0 : 1) :
+                        parameter.type == AnimatorControllerParameterType.Int ? Mathf.RoundToInt(value) : value;
+                    if (float.IsNaN(initial) || float.IsInfinity(initial) || float.IsNaN(final) || float.IsInfinity(final) ||
+                        Normalize(initial) != Normalize(final)) continue;
+                    invariant.Add(parameter.name, Normalize(initial));
+                }
+                // Known SDK weight commands cannot mutate an Animator input,
+                // so they do not invalidate this typed reachability proof.
+                // They remain unsupported effects: every reachable command is
+                // rejected, including commands on an active ancestor machine.
+                item.Unknown.Clear(); item.KnownSdkControls.Clear();
+                item.Layers = Inspect(item.Runtime, null, new Dictionary<StateMachineBehaviour, VrChatParameterDriver.Program>(),
+                    item.Unknown, neutralFixed: invariant, knownSdkControls: item.KnownSdkControls,
+                    fxLayerCount: Controller(runtime).layers.Length);
+                item.Unknown.AddRange(item.KnownSdkControls);
+            }
+            return result;
+        }
+
+        // Read only the documented SDK data. Never execute SDK delegates or
+        // turn a layer-weight effect into a parameter writer/no-op. The source
+        // metadata retains no body playable-slot identities, so only FX target
+        // indices can be resolved here; other targets remain conservative.
+        private static bool IsKnownAdditionalFxWeightControl(StateMachineBehaviour behaviour, int? fxLayerCount)
+        {
+            if (behaviour == null || !fxLayerCount.HasValue) return false;
+            var name = behaviour.GetType().FullName;
+            var animatorLayer = name == "VRC.SDK3.Avatars.Components.VRCAnimatorLayerControl" || name == "VRC.SDKBase.VRC_AnimatorLayerControl";
+            var playableLayer = name == "VRC.SDK3.Avatars.Components.VRCPlayableLayerControl" || name == "VRC.SDKBase.VRC_PlayableLayerControl";
+            if (!animatorLayer && !playableLayer) return false;
+            using (var data = new SerializedObject(behaviour))
+            {
+                var target = data.FindProperty(animatorLayer ? "playable" : "layer");
+                var goal = data.FindProperty("goalWeight");
+                var duration = data.FindProperty("blendDuration");
+                if (target == null || target.propertyType != SerializedPropertyType.Enum ||
+                    target.enumValueIndex < 0 || target.enumValueIndex >= target.enumNames.Length || target.enumNames[target.enumValueIndex] != "FX" ||
+                    goal == null || goal.propertyType != SerializedPropertyType.Float ||
+                    duration == null || duration.propertyType != SerializedPropertyType.Float ||
+                    !NeutralShapeSnapshot.Finite(goal.floatValue) || goal.floatValue < 0 || goal.floatValue > 1 ||
+                    !NeutralShapeSnapshot.Finite(duration.floatValue) || duration.floatValue < 0) return false;
+                if (!animatorLayer) return true;
+                var layer = data.FindProperty("layer");
+                // Index zero is a valid SDK base-layer target, whose weight is
+                // fixed at one. Even that command is retained when reachable.
+                return layer != null && layer.propertyType == SerializedPropertyType.Integer &&
+                    layer.intValue >= 0 && layer.intValue < fxLayerCount.Value;
+            }
+        }
+
         internal static bool IsFalse(AnimatorTransitionBase transition, IDictionary<string, float> fixedValues)
         {
             if (fixedValues == null) return false;
@@ -400,6 +622,30 @@ namespace VRVlog.LilToonExporter
             return false;
         }
 
+        private static bool? TypedCondition(AnimatorCondition condition, IDictionary<string, float> fixedValues,
+            IDictionary<string, AnimatorControllerParameterType> types)
+        {
+            if (fixedValues == null || string.IsNullOrEmpty(condition.parameter) ||
+                !fixedValues.TryGetValue(condition.parameter, out var value) || !NeutralShapeSnapshot.Finite(value) ||
+                !types.TryGetValue(condition.parameter, out var type)) return null;
+            if (type == AnimatorControllerParameterType.Bool)
+                return condition.mode == AnimatorConditionMode.If ? value != 0 :
+                    condition.mode == AnimatorConditionMode.IfNot ? value == 0 : (bool?)null;
+            if (type != AnimatorControllerParameterType.Float && type != AnimatorControllerParameterType.Int || !NeutralShapeSnapshot.Finite(condition.threshold) ||
+                type == AnimatorControllerParameterType.Int && (value != Math.Truncate(value) || condition.threshold != Math.Truncate(condition.threshold))) return null;
+            switch (condition.mode)
+            {
+                case AnimatorConditionMode.Equals: return type == AnimatorControllerParameterType.Int ? value == condition.threshold : (bool?)null;
+                case AnimatorConditionMode.NotEqual: return type == AnimatorControllerParameterType.Int ? value != condition.threshold : (bool?)null;
+                case AnimatorConditionMode.Greater: return value > condition.threshold;
+                case AnimatorConditionMode.Less: return value < condition.threshold;
+                default: return null;
+            }
+        }
+
+        private static bool IsTypedFalse(AnimatorTransitionBase transition, IDictionary<string, float> fixedValues,
+            IDictionary<string, AnimatorControllerParameterType> types) => transition.conditions.Any(condition => TypedCondition(condition, fixedValues, types) == false);
+
         private sealed class NeutralReachability
         {
             internal readonly HashSet<AnimatorState> States = new HashSet<AnimatorState>();
@@ -409,7 +655,8 @@ namespace VRVlog.LilToonExporter
         // Over-approximate every state reachable from fixed neutral inputs,
         // including nested entry/exit and ancestor Any State transitions. A
         // transition is pruned only when an AND condition is provably false.
-        private static NeutralReachability NeutralStates(AnimatorStateMachine root, IDictionary<string, float> fixedValues)
+        private static NeutralReachability NeutralStates(AnimatorStateMachine root, IDictionary<string, float> fixedValues,
+            IDictionary<string, AnimatorControllerParameterType> conditionTypes = null)
         {
             if (fixedValues == null) return null;
             var parents = new Dictionary<AnimatorStateMachine, AnimatorStateMachine>();
@@ -429,10 +676,12 @@ namespace VRVlog.LilToonExporter
             IEnumerable<AnimatorTransitionBase> Enabled(IEnumerable<AnimatorTransitionBase> values)
             {
                 var all = values.ToArray(); var solo = all.Any(value => value.solo);
-                return all.Where(value => !value.mute && (!solo || value.solo) && !IsFalse(value, fixedValues));
+                return all.Where(value => !value.mute && (!solo || value.solo) &&
+                    !(conditionTypes == null ? IsFalse(value, fixedValues) : IsTypedFalse(value, fixedValues, conditionTypes)));
             }
             bool Always(AnimatorTransitionBase transition) => transition.conditions.All(condition =>
             {
+                if (conditionTypes != null) return TypedCondition(condition, fixedValues, conditionTypes) == true;
                 if (!fixedValues.TryGetValue(condition.parameter, out var value)) return false;
                 switch (condition.mode)
                 {
@@ -557,12 +806,14 @@ namespace VRVlog.LilToonExporter
 
         private static Layer[] Inspect(RuntimeAnimatorController runtime, Func<string, bool> excludedPath,
             Dictionary<StateMachineBehaviour, VrChatParameterDriver.Program> drivers, List<string> unknown, bool allowFxControls = false,
-            IDictionary<string, float> neutralFixed = null)
+            IDictionary<string, float> neutralFixed = null, List<string> knownSdkControls = null, int? fxLayerCount = null)
         {
             var controller = Controller(runtime);
             var replacements = Overrides(runtime);
             var layers = controller.layers;
             var result = new Layer[layers.Length];
+            var conditionTypes = knownSdkControls == null ? null : controller.parameters.GroupBy(parameter => parameter.name, StringComparer.Ordinal)
+                .Where(group => group.Count() == 1).ToDictionary(group => group.Key, group => group.Single().type, StringComparer.Ordinal);
             for (var index = 0; index < layers.Length; index++)
             {
                 var info = result[index] = new Layer();
@@ -574,16 +825,18 @@ namespace VRVlog.LilToonExporter
                     sourceIndex = layers[sourceIndex].syncedLayerIndex;
                 }
                 if (sourceIndex < 0 || sourceIndex >= layers.Length) throw new InvalidOperationException("FXの同期レイヤー参照が不正です。");
-                var reached = layers[index].syncedLayerIndex < 0 ? NeutralStates(layers[sourceIndex].stateMachine, neutralFixed) : null;
+                var reached = layers[index].syncedLayerIndex < 0 ? NeutralStates(layers[sourceIndex].stateMachine, neutralFixed, conditionTypes) : null;
                 void ReadParameter(string name) { if (!string.IsNullOrEmpty(name)) info.Reads.Add(name); }
+                void ReadControl(string name) { ReadParameter(name); if (!string.IsNullOrEmpty(name)) info.ControlReads.Add(name); }
                 void Conditions(IEnumerable<AnimatorTransitionBase> transitions)
                 {
                     var siblings = transitions.ToArray();
                     var solo = siblings.Any(t => t.solo);
-                    foreach (var transition in siblings.Where(t => !t.mute && (!solo || t.solo) && !IsFalse(t, neutralFixed)))
+                    foreach (var transition in siblings.Where(t => !t.mute && (!solo || t.solo) &&
+                        !(conditionTypes == null ? IsFalse(t, neutralFixed) : IsTypedFalse(t, neutralFixed, conditionTypes))))
                     {
                         if (transition is AnimatorStateTransition timed && timed.hasExitTime) info.Timed = true;
-                        foreach (var condition in transition.conditions) ReadParameter(condition.parameter);
+                        foreach (var condition in transition.conditions) ReadControl(condition.parameter);
                     }
                 }
                 void Behaviours(IEnumerable<StateMachineBehaviour> behaviours, string path, bool onState = false)
@@ -599,6 +852,11 @@ namespace VRVlog.LilToonExporter
                             if (!drivers.ContainsKey(behaviour)) drivers.Add(behaviour, control);
                             continue;
                         }
+                        if (knownSdkControls != null && IsKnownAdditionalFxWeightControl(behaviour, fxLayerCount))
+                        {
+                            knownSdkControls.Add(path + " / " + behaviour.GetType().Name + " (FXレイヤーの重み制御)");
+                            continue;
+                        }
                         if (!VrChatParameterDriver.IsDriver(behaviour))
                         {
                             unknown.Add(path + " / " + (behaviour == null ? "欠けたBehaviour" : behaviour.GetType().Name));
@@ -611,7 +869,11 @@ namespace VRVlog.LilToonExporter
                         {
                             info.Writes.Add(op.Destination);
                             info.DriverWrites.Add(op.Destination);
-                            if (op.Kind == "Copy") ReadParameter(op.Source);
+                            if (op.Kind == "Copy")
+                            {
+                                ReadParameter(op.Source);
+                                if (op.Error == null) info.CopyInputs.Add((op.Source, op.Destination));
+                            }
                             if (op.Kind == "Add") ReadParameter(op.Destination);
                         }
                     }
@@ -626,10 +888,21 @@ namespace VRVlog.LilToonExporter
                         if (motion is BlendTree tree)
                         {
                             ReadParameter(tree.blendParameter); ReadParameter(tree.blendParameterY);
-                            foreach (var child in tree.children) { ReadParameter(child.directBlendParameter); InspectMotion(child.motion); }
+                            if (tree.blendType != BlendTreeType.Direct)
+                            {
+                                ReadControl(tree.blendParameter);
+                                if (tree.blendType != BlendTreeType.Simple1D) ReadControl(tree.blendParameterY);
+                            }
+                            foreach (var child in tree.children)
+                            {
+                                ReadParameter(child.directBlendParameter);
+                                if (tree.blendType == BlendTreeType.Direct) ReadControl(child.directBlendParameter);
+                                InspectMotion(child.motion);
+                            }
                         }
                         if (!(motion is AnimationClip clip)) return;
                         if (replacements.TryGetValue(clip, out var replacement)) clip = replacement;
+                        info.Clips.Add(clip);
                         var bindings = AnimationUtility.GetCurveBindings(clip).Concat(AnimationUtility.GetObjectReferenceCurveBindings(clip)).ToArray();
                         if (bindings.Length == 0) info.EmptyMotion = true;
                         foreach (var binding in bindings)
@@ -677,10 +950,10 @@ namespace VRVlog.LilToonExporter
                             controller.GetStateEffectiveBehaviours(state, index) ?? Array.Empty<StateMachineBehaviour>();
                         Behaviours(behaviours, path + "/" + state.name, true);
                         Conditions(state.transitions);
-                        if (state.timeParameterActive) ReadParameter(state.timeParameter);
-                        if (state.speedParameterActive) ReadParameter(state.speedParameter);
-                        if (state.cycleOffsetParameterActive) ReadParameter(state.cycleOffsetParameter);
-                        if (state.mirrorParameterActive) ReadParameter(state.mirrorParameter);
+                        if (state.timeParameterActive) ReadControl(state.timeParameter);
+                        if (state.speedParameterActive) ReadControl(state.speedParameter);
+                        if (state.cycleOffsetParameterActive) ReadControl(state.cycleOffsetParameter);
+                        if (state.mirrorParameterActive) ReadControl(state.mirrorParameter);
                         InspectMotion(controller.GetStateEffectiveMotion(state, index) ?? state.motion);
                     }
                     foreach (var child in machine.stateMachines)

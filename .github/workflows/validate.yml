@@ -19,6 +19,10 @@ jobs:
         with:
           python-version: "3.12"
       - run: python3 Tools/validate.py
+      - name: Verify publication channels and listing integrity
+        run: |
+          python3 Tools/test-release-policy.py
+          python3 Tools/test-listing.py
       - run: python3 Tools/check-public-content.py
       - run: python3 Tools/test-package.py
       - name: Verify explicit AAO source correction safety

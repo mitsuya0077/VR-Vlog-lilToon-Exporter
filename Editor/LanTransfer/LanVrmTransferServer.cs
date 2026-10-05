@@ -23,6 +23,19 @@ using BcCertificate = Org.BouncyCastle.Tls.Certificate;
 
 namespace VRVlog.LilToonExporter.LanTransfer
 {
+    // Direct phone transfer is unavailable in this release. There is no
+    // serialized preference or restored window state that can enable it.
+    internal static class LanTransferAvailability
+    {
+        internal static bool Enabled => false;
+        internal const string DisabledMessage = "このバージョンでは「スマホに送る」を利用できません。VRMをファイルに書き出して、VR Vlogへ取り込んでください。";
+
+        internal static void RequireEnabled()
+        {
+            if (!Enabled) throw new NotSupportedException(DisabledMessage);
+        }
+    }
+
     internal enum TransferState { Waiting, Sending, AwaitingReceipt, Completing, Completed, Canceled, Expired, Failed }
 
     /// <summary>A single immutable file and an in-memory identity, with no document root or arbitrary path API.</summary>
@@ -100,8 +113,13 @@ namespace VRVlog.LilToonExporter.LanTransfer
             }
         }
 
-        internal static LanVrmTransferServer Start(string path, string displayName, IPAddress address, TimeSpan timeout, FileStream ownedSnapshot = null) =>
-            new LanVrmTransferServer(path, displayName, address, timeout, false, ownedSnapshot, null);
+        internal static LanVrmTransferServer Start(string path, string displayName, IPAddress address, TimeSpan timeout, FileStream ownedSnapshot = null)
+        {
+            // Reject before opening/owning a file, generating credentials or
+            // constructing a listener. Protocol fixtures use only loopback.
+            LanTransferAvailability.RequireEnabled();
+            return new LanVrmTransferServer(path, displayName, address, timeout, false, ownedSnapshot, null);
+        }
 
         internal static LanVrmTransferServer StartLoopbackForTests(string path, string name, TimeSpan timeout, FileStream ownedSnapshot = null, Action beforeReceiptWrite = null) =>
             new LanVrmTransferServer(path, name, IPAddress.Loopback, timeout, true, ownedSnapshot, beforeReceiptWrite);

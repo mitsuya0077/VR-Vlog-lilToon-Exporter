@@ -26,7 +26,7 @@ listing = json.loads((root / "source.json").read_text(encoding="utf-8"))
 
 assert package["name"] == "com.vrvlog.liltoon-vrm-exporter"
 assert package["unity"] == "2022.3"
-assert package["version"] == "0.11.10"
+assert package["version"] == "0.11.11-beta.1"
 assert one_click.index("AvatarBaseShape.Preserve(clone, clone,") < one_click.index("Vrm10AppearanceExporter.Export(")
 assert "foreach (var mesh in temporaryMeshes) UnityEngine.Object.DestroyImmediate(mesh);" in one_click
 assert package["vpmDependencies"] == {
@@ -235,9 +235,9 @@ assert "package.json, source.json" in listing_workflow
 assert "\n  push:" not in listing_workflow
 assert "check-listing-builder:" in listing_workflow
 assert "if: github.event_name == 'pull_request'" in listing_workflow
-assert "github.event.release.prerelease == false" in listing_workflow
+assert "github.event.release.draft == false" in listing_workflow
 assert "types: [published, released]" in listing_workflow
-assert listing_workflow.index("github.event.release.prerelease == false") < listing_workflow.index("environment:")
+assert listing_workflow.index("github.event.release.draft == false") < listing_workflow.index("environment:")
 assert "Build listing tool" in listing_workflow
 assert "Generate VPM listing" in listing_workflow
 assert "Generate listing from a local release fixture" in listing_workflow
@@ -249,7 +249,20 @@ assert 'Compatibility/dependencies.json' in release_workflow
 if "-" not in package["version"]:
     assert f"default: {package['version']}" in release_workflow
 assert '--target "${GITHUB_SHA}"' in release_workflow
-assert 'os.environ["UNIVRM_VERSION"] == compat["uniVrm"]["releaseVersion"]' in release_workflow
+release_policy = (root / "Tools/release_policy.py").read_text(encoding="utf-8")
+assert '"refs/heads/main"' in release_policy
+assert 'sha != expected_sha' in release_policy
+assert 'compatibility["uniVrm"]["releaseVersion"]' in release_policy
+assert '["--prerelease", "--latest=false"]' in release_policy
+assert 'EXPECTED_COMMIT: ${{ inputs.expected_commit }}' in release_workflow
+assert 'EXPECTED_PACKAGE_SHA256: ${{ inputs.expected_package_sha256 }}' in release_workflow
+assert 'Built ZIP differs from the validated release candidate' in release_workflow
+assert 'RELEASE_CHANNEL: ${{ inputs.channel }}' in release_workflow
+assert 'python3 Tools/release_policy.py > release-flags.txt' in release_workflow
+assert '"${release_flags[@]}"' in release_workflow
+for script in ("Tools/test-release-policy.py", "Tools/test-listing.py"):
+    assert f"python3 {script}" in release_workflow
+    assert f"python3 {script}" in (root / ".github/workflows/validate.yml").read_text(encoding="utf-8")
 assert 'tag v${VERSION} already exists' in release_workflow
 assert 'git ls-remote --exit-code --tags origin' in release_workflow
 assert 'gh workflow run build-listing.yml --repo "$GITHUB_REPOSITORY" --ref main' in release_workflow
@@ -336,7 +349,7 @@ assert 'bool ExcludedBinding(string path) => exclusions.ContainsPath(path) || gi
 assert 'new PreparedExpressionBindings(clone, menu, excludedPath: ExcludedBinding)' in one_click
 assert 'VrChatExpressionSampler.Analyze(clone, expressionBindings.ExcludesPreparedPath,' in one_click
 assert one_click.index('FaceEmoExpressions.Capture(source, clone, ExcludedBinding,') < one_click.index('NdmfExportPreparation.Prepare(source, clone,')
-assert 'faceEmoBindings?.RebindPrepared(transformed.PreparedRendererFor);' in one_click
+assert 'faceEmoBindings?.RebindPrepared(transformed.PreparedRendererFor,\n                        transformed.ObjectRegistry, transformed.IsolatedCopyOf);' in one_click
 assert 'new PoseExportSession(source, poseOptions, exclusions.Contains, menuPolicy)' in one_click
 assert 'SkipVrChatMenus' in recovery and 'ExcludeMenuBranch' in recovery
 assert one_click.index('AvatarBaseShape.Preserve(clone, clone,') < one_click.index('VrChatExpressionBaker.Bake(') < one_click.index('Vrm10AppearanceExporter.Export(')

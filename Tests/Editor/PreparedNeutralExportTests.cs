@@ -7,6 +7,8 @@ using UniVRM10;
 using UnityEditor;
 using UnityEditor.Animations;
 using UnityEngine;
+using UnityEngine.Animations;
+using UnityEngine.Playables;
 using Object = UnityEngine.Object;
 
 namespace VRVlog.LilToonExporter.Tests
@@ -40,6 +42,204 @@ namespace VRVlog.LilToonExporter.Tests
             var state = machine.AddState("Neutral"); state.writeDefaultValues = false; state.motion = clip;
             machine.defaultState = state;
             return controller;
+        }
+
+        [Test]
+        public async Task IndependentLoopOnTheInfluencingSkinBoneKeepsPreparedGeometryAndAuthoredEndpoints()
+        {
+            var type = DescriptorType(); if (type == null) Assert.Ignore("Install the real VRChat SDK.");
+            var shader = Shader.Find("lilToon"); if (shader == null) Assert.Ignore("Install lilToon for the real exporter entry point.");
+            using var fixture = new AttachmentConnectionTests.Fixture();
+            var folderName = "__IndependentSkinBoneNeutral_" + Guid.NewGuid().ToString("N");
+            AssetDatabase.CreateFolder("Assets", folderName); var folder = "Assets/" + folderName;
+            Vrm10Instance imported = null;
+            GameObject native = null, expected = null;
+            var graph = PlayableGraph.Create("Independent skin bone native reference");
+            try
+            {
+                var sourceSkins = fixture.Source.GetComponentsInChildren<SkinnedMeshRenderer>();
+                foreach (var skin in sourceSkins) skin.sharedMaterial.shader = shader;
+                var sourceBone = sourceSkins[0].bones[0];
+                Assert.That(sourceBone, Is.SameAs(fixture.Source.transform.Find("Independent hair/Head")));
+                Assert.That(fixture.Mesh.boneWeights.All(weight => weight.boneIndex0 == 0 && weight.weight0 == 1), Is.True);
+                sourceBone.localRotation = Quaternion.Euler(0, 0, 25);
+                var sourcePosition = sourceBone.localPosition; var sourceRotation = sourceBone.localRotation; var sourceScale = sourceBone.localScale;
+                var controller = DefaultFx(folder + "/FX.controller", "Front", "Hair detail", 50);
+                var neutral = (AnimationClip)controller.layers[0].stateMachine.defaultState.motion;
+                AnimationUtility.SetEditorCurve(neutral, EditorCurveBinding.FloatCurve("Back", typeof(SkinnedMeshRenderer), "blendShape.Hair detail"),
+                    AnimationCurve.Constant(0, 1, 50));
+                var loop = new AnimationClip { name = "Independent influencing bone loop" };
+                AnimationUtility.SetEditorCurve(loop, EditorCurveBinding.FloatCurve("Independent hair/Head", typeof(Transform), "localEulerAnglesRaw.z"),
+                    new AnimationCurve(new Keyframe(0, 0), new Keyframe(.5f, 60), new Keyframe(1, 0)));
+                var clipSettings = AnimationUtility.GetAnimationClipSettings(loop); clipSettings.loopTime = true;
+                AnimationUtility.SetAnimationClipSettings(loop, clipSettings); AssetDatabase.AddObjectToAsset(loop, controller);
+                controller.AddLayer("Independent native additive motion");
+                var layers = controller.layers; var motionLayer = layers[layers.Length - 1];
+                motionLayer.defaultWeight = .5f; motionLayer.blendingMode = AnimatorLayerBlendingMode.Additive;
+                var moving = motionLayer.stateMachine.AddState("Loop"); moving.writeDefaultValues = false; moving.motion = loop;
+                motionLayer.stateMachine.defaultState = moving; controller.layers = layers;
+                SetFx(fixture.Source.AddComponent(type), controller);
+                var vrm = ScriptableObject.CreateInstance<VRM10Object>();
+                var endpoint = ScriptableObject.CreateInstance<VRM10Expression>(); endpoint.name = "Authored source endpoint";
+                endpoint.MorphTargetBindings = new[] { new MorphTargetBinding("Front", 0, .8f), new MorphTargetBinding("Back", 0, .8f) };
+                vrm.Expression.CustomClips.Add(endpoint);
+                AssetDatabase.CreateAsset(vrm, folder + "/Vrm.asset"); AssetDatabase.CreateAsset(endpoint, folder + "/Endpoint.asset");
+                fixture.Source.AddComponent<Vrm10Instance>().Vrm = vrm;
+                var meshBefore = EditorJsonUtility.ToJson(fixture.Mesh); var controllerBefore = EditorJsonUtility.ToJson(controller);
+                var vrmBefore = EditorJsonUtility.ToJson(vrm); var endpointBefore = EditorJsonUtility.ToJson(endpoint);
+
+                // Play the authored controller without the export sampler's
+                // reconstructed graph. A moving, fully influencing bone must
+                // change pose while the independent native morph scalar holds.
+                native = Object.Instantiate(fixture.Source);
+                foreach (var behaviour in native.GetComponentsInChildren<Behaviour>(true)) behaviour.enabled = false;
+                var animator = native.GetComponent<Animator>(); animator.enabled = true;
+                animator.runtimeAnimatorController = null; animator.applyRootMotion = false; animator.cullingMode = AnimatorCullingMode.AlwaysAnimate;
+                graph.SetTimeUpdateMode(DirectorUpdateMode.Manual);
+                var playable = AnimatorControllerPlayable.Create(graph, controller);
+                for (var layer = 0; layer < controller.layers.Length; layer++)
+                    playable.SetLayerWeight(layer, layer == 0 ? 1 : controller.layers[layer].defaultWeight);
+                AnimationPlayableOutput.Create(graph, "Native scalar reference", animator).SetSourcePlayable(playable);
+                graph.Play(); graph.Evaluate(0); graph.Evaluate(.2f);
+                var nativeSkin = native.transform.Find("Front").GetComponent<SkinnedMeshRenderer>();
+                var nativeWeight = nativeSkin.GetBlendShapeWeight(0);
+                var nativeRotation = nativeSkin.bones[0].localRotation;
+                graph.Evaluate(.5f);
+                Assert.That(nativeSkin.GetBlendShapeWeight(0), Is.EqualTo(nativeWeight).Within(.001f));
+                Assert.That(Quaternion.Angle(nativeRotation, nativeSkin.bones[0].localRotation), Is.GreaterThan(.1f));
+                Assert.That(nativeWeight, Is.GreaterThan(40).And.LessThan(100), "Native rest must differ from the serialized35 and remain within the source range.");
+                var sampled = NeutralShapeSampler.Sample(fixture.Source);
+                foreach (var path in new[] { "Front", "Back" })
+                    Assert.That(sampled.Single(value => value.Path == path && value.Shape == "Hair detail").Weight,
+                        Is.EqualTo(nativeWeight).Within(.001f));
+
+                expected = Object.Instantiate(fixture.Source);
+                foreach (var behaviour in expected.GetComponentsInChildren<Behaviour>(true)) behaviour.enabled = false;
+                Vector3[] Vertices(SkinnedMeshRenderer skin)
+                {
+                    var baked = new Mesh();
+                    try { skin.BakeMesh(baked, false); return baked.vertices.Select(skin.transform.TransformPoint).ToArray(); }
+                    finally { Object.DestroyImmediate(baked); }
+                }
+                var bytes = UniVrmOneClickExporter.Export(fixture.Source, "Independent influencing bone neutral", "Tests",
+                    blinkOptions: new BlinkExportOptions { Mode = BlinkExportMode.None });
+                imported = await Vrm10.LoadBytesAsync(bytes, canLoadVrm0X: false, awaitCaller: new ImmediateCaller());
+                Assert.That(imported, Is.Not.Null);
+                foreach (var input in new[] { 0f, 1f, 0f })
+                {
+                    imported.Runtime.Expression.SetWeight(ExpressionKey.CreateCustom(endpoint.name), input); imported.Runtime.Process();
+                    foreach (var path in new[] { "Front", "Back" })
+                    {
+                        var referenceSkin = expected.transform.Find(path).GetComponent<SkinnedMeshRenderer>();
+                        referenceSkin.SetBlendShapeWeight(0, input == 0 ? nativeWeight : 80);
+                        var referenceVertices = Vertices(referenceSkin);
+                        var output = imported.GetComponentsInChildren<SkinnedMeshRenderer>().Single(skin => skin.name == path);
+                        var outputVertices = Vertices(output);
+                        Assert.That(outputVertices.Length, Is.EqualTo(referenceVertices.Length));
+                        for (var vertex = 0; vertex < referenceVertices.Length; vertex++)
+                            Assert.That(Vector3.Distance(outputVertices[vertex], referenceVertices[vertex]), Is.LessThan(.0005f),
+                                path + " / expression " + input + " / vertex " + vertex + ": native scalar with prepared bone pose");
+                    }
+                }
+                Assert.That(sourceBone.localPosition, Is.EqualTo(sourcePosition)); Assert.That(sourceBone.localRotation, Is.EqualTo(sourceRotation));
+                Assert.That(sourceBone.localScale, Is.EqualTo(sourceScale));
+                Assert.That(sourceSkins.All(skin => skin.sharedMesh == fixture.Mesh && skin.GetBlendShapeWeight(0) == 35), Is.True);
+                Assert.That(EditorJsonUtility.ToJson(fixture.Mesh), Is.EqualTo(meshBefore));
+                Assert.That(EditorJsonUtility.ToJson(controller), Is.EqualTo(controllerBefore));
+                Assert.That(EditorJsonUtility.ToJson(vrm), Is.EqualTo(vrmBefore)); Assert.That(EditorJsonUtility.ToJson(endpoint), Is.EqualTo(endpointBefore));
+            }
+            finally
+            {
+                if (graph.IsValid()) graph.Destroy();
+                if (imported != null) Object.DestroyImmediate(imported.gameObject);
+                Object.DestroyImmediate(native); Object.DestroyImmediate(expected); AssetDatabase.DeleteAsset(folder);
+            }
+        }
+
+        [Test]
+        public void OneClickManualBlinkCannotFreezeOnlyTheMorphHalfOfAWardrobeConfiguration()
+        {
+            var type = DescriptorType(); if (type == null) Assert.Ignore("Install the real VRChat SDK.");
+            using var fixture = new AttachmentConnectionTests.Fixture();
+            var folderName = "__ManualBlinkAppearance_" + Guid.NewGuid().ToString("N");
+            AssetDatabase.CreateFolder("Assets", folderName); var folder = "Assets/" + folderName;
+            try
+            {
+                var cap = AppearanceCoupledFx(fixture, type, folder, out var controller);
+                var front = fixture.Source.transform.Find("Front").GetComponent<SkinnedMeshRenderer>();
+                var options = new BlinkExportOptions { Mode = BlinkExportMode.Manual };
+                options.Both.Add(new BlinkShapeBinding { Renderer = front, Shape = "Cap mask", Weight = 100 });
+                var beforeController = EditorJsonUtility.ToJson(controller);
+                var error = Assert.Throws<InvalidOperationException>(() => UniVrmOneClickExporter.Export(fixture.Source,
+                    "Manual blink appearance conflict", "Tests", blinkOptions: options));
+                Assert.That(error.Message, Does.Contain("必須").And.Contain("Front").And.Contain("blendShape.Cap mask").And.Contain("Cap"));
+                Assert.That(cap.activeSelf, Is.False);
+                Assert.That(front.GetBlendShapeWeight(0), Is.EqualTo(25));
+                Assert.That(front.sharedMesh, Is.SameAs(fixture.Mesh));
+                Assert.That(EditorJsonUtility.ToJson(controller), Is.EqualTo(beforeController));
+                Assert.That(options.Both.Single().Renderer, Is.SameAs(front));
+            }
+            finally { AssetDatabase.DeleteAsset(folder); }
+        }
+
+        [Test]
+        public void OneClickKeepsSourceTrackingObligationsWhenThePreparedCopyNoLongerHasTheMarker()
+        {
+            var type = DescriptorType(); if (type == null) Assert.Ignore("Install the real VRChat SDK.");
+            using var fixture = new AttachmentConnectionTests.Fixture();
+            var folderName = "__StrippedTrackingAppearance_" + Guid.NewGuid().ToString("N");
+            AssetDatabase.CreateFolder("Assets", folderName); var folder = "Assets/" + folderName;
+            var profile = ScriptableObject.CreateInstance<VrmTrackingProfile>();
+            try
+            {
+                var cap = AppearanceCoupledFx(fixture, type, folder, out var controller);
+                profile.expressions = VrmTrackingExpressions.Names.Select(name => new TrackingExpression
+                    { name = name, morphs = new[] { new TrackingMorph { shape = "Cap mask", weight = 1 } } }).ToArray();
+                var markerObject = new GameObject("Authoring tracking marker"); markerObject.transform.SetParent(fixture.Source.transform, false);
+                markerObject.AddComponent<VrmTrackingMarker>().profile = profile;
+                // Exercise the public pipeline's copy-only authoring removal.
+                // This occurs before NDMF and guarantees the neutral planner
+                // cannot discover the source obligation from a copied marker.
+                var probe = Object.Instantiate(fixture.Source);
+                try
+                {
+                    using var exclusions = new ExportObjectExclusions(fixture.Source, new[] { markerObject });
+                    exclusions.Apply(probe, null);
+                    Assert.That(probe.GetComponentInChildren<VrmTrackingMarker>(true), Is.Null);
+                }
+                finally { Object.DestroyImmediate(probe); }
+                var beforeController = EditorJsonUtility.ToJson(controller);
+                var front = fixture.Source.transform.Find("Front").GetComponent<SkinnedMeshRenderer>();
+                var error = Assert.Throws<InvalidOperationException>(() => UniVrmOneClickExporter.Export(fixture.Source,
+                    "Stripped marker appearance conflict", "Tests", excludedObjects: new[] { markerObject },
+                    blinkOptions: new BlinkExportOptions { Mode = BlinkExportMode.None }));
+                Assert.That(error.Message, Does.Contain("必須").And.Contain("blendShape.Cap mask").And.Contain("Cap"));
+                Assert.That(markerObject.GetComponent<VrmTrackingMarker>().profile, Is.SameAs(profile));
+                Assert.That(markerObject.transform.parent, Is.SameAs(fixture.Source.transform));
+                Assert.That(cap.activeSelf, Is.False);
+                Assert.That(front.GetBlendShapeWeight(0), Is.EqualTo(25));
+                Assert.That(front.sharedMesh, Is.SameAs(fixture.Mesh));
+                Assert.That(EditorJsonUtility.ToJson(controller), Is.EqualTo(beforeController));
+            }
+            finally { Object.DestroyImmediate(profile); AssetDatabase.DeleteAsset(folder); }
+        }
+
+        static GameObject AppearanceCoupledFx(AttachmentConnectionTests.Fixture fixture, Type descriptorType, string folder,
+            out AnimatorController controller)
+        {
+            fixture.Mesh.ClearBlendShapes();
+            fixture.Mesh.AddBlendShapeFrame("Cap mask", 100,
+                Enumerable.Repeat(Vector3.up * .03f, fixture.Mesh.vertexCount).ToArray(), null, null);
+            foreach (var skin in fixture.Source.GetComponentsInChildren<SkinnedMeshRenderer>())
+            { skin.SetBlendShapeWeight(0, 25); skin.sharedMaterial.shader = Shader.Find("lilToon"); }
+            var cap = new GameObject("Cap"); cap.transform.SetParent(fixture.Source.transform, false); cap.SetActive(false);
+            controller = DefaultFx(folder + "/FX.controller", "Front", "Cap mask", 100);
+            var clip = (AnimationClip)controller.layers[0].stateMachine.defaultState.motion;
+            AnimationUtility.SetEditorCurve(clip, EditorCurveBinding.FloatCurve("Back", typeof(SkinnedMeshRenderer), "blendShape.Cap mask"),
+                AnimationCurve.Constant(0, 1, 100));
+            AnimationUtility.SetEditorCurve(clip, EditorCurveBinding.FloatCurve("Cap", typeof(GameObject), "m_IsActive"), AnimationCurve.Constant(0, 1, 1));
+            SetFx(fixture.Source.AddComponent(descriptorType), controller);
+            return cap;
         }
 
         [TestCase(false)]

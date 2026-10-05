@@ -131,6 +131,13 @@ namespace VRVlog.LilToonExporter
             internal RuntimeAnimatorController Controller;
             internal readonly Dictionary<string, float> Defaults = new Dictionary<string, float>(StringComparer.Ordinal);
             internal readonly HashSet<string> ExpressionParameters = new HashSet<string>(StringComparer.Ordinal);
+            // Neutral appearance ownership needs complete input metadata even
+            // when expression import intentionally skips menu candidates.
+            internal bool NeutralInputInventoryComplete = false;
+            internal readonly HashSet<string> MenuInputs = new HashSet<string>(StringComparer.Ordinal);
+            internal readonly Dictionary<string, (bool Saved, bool NetworkSynced)> ParameterPersistence =
+                new Dictionary<string, (bool Saved, bool NetworkSynced)>(StringComparer.Ordinal);
+            internal readonly Dictionary<string, string> ExpressionParameterTypes = new Dictionary<string, string>(StringComparer.Ordinal);
             internal readonly List<RuntimeAnimatorController> OtherControllers = new List<RuntimeAnimatorController>();
             internal readonly HashSet<string> ExternalParameters = new HashSet<string>(StringComparer.Ordinal);
             internal readonly List<Entry> Entries = new List<Entry>();

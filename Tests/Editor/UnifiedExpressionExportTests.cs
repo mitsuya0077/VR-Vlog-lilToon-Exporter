@@ -584,8 +584,6 @@ namespace VRVlog.LilToonExporter.Tests
         [TestCase("inert", true)]
         [TestCase("rest100", false)]
         [TestCase("rest100", true)]
-        [TestCase("unsupportedRest", false)]
-        [TestCase("unsupportedRest", true)]
         [TestCase("suppressed", false)]
         [TestCase("suppressed", true)]
         [TestCase("inertPreferred", false)]
@@ -637,9 +635,9 @@ namespace VRVlog.LilToonExporter.Tests
                 {
                     AddTrackingDelta(fixture.Mesh, "MouthClosed", scenario == "inert" ? 0 : .02f);
                     if (scenario == "inertPreferred") AddTrackingDelta(fixture.Mesh, "UE/MouthClosed", 0);
-                    if (scenario == "rest100" || scenario == "unsupportedRest")
+                    if (scenario == "rest100")
                         foreach (var skin in fixture.Source.GetComponentsInChildren<SkinnedMeshRenderer>())
-                            skin.SetBlendShapeWeight(2, scenario == "rest100" ? 100 : -10);
+                            skin.SetBlendShapeWeight(2, 100);
                 }
                 foreach (var skin in fixture.Source.GetComponentsInChildren<SkinnedMeshRenderer>()) skin.sharedMaterial.shader = Shader.Find("lilToon");
                 fixture.Source.AddComponent<Vrm10Instance>().Vrm = vrm;
@@ -664,6 +662,61 @@ namespace VRVlog.LilToonExporter.Tests
                 Assert.That(fixture.Mesh.GetBlendShapeIndex("JawOpen"), Is.EqualTo(1));
             }
             finally { Object.DestroyImmediate(clip); Object.DestroyImmediate(vrm); }
+        }
+
+        [TestCase(false)]
+        [TestCase(true)]
+        public async Task ClampedNegativeRestKeepsNativeGeometryAndProvidesMovingUnifiedBlinkFallback(bool fullLilToon)
+        {
+            using var fixture = new AttachmentConnectionTests.Fixture();
+            var previousClamp = UnityEditor.PlayerSettings.legacyClampBlendShapeWeights;
+            Vrm10Instance imported = null;
+            var sourceVertices = fixture.Mesh.vertices;
+            try
+            {
+                UnityEditor.PlayerSettings.legacyClampBlendShapeWeights = true;
+                await BlendShapeSettingsTestSupport.WaitForEditorUpdates();
+                AddTrackingDelta(fixture.Mesh, "JawOpen");
+                AddTrackingDelta(fixture.Mesh, "MouthClosed");
+                var skins = fixture.Source.GetComponentsInChildren<SkinnedMeshRenderer>();
+                foreach (var skin in skins)
+                {
+                    skin.sharedMaterial.shader = Shader.Find("lilToon");
+                    skin.SetBlendShapeWeight(2, -10);
+                }
+                var native = NativePoses(skins, 2, 100);
+                Assert.That(native.Values.All(pose => Vector3.Distance(pose.Neutral, pose.Endpoint) > .001f), Is.True,
+                    "Native clamped rest and the declared absolute closure must have different geometry.");
+                Assert.That(UnifiedExpressionPreparation.HasUsableEvidence(fixture.Source), Is.False,
+                    "The standalone authored endpoint guard keeps its explicit, unnormalized source-weight contract.");
+                var bytes = UniVrmOneClickExporter.Export(fixture.Source, "Clamped negative rest UE fallback", "Tests",
+                    exporterVersion: fullLilToon ? "0.11.5" : null, lilToonVersion: fullLilToon ? "2.3.4" : null);
+                Assert.That(VrmUnifiedExpressions.HasUsableEvidence(bytes), Is.True,
+                    "Only the surviving moving route after native source normalization can waive missing ordinary blink.");
+                imported = await Vrm10.LoadBytesAsync(bytes, canLoadVrm0X: false, awaitCaller: new ImmediateCaller());
+                var route = imported.Vrm.Expression.CustomClips.Single(value => value.name == "UE/MouthClosed");
+                Assert.That(route.MorphTargetBindings.Length, Is.EqualTo(skins.Length));
+                foreach (var input in new[] { 0f, .5f, 1f })
+                {
+                    imported.Runtime.Expression.SetWeight(ExpressionKey.CreateCustom(route.name), input);
+                    imported.Runtime.Process();
+                    foreach (var binding in route.MorphTargetBindings)
+                    {
+                        var output = imported.transform.Find(binding.RelativePath).GetComponent<SkinnedMeshRenderer>();
+                        Assert.That(binding.Weight, Is.EqualTo(1));
+                        AssertNativePose(output, native[output.name], input);
+                    }
+                }
+                Assert.That(skins.All(skin => skin.sharedMesh == fixture.Mesh && skin.GetBlendShapeWeight(2) == -10), Is.True);
+                Assert.That(fixture.Mesh.vertices, Is.EqualTo(sourceVertices));
+                Assert.That(fixture.Mesh.GetBlendShapeIndex("MouthClosed"), Is.EqualTo(2));
+            }
+            finally
+            {
+                UnityEditor.PlayerSettings.legacyClampBlendShapeWeights = previousClamp;
+                await BlendShapeSettingsTestSupport.WaitForEditorUpdates();
+                if (imported != null) Object.DestroyImmediate(imported.gameObject);
+            }
         }
 
         [TestCase("partial", false)]
