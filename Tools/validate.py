@@ -26,7 +26,7 @@ listing = json.loads((root / "source.json").read_text(encoding="utf-8"))
 
 assert package["name"] == "com.vrvlog.liltoon-vrm-exporter"
 assert package["unity"] == "2022.3"
-assert package["version"] == "0.11.11-beta.1"
+assert package["version"] == "0.11.11-beta.2"
 assert one_click.index("AvatarBaseShape.Preserve(clone, clone,") < one_click.index("Vrm10AppearanceExporter.Export(")
 assert "foreach (var mesh in temporaryMeshes) UnityEngine.Object.DestroyImmediate(mesh);" in one_click
 assert package["vpmDependencies"] == {
@@ -318,7 +318,11 @@ assert 'ExportAndSaveNormally(' in (root / 'Tests/Editor/ExportFlowTests.cs').re
 assert 'recoveryOptions: options, recoveryReport: report' in window
 assert 'ExcludeHiddenRenderer' in recovery and 'ExportGimmickDetection.Inspect(action.Renderer)?.Unit' in recovery
 assert 'code == "audio-link"' in recovery and 'Official(audio)' in recovery
-assert 'ExportSourceFingerprint.Compute(source)' in recovery
+# Recovery compares partial solver output with the original capture separately
+# from the exact authored-input hash; it must not replace that baseline.
+assert 'ExportSourceFingerprint.Capture(source, out var partialRotations)' in recovery
+assert 'readonly ExportSourceFingerprint.PartialRotation[] partialRotations;' in recovery
+assert 'partialRotations[index].Matches(current[index])' in recovery
 assert 'EditorJsonUtility.ToJson(' not in fingerprint
 assert 'new StringBuilder' not in fingerprint
 assert 'LastSuccess = new SuccessfulAttempt' in recovery_session

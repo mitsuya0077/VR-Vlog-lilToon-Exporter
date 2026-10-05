@@ -516,15 +516,21 @@ namespace VRVlog.LilToonExporter
     {
         readonly int sourceId;
         readonly Hash128 hash;
-        ExportRecoverySourceStamp(int sourceId, Hash128 hash) { this.sourceId = sourceId; this.hash = hash; }
+        readonly ExportSourceFingerprint.PartialRotation[] partialRotations;
+        ExportRecoverySourceStamp(int sourceId, Hash128 hash, ExportSourceFingerprint.PartialRotation[] partialRotations)
+        { this.sourceId = sourceId; this.hash = hash; this.partialRotations = partialRotations; }
         internal static ExportRecoverySourceStamp Capture(GameObject source)
         {
             if (source == null) throw new ArgumentNullException(nameof(source));
-            return new ExportRecoverySourceStamp(source.GetInstanceID(), Fingerprint(source));
+            var hash = ExportSourceFingerprint.Capture(source, out var partialRotations);
+            return new ExportRecoverySourceStamp(source.GetInstanceID(), hash, partialRotations);
         }
-        internal bool Matches(GameObject source) => source != null && source.GetInstanceID() == sourceId && hash == Fingerprint(source);
-
-        static Hash128 Fingerprint(GameObject source) => ExportSourceFingerprint.Compute(source);
+        internal bool Matches(GameObject source)
+        {
+            if (source == null || source.GetInstanceID() != sourceId || hash != ExportSourceFingerprint.Capture(source, out var current) || current.Length != partialRotations.Length) return false;
+            for (var index = 0; index < current.Length; index++) if (!partialRotations[index].Matches(current[index])) return false;
+            return true;
+        }
 
     }
 }

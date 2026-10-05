@@ -7,6 +7,7 @@ using System.Text;
 using Unity.Collections;
 using UnityEditor;
 using UnityEngine;
+using UnityEngine.Animations;
 using Object = UnityEngine.Object;
 
 namespace VRVlog.LilToonExporter
@@ -17,11 +18,31 @@ namespace VRVlog.LilToonExporter
     internal static class ExportSourceFingerprint
     {
         internal static Hash128 Compute(GameObject source)
+            => ComputeCore(source, false, out _);
+
+        internal static Hash128 Capture(GameObject source, out PartialRotation[] partialRotations)
+            => ComputeCore(source, true, out partialRotations);
+
+        static Hash128 ComputeCore(GameObject source, bool capturePartial, out PartialRotation[] partialRotations)
         {
             if (source == null) throw new ArgumentNullException(nameof(source));
             using var hash = new Digest();
+            var drivenRotations = DrivenRotations(source, out var externalInputs, out var partial);
+            partialRotations = capturePartial ? partial.OrderBy(value => value.GetInstanceID()).Select(value => new PartialRotation(value)).ToArray() : Array.Empty<PartialRotation>();
             hash.Boolean(source.activeInHierarchy);
-            hash.Matrix(source.transform.localToWorldMatrix);
+            // A fully driven rotation is the solver's output, including its
+            // frame-to-frame floating point noise. The parent and the other
+            // root channels remain inputs even when the avatar root is driven.
+            var rootRotationCaptured = drivenRotations.Contains(source.transform) || capturePartial && partial.Contains(source.transform);
+            hash.Boolean(rootRotationCaptured);
+            if (rootRotationCaptured)
+            {
+                hash.Matrix(source.transform.parent != null ? source.transform.parent.localToWorldMatrix : Matrix4x4.identity);
+                hash.Vector(source.transform.localPosition); hash.Vector(source.transform.localScale);
+            }
+            else hash.Matrix(source.transform.localToWorldMatrix);
+            foreach (var input in externalInputs.OrderBy(value => value.GetInstanceID()))
+            { hash.Integer(input.GetInstanceID()); hash.Matrix(input.localToWorldMatrix); }
             var visited = new HashSet<Object>(); var assets = new HashSet<string>(StringComparer.Ordinal);
             var queue = new Queue<Object>(source.GetComponentsInChildren<Component>(true).Cast<Object>());
             foreach (var transform in source.GetComponentsInChildren<Transform>(true)) queue.Enqueue(transform.gameObject);
@@ -44,7 +65,9 @@ namespace VRVlog.LilToonExporter
                 // Explicitly authored bounds and every serialized field remain
                 // part of the source stamp.
                 if (value is SkinnedMeshRenderer skin) hash.Bounds(skin.localBounds);
-                SerializedData(hash, value, queue);
+                var transform = value as Transform;
+                var driven = transform != null && drivenRotations.Contains(transform);
+                SerializedDataCore(hash, value, queue, driven || capturePartial && transform != null && partial.Contains(transform), driven);
             }
             foreach (var path in assets.OrderBy(path => path, StringComparer.Ordinal))
             { hash.Text(path); hash.Text(AssetDatabase.GetAssetDependencyHash(path).ToString()); }
@@ -57,6 +80,117 @@ namespace VRVlog.LilToonExporter
             }
             return hash.Finish();
         }
+
+        static HashSet<Transform> DrivenRotations(GameObject source, out HashSet<Transform> externalInputs, out HashSet<Transform> partialRotations)
+        {
+            var result = new HashSet<Transform>();
+            externalInputs = new HashSet<Transform>();
+            partialRotations = new HashSet<Transform>();
+            foreach (var component in source.GetComponentsInChildren<Component>(true))
+            {
+                if (!(component is Behaviour behaviour) || !behaviour.isActiveAndEnabled) continue;
+                Transform target = null;
+                var partial = false;
+                if (component is AimConstraint aim && aim.constraintActive && aim.locked && aim.weight == 1 && aim.rotationAxis == (Axis.X | Axis.Y | Axis.Z) &&
+                    aim.worldUpType != AimConstraint.WorldUpType.None && HasEffectiveSource(aim))
+                    target = aim.transform;
+                else if (component is RotationConstraint rotation && rotation.constraintActive && rotation.locked && rotation.weight == 1 && rotation.rotationAxis == (Axis.X | Axis.Y | Axis.Z) && HasEffectiveSource(rotation))
+                    target = rotation.transform;
+                else if (IsVrcRotationConstraint(component))
+                {
+                    using var settings = new SerializedObject(component);
+                    var weight = settings.FindProperty("GlobalWeight")?.floatValue ?? float.NaN;
+                    var x = True(settings, "AffectsRotationX"); var y = True(settings, "AffectsRotationY"); var z = True(settings, "AffectsRotationZ");
+                    if (!True(settings, "IsActive") || !True(settings, "Locked") || !(weight > 0 && weight <= 1) ||
+                        settings.FindProperty("FreezeToWorld")?.boolValue != false || !(x || y || z) || !HasEffectiveVrcSource(settings)) continue;
+                    partial = weight != 1 || !(x && y && z);
+                    // Aim without an up vector retains an authored roll; it
+                    // cannot own the complete local rotation.
+                    if (component.GetType().FullName.EndsWith(".VRCAimConstraint", StringComparison.Ordinal))
+                    {
+                        var up = settings.FindProperty("WorldUp");
+                        if (up == null || up.propertyType != SerializedPropertyType.Enum || up.enumValueIndex < 0 ||
+                            up.enumValueIndex >= up.enumNames.Length || up.enumNames[up.enumValueIndex] == "None") continue;
+                    }
+                    var targetProperty = settings.FindProperty("TargetTransform");
+                    if (targetProperty == null) continue;
+                    target = targetProperty.objectReferenceValue as Transform ?? component.transform;
+                }
+                if (target == null || (target != source.transform && !target.IsChildOf(source.transform))) continue;
+                if (partial) partialRotations.Add(target); else result.Add(target);
+                // A constraint may read another scene object's pose. Its
+                // identity alone cannot detect moving that external input.
+                using var serialized = new SerializedObject(component);
+                using var property = serialized.GetIterator();
+                while (property.Next(true))
+                {
+                    if (property.propertyType != SerializedPropertyType.ObjectReference || IsPrefabBookkeeping(property.propertyPath)) continue;
+                    var reference = property.objectReferenceValue;
+                    var input = reference is GameObject go ? go.transform : (reference as Component)?.transform;
+                    if (input != null && !EditorUtility.IsPersistent(input) && input != source.transform && !input.IsChildOf(source.transform))
+                        externalInputs.Add(input);
+                }
+            }
+            partialRotations.ExceptWith(result);
+            return result;
+        }
+
+        static bool HasEffectiveSource(IConstraint constraint)
+        {
+            for (var index = 0; index < constraint.sourceCount; index++)
+            {
+                var source = constraint.GetSource(index);
+                if (source.sourceTransform != null && source.weight > 0 && !float.IsInfinity(source.weight)) return true;
+            }
+            return false;
+        }
+
+        static bool HasEffectiveVrcSource(SerializedObject settings)
+        {
+            var count = settings.FindProperty("Sources.totalLength")?.intValue ?? 0;
+            var overflow = settings.FindProperty("Sources.overflowList");
+            // Serialized storage is sixteen inline entries followed by an
+            // overflow list. Stale entries beyond totalLength are not inputs.
+            if (count <= 0 || count > 16 + (overflow?.arraySize ?? 0)) return false;
+            for (var index = 0; index < count; index++)
+            {
+                var path = index < 16 ? "Sources.source" + index : "Sources.overflowList.Array.data[" + (index - 16) + "]";
+                if (settings.FindProperty(path + ".SourceTransform")?.objectReferenceValue == null) continue;
+                var weight = settings.FindProperty(path + ".Weight")?.floatValue ?? float.NaN;
+                if (weight > 0 && !float.IsInfinity(weight)) return true;
+            }
+            return false;
+        }
+
+        internal sealed class PartialRotation
+        {
+            readonly Transform target;
+            readonly Quaternion rotation;
+            internal PartialRotation(Transform target) { this.target = target; rotation = target.localRotation; }
+            internal bool Matches(PartialRotation other)
+            {
+                if (other == null || target == null || target != other.target) return false;
+                // VRC's partial solver retains unmasked Euler channels and
+                // re-encodes them as a quaternion. Permit only representation
+                // noise against the ORIGINAL capture, never a rolling baseline.
+                var a = new[] { (double)rotation.x, rotation.y, rotation.z, rotation.w };
+                var b = new[] { (double)other.rotation.x, other.rotation.y, other.rotation.z, other.rotation.w };
+                var an = Math.Sqrt(a.Sum(v => v * v)); var bn = Math.Sqrt(b.Sum(v => v * v));
+                if (!(an > 0) || !(bn > 0) || double.IsInfinity(an) || double.IsInfinity(bn)) return false;
+                var difference = 0d; var opposite = 0d;
+                for (var index = 0; index < 4; index++)
+                {
+                    var x = a[index] / an; var y = b[index] / bn;
+                    difference += (x - y) * (x - y); opposite += (x + y) * (x + y);
+                }
+                return Math.Min(difference, opposite) <= 1e-14; // quaternion chord <= 1e-7
+            }
+        }
+
+        static bool True(SerializedObject settings, string name) => settings.FindProperty(name)?.boolValue == true;
+        static bool IsVrcRotationConstraint(Object value) => value.GetType().FullName == "VRC.SDK3.Dynamics.Constraint.Components.VRCAimConstraint" ||
+            value.GetType().FullName == "VRC.SDK3.Dynamics.Constraint.Components.VRCRotationConstraint";
+        static bool IsPrefabBookkeeping(string path) => path == "m_CorrespondingSourceObject" || path == "m_PrefabInstance" || path == "m_PrefabAsset";
 
         static void MeshData(Digest hash, Mesh mesh)
         {
@@ -159,6 +293,9 @@ namespace VRVlog.LilToonExporter
         }
 
         static void SerializedData(Digest hash, Object value, Queue<Object> queue)
+            => SerializedDataCore(hash, value, queue, false, false);
+
+        static void SerializedDataCore(Digest hash, Object value, Queue<Object> queue, bool drivenRotation, bool drivenEulerHint)
         {
             using var serialized = new SerializedObject(value);
             using var property = serialized.GetIterator();
@@ -166,6 +303,20 @@ namespace VRVlog.LilToonExporter
             while (property.Next(enterChildren))
             {
                 enterChildren = property.propertyType == SerializedPropertyType.Generic || property.propertyType == SerializedPropertyType.ExposedReference;
+                // Effective values are already read from the instantiated
+                // hierarchy. Prefab override records duplicate those values,
+                // including live constraint output recorded by the Editor.
+                if ((value is Component || value is GameObject) && IsPrefabBookkeeping(property.propertyPath))
+                {
+                    // Prefab identity can affect authoring tools' behavior,
+                    // but its mutable override graph is not a second input.
+                    hash.Text(property.propertyPath); hash.Integer((int)property.propertyType);
+                    hash.Integer(property.objectReferenceValue == null ? 0 : property.objectReferenceValue.GetInstanceID());
+                    enterChildren = false; continue;
+                }
+                if (drivenRotation && property.propertyPath == "m_LocalRotation" || drivenEulerHint && property.propertyPath == "m_LocalEulerAnglesHint" ||
+                    IsVrcRotationConstraint(value) && (property.propertyPath == "cachedExecutionGroupIndex" || property.propertyPath == "latestValidExecutionGroupIndex"))
+                { enterChildren = false; continue; }
                 hash.Text(property.propertyPath); hash.Integer((int)property.propertyType);
                 switch (property.propertyType)
                 {
