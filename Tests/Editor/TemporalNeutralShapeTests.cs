@@ -216,7 +216,7 @@ namespace VRVlog.LilToonExporter.Tests
         [TestCase("TimedUpper")]
         [TestCase("AnimatorCurve")]
         [TestCase("RandomDriver")]
-        public void PreservingTheLastTemporalRootDoesNotWaiveDynamicGraphGuards(string kind)
+        public void UnresolvedTemporalGraphKeepsPreparedRestButStillRejectsUnsupportedDrivers(string kind)
         {
             var clip = Clip("Temporal-only idle", ("Temporal", Varying("Delayed"))); var state = State(0, clip);
             if (kind == "TimedState" || kind == "TimedUpper")
@@ -239,7 +239,16 @@ namespace VRVlog.LilToonExporter.Tests
                 if (kind == "AnimatorCurve") AnimationUtility.SetEditorCurve(clip, EditorCurveBinding.FloatCurve("", typeof(Animator), "Changing input"), Varying("Delayed"));
                 else ParameterDriverExpressionTests.Driver(state, ParameterDriverExpressionTests.Op("Random", "Changing input"));
             }
-            Assert.Catch<InvalidOperationException>(() => NeutralShapeSampler.Sample(avatar));
+            if (kind == "RandomDriver")
+                Assert.Catch<InvalidOperationException>(() => NeutralShapeSampler.Sample(avatar));
+            else
+            {
+                var warnings = new List<string>();
+                var values = NeutralShapeSampler.Sample(avatar, warnings: warnings);
+                Assert.That(values, Is.Empty, "An unresolved dynamic graph cannot provide a captured neutral phase.");
+                NeutralShapeSnapshot.Apply(avatar, values);
+                Assert.That(warnings.Any(value => value.Contains("Temporal")), Is.True);
+            }
             Assert.That(skin.GetBlendShapeWeight(0), Is.EqualTo(17));
         }
 

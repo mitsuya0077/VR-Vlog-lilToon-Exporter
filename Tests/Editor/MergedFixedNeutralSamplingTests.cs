@@ -240,7 +240,7 @@ namespace VRVlog.LilToonExporter.Tests
         }
 
         [Test]
-        public void FractionalNeutralRejectsDelayedAutomaticBaseActivityChanges()
+        public void FractionalNeutralKeepsPreparedRestForDelayedAutomaticBaseActivityChanges()
         {
             var baseClip = Clip("Automatic base", "Blink");
             AnimationUtility.SetEditorCurve(baseClip, EditorCurveBinding.FloatCurve("Face", typeof(SkinnedMeshRenderer), "blendShape.Blink"),
@@ -251,8 +251,14 @@ namespace VRVlog.LilToonExporter.Tests
             var transition = initial.AddTransition(held); transition.hasExitTime = true; transition.exitTime = 30; transition.duration = 0;
             FractionalPupil();
             var sourceJson = EditorJsonUtility.ToJson(controller);
-            var error = Assert.Throws<NeutralShapeSamplingException>(() => NeutralShapeSampler.Sample(avatar));
-            Assert.That(error.Message, Does.Contain("時間で遷移"));
+            var skin = avatar.GetComponentInChildren<SkinnedMeshRenderer>();
+            var preparedPupil = skin.GetBlendShapeWeight(mesh.GetBlendShapeIndex("Pupil removal"));
+            var warnings = new List<string>();
+            var values = NeutralShapeSampler.Sample(avatar, warnings: warnings);
+            Assert.That(values, Is.Empty);
+            NeutralShapeSnapshot.Apply(avatar, values);
+            Assert.That(skin.GetBlendShapeWeight(mesh.GetBlendShapeIndex("Pupil removal")), Is.EqualTo(preparedPupil));
+            Assert.That(warnings.Any(value => value.Contains("Pupil removal") && value.Contains("FX")), Is.True);
             Assert.That(EditorJsonUtility.ToJson(controller), Is.EqualTo(sourceJson));
         }
     }

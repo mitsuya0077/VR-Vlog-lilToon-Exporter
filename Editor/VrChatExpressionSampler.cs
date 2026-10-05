@@ -567,6 +567,7 @@ namespace VRVlog.LilToonExporter
             if (affected.Length == 0) return new List<MorphValue>();
             var excludedLayers = new HashSet<int>(Enumerable.Range(0, originalController.layers.Length)
                 .Except(affected.Concat(dependencies.NativeSupportLayers)));
+            var requiredParameterCurves = NeutralParameterDependencies.Required(runtime, dependencies, excludedPath);
             using var evaluation = new ExpressionEvaluationSession(runtime, dependencies, metadata.ExpressionParameters,
                 !metadata.Defaults.TryGetValue("IsLocal", out var local) || local != 0, fixedContext);
             var controller = evaluation.Controller;
@@ -628,7 +629,8 @@ namespace VRVlog.LilToonExporter
                 ValidateFixedPose(avatar, playable, controller, excludedPath, excludedLayers, equivalentStates,
                     dependencies.NativeSupportLayers, capturedMorphs, neutral: true,
                     neutralFixed: dependencies.NeutralFixedValues, dependencies: dependencies, metadata: metadata,
-                    restrictCapturedMorphs: neutralPlan != null, neutralPlan: neutralPlan, shadowedNeutralCurves: shadowedCurves);
+                    restrictCapturedMorphs: neutralPlan != null, neutralPlan: neutralPlan, shadowedNeutralCurves: shadowedCurves,
+                    requiredParameterCurves: requiredParameterCurves);
                 var bindings = ActiveBindings(playable, affected, excludedPath, equivalentStates, neutral: true, neutralAvatar: avatar,
                     neutralPlan: neutralPlan, capturedMorphs: neutralPlan == null ? null : capturedMorphs);
                 var unresolved = new List<MorphValue>();
@@ -964,7 +966,8 @@ namespace VRVlog.LilToonExporter
             ISet<int> excludedLayers, ISet<int> equivalentStates = null, ISet<int> nativeSupportLayers = null,
             ISet<EditorCurveBinding> relevantMorphs = null, bool neutral = false, IDictionary<string, float> neutralFixed = null,
             ExpressionDependencies dependencies = null, VrChatExpressionMenu.Source metadata = null, bool restrictCapturedMorphs = false,
-            NeutralShapePlan neutralPlan = null, ISet<(int Layer, AnimationClip Clip, EditorCurveBinding Binding)> shadowedNeutralCurves = null)
+            NeutralShapePlan neutralPlan = null, ISet<(int Layer, AnimationClip Clip, EditorCurveBinding Binding)> shadowedNeutralCurves = null,
+            ISet<string> requiredParameterCurves = null)
         {
             InvalidOperationException Unstable(string message) => neutral ?
                 new NeutralShapeSamplingException(message) : new InvalidOperationException(message);
@@ -1007,6 +1010,16 @@ namespace VRVlog.LilToonExporter
                             if (excludedPath?.Invoke(binding.path) == true) continue;
                             if (binding.type != typeof(Animator) &&
                                 !(binding.type == typeof(SkinnedMeshRenderer) && binding.propertyName.StartsWith("blendShape.", StringComparison.Ordinal))) continue;
+                            // WD/additive support remains active, including its
+                            // native parameter curves. An internal parameter with
+                            // no path to this pose need not itself become static.
+                            if (neutral && binding.type == typeof(Animator) && binding.path == "" && requiredParameterCurves != null &&
+                                !requiredParameterCurves.Contains(binding.propertyName))
+                            {
+                                var parameterCurve = AnimationUtility.GetEditorCurve(info.clip, binding);
+                                if (parameterCurve != null && parameterCurve.length > 0) VrChatGestureExpressions.ReadCurve(parameterCurve);
+                                continue;
+                            }
                             // An uncaptured support/appearance morph may target
                             // another authored layout absent from this copy. It
                             // must not require a renderer lookup for this plan.

@@ -33,11 +33,14 @@ BEHAVIOR_CASES = {
         'InactiveAlternateTemporalClipDoesNotChangeTheActiveConstantCapture': 1,
         'TemporalCaptureKeepsIndependentNativeOverrideAdditiveAndWriteDefaults': 4,
         'OnlyAFullUnmaskedExplicitConstantOverrideDominatesTheLowerTemporalCurve': 6,
-        'PreservingTheLastTemporalRootDoesNotWaiveDynamicGraphGuards': 4,
+        'UnresolvedTemporalGraphKeepsPreparedRestButStillRejectsUnsupportedDrivers': 4,
         'DirectFixedExpressionSamplingStillRejectsItsActualTemporalCurve': 1,
         'TemporalRequiredEndpointExportsPreparedRestAndTheExactAuthoredProgram': 2,
     },
     'NeutralShapeSamplerTests': {
+        'UnmeasuredBuiltinInputKeepsPreparedNeutralInsteadOfChoosingAFace': 2,
+        'UnresolvedGroupPreservesAuthoredWeightsWithoutDiscardingIndependentRest': 2,
+        'RecoverableExternalInputCannotHideAnIndependentUnsupportedGraph': 3,
         'DelayedGenericMorphAnimationKeepsPreparedRestInsteadOfASampledPhase': 1,
         'AutomaticAnimationSharingTheOpeningChannelKeepsItsPreparedRest': 1,
         'AutomaticBlinkWithWriteDefaultsKeepsTheFullNativeClosureAndConstantRest': 1,
@@ -100,12 +103,25 @@ BEHAVIOR_CASES = {
     },
     'MergedFixedNeutralSamplingTests': {
         'FractionalNeutralRetainsNativeBaseActivityAndLeavesAutomaticBlinkLive': 4,
-        'FractionalNeutralRejectsDelayedAutomaticBaseActivityChanges': 1,
+        'FractionalNeutralKeepsPreparedRestForDelayedAutomaticBaseActivityChanges': 1,
         'FractionalNeutralDistinguishesDisconnectedAndReachableUnsupportedSupportMotions': 4,
     },
     'NeutralCurveConditionTests': {
-        'DynamicParameterCurveCannotHideAFutureTimedExit': 1,
+        'DynamicParameterCurveKeepsPreparedNeutralWhenItsFutureTimedExitIsUnresolved': 1,
         'CompetingParameterDriverPreventsTheRelayProof': 1,
+    },
+    'NeutralParameterCurveTests': {
+        'IndependentParameterAnimationKeepsTheNativeBodyPose': 6,
+        'ParameterThatControlsCapturedMorphsMustRemainFixedEvenWhenItsChangeIsDelayed': 1,
+        'ParameterDependencePropagatesThroughAnotherMotionTimeRelay': 1,
+        'FutureTimedTransitionsAreStillValidatedForIndependentParameterSupport': 1,
+        'SelectedMenuExpressionRetainsItsStrictParameterCurveContract': 1,
+        'GestureSmoothingFeedbackAndUnrelatedFacialConsumerKeepNativeBody': 4,
+        'GestureSmoothingThatActuallyControlsBodyStillRequiresItsParameterProof': 1,
+        'FeedbackWithUnprovedNativeDefaultContributionIsNotExempt': 3,
+    },
+    'NeutralFallbackExportTests': {
+        'UnresolvedBodyRestExportsWithIndependentOpenEyesAndAbsoluteEndpoints': 2,
     },
     'NeutralShapeEndpointTests': {
         'PreparedSnapshotRetainsIdentityMeshAndExplicitZeroWithoutChangingSource': 1,
