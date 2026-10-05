@@ -12,23 +12,28 @@ namespace VRVlog.LilToonExporter
     // independent FX group cannot provide a stable authored neutral pose.
     internal sealed class NeutralShapeSamplingException : InvalidOperationException
     {
-        internal NeutralShapeSamplingException(string message, Exception inner = null) : base(message, inner) { }
+        internal readonly HashSet<EditorCurveBinding> DependencyMorphs;
+        internal NeutralShapeSamplingException(string message, Exception inner = null, IEnumerable<EditorCurveBinding> dependencyMorphs = null) : base(message, inner)
+        { DependencyMorphs = dependencyMorphs == null ? null : new HashSet<EditorCurveBinding>(dependencyMorphs); }
     }
 
     internal static class NeutralShapeSampler
     {
-        internal static List<VrChatExpressionMenu.MorphValue> Sample(GameObject prepared, Func<string, bool> excludedPath = null)
+        internal static List<VrChatExpressionMenu.MorphValue> Sample(GameObject prepared, Func<string, bool> excludedPath = null,
+            ICollection<string> warnings = null, IEnumerable<EditorCurveBinding> requiredMorphs = null)
         {
             if (prepared == null) throw new ArgumentNullException(nameof(prepared));
             // This reads the prepared FX and parameter defaults without walking
             // a large expression menu or reusing a pre-NDMF controller.
             var metadata = VrChatExpressionMenu.Read(prepared, new VrChatMenuImportPolicy { SkipAll = true });
             if (metadata.Controller == null) return new List<VrChatExpressionMenu.MorphValue>();
+            NeutralInputProof.Read(prepared, metadata);
+            var fixedContext = FixedExpressionContext.Create(metadata.Controller, metadata.Defaults, metadata);
             var automatic = AutomaticChannels(prepared);
             var completed = new HashSet<string>(StringComparer.Ordinal);
             var values = new Dictionary<(string Path, string Shape), VrChatExpressionMenu.MorphValue>();
             HashSet<EditorCurveBinding>[] groups;
-            try { groups = ExpressionDependencies.NeutralRoots(metadata.Controller, excludedPath, metadata, automatic).ToArray(); }
+            try { groups = ExpressionDependencies.NeutralRoots(metadata.Controller, excludedPath, metadata, automatic, fixedContext).ToArray(); }
             catch (InvalidOperationException error)
             {
                 var bindings = metadata.Controller.animationClips.SelectMany(AnimationUtility.GetCurveBindings)
@@ -36,18 +41,27 @@ namespace VRVlog.LilToonExporter
                         excludedPath?.Invoke(binding.path) != true);
                 throw WithAffected(error, bindings);
             }
+            var plan = NeutralShapePlan.Create(prepared, metadata.Controller, groups, excludedPath, requiredMorphs, warnings, metadata, fixedContext);
             foreach (var roots in groups)
             {
+                roots.IntersectWith(plan.CommittedMorphs);
+                if (roots.Count == 0) continue;
                 ExpressionDependencies dependencies;
-                try { dependencies = ExpressionDependencies.AnalyzeNeutral(metadata.Controller, roots, excludedPath, metadata, automatic); }
-                catch (NeutralShapeSamplingException) when (roots.All(automatic.Contains)) { continue; }
+                try { dependencies = ExpressionDependencies.AnalyzeNeutral(metadata.Controller, roots, excludedPath, metadata, automatic, fixedContext,
+                    preserveCommittedMorphs: true); }
+                catch (NeutralShapeSamplingException error) when (roots.All(automatic.Contains) &&
+                    error.DependencyMorphs != null && error.DependencyMorphs.All(automatic.Contains)) { continue; }
                 catch (InvalidOperationException error) { throw WithAffected(error, roots); }
                 var identity = string.Join(",", dependencies.Layers.OrderBy(index => index)) + "|" +
-                    string.Join(",", dependencies.NativeSupportLayers.OrderBy(index => index));
+                    string.Join(",", dependencies.NativeSupportLayers.OrderBy(index => index)) + "|" +
+                    string.Join(",", dependencies.Morphs.OrderBy(binding => binding.path, StringComparer.Ordinal)
+                        .ThenBy(binding => binding.propertyName, StringComparer.Ordinal).Select(binding => binding.path + "/" + binding.propertyName));
                 if (!completed.Add(identity)) continue;
                 List<VrChatExpressionMenu.MorphValue> sampled;
-                try { sampled = VrChatExpressionSampler.SampleNeutral(prepared, metadata.Controller, dependencies, metadata, excludedPath); }
-                catch (NeutralShapeSamplingException) when (dependencies.Morphs.All(automatic.Contains)) { continue; }
+                try { sampled = VrChatExpressionSampler.SampleNeutral(prepared, metadata.Controller, dependencies, metadata, excludedPath,
+                    fixedContext, plan, preserveTemporalRest: true); }
+                catch (NeutralShapeSamplingException) when (dependencies.Morphs.All(automatic.Contains) &&
+                    dependencies.NeutralDependencyMorphs.All(automatic.Contains)) { continue; }
                 catch (InvalidOperationException error) { throw WithAffected(error, dependencies.Morphs); }
                 foreach (var value in sampled)
                 {
@@ -57,7 +71,11 @@ namespace VRVlog.LilToonExporter
                     values[key] = value;
                 }
             }
-            return values.Values.OrderBy(value => value.Path, StringComparer.Ordinal)
+            plan.ReportTemporalRest(warnings);
+            // Different groups can share a native support channel. A later
+            // group must not turn an earlier captured phase into authored rest.
+            return values.Values.Where(value => !plan.TemporalMorphs.Contains(EditorCurveBinding.FloatCurve(value.Path,
+                    typeof(SkinnedMeshRenderer), "blendShape." + value.Shape))).OrderBy(value => value.Path, StringComparer.Ordinal)
                 .ThenBy(value => value.Shape, StringComparer.Ordinal).ToList();
         }
 
@@ -68,7 +86,7 @@ namespace VRVlog.LilToonExporter
             var affected = string.Join(", ", targets.Take(16));
             if (targets.Length > 16) affected += " ほか" + (targets.Length - 16) + "件";
             var message = "FXの初期表情を確定できません（対象: " + affected + "）: " + error.Message;
-            return error is NeutralShapeSamplingException ? new NeutralShapeSamplingException(message, error) :
+            return error is NeutralShapeSamplingException neutral ? new NeutralShapeSamplingException(message, error, neutral.DependencyMorphs) :
                 new InvalidOperationException(message, error);
         }
 

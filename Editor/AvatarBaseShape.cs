@@ -8,6 +8,35 @@ namespace VRVlog.LilToonExporter
     // authored rest face in geometry, with morphs relative to that rest face.
     internal static class AvatarBaseShape
     {
+        // A native renderer keeps the unbounded Animator scalar, but legacy
+        // mesh evaluation uses zero and the final authored frame as its bounds.
+        // The first frame is an interpolation knot, not the lower bound. Keep
+        // this policy separate from explicit VRM/profile endpoint arithmetic.
+        internal static double ClampSourceWeight(Mesh mesh, int shape, double weight)
+        {
+            var frame = mesh.GetBlendShapeFrameCount(shape) - 1;
+            if (frame < 0) throw new InvalidOperationException("BlendShape has no frames.");
+            var maximum = mesh.GetBlendShapeFrameWeight(shape, frame);
+            if (!Finite(maximum) || double.IsNaN(weight) || double.IsInfinity(weight))
+                throw new InvalidOperationException("表情のBlendShape値が不正です。");
+            // Unity evaluates a lone negative frame at the undeformed base when
+            // legacy clamping is enabled. Multiple negative frames still use
+            // their final authored frame as the upper bound.
+            if (frame == 0 && maximum < 0f) return 0d;
+            return Math.Min(maximum, Math.Max(0d, weight));
+        }
+
+        internal static void NormalizeSourceWeights(GameObject prepared, bool clampToSourceRange)
+        {
+            if (!clampToSourceRange) return;
+            foreach (var renderer in ExportRendererSelection.Enumerate(prepared))
+            {
+                if (!(renderer is SkinnedMeshRenderer skin) || skin.sharedMesh == null) continue;
+                for (var shape = 0; shape < skin.sharedMesh.blendShapeCount; shape++)
+                    skin.SetBlendShapeWeight(shape, (float)ClampSourceWeight(skin.sharedMesh, shape, skin.GetBlendShapeWeight(shape)));
+            }
+        }
+
         internal static void Preserve(GameObject source, GameObject clone, ICollection<Mesh> temporaryMeshes, ICollection<string> warnings,
             Func<Transform, bool> excluded = null)
         {
@@ -172,7 +201,8 @@ namespace VRVlog.LilToonExporter
         // One composed expression is one residual morph per renderer. Computing
         // absolute source deltas before subtracting the authored rest also handles
         // partial weights, negative weights and restoring a customized shape to 0.
-        internal static void AppendExpression(Mesh source, Mesh target, string name, float[] rest, float[] expression)
+        internal static void AppendExpression(Mesh source, Mesh target, string name, float[] rest, float[] expression,
+            bool clampToSourceRange = false)
         {
             if (ReferenceEquals(source, target)) throw new ArgumentException("The source mesh must remain unchanged.");
             if (rest.Length != source.blendShapeCount || expression.Length != rest.Length)
@@ -183,8 +213,8 @@ namespace VRVlog.LilToonExporter
                 if (float.IsNaN(rest[shape]) || float.IsInfinity(rest[shape]) || float.IsNaN(expression[shape]) || float.IsInfinity(expression[shape]))
                     throw new InvalidOperationException("表情のBlendShape値が不正です。");
                 if (rest[shape] == expression[shape]) continue;
-                var before = Evaluate(source, shape, rest[shape]);
-                var after = Evaluate(source, shape, expression[shape]);
+                var before = Evaluate(source, shape, clampToSourceRange ? ClampSourceWeight(source, shape, rest[shape]) : rest[shape]);
+                var after = Evaluate(source, shape, clampToSourceRange ? ClampSourceWeight(source, shape, expression[shape]) : expression[shape]);
                 for (var v = 0; v < source.vertexCount; v++)
                 {
                     delta.Vertices[v] += after.Vertices[v] - before.Vertices[v];
@@ -206,11 +236,12 @@ namespace VRVlog.LilToonExporter
             }
         }
 
-        internal static void AppendAnimatedShape(Mesh source, Mesh target, string name, int shape, double initial, double weight)
+        internal static void AppendAnimatedShape(Mesh source, Mesh target, string name, int shape, double initial, double weight,
+            bool clampToSourceRange = false)
         {
             if (ReferenceEquals(source, target)) throw new ArgumentException("The source mesh must remain unchanged.");
-            var before = Evaluate(source, shape, initial);
-            var after = Evaluate(source, shape, weight);
+            var before = Evaluate(source, shape, clampToSourceRange ? ClampSourceWeight(source, shape, initial) : initial);
+            var after = Evaluate(source, shape, clampToSourceRange ? ClampSourceWeight(source, shape, weight) : weight);
             for (var v = 0; v < source.vertexCount; v++)
             {
                 after.Vertices[v] -= before.Vertices[v];

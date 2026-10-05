@@ -468,6 +468,39 @@ namespace VRVlog.LilToonExporter.Tests
             Assert.That(selected["Contact"], Is.Zero);
         }
 
+        [TestCase(false)]
+        [TestCase(true)]
+        public void FixedMenuPrunesDormantAfkActionButRejectsExplicitlySelectedAfk(bool selectedAfk)
+        {
+            Driver(Gate(), Op("Set", "Face", 1)); FaceLayer();
+            controller.AddParameter("AFK", AnimatorControllerParameterType.Bool);
+            var other = AnimatorController.CreateAnimatorControllerAtPath(folder + "/AfkAction.controller");
+            other.AddParameter("AFK", AnimatorControllerParameterType.Bool); other.AddParameter("Face", AnimatorControllerParameterType.Int);
+            var machine = other.layers[0].stateMachine;
+            var idle = State(machine, "Normal"); machine.defaultState = idle;
+            var afk = State(machine, "AFK face", Clip("AFK face", 0)); Driver(afk, Op("Set", "Face", 2));
+            var transition = idle.AddTransition(afk); transition.hasExitTime = false; transition.duration = 0;
+            transition.AddCondition(AnimatorConditionMode.If, 0, "AFK"); metadata.OtherControllers.Add(other);
+            var selected = new Dictionary<string, float> { ["Menu"] = 1 };
+            if (selectedAfk) selected["AFK"] = 1;
+            if (selectedAfk)
+                Assert.That(Assert.Throws<InvalidOperationException>(() => SampleFixed(selected: selected)).Message,
+                    Does.Contain("FX以外").And.Contain("Face"));
+            else
+                Assert.That(SampleFixed(selected: selected).Single(value => value.Shape == "Face size").Weight, Is.EqualTo(75).Within(.01));
+        }
+
+        [Test]
+        public void FixedMenuStillRejectsReachableAdditionalMorphWithoutAParameterDriver()
+        {
+            Gate().motion = Clip("Menu face", 75);
+            var other = AnimatorController.CreateAnimatorControllerAtPath(folder + "/Other.controller");
+            var state = State(other.layers[0].stateMachine, "Another playable face", Clip("Another playable face", 0));
+            other.layers[0].stateMachine.defaultState = state; metadata.OtherControllers.Add(other);
+            Assert.That(Assert.Throws<InvalidOperationException>(() => SampleFixed()).Message,
+                Does.Contain("FX以外").And.Contain("Body/blendShape.Face size"));
+        }
+
         [Test]
         public void FixedExternalContextDoesNotReapplyMenuAfterAParameterDriverReset()
         {

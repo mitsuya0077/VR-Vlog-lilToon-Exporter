@@ -31,10 +31,15 @@ namespace VRVlog.LilToonExporter.LanTransfer
         private int lifetimeMinutes = 10;
         private Vector2 scroll;
 
-        public static string CreateSnapshotPath() => Path.Combine(Path.GetTempPath(), "VRVlogLanTransfers", Guid.NewGuid().ToString("N") + ".vrm");
+        public static string CreateSnapshotPath()
+        {
+            LanTransferAvailability.RequireEnabled();
+            return Path.Combine(Path.GetTempPath(), "VRVlogLanTransfers", Guid.NewGuid().ToString("N") + ".vrm");
+        }
 
         public static void Show(string path, string name)
         {
+            LanTransferAvailability.RequireEnabled();
             var window = GetWindow<LanVrmTransferWindow>(false, "スマホに送る");
             window.StopAndClean();
             window.snapshotPath = path;
@@ -47,6 +52,14 @@ namespace VRVlog.LilToonExporter.LanTransfer
 
         private void OnEnable()
         {
+            if (!LanTransferAvailability.Enabled)
+            {
+                StopAndClean();
+                addresses = Array.Empty<IPAddress>();
+                addressLabels = Array.Empty<string>();
+                error = null;
+                return;
+            }
             lifetimeMinutes = Mathf.Clamp(EditorPrefs.GetInt(LifetimePreference, 10), 1, 60);
             RefreshAddresses();
             EditorApplication.update += Poll;
@@ -64,6 +77,7 @@ namespace VRVlog.LilToonExporter.LanTransfer
 
         private void RefreshAddresses()
         {
+            if (!LanTransferAvailability.Enabled) return;
             var found = new List<(IPAddress Address, string Label)>();
             try
             {
@@ -83,6 +97,12 @@ namespace VRVlog.LilToonExporter.LanTransfer
 
         private void Begin()
         {
+            if (!LanTransferAvailability.Enabled)
+            {
+                StopAndClean();
+                error = LanTransferAvailability.DisabledMessage;
+                return;
+            }
             if (addresses.Length == 0 || starting != null || server != null || string.IsNullOrEmpty(snapshotPath)) return;
             var path = snapshotPath;
             var name = displayName;
@@ -109,6 +129,11 @@ namespace VRVlog.LilToonExporter.LanTransfer
 
         private void Poll()
         {
+            if (!LanTransferAvailability.Enabled)
+            {
+                StopAndClean();
+                return;
+            }
             if (starting != null && starting.IsCompleted)
             {
                 var completed = starting;
@@ -156,6 +181,12 @@ namespace VRVlog.LilToonExporter.LanTransfer
 
         private void OnGUI()
         {
+            if (!LanTransferAvailability.Enabled)
+            {
+                StopAndClean();
+                EditorGUILayout.HelpBox(LanTransferAvailability.DisabledMessage, MessageType.Info);
+                return;
+            }
             using (var scrolling = new EditorGUILayout.ScrollViewScope(scroll))
             {
                 scroll = scrolling.scrollPosition;

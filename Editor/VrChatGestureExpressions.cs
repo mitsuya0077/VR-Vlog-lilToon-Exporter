@@ -11,8 +11,8 @@ namespace VRVlog.LilToonExporter
     // A gesture's authored AnimationClip is a composed face in its own
     // right. Read that clip, not every mesh morph and not an arbitrary frame of
     // the live FX controller (whose independent blink can keep running forever).
-    // This route exports the clip on the authored base face, not a simulation of
-    // state behaviours, retained WD-Off values or additional Animator layers.
+    // Retain the exact authored state so its deterministic callbacks and native
+    // layer contributions are evaluated together with the selected face.
     internal static class VrChatGestureExpressions
     {
         internal static void Add(GameObject avatar, VrChatExpressionMenu.Source source, Func<string, bool> excludedPath = null)
@@ -29,14 +29,13 @@ namespace VRVlog.LilToonExporter
             }
             if (controller == null) return;
 
-            var seen = new HashSet<AnimationClip>();
+            var seen = new Dictionary<AnimationClip, List<VrChatExpressionMenu.Entry>>();
             foreach (var target in Discover(controller))
             {
                 var path = target.Path;
                 var motion = EffectiveMotion(controller, target.State, target.Layer);
                 var clip = motion as AnimationClip;
                 if (clip != null && replacements.TryGetValue(clip, out var replacement)) clip = replacement;
-                if (clip != null && !seen.Add(clip)) continue;
                 if (motion == null) continue;
                 // A BlendTree's children are not independent expressions. Never
                 // publish its leaves as if their authored mixing did not exist.
@@ -52,12 +51,49 @@ namespace VRVlog.LilToonExporter
                     if (!bindings.Any(IsMorph)) continue; // Hand/bone motions are not facial expressions.
                     ReadClip(avatar, clip, entry, excludedPath);
                     VrChatExpressionSampler.ApplyPermanentOverrides(avatar, runtime, entry, target.Layer, target.State.writeDefaultValues,
-                        excludedPath, metadata: source);
+                        excludedPath, metadata: source, sourceState: target.State);
                 }
                 catch (InvalidOperationException error) { entry.Error = error.Message; }
+                // Sharing a clip does not establish the same expression:
+                // effective state callbacks and native layer blending can
+                // change its result. Evaluate every registration first, keep
+                // distinct outcomes/errors, and merge only proven duplicates.
+                if (clip != null && entry.Error == null)
+                {
+                    if (!seen.TryGetValue(clip, out var outcomes))
+                        seen.Add(clip, outcomes = new List<VrChatExpressionMenu.Entry>());
+                    if (outcomes.Any(previous => SameOutcome(previous, entry))) continue;
+                    outcomes.Add(entry);
+                }
                 source.Entries.Add(entry);
                 if (source.Entries.Count > 512) throw new InvalidOperationException("表情候補が512件を超えています。FXの表情登録を整理してください。");
             }
+        }
+
+        private static bool SameOutcome(VrChatExpressionMenu.Entry first, VrChatExpressionMenu.Entry second)
+        {
+            if (first.Error != null || second.Error != null || !first.Duration.Equals(second.Duration) || first.Loop != second.Loop ||
+                first.ControlType != second.ControlType || first.ControlParameter != second.ControlParameter ||
+                first.Parameters.Count != second.Parameters.Count || first.Animation.Count != second.Animation.Count ||
+                !first.Messages.SequenceEqual(second.Messages) || !SameMorphs(first.Values, second.Values) ||
+                !SameMorphs(first.Unevaluated, second.Unevaluated)) return false;
+            if (first.Parameters.Any(pair => !second.Parameters.TryGetValue(pair.Key, out var value) || !pair.Value.Equals(value))) return false;
+            var a = first.Animation.OrderBy(value => value.Path, StringComparer.Ordinal).ThenBy(value => value.Shape, StringComparer.Ordinal).ToArray();
+            var b = second.Animation.OrderBy(value => value.Path, StringComparer.Ordinal).ThenBy(value => value.Shape, StringComparer.Ordinal).ToArray();
+            for (var index = 0; index < a.Length; index++)
+                if (a[index].Path != b[index].Path || a[index].Shape != b[index].Shape ||
+                    !VrChatExpressionBaker.SameCurve(a[index].Curve, b[index].Curve)) return false;
+            return true;
+        }
+
+        private static bool SameMorphs(IList<VrChatExpressionMenu.MorphValue> first, IList<VrChatExpressionMenu.MorphValue> second)
+        {
+            if (first.Count != second.Count) return false;
+            var a = first.OrderBy(value => value.Path, StringComparer.Ordinal).ThenBy(value => value.Shape, StringComparer.Ordinal).ToArray();
+            var b = second.OrderBy(value => value.Path, StringComparer.Ordinal).ThenBy(value => value.Shape, StringComparer.Ordinal).ToArray();
+            for (var index = 0; index < a.Length; index++)
+                if (a[index].Path != b[index].Path || a[index].Shape != b[index].Shape || !a[index].Weight.Equals(b[index].Weight)) return false;
+            return true;
         }
 
         private sealed class Target

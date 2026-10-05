@@ -6,7 +6,19 @@ on:
       version:
         description: Exporter version without the v prefix
         required: true
-        default: 0.11.10
+        default: 0.11.11-beta.1
+      channel:
+        description: Explicit publication channel (beta keeps the stable latest release)
+        type: choice
+        options: [beta, stable]
+        required: true
+        default: beta
+      expected_commit:
+        description: Full reviewed main commit SHA to publish
+        required: true
+      expected_package_sha256:
+        description: SHA256 of the validated exporter ZIP
+        required: true
       univrm_version:
         description: Pinned UniVRM version
         required: true
@@ -27,22 +39,22 @@ jobs:
         env:
           EXPORTER_VERSION: ${{ inputs.version }}
           UNIVRM_VERSION: ${{ inputs.univrm_version }}
+          RELEASE_CHANNEL: ${{ inputs.channel }}
+          EXPECTED_COMMIT: ${{ inputs.expected_commit }}
         run: |
-          python3 - <<'PY'
-          import json, os
-          package = json.load(open("package.json", encoding="utf-8"))
-          assert os.environ["GITHUB_REF"] == "refs/heads/main", "Publish only the reviewed main branch"
-          assert package["version"] == os.environ["EXPORTER_VERSION"]
-          assert "-" not in package["version"], "This workflow publishes stable versions only"
-          compat = json.load(open("Compatibility/dependencies.json", encoding="utf-8"))
-          assert os.environ["UNIVRM_VERSION"] == compat["uniVrm"]["releaseVersion"]
-          PY
+          python3 Tools/release_policy.py > release-flags.txt
       - name: Validate exporter before packaging
         run: python3 Tools/validate.py
+      - name: Verify publication channels and listing integrity
+        run: |
+          python3 Tools/test-release-policy.py
+          python3 Tools/test-listing.py
       - name: Check public contents and package isolation
         run: |
           python3 Tools/check-public-content.py
           python3 Tools/test-package.py
+      - name: Verify explicit AAO source correction safety
+        run: python3 Tools/test-aao-vertex-buffer-patch.py
       - name: Check dependency compatibility
         run: |
           python3 Tools/generate-compatibility.py
@@ -53,6 +65,12 @@ jobs:
       - name: Run exporter behavior checks
         shell: pwsh
         run: ./Tools/run-behavior-tests.ps1
+      - name: Run pinned TLS sender checks
+        shell: pwsh
+        run: ./Tools/run-lan-transfer-tests.ps1
+      - name: Validate optional humanoid pose contract
+        shell: pwsh
+        run: ./Tools/run-pose-contract-tests.ps1
       - name: Run material bake preflight checks
         shell: pwsh
         run: ./Tools/run-bake-tests.ps1
@@ -62,8 +80,17 @@ jobs:
       - name: Build exporter package
         env:
           VERSION: ${{ inputs.version }}
+          EXPECTED_PACKAGE_SHA256: ${{ inputs.expected_package_sha256 }}
         run: |
           python3 Tools/build-package.py --output "artifacts/com.vrvlog.liltoon-vrm-exporter-${VERSION}.zip"
+          python3 - <<'PY'
+          import hashlib, os, re
+          from pathlib import Path
+          expected = os.environ["EXPECTED_PACKAGE_SHA256"]
+          actual = hashlib.sha256(Path("artifacts/com.vrvlog.liltoon-vrm-exporter-" + os.environ["VERSION"] + ".zip").read_bytes()).hexdigest()
+          if not re.fullmatch(r"[0-9a-f]{64}", expected) or actual != expected:
+              raise SystemExit("Built ZIP differs from the validated release candidate: " + actual)
+          PY
       - name: Build UniVRM dependency packages
         env:
           UNIVRM_VERSION: ${{ inputs.univrm_version }}
@@ -112,13 +139,15 @@ jobs:
               raise SystemExit("Release notes must not be empty")
           Path("artifacts/release-notes.md").write_text(notes, encoding="utf-8")
           PY
+          mapfile -t release_flags < release-flags.txt
           gh release create "v${VERSION}" \
             "artifacts/com.vrvlog.liltoon-vrm-exporter-${VERSION}.zip" \
             "artifacts/com.vrmc.gltf-${UNIVRM_VERSION}.zip" \
             "artifacts/com.vrmc.vrm-${UNIVRM_VERSION}.zip" \
             --title "VR Vlog lilToon VRM Exporter ${VERSION}" \
             --target "${GITHUB_SHA}" \
-            --notes-file artifacts/release-notes.md
+            --notes-file artifacts/release-notes.md \
+            "${release_flags[@]}"
   dispatch-listing:
     needs: release
     runs-on: ubuntu-latest

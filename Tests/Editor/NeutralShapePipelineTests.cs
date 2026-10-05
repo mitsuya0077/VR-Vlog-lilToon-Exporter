@@ -34,8 +34,13 @@ namespace VRVlog.LilToonExporter.Tests
             using var f = new AttachmentConnectionTests.Fixture();
             var folder = "Assets/__NeutralPipeline_" + Guid.NewGuid().ToString("N");
             AssetDatabase.CreateFolder("Assets", folder.Substring(7));
+            var legacyClamp = PlayerSettings.legacyClampBlendShapeWeights;
             try
             {
+                // This fixture deliberately tests unlimited authored FX weights.
+                // Keep that contract explicit instead of inheriting the host
+                // project's player policy for ordinary VRChat expressions.
+                PlayerSettings.legacyClampBlendShapeWeights = false;
                 f.Mesh.ClearBlendShapes();
                 Vector3[] Delta(Vector3 v) => Enumerable.Repeat(v, f.Mesh.vertexCount).ToArray();
                 f.Mesh.AddBlendShapeFrame("Open", 50, Delta(Vector3.up * .02f), Delta(new Vector3(.02f, .01f, 0)), null);
@@ -135,7 +140,7 @@ namespace VRVlog.LilToonExporter.Tests
                 }
                 return bytes;
             }
-            finally { AssetDatabase.DeleteAsset(folder); }
+            finally { PlayerSettings.legacyClampBlendShapeWeights = legacyClamp; AssetDatabase.DeleteAsset(folder); }
         }
 
         static Type Sdk(string name) => AppDomain.CurrentDomain.GetAssemblies().Select(a => a.GetType(name)).FirstOrDefault(t => t != null);

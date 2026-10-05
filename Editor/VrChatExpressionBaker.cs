@@ -151,6 +151,7 @@ namespace VRVlog.LilToonExporter
             // Bind against the actual exported names, never guessed mesh indices.
             var prefix = "__VRVlog_Menu_" + Guid.NewGuid().ToString("N") + "_";
             var serial = 0;
+            var clampToSourceRange = UnityEditor.PlayerSettings.legacyClampBlendShapeWeights;
             long generatedBytes = 0;
             var basis = new Dictionary<(Mesh mesh, int shape, double initial, double value), string>();
             void Reserve(Mesh mesh)
@@ -182,7 +183,7 @@ namespace VRVlog.LilToonExporter
                         pose[index] = value.Weight;
                     }
                     var name = prefix + serial++;
-                    AvatarBaseShape.AppendExpression(originalMesh, copy.sharedMesh, name, rest, pose);
+                    AvatarBaseShape.AppendExpression(originalMesh, copy.sharedMesh, name, rest, pose, clampToSourceRange);
                     expression.Targets.Add(name);
                 }
                 if (plan.Animation.Count > 0)
@@ -212,7 +213,7 @@ namespace VRVlog.LilToonExporter
                             {
                                 Reserve(original);
                                 target = ExpressionAnimationData.TargetPrefix + prefix + serial++;
-                                AvatarBaseShape.AppendAnimatedShape(original, copy, target, shape, initial, weight);
+                                AvatarBaseShape.AppendAnimatedShape(original, copy, target, shape, initial, weight, clampToSourceRange);
                                 basis.Add((copy, shape, initial, weight), target);
                             }
                             channel.Points.Add(new ExpressionAnimationData.Point { Value = weight, Target = target });

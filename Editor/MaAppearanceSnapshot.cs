@@ -51,11 +51,11 @@ namespace VRVlog.LilToonExporter
                 var states = (IDictionary)Field(analysis, "InitialStates");
                 var selectorType = Required(Ma + "editor.IMeshSelector");
                 var selectors = new Dictionary<SkinnedMeshRenderer, IList>();
-                bool Enabled(string name) => PreviewEnabled(source, context, name);
-                var shape = Enabled("ShapeChangerPreview");
-                var material = Enabled("MaterialSetterPreview");
-                var visibility = Enabled("ObjectSwitcherPreview");
-                var cutter = Enabled("MeshDeleterPreview");
+                // Preview toggles control only the Editor display. Freeze all
+                // authored operations resolved by MA (including its simulator
+                // selections) before removing their components from the copy.
+                // Otherwise preview-off exports silently discard build-time
+                // mesh deletion, shape, material and visibility operations.
                 foreach (DictionaryEntry state in states)
                 {
                     var original = (Object)Field(state.Key, "TargetObject");
@@ -63,20 +63,20 @@ namespace VRVlog.LilToonExporter
                     var target = original;
                     if (!analyzeClone && !map.TryGetValue(original, out target)) continue;
                     var name = (string)Field(state.Key, "PropertyName");
-                    if (visibility && target is GameObject go && name == "m_IsActive" && state.Value is float active)
+                    if (target is GameObject go && name == "m_IsActive" && state.Value is float active)
                         go.SetActive(active > .5f);
-                    else if (shape && target is SkinnedMeshRenderer skin && name.StartsWith("blendShape.", StringComparison.Ordinal) && state.Value is float weight)
+                    else if (target is SkinnedMeshRenderer skin && name.StartsWith("blendShape.", StringComparison.Ordinal) && state.Value is float weight)
                     {
                         var index = skin.sharedMesh == null ? -1 : skin.sharedMesh.GetBlendShapeIndex(name.Substring(11));
                         if (index >= 0) skin.SetBlendShapeWeight(index, Mathf.Clamp(weight, 0, 100));
                     }
-                    else if (material && target is Renderer renderer && name.StartsWith("m_Materials.Array.data[", StringComparison.Ordinal) && state.Value is Material replacement)
+                    else if (target is Renderer renderer && name.StartsWith("m_Materials.Array.data[", StringComparison.Ordinal) && state.Value is Material replacement)
                     {
                         var index = int.Parse(name.Substring(23).TrimEnd(']'));
                         var slots = renderer.sharedMaterials;
                         if (index >= 0 && index < slots.Length) { slots[index] = replacement; renderer.sharedMaterials = slots; }
                     }
-                    else if (cutter && target is SkinnedMeshRenderer cut && state.Value != null && selectorType.IsInstanceOfType(state.Value))
+                    else if (target is SkinnedMeshRenderer cut && state.Value != null && selectorType.IsInstanceOfType(state.Value))
                     {
                         if (!selectors.TryGetValue(cut, out var list))
                             selectors.Add(cut, list = (IList)Activator.CreateInstance(typeof(List<>).MakeGenericType(selectorType)));
@@ -106,19 +106,6 @@ namespace VRVlog.LilToonExporter
             {
                 throw new InvalidOperationException("Modular Avatar の現在の表示を固定できませんでした。MA " + Compatibility.DependencyPolicy.ModularAvatarReference + " / NDMF " + Compatibility.DependencyPolicy.NdmfReference + " で確認済みのプレビュー API が必要です。ALCOM でパッケージを確認してください。原本は変更していません。", error);
             }
-        }
-
-        static bool PreviewEnabled(GameObject root, object context, string name)
-        {
-            var preview = Required("nadena.dev.ndmf.preview.NDMFPreview");
-            if (!(bool)preview.GetProperty("EnablePreviewsUI", Members).GetValue(null) ||
-                (int)preview.GetProperty("DisablePreviewDepth", Members).GetValue(null) != 0 ||
-                (bool)preview.GetMethod("IsExcludedFromDefaultPreview", Members).Invoke(null, new object[] { root })) return false;
-            var prefsType = Required("nadena.dev.ndmf.preview.UI.PreviewPrefs");
-            var prefs = prefsType.GetProperty("instance", Members).GetValue(null);
-            if (!(bool)prefsType.GetMethod("IsPreviewPluginEnabled").Invoke(prefs, new object[] { "nadena.dev.modular-avatar" })) return false;
-            var filter = Activator.CreateInstance(Required(Ma + "editor." + name), true);
-            return (bool)filter.GetType().GetMethod("IsEnabled").Invoke(filter, new[] { context });
         }
 
         static Dictionary<string, string> ParameterMap(object analyzer, Dictionary<Object, Object> objects)

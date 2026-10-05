@@ -2,6 +2,8 @@ using System;
 using System.Collections.Generic;
 using System.Linq;
 using NUnit.Framework;
+using UniVRM10;
+using Unity.Collections;
 using UnityEditor;
 using UnityEditor.Animations;
 using UnityEngine;
@@ -64,6 +66,17 @@ namespace VRVlog.LilToonExporter.Tests
             }
         }
 
+        private void SetAction(RuntimeAnimatorController runtime)
+        {
+            using var data = new SerializedObject(descriptor);
+            var layers = data.FindProperty("baseAnimationLayers"); layers.arraySize = 2;
+            var layer = layers.GetArrayElementAtIndex(1);
+            var type = layer.FindPropertyRelative("type"); type.enumValueIndex = Array.IndexOf(type.enumNames, "Action");
+            layer.FindPropertyRelative("isDefault").boolValue = false;
+            layer.FindPropertyRelative("animatorController").objectReferenceValue = runtime;
+            data.ApplyModifiedPropertiesWithoutUndo();
+        }
+
         private AnimationClip Clip(string shape, AnimationCurve curve)
         {
             var clip = new AnimationClip { name = shape + " pose" };
@@ -105,6 +118,671 @@ namespace VRVlog.LilToonExporter.Tests
             Assert.That(skin.GetBlendShapeWeight(3), Is.EqualTo(35));
         }
 
+        [TestCase(false)]
+        [TestCase(true)]
+        public void NeutralAcceptsConstantActivationThatPreservesThePreparedObject(bool active)
+        {
+            var target = new GameObject("Prepared clothing"); target.transform.SetParent(avatar.transform, false); target.SetActive(active);
+            var clip = (AnimationClip)Open(75).motion;
+            AnimationUtility.SetEditorCurve(clip, EditorCurveBinding.FloatCurve(target.name, typeof(GameObject), "m_IsActive"),
+                AnimationCurve.Constant(0, 1, active ? 1 : 0));
+            var before = EditorJsonUtility.ToJson(clip);
+            Assert.That(NeutralShapeSampler.Sample(avatar).Single(value => value.Shape == "Open").Weight, Is.EqualTo(75).Within(.01));
+            Assert.That(target.activeSelf, Is.EqualTo(active));
+            Assert.That(skin.GetBlendShapeWeight(0), Is.Zero);
+            Assert.That(EditorJsonUtility.ToJson(clip), Is.EqualTo(before));
+        }
+
+        [Test]
+        public void NeutralAcceptsAnAbsentConstantDummyActivationTarget()
+        {
+            var face = (AnimationClip)Open(75).motion;
+            var clip = new AnimationClip { name = "Generated empty pose" };
+            AnimationUtility.SetEditorCurve(clip, EditorCurveBinding.FloatCurve("_ignored", typeof(GameObject), "m_IsActive"), AnimationCurve.Constant(0, 1, 0));
+            AssetDatabase.AddObjectToAsset(clip, controller);
+            var machine = controller.layers[0].stateMachine;
+            machine.defaultState.motion = clip; machine.defaultState.writeDefaultValues = true;
+            var faceLayer = Layer("Authored neutral face"); faceLayer.defaultState = State(faceLayer, face);
+            Assert.That(avatar.transform.Find("_ignored"), Is.Null);
+            Assert.That(NeutralShapeSampler.Sample(avatar).Single(value => value.Shape == "Open").Weight, Is.EqualTo(75).Within(.01));
+            Assert.That(avatar.transform.Find("_ignored"), Is.Null);
+        }
+
+        [Test]
+        public void MissingAlternateHairLayoutCannotBindOrClaimTheAccompanyingMorph()
+        {
+            var clip = (AnimationClip)Open(75).motion;
+            AnimationUtility.SetEditorCurve(clip, EditorCurveBinding.FloatCurve("Hair_Root/Hair_Ahoge/Ahoge.A", typeof(Transform), "localEulerAnglesRaw.x"),
+                AnimationCurve.Constant(0, 1, 31));
+            var before = EditorJsonUtility.ToJson(clip);
+            Assert.That(NeutralShapeSampler.Sample(avatar).Single(value => value.Shape == "Open").Weight, Is.EqualTo(75).Within(.01));
+            Assert.That(avatar.transform.Find("Hair_Root"), Is.Null);
+            Assert.That(skin.GetBlendShapeWeight(0), Is.Zero);
+            Assert.That(EditorJsonUtility.ToJson(clip), Is.EqualTo(before));
+        }
+
+        [TestCase("material._Color.r")]
+        [TestCase("m_Enabled")]
+        public void MissingTypedRendererComponentCannotClaimOrBlockARequiredMorph(string property)
+        {
+            var clip = (AnimationClip)Open(75).motion;
+            AnimationUtility.SetEditorCurve(clip, EditorCurveBinding.FloatCurve("Body", typeof(MeshRenderer), property), AnimationCurve.Constant(0, 1, 0));
+            var required = new[] { EditorCurveBinding.FloatCurve("Body", typeof(SkinnedMeshRenderer), "blendShape.Open") };
+            var before = EditorJsonUtility.ToJson(clip);
+            Assert.That(skin.GetComponent<MeshRenderer>(), Is.Null);
+            Assert.That(NeutralShapeSampler.Sample(avatar, requiredMorphs: required).Single(value => value.Shape == "Open").Weight, Is.EqualTo(75).Within(.01));
+            Assert.That(skin.enabled, Is.True);
+            Assert.That(skin.GetBlendShapeWeight(0), Is.Zero);
+            Assert.That(EditorJsonUtility.ToJson(clip), Is.EqualTo(before));
+        }
+
+        [TestCase(false)]
+        [TestCase(true)]
+        public void AppearanceCoupledStartupKeepsItsEntirePreparedConfiguration(bool affectsRendererAncestor)
+        {
+            var target = affectsRendererAncestor ? skin.gameObject : new GameObject("Prepared clothing");
+            if (!affectsRendererAncestor) target.transform.SetParent(avatar.transform, false);
+            var clip = (AnimationClip)Open(75).motion;
+            AnimationUtility.SetEditorCurve(clip, EditorCurveBinding.FloatCurve(target.name, typeof(GameObject), "m_IsActive"), AnimationCurve.Constant(0, 1, 0));
+            var warnings = new List<string>();
+            var values = NeutralShapeSampler.Sample(avatar, warnings: warnings);
+            Assert.That(values, Is.Empty);
+            Assert.That(warnings.Single(), Does.Contain(clip.name).And.Contain(target.name).And.Contain("m_IsActive"));
+            Assert.That(target.activeSelf, Is.True);
+            Assert.That(skin.GetBlendShapeWeight(0), Is.Zero);
+        }
+
+        [Test]
+        public void DelayedAppearanceConfigurationKeepsItsPreparedMorphAndActivationTogether()
+        {
+            var target = new GameObject("Prepared clothing"); target.transform.SetParent(avatar.transform, false);
+            var clip = (AnimationClip)Open(75).motion;
+            AnimationUtility.SetEditorCurve(clip, EditorCurveBinding.FloatCurve(target.name, typeof(GameObject), "m_IsActive"),
+                new AnimationCurve(new Keyframe(0, 1), new Keyframe(10, 1), new Keyframe(11, 0)));
+            var warnings = new List<string>();
+            Assert.That(NeutralShapeSampler.Sample(avatar, warnings: warnings), Is.Empty);
+            Assert.That(warnings.Single(), Does.Contain("m_IsActive"));
+            Assert.That(target.activeSelf, Is.True);
+            Assert.That(skin.GetBlendShapeWeight(0), Is.Zero);
+        }
+
+        [TestCase(false)]
+        [TestCase(true)]
+        public void CurrentCapHairAndMaskStayTogetherWhileIndependentFaceAndPermanentMorphReconstruct(bool writeDefaults)
+        {
+            mesh.AddBlendShapeFrame("Cap mask", 100, Enumerable.Repeat(Vector3.right * .2f, 3).ToArray(), null, null);
+            skin.SetBlendShapeWeight(4, 25);
+            var cap = new GameObject("Cap"); cap.transform.SetParent(avatar.transform, false); cap.SetActive(false);
+            var hair = new GameObject("Hair"); hair.transform.SetParent(avatar.transform, false);
+            hair.transform.localEulerAngles = new Vector3(345, 9, 328);
+            var sourceHair = hair.transform.localRotation;
+            var startup = (AnimationClip)Open(75).motion;
+            AnimationUtility.SetEditorCurve(startup, EditorCurveBinding.FloatCurve("Body", typeof(SkinnedMeshRenderer), "blendShape.Cap mask"),
+                AnimationCurve.Constant(0, 1, 0));
+            var clothing = Layer("Current scene wardrobe differs from authored defaults");
+            var capOn = Clip("Cap mask", AnimationCurve.Constant(0, 1, 100)); capOn.name = "Authored Cap ON";
+            AnimationUtility.SetEditorCurve(capOn, EditorCurveBinding.FloatCurve("Outfit_Mobile", typeof(SkinnedMeshRenderer), "blendShape.Cap_OFF"),
+                AnimationCurve.Constant(0, 1, 100));
+            AnimationUtility.SetEditorCurve(capOn, EditorCurveBinding.FloatCurve("Cap", typeof(GameObject), "m_IsActive"), AnimationCurve.Constant(0, 1, 1));
+            foreach (var axis in new[] { (Name: "x", Value: 31f), (Name: "y", Value: -13f), (Name: "z", Value: -144f) })
+                AnimationUtility.SetEditorCurve(capOn, EditorCurveBinding.FloatCurve("Hair", typeof(Transform), "localEulerAnglesRaw." + axis.Name),
+                    AnimationCurve.Constant(0, 1, axis.Value));
+            clothing.defaultState = State(clothing, capOn, writeDefaults);
+            // A generic FaceEmo common reset may mention the mask too. It does
+            // not transfer ownership away from the prepared wardrobe group.
+            var common = Layer("Common face above wardrobe"); common.defaultState = State(common, startup);
+            var pupil = Layer("Permanent pupil setting"); pupil.defaultState = State(pupil, Clip("Untouched", AnimationCurve.Constant(0, 1, 80)));
+            var sourceController = EditorJsonUtility.ToJson(controller);
+            var warnings = new List<string>();
+            var values = NeutralShapeSampler.Sample(avatar, warnings: warnings);
+            Assert.That(values.Select(value => value.Shape), Is.EquivalentTo(new[] { "Open", "Untouched" }));
+            Assert.That(values.Single(value => value.Shape == "Open").Weight, Is.EqualTo(75).Within(.01));
+            Assert.That(values.Single(value => value.Shape == "Untouched").Weight, Is.EqualTo(80).Within(.01));
+            Assert.That(warnings.Any(warning => warning.Contains("Cap mask") && warning.Contains("Authored Cap ON")), Is.True);
+            Assert.That(warnings.Any(warning => warning.Contains("Outfit_Mobile") && warning.Contains("Cap_OFF")), Is.True);
+            var prepared = Object.Instantiate(avatar);
+            try
+            {
+                NeutralShapeSnapshot.Apply(prepared, values);
+                var preparedSkin = prepared.transform.Find("Body").GetComponent<SkinnedMeshRenderer>();
+                Assert.That(preparedSkin.GetBlendShapeWeight(0), Is.EqualTo(75).Within(.01));
+                Assert.That(preparedSkin.GetBlendShapeWeight(3), Is.EqualTo(80).Within(.01));
+                Assert.That(preparedSkin.GetBlendShapeWeight(4), Is.EqualTo(25));
+                Assert.That(prepared.transform.Find("Cap").gameObject.activeSelf, Is.False);
+                Assert.That(Quaternion.Angle(prepared.transform.Find("Hair").localRotation, sourceHair), Is.LessThan(.001));
+            }
+            finally { Object.DestroyImmediate(prepared); }
+            Assert.That(skin.GetBlendShapeWeight(0), Is.Zero);
+            Assert.That(skin.GetBlendShapeWeight(3), Is.EqualTo(35));
+            Assert.That(skin.GetBlendShapeWeight(4), Is.EqualTo(25));
+            Assert.That(cap.activeSelf, Is.False);
+            Assert.That(Quaternion.Angle(hair.transform.localRotation, sourceHair), Is.LessThan(.001));
+            Assert.That(EditorJsonUtility.ToJson(controller), Is.EqualTo(sourceController));
+        }
+
+        [Test]
+        public void ExplicitRequiredMorphCannotBeSeparatedFromItsAppearanceConfiguration()
+        {
+            var clothing = new GameObject("Clothing"); clothing.transform.SetParent(avatar.transform, false);
+            var clip = (AnimationClip)Open(75).motion;
+            AnimationUtility.SetEditorCurve(clip, EditorCurveBinding.FloatCurve("Clothing", typeof(GameObject), "m_IsActive"), AnimationCurve.Constant(0, 1, 0));
+            var required = new[] { EditorCurveBinding.FloatCurve("Body", typeof(SkinnedMeshRenderer), "blendShape.Open") };
+            Assert.That(Assert.Throws<InvalidOperationException>(() => NeutralShapeSampler.Sample(avatar, requiredMorphs: required)).Message,
+                Does.Contain("必須").And.Contain("blendShape.Open").And.Contain("Clothing"));
+            Assert.That(clothing.activeSelf, Is.True);
+        }
+
+        [TestCase(false, 0, false)]
+        [TestCase(true, 0, false)]
+        [TestCase(false, 1, false)]
+        [TestCase(true, 1, false)]
+        [TestCase(false, 2, true)]
+        [TestCase(true, 2, true)]
+        public void SharedCustomAppearanceControlKeepsSeparateVisibilityAndMaskTogetherWithoutClaimingGenericResetFace(bool requiredMask,
+            int copyHops, bool convertRange)
+        {
+            mesh.AddBlendShapeFrame("Cap mask", 100, Enumerable.Repeat(Vector3.right * .2f, 3).ToArray(), null, null);
+            skin.SetBlendShapeWeight(4, 25);
+            controller.AddParameter("Cap selected", AnimatorControllerParameterType.Bool);
+            var maskInput = "Cap selected";
+            var copyOperations = new List<VrChatParameterDriver.Operation>();
+            for (var hop = 1; hop <= copyHops; hop++)
+            {
+                var copied = "Cap alias " + hop;
+                controller.AddParameter(copied, AnimatorControllerParameterType.Bool);
+                var copy = ParameterDriverExpressionTests.Op("Copy", copied, source: maskInput);
+                copy.ConvertRange = convertRange; copy.SourceMin = 0; copy.SourceMax = 1; copy.DestinationMin = 0; copy.DestinationMax = 2;
+                copyOperations.Add(copy); maskInput = copied;
+            }
+            var cap = new GameObject("Cap"); cap.transform.SetParent(avatar.transform, false); cap.SetActive(false);
+            var face = (AnimationClip)Open(75).motion;
+            AnimationUtility.SetEditorCurve(face, EditorCurveBinding.FloatCurve("Body", typeof(SkinnedMeshRenderer), "blendShape.Cap mask"),
+                AnimationCurve.Constant(0, 1, 0));
+            var visibility = Layer("Cap visibility route");
+            var off = new AnimationClip { name = "Cap OFF visibility" };
+            var on = new AnimationClip { name = "Cap ON visibility" };
+            AnimationUtility.SetEditorCurve(off, EditorCurveBinding.FloatCurve("Cap", typeof(GameObject), "m_IsActive"), AnimationCurve.Constant(0, 1, 0));
+            AnimationUtility.SetEditorCurve(on, EditorCurveBinding.FloatCurve("Cap", typeof(GameObject), "m_IsActive"), AnimationCurve.Constant(0, 1, 1));
+            AssetDatabase.AddObjectToAsset(off, controller); AssetDatabase.AddObjectToAsset(on, controller);
+            visibility.defaultState = State(visibility, off);
+            var shown = State(visibility, on);
+            var show = visibility.defaultState.AddTransition(shown); show.hasExitTime = false; show.duration = 0;
+            show.AddCondition(AnimatorConditionMode.If, 0, "Cap selected");
+            var mask = Layer("Separate cap mask route"); mask.defaultState = State(mask, Clip("Cap mask", AnimationCurve.Constant(0, 1, 0)));
+            var covered = State(mask, Clip("Cap mask", AnimationCurve.Constant(0, 1, 100)));
+            var cover = mask.defaultState.AddTransition(covered); cover.hasExitTime = false; cover.duration = 0;
+            cover.AddCondition(AnimatorConditionMode.If, 0, maskInput);
+            var common = Layer("Generic common reset"); common.defaultState = State(common, face);
+            if (copyOperations.Count > 0)
+            {
+                var aliases = Layer("Copy appearance inputs"); aliases.defaultState = State(aliases, null);
+                ParameterDriverExpressionTests.Driver(aliases.defaultState, copyOperations.ToArray());
+            }
+            var before = EditorJsonUtility.ToJson(controller);
+            var warnings = new List<string>();
+            var required = requiredMask ? new[] { EditorCurveBinding.FloatCurve("Body", typeof(SkinnedMeshRenderer), "blendShape.Cap mask") } : null;
+            if (requiredMask)
+                Assert.That(Assert.Throws<InvalidOperationException>(() => NeutralShapeSampler.Sample(avatar, requiredMorphs: required)).Message,
+                    Does.Contain("必須").And.Contain("Cap selected").And.Contain("Cap mask"));
+            else
+            {
+                var values = NeutralShapeSampler.Sample(avatar, warnings: warnings);
+                Assert.That(values.Select(value => value.Shape), Is.EqualTo(new[] { "Open" }));
+                Assert.That(values.Single().Weight, Is.EqualTo(75).Within(.01));
+                Assert.That(warnings.Single(), Does.Contain("Cap mask").And.Contain("Cap selected"));
+                if (copyHops > 0) Assert.That(warnings.Single(), Does.Contain(maskInput).And.Contain("Parameter Driver Copy"));
+                NeutralShapeSnapshot.Apply(avatar, values);
+                Assert.That(skin.GetBlendShapeWeight(0), Is.EqualTo(75).Within(.01));
+            }
+            Assert.That(skin.GetBlendShapeWeight(4), Is.EqualTo(25));
+            Assert.That(cap.activeSelf, Is.False);
+            Assert.That(EditorJsonUtility.ToJson(controller), Is.EqualTo(before));
+        }
+
+        [TestCase("dormant")]
+        [TestCase("reachable")]
+        [TestCase("custom")]
+        [TestCase("height")]
+        [TestCase("curve writer")]
+        [TestCase("driver writer")]
+        [TestCase("other writer")]
+        public void AppearanceOwnershipPrunesOnlyProvedNormalExternalBranches(string scenario)
+        {
+            var face = (AnimationClip)Open(75).motion;
+            var input = scenario == "custom" ? "Wardrobe mode" : scenario == "height" ? "EyeHeightAsMeters" : "AFK";
+            var type = scenario == "height" ? AnimatorControllerParameterType.Float : AnimatorControllerParameterType.Bool;
+            controller.AddParameter(new AnimatorControllerParameter { name = input, type = type, defaultBool = true });
+            var support = Layer("Normal or mixed appearance support");
+            var idleClip = new AnimationClip { name = "Waiting" }; AssetDatabase.AddObjectToAsset(idleClip, controller);
+            support.defaultState = State(support, idleClip, writeDefaults: true);
+            var mixed = Clip("Open", AnimationCurve.Constant(0, 1, 10)); mixed.name = "Mixed alternate configuration";
+            AnimationUtility.SetEditorCurve(mixed, EditorCurveBinding.FloatCurve("Body", typeof(Transform), "m_LocalPosition.x"),
+                AnimationCurve.Constant(0, 1, 1));
+            var alternate = State(support, mixed);
+            var transition = support.defaultState.AddTransition(alternate); transition.hasExitTime = false; transition.duration = 0;
+            transition.AddCondition(scenario == "height" ? AnimatorConditionMode.Greater : scenario == "reachable" ?
+                AnimatorConditionMode.IfNot : AnimatorConditionMode.If, 0, input);
+            var common = Layer("Face above native support"); common.defaultState = State(common, face);
+            if (scenario == "curve writer")
+            {
+                var writer = Layer("Authored AFK curve");
+                var clip = new AnimationClip { name = "AFK input writer" };
+                AnimationUtility.SetEditorCurve(clip, EditorCurveBinding.FloatCurve("", typeof(Animator), "AFK"), AnimationCurve.Constant(0, 1, 1));
+                AssetDatabase.AddObjectToAsset(clip, controller); writer.defaultState = State(writer, clip);
+            }
+            if (scenario == "driver writer")
+                ParameterDriverExpressionTests.Driver(common.defaultState, ParameterDriverExpressionTests.Op("Set", "AFK", 1));
+            if (scenario == "other writer")
+            {
+                var other = AnimatorController.CreateAnimatorControllerAtPath(folder + "/Action.controller");
+                other.AddParameter("AFK", AnimatorControllerParameterType.Bool);
+                var state = other.layers[0].stateMachine.AddState("Writes shared external input");
+                other.layers[0].stateMachine.defaultState = state; state.writeDefaultValues = false;
+                ParameterDriverExpressionTests.Driver(state, ParameterDriverExpressionTests.Op("Set", "AFK", 1));
+                SetAction(other);
+            }
+            var required = new[] { EditorCurveBinding.FloatCurve("Body", typeof(SkinnedMeshRenderer), "blendShape.Open") };
+            var warnings = new List<string>();
+            if (scenario == "dormant")
+            {
+                var values = NeutralShapeSampler.Sample(avatar, requiredMorphs: required, warnings: warnings);
+                Assert.That(values.Single().Shape, Is.EqualTo("Open"));
+                Assert.That(values.Single().Weight, Is.EqualTo(75).Within(.01));
+                Assert.That(warnings, Is.Empty);
+            }
+            else Assert.That(Assert.Throws<InvalidOperationException>(() => NeutralShapeSampler.Sample(avatar, requiredMorphs: required)).Message,
+                Does.Contain("必須").And.Contain("Mixed alternate configuration"));
+            Assert.That(skin.transform.localPosition, Is.EqualTo(Vector3.zero));
+            Assert.That(skin.GetBlendShapeWeight(0), Is.Zero);
+        }
+
+        [Test]
+        public void DeclaredTrackingProfileCannotSilentlyRetainAnAppearanceCoupledRequiredShape()
+        {
+            var clothing = new GameObject("Clothing"); clothing.transform.SetParent(avatar.transform, false);
+            var clip = (AnimationClip)Open(75).motion;
+            AnimationUtility.SetEditorCurve(clip, EditorCurveBinding.FloatCurve("Clothing", typeof(GameObject), "m_IsActive"), AnimationCurve.Constant(0, 1, 0));
+            var profile = ScriptableObject.CreateInstance<VrmTrackingProfile>();
+            profile.expressions = VrmTrackingExpressions.Names.Select(name => new TrackingExpression
+                { name = name, morphs = new[] { new TrackingMorph { shape = "Open", weight = 1 } } }).ToArray();
+            avatar.AddComponent<VrmTrackingMarker>().profile = profile;
+            try
+            {
+                Assert.That(Assert.Throws<InvalidOperationException>(() => NeutralShapeSampler.Sample(avatar)).Message,
+                    Does.Contain("必須").And.Contain("blendShape.Open").And.Contain("Clothing"));
+                Assert.That(clothing.activeSelf, Is.True);
+                Assert.That(skin.GetBlendShapeWeight(0), Is.Zero);
+            }
+            finally { Object.DestroyImmediate(profile); }
+        }
+
+        [TestCase(false)]
+        [TestCase(true)]
+        public void AuthoredEndpointObligationUsesItsFirstBindingAndRetainsDisabledZeroCoverage(bool firstZero)
+        {
+            var clothing = new GameObject("Clothing"); clothing.transform.SetParent(avatar.transform, false);
+            var clip = (AnimationClip)Open(75).motion;
+            AnimationUtility.SetEditorCurve(clip, EditorCurveBinding.FloatCurve("Clothing", typeof(GameObject), "m_IsActive"), AnimationCurve.Constant(0, 1, 0));
+            var vrm = ScriptableObject.CreateInstance<VRM10Object>();
+            var expression = ScriptableObject.CreateInstance<VRM10Expression>();
+            expression.MorphTargetBindings = new[] { new MorphTargetBinding("Body", 0, firstZero ? 0 : .5f), new MorphTargetBinding("Body", 0, 1) };
+            vrm.Expression.Happy = expression;
+            avatar.AddComponent<Vrm10Instance>().Vrm = vrm;
+            try
+            {
+                if (firstZero) Assert.That(NeutralShapeSampler.Sample(avatar), Is.Empty);
+                else Assert.That(Assert.Throws<InvalidOperationException>(() => NeutralShapeSampler.Sample(avatar)).Message,
+                    Does.Contain("必須").And.Contain("blendShape.Open").And.Contain("Clothing"));
+                Assert.That(skin.GetBlendShapeWeight(0), Is.Zero);
+                Assert.That(clothing.activeSelf, Is.True);
+                Assert.That(vrm.Expression.Happy, Is.SameAs(expression));
+                Assert.That(expression.MorphTargetBindings[0].Weight, Is.EqualTo(firstZero ? 0 : .5f));
+            }
+            finally { Object.DestroyImmediate(expression); Object.DestroyImmediate(vrm); }
+        }
+
+        [TestCase(false)]
+        [TestCase(true)]
+        public void AppearanceSupportCannotDisableTheCommittedRendererOrItsAncestor(bool ancestor)
+        {
+            Open(75);
+            var path = ancestor ? "" : "Body";
+            var support = Layer("Appearance support cannot disable the face");
+            var clip = new AnimationClip { name = "Unsafe activation support" };
+            AnimationUtility.SetEditorCurve(clip, EditorCurveBinding.FloatCurve(path, typeof(GameObject), "m_IsActive"),
+                AnimationCurve.Constant(0, 1, 0));
+            AssetDatabase.AddObjectToAsset(clip, controller);
+            support.defaultState = State(support, clip, writeDefaults: true);
+            Assert.That(Assert.Throws<InvalidOperationException>(() => NeutralShapeSampler.Sample(avatar)).Message,
+                Does.Contain("Unsafe activation support").And.Contain("判定理由").And.Contain("Body").And.Contain("Renderer階層"));
+            Assert.That(avatar.activeSelf, Is.True);
+            Assert.That(skin.gameObject.activeSelf, Is.True);
+            Assert.That(skin.GetBlendShapeWeight(0), Is.Zero);
+        }
+
+        [TestCase("bone")]
+        [TestCase("renderer")]
+        [TestCase("ancestor")]
+        public void IndependentTransformSupportCapturesNativeMorphScalarsAndKeepsPreparedPose(string targetKind)
+        {
+            var face = (AnimationClip)Open(75).motion;
+            var bone = new GameObject("Face bone").transform; bone.SetParent(avatar.transform, false);
+            skin.bones = new[] { bone }; skin.rootBone = bone;
+            mesh.bindposes = new[] { Matrix4x4.identity };
+            mesh.boneWeights = Enumerable.Repeat(new BoneWeight { boneIndex0 = 0, weight0 = 1 }, mesh.vertexCount).ToArray();
+            var target = targetKind == "bone" ? bone : targetKind == "renderer" ? skin.transform : avatar.transform;
+            var preparedPosition = new Vector3(.2f, .3f, .4f); target.localPosition = preparedPosition;
+            var support = Layer("Independent transform support");
+            var clip = new AnimationClip { name = "Probe-only transform" };
+            AnimationUtility.SetEditorCurve(clip, EditorCurveBinding.FloatCurve(AnimationUtility.CalculateTransformPath(target, avatar.transform),
+                typeof(Transform), "m_LocalPosition.x"), AnimationCurve.Constant(0, 1, 1));
+            AssetDatabase.AddObjectToAsset(clip, controller);
+            support.defaultState = State(support, clip, writeDefaults: true);
+            var common = Layer("Face above native support"); common.defaultState = State(common, face);
+            var before = EditorJsonUtility.ToJson(controller);
+            var expected = NativeOpeningWeight();
+            var values = NeutralShapeSampler.Sample(avatar);
+            Assert.That(expected, Is.EqualTo(75).Within(.01));
+            Assert.That(values.Single(value => value.Shape == "Open").Weight, Is.EqualTo(expected).Within(.01));
+            Assert.That(target.localPosition, Is.EqualTo(preparedPosition));
+            Assert.That(skin.sharedMesh, Is.SameAs(mesh));
+            Assert.That(skin.enabled, Is.True);
+            Assert.That(skin.gameObject.activeSelf, Is.True);
+            Assert.That(skin.GetBlendShapeWeight(0), Is.Zero);
+            Assert.That(EditorJsonUtility.ToJson(controller), Is.EqualTo(before));
+            NeutralShapeSnapshot.Apply(avatar, values);
+            Assert.That(skin.GetBlendShapeWeight(0), Is.EqualTo(expected).Within(.01));
+            Assert.That(target.localPosition, Is.EqualTo(preparedPosition));
+        }
+
+        [Test]
+        public void IndependentTransformOnSixthSkinInfluenceKeepsNativeScalarAndPreparedBone()
+        {
+            var face = (AnimationClip)Open(75).motion;
+            var bones = Enumerable.Range(0, 6).Select(index =>
+            {
+                var bone = new GameObject("Bone " + index).transform; bone.SetParent(avatar.transform, false); return bone;
+            }).ToArray();
+            skin.bones = bones; skin.rootBone = bones[0];
+            mesh.bindposes = Enumerable.Repeat(Matrix4x4.identity, bones.Length).ToArray();
+            using (var counts = new NativeArray<byte>(Enumerable.Repeat((byte)6, mesh.vertexCount).ToArray(), Allocator.Temp))
+            using (var weights = new NativeArray<BoneWeight1>(Enumerable.Range(0, mesh.vertexCount)
+                .SelectMany(_ => Enumerable.Range(0, 6).Select(index => new BoneWeight1 { boneIndex = index, weight = (6 - index) / 21f })).ToArray(), Allocator.Temp))
+                mesh.SetBoneWeights(counts, weights);
+            var support = Layer("Sixth influence support");
+            var clip = new AnimationClip { name = "Move sixth face influence" };
+            AnimationUtility.SetEditorCurve(clip, EditorCurveBinding.FloatCurve("Bone 5", typeof(Transform), "m_LocalPosition.x"), AnimationCurve.Constant(0, 1, 1));
+            AssetDatabase.AddObjectToAsset(clip, controller);
+            support.defaultState = State(support, clip, writeDefaults: true);
+            var common = Layer("Face above native support"); common.defaultState = State(common, face);
+            var expected = NativeOpeningWeight();
+            var values = NeutralShapeSampler.Sample(avatar);
+            Assert.That(expected, Is.EqualTo(75).Within(.01));
+            Assert.That(values.Single(value => value.Shape == "Open").Weight, Is.EqualTo(expected).Within(.01));
+            Assert.That(bones[5].localPosition, Is.EqualTo(Vector3.zero));
+            Assert.That(skin.GetBlendShapeWeight(0), Is.Zero);
+            NeutralShapeSnapshot.Apply(avatar, values);
+            Assert.That(skin.GetBlendShapeWeight(0), Is.EqualTo(expected).Within(.01));
+            Assert.That(bones[5].localPosition, Is.EqualTo(Vector3.zero));
+        }
+
+        [TestCase("positions", false)]
+        [TestCase("normals", false)]
+        [TestCase("tangents", false)]
+        [TestCase("positions", true)]
+        [TestCase("normals", true)]
+        [TestCase("tangents", true)]
+        public void IndependentTransformSupportKeepsNativeScalarAcrossOverlappingMorphFrames(string kind, bool overlaps)
+        {
+            mesh.ClearBlendShapes();
+            mesh.normals = Enumerable.Repeat(Vector3.forward, mesh.vertexCount).ToArray();
+            mesh.tangents = Enumerable.Repeat(new Vector4(1, 0, 0, 1), mesh.vertexCount).ToArray();
+            var zero = new Vector3[mesh.vertexCount];
+            var positions = new Vector3[mesh.vertexCount];
+            var normals = new Vector3[mesh.vertexCount];
+            var tangents = new Vector3[mesh.vertexCount];
+            var changed = kind == "positions" ? positions : kind == "normals" ? normals : tangents;
+            // Physical overlap in a later position or shading frame is not
+            // scalar coupling: only the native morph weight leaves the probe.
+            changed[overlaps ? 1 : 0] = Vector3.up * .1f;
+            mesh.AddBlendShapeFrame("Open", 50, zero, zero, zero);
+            mesh.AddBlendShapeFrame("Open", 100, positions, normals, tangents);
+            var faceBone = new GameObject("Face bone").transform; faceBone.SetParent(avatar.transform, false);
+            var hairBone = new GameObject("Hair bone").transform; hairBone.SetParent(avatar.transform, false);
+            skin.bones = new[] { faceBone, hairBone }; skin.rootBone = faceBone;
+            mesh.bindposes = new[] { Matrix4x4.identity, Matrix4x4.identity };
+            mesh.boneWeights = new[] { new BoneWeight { boneIndex0 = 0, weight0 = 1 },
+                new BoneWeight { boneIndex0 = 1, weight0 = 1 }, new BoneWeight { boneIndex0 = 0, weight0 = 1 } };
+            var face = (AnimationClip)Open(75).motion;
+            var support = Layer("Integrated hair appearance support");
+            var clip = new AnimationClip { name = "Hair configuration" };
+            AnimationUtility.SetEditorCurve(clip, EditorCurveBinding.FloatCurve("Hair bone", typeof(Transform), "m_LocalPosition.x"),
+                AnimationCurve.Constant(0, 1, 1));
+            AssetDatabase.AddObjectToAsset(clip, controller);
+            support.defaultState = State(support, clip, writeDefaults: true);
+            var common = Layer("Face above native support"); common.defaultState = State(common, face);
+            var before = EditorJsonUtility.ToJson(mesh);
+            var expected = NativeOpeningWeight();
+            var values = NeutralShapeSampler.Sample(avatar);
+            Assert.That(expected, Is.EqualTo(75).Within(.01));
+            Assert.That(values.Single(value => value.Shape == "Open").Weight, Is.EqualTo(expected).Within(.01));
+            Assert.That(hairBone.localPosition, Is.EqualTo(Vector3.zero));
+            Assert.That(skin.GetBlendShapeWeight(0), Is.Zero);
+            Assert.That(EditorJsonUtility.ToJson(mesh), Is.EqualTo(before));
+            NeutralShapeSnapshot.Apply(avatar, values);
+            Assert.That(skin.GetBlendShapeWeight(0), Is.EqualTo(expected).Within(.01));
+            Assert.That(hairBone.localPosition, Is.EqualTo(Vector3.zero));
+            Assert.That(skin.sharedMesh, Is.SameAs(mesh));
+        }
+
+        [TestCase("path")]
+        [TestCase("component")]
+        [TestCase("mesh")]
+        [TestCase("shape")]
+        [TestCase("inactive")]
+        [TestCase("parent")]
+        [TestCase("disabled")]
+        public void OptionalUnboundOrUnexportedMorphCannotPoisonIndependentFaceReconstruction(string missing)
+        {
+            var face = (AnimationClip)Open(75).motion;
+            var path = "Optional wardrobe";
+            var shape = "Untouched";
+            GameObject wardrobe = null;
+            SkinnedMeshRenderer wardrobeRenderer = null;
+            if (missing == "shape") { path = "Body"; shape = "Absent shape"; }
+            else if (missing != "path")
+            {
+                wardrobe = new GameObject(path); wardrobe.transform.SetParent(avatar.transform, false);
+                if (missing != "component")
+                {
+                    wardrobeRenderer = wardrobe.AddComponent<SkinnedMeshRenderer>();
+                    if (missing != "mesh")
+                    { wardrobeRenderer.sharedMesh = mesh; wardrobeRenderer.SetBlendShapeWeight(3, 37); }
+                }
+                if (missing == "inactive") wardrobe.SetActive(false);
+                if (missing == "disabled") wardrobeRenderer.enabled = false;
+                if (missing == "parent")
+                {
+                    var parent = new GameObject("Hidden wardrobe"); parent.transform.SetParent(avatar.transform, false);
+                    wardrobe.transform.SetParent(parent.transform, false); parent.SetActive(false);
+                    path = "Hidden wardrobe/Optional wardrobe";
+                }
+            }
+            AnimationUtility.SetEditorCurve(face, EditorCurveBinding.FloatCurve(path, typeof(SkinnedMeshRenderer), "blendShape." + shape),
+                AnimationCurve.Constant(0, 1, 100));
+            var target = new GameObject("Visual support"); target.transform.SetParent(avatar.transform, false);
+            var support = Layer("Native visual support");
+            var clip = new AnimationClip { name = "Independent visual configuration" };
+            AnimationUtility.SetEditorCurve(clip, EditorCurveBinding.FloatCurve(target.name, typeof(Transform), "m_LocalPosition.x"),
+                AnimationCurve.Constant(0, 1, 1));
+            AssetDatabase.AddObjectToAsset(clip, controller);
+            support.defaultState = State(support, clip, writeDefaults: true);
+            var common = Layer("Face above native support"); common.defaultState = State(common, face);
+            var before = EditorJsonUtility.ToJson(face);
+            var warnings = new List<string>();
+            var expected = NativeOpeningWeight();
+            var values = NeutralShapeSampler.Sample(avatar, warnings: warnings);
+            Assert.That(values.Select(value => value.Shape), Is.EqualTo(new[] { "Open" }));
+            Assert.That(values.Single().Weight, Is.EqualTo(expected).Within(.01));
+            Assert.That(expected, Is.EqualTo(75).Within(.01));
+            Assert.That(warnings.Single(), Does.Contain(path).And.Contain(shape));
+            Assert.That(target.transform.localPosition, Is.EqualTo(Vector3.zero));
+            Assert.That(skin.GetBlendShapeWeight(0), Is.Zero);
+            if (wardrobeRenderer != null && wardrobeRenderer.sharedMesh != null)
+                Assert.That(wardrobeRenderer.GetBlendShapeWeight(3), Is.EqualTo(37));
+            Assert.That(EditorJsonUtility.ToJson(face), Is.EqualTo(before));
+            NeutralShapeSnapshot.Apply(avatar, values);
+            Assert.That(skin.GetBlendShapeWeight(0), Is.EqualTo(75).Within(.01));
+            if (wardrobe != null && missing == "inactive") Assert.That(wardrobe.activeSelf, Is.False);
+            if (wardrobeRenderer != null && missing == "disabled") Assert.That(wardrobeRenderer.enabled, Is.False);
+        }
+
+        [Test]
+        public void AmbiguousOptionalMorphTargetIsRejectedBeforeIgnoringItsMissingShape()
+        {
+            var face = (AnimationClip)Open(75).motion;
+            foreach (var _ in new[] { 0, 1 })
+            {
+                var wardrobe = new GameObject("Optional wardrobe"); wardrobe.transform.SetParent(avatar.transform, false);
+            }
+            AnimationUtility.SetEditorCurve(face, EditorCurveBinding.FloatCurve("Optional wardrobe", typeof(SkinnedMeshRenderer), "blendShape.Absent"),
+                AnimationCurve.Constant(0, 1, 100));
+            Assert.That(Assert.Throws<InvalidOperationException>(() => NeutralShapeSampler.Sample(avatar)).Message,
+                Does.Contain("一意").And.Contain("Optional wardrobe").And.Contain("Absent"));
+            Assert.That(skin.GetBlendShapeWeight(0), Is.Zero);
+        }
+
+        [TestCase(false)]
+        [TestCase(true)]
+        public void DisjointAdditiveVisibilityOrMaterialSupportKeepsNativeMorphMathAndPreparedAppearance(bool materialCurve)
+        {
+            Open(75);
+            var clothing = new GameObject("Prepared clothing", typeof(MeshRenderer)); clothing.transform.SetParent(avatar.transform, false);
+            var renderer = clothing.GetComponent<MeshRenderer>();
+            var material = new Material(Shader.Find("Unlit/Color")); renderer.sharedMaterial = material;
+            var beforeMaterial = EditorJsonUtility.ToJson(material);
+            var support = Layer("Additive visual support");
+            var clip = new AnimationClip { name = materialCurve ? "Material support" : "Visibility support" };
+            AnimationUtility.SetEditorCurve(clip, EditorCurveBinding.FloatCurve(clothing.name, typeof(MeshRenderer),
+                materialCurve ? "material._Color.r" : "m_Enabled"), AnimationCurve.Constant(0, 1, 0));
+            AssetDatabase.AddObjectToAsset(clip, controller); support.defaultState = State(support, clip);
+            var layers = controller.layers; layers[1].defaultWeight = .5f; layers[1].blendingMode = AnimatorLayerBlendingMode.Additive; controller.layers = layers;
+            var beforeController = EditorJsonUtility.ToJson(controller);
+            try
+            {
+                var expected = NativeOpeningWeight();
+                var values = NeutralShapeSampler.Sample(avatar);
+                Assert.That(values.Select(value => value.Shape), Is.EqualTo(new[] { "Open" }));
+                Assert.That(values.Single().Weight, Is.EqualTo(expected).Within(.01));
+                Assert.That(renderer.enabled, Is.True);
+                Assert.That(renderer.sharedMaterial, Is.SameAs(material));
+                Assert.That(EditorJsonUtility.ToJson(material), Is.EqualTo(beforeMaterial));
+                Assert.That(EditorJsonUtility.ToJson(controller), Is.EqualTo(beforeController));
+                Assert.That(skin.GetBlendShapeWeight(0), Is.Zero);
+            }
+            finally { Object.DestroyImmediate(material); }
+        }
+
+        private float NativeOpeningWeight()
+        {
+            var scene = UnityEditor.SceneManagement.EditorSceneManager.NewPreviewScene();
+            GameObject copy = null;
+            var graph = default(PlayableGraph);
+            try
+            {
+                copy = Object.Instantiate(avatar); copy.hideFlags = HideFlags.HideAndDontSave;
+                UnityEngine.SceneManagement.SceneManager.MoveGameObjectToScene(copy, scene);
+                foreach (var component in copy.GetComponentsInChildren<Behaviour>(true)) component.enabled = false;
+                var animator = copy.GetComponent<Animator>(); animator.runtimeAnimatorController = null; animator.enabled = true;
+                animator.cullingMode = AnimatorCullingMode.AlwaysAnimate; animator.applyRootMotion = false; animator.fireEvents = false;
+                graph = PlayableGraph.Create("Original additive visual support oracle"); graph.SetTimeUpdateMode(DirectorUpdateMode.Manual);
+                var playable = AnimatorControllerPlayable.Create(graph, controller);
+                AnimationPlayableOutput.Create(graph, "Original full FX", animator).SetSourcePlayable(playable);
+                graph.Play(); graph.Evaluate(0f);
+                for (var frame = 0; frame < 120; frame++) graph.Evaluate(1f / 60f);
+                return copy.transform.Find("Body").GetComponent<SkinnedMeshRenderer>().GetBlendShapeWeight(0);
+            }
+            finally
+            {
+                if (graph.IsValid()) graph.Destroy();
+                if (copy != null) Object.DestroyImmediate(copy);
+                UnityEditor.SceneManagement.EditorSceneManager.ClosePreviewScene(scene);
+            }
+        }
+
+        [Test]
+        public void AppearanceGroupDoesNotHideUnknownPropertyAffectingCommittedMorphs()
+        {
+            Open(75);
+            var support = Layer("Unknown support");
+            var clip = new AnimationClip { name = "Unknown collider change" };
+            var collider = skin.gameObject.AddComponent<BoxCollider>();
+            AnimationUtility.SetEditorCurve(clip, EditorCurveBinding.FloatCurve("Body", typeof(BoxCollider), "m_Size.x"), AnimationCurve.Constant(0, 1, 4));
+            AssetDatabase.AddObjectToAsset(clip, controller);
+            support.defaultState = State(support, clip, writeDefaults: true);
+            Assert.That(Assert.Throws<InvalidOperationException>(() => NeutralShapeSampler.Sample(avatar)).Message,
+                Does.Contain("Unknown collider change").And.Contain("m_Size.x"));
+            Assert.That(collider.size.x, Is.EqualTo(1));
+        }
+
+        [TestCase("m_LocalPosition.anything")]
+        [TestCase("m_LocalRotation.x.extra")]
+        [TestCase("localEulerAnglesRaw.w")]
+        [TestCase("m_LocalScale.w")]
+        public void IndependentTransformSupportStillRejectsUnknownPropertyComponents(string property)
+        {
+            Open(75);
+            var target = new GameObject("Unsupported transform"); target.transform.SetParent(avatar.transform, false);
+            var support = Layer("Unknown transform support");
+            var clip = new AnimationClip { name = "Known transform support" };
+            var valid = EditorCurveBinding.FloatCurve(target.name, typeof(Transform), "m_LocalPosition.x");
+            AnimationUtility.SetEditorCurve(clip, valid, AnimationCurve.Constant(0, 1, 1));
+            AssetDatabase.AddObjectToAsset(clip, controller);
+            support.defaultState = State(support, clip, writeDefaults: true);
+            var metadata = VrChatExpressionMenu.Read(avatar, new VrChatMenuImportPolicy { SkipAll = true });
+            var plan = NeutralShapePlan.Create(avatar, controller, new[] { new[] {
+                EditorCurveBinding.FloatCurve("Body", typeof(SkinnedMeshRenderer), "blendShape.Open") } },
+                source: metadata, fixedContext: FixedExpressionContext.Create(controller, metadata.Defaults, metadata));
+            Assert.That(plan.AllowsEvaluationBinding(clip, valid), Is.True);
+            // Unity refuses to create these invalid Transform curves. Exercise
+            // the admission boundary directly instead of relying on an
+            // impossible clip or suppressing AnimationUtility error logs.
+            var unknown = EditorCurveBinding.FloatCurve(target.name, typeof(Transform), property);
+            Assert.That(plan.AllowsEvaluationBinding(clip, unknown), Is.False);
+            Assert.That(plan.EvaluationBindingRejection(clip, unknown), Does.Contain("未対応"));
+            Assert.That(target.transform.localPosition, Is.EqualTo(Vector3.zero));
+            Assert.That(skin.GetBlendShapeWeight(0), Is.Zero);
+        }
+
+        [Test]
+        public void NeutralRejectsAnAmbiguousActivationPath()
+        {
+            foreach (var index in Enumerable.Range(0, 2)) new GameObject("Ambiguous clothing").transform.SetParent(avatar.transform, false);
+            var clip = (AnimationClip)Open(75).motion;
+            AnimationUtility.SetEditorCurve(clip, EditorCurveBinding.FloatCurve("Ambiguous clothing", typeof(GameObject), "m_IsActive"), AnimationCurve.Constant(0, 1, 1));
+            Assert.That(Assert.Throws<InvalidOperationException>(() => NeutralShapeSampler.Sample(avatar)).Message,
+                Does.Contain("Ambiguous clothing").And.Contain("m_IsActive"));
+        }
+
+        [TestCase(false)]
+        [TestCase(true)]
+        public void FixedMenuStillRejectsActivationIncludingHarmlessNeutralBindings(bool targetExists)
+        {
+            if (targetExists) new GameObject("Prepared clothing").transform.SetParent(avatar.transform, false);
+            controller.AddParameter("Menu", AnimatorControllerParameterType.Int);
+            var idle = Open(0);
+            var clip = Clip("Open", AnimationCurve.Constant(0, 1, 75));
+            AnimationUtility.SetEditorCurve(clip, EditorCurveBinding.FloatCurve("Prepared clothing", typeof(GameObject), "m_IsActive"),
+                AnimationCurve.Constant(0, 1, targetExists ? 1 : 0));
+            var selected = State(controller.layers[0].stateMachine, clip);
+            var transition = idle.AddTransition(selected); transition.hasExitTime = false; transition.duration = 0;
+            transition.AddCondition(AnimatorConditionMode.Equals, 1, "Menu");
+            var metadata = VrChatExpressionMenu.Read(avatar, new VrChatMenuImportPolicy { SkipAll = true });
+            Assert.That(Assert.Throws<InvalidOperationException>(() => VrChatExpressionSampler.SampleFixed(avatar, controller,
+                metadata.Defaults, new Dictionary<string, float> { ["Menu"] = 1 }, metadata: metadata)).Message,
+                Does.Contain("Prepared clothing").And.Contain("m_IsActive"));
+        }
+
         [Test]
         public void WriteDefaultsOffInitializerRetainsItsStartupPoseAfterLeavingTheClip()
         {
@@ -116,13 +794,16 @@ namespace VRVlog.LilToonExporter.Tests
         }
 
         [Test]
-        public void DelayedGenericMorphAnimationCannotBeFrozenAsNeutral()
+        public void DelayedGenericMorphAnimationKeepsPreparedRestInsteadOfASampledPhase()
         {
-            var state = Open();
+            var state = Open(); skin.SetBlendShapeWeight(0, 17);
             AnimationUtility.SetEditorCurve((AnimationClip)state.motion,
                 EditorCurveBinding.FloatCurve("Body", typeof(SkinnedMeshRenderer), "blendShape.Open"),
                 AnimationCurve.Linear(0, 0, 10, 100));
-            Assert.That(Assert.Throws<NeutralShapeSamplingException>(() => NeutralShapeSampler.Sample(avatar)).Message, Does.Contain("時間で変わる"));
+            var warnings = new List<string>();
+            Assert.That(NeutralShapeSampler.Sample(avatar, warnings: warnings), Is.Empty);
+            Assert.That(skin.GetBlendShapeWeight(0), Is.EqualTo(17));
+            Assert.That(warnings.Any(warning => warning.Contains("時間で変わる") && warning.Contains("blendShape.Open")), Is.True);
         }
 
         [Test]
@@ -143,25 +824,450 @@ namespace VRVlog.LilToonExporter.Tests
         }
 
         [Test]
-        public void AutomaticAnimationSharingTheOpeningChannelIsRejected()
+        public void AutomaticAnimationSharingTheOpeningChannelKeepsItsPreparedRest()
         {
-            Open(); var blink = Layer("Blink also changes opening");
+            Open(); skin.SetBlendShapeWeight(0, 17); var blink = Layer("Blink also changes opening");
             var clip = Clip("Blink", AnimationCurve.Linear(0, 0, 10, 100));
             AnimationUtility.SetEditorCurve(clip, EditorCurveBinding.FloatCurve("Body", typeof(SkinnedMeshRenderer), "blendShape.Open"),
                 AnimationCurve.Linear(0, 100, 10, 0));
             blink.defaultState = State(blink, clip);
-            Assert.Throws<NeutralShapeSamplingException>(() => NeutralShapeSampler.Sample(avatar));
+            var values = NeutralShapeSampler.Sample(avatar);
+            Assert.That(values.Any(value => value.Shape == "Open"), Is.False);
+            Assert.That(skin.GetBlendShapeWeight(0), Is.EqualTo(17));
         }
 
         [Test]
-        public void ExternalInputCannotChooseTheNeutralOpeningPose()
+        public void QuietVoiceContextChoosesTheNeutralOpeningPose()
         {
             var idle = Open(0); controller.AddParameter("Voice", AnimatorControllerParameterType.Float);
             var selected = State(controller.layers[0].stateMachine, Clip("Open", AnimationCurve.Constant(0, 1, 100)));
             var transition = idle.AddTransition(selected); transition.hasExitTime = false; transition.duration = 0;
             transition.AddCondition(AnimatorConditionMode.Greater, .5f, "Voice");
-            var message = Assert.Throws<NeutralShapeSamplingException>(() => NeutralShapeSampler.Sample(avatar)).Message;
-            Assert.That(message, Does.Contain("外部入力").And.Contain("Body / Open"));
+            Assert.That(NeutralShapeSampler.Sample(avatar).Single(value => value.Shape == "Open").Weight, Is.Zero.Within(.01));
+        }
+
+        [TestCase("Upright", AnimatorControllerParameterType.Float, 0, 1)]
+        [TestCase("VRMode", AnimatorControllerParameterType.Int, 0, 1)]
+        [TestCase("Viseme", AnimatorControllerParameterType.Int, 1, 0)]
+        [TestCase("Voice", AnimatorControllerParameterType.Float, 1, 0)]
+        public void NeutralUsesTheSameNormalVrChatInputsAsMenuSampling(string name, AnimatorControllerParameterType type,
+            float authoredDefault, float normalValue)
+        {
+            var idle = Open(0);
+            controller.AddParameter(new AnimatorControllerParameter {
+                name = name, type = type, defaultFloat = authoredDefault, defaultInt = (int)authoredDefault });
+            var selected = State(controller.layers[0].stateMachine, Clip("Open", AnimationCurve.Constant(0, 1, 100)));
+            var transition = idle.AddTransition(selected); transition.hasExitTime = false; transition.duration = 0;
+            transition.AddCondition(type == AnimatorControllerParameterType.Int ? AnimatorConditionMode.Equals : AnimatorConditionMode.Greater,
+                type == AnimatorControllerParameterType.Int ? 1 : .5f, name);
+            var before = EditorJsonUtility.ToJson(controller);
+            Assert.That(NeutralShapeSampler.Sample(avatar).Single(value => value.Shape == "Open").Weight,
+                Is.EqualTo(normalValue == 0 ? 0 : 100).Within(.01));
+            Assert.That(EditorJsonUtility.ToJson(controller), Is.EqualTo(before));
+        }
+
+        private void Contact(string parameter)
+        {
+            var type = AppDomain.CurrentDomain.GetAssemblies().Select(assembly =>
+                assembly.GetType("VRC.SDK3.Dynamics.Contact.Components.VRCContactReceiver")).FirstOrDefault(value => value != null);
+            if (type == null) Assert.Ignore("Install the real VRChat SDK contact components.");
+            using var data = new SerializedObject(avatar.AddComponent(type));
+            data.FindProperty("parameter").stringValue = parameter;
+            data.ApplyModifiedPropertiesWithoutUndo();
+        }
+
+        private void ExpressionDefault(string parameter, float value)
+        {
+            var type = AppDomain.CurrentDomain.GetAssemblies().Select(assembly =>
+                assembly.GetType("VRC.SDK3.Avatars.ScriptableObjects.VRCExpressionParameters")).FirstOrDefault(candidate => candidate != null);
+            if (type == null) Assert.Ignore("Install the real VRChat SDK expression parameters.");
+            var asset = ScriptableObject.CreateInstance(type); AssetDatabase.CreateAsset(asset, folder + "/Parameters.asset");
+            using (var data = new SerializedObject(asset))
+            {
+                var parameters = data.FindProperty("parameters"); parameters.arraySize = 1;
+                var item = parameters.GetArrayElementAtIndex(0);
+                item.FindPropertyRelative("name").stringValue = parameter;
+                var valueType = item.FindPropertyRelative("valueType"); valueType.enumValueIndex = Array.IndexOf(valueType.enumNames, "Float");
+                item.FindPropertyRelative("defaultValue").floatValue = value;
+                data.ApplyModifiedPropertiesWithoutUndo();
+            }
+            using (var data = new SerializedObject(descriptor))
+            {
+                data.FindProperty("expressionParameters").objectReferenceValue = asset;
+                data.ApplyModifiedPropertiesWithoutUndo();
+            }
+        }
+
+        [TestCase(false, 0)]
+        [TestCase(false, 1)]
+        [TestCase(true, 0)]
+        [TestCase(true, 1)]
+        public void NeutralContactUsesTheAuthoredDefaultWithoutReceivingLiveInput(bool expressionDefault, float value)
+        {
+            controller.AddParameter(new AnimatorControllerParameter {
+                name = "Pet", type = AnimatorControllerParameterType.Float, defaultFloat = expressionDefault ? 1 - value : value });
+            Contact("Pet");
+            if (expressionDefault) ExpressionDefault("Pet", value);
+            var idle = Open(0);
+            var selected = State(controller.layers[0].stateMachine, Clip("Open", AnimationCurve.Constant(0, 1, 100)));
+            var transition = idle.AddTransition(selected); transition.hasExitTime = false; transition.duration = 0;
+            transition.AddCondition(AnimatorConditionMode.Greater, .25f, "Pet");
+            Assert.That(VrChatExpressionMenu.Read(avatar).ExternalParameters, Does.Contain("Pet"));
+            Assert.That(NeutralShapeSampler.Sample(avatar).Single(result => result.Shape == "Open").Weight,
+                Is.EqualTo(value == 0 ? 0 : 100).Within(.01));
+            Assert.That(controller.parameters.Single(parameter => parameter.name == "Pet").defaultFloat,
+                Is.EqualTo(expressionDefault ? 1 - value : value));
+        }
+
+        [Test]
+        public void SuppliedBuiltinCanBeCopiedByTheNeutralDriver()
+        {
+            controller.AddParameter("Upright", AnimatorControllerParameterType.Float);
+            controller.AddParameter("Face", AnimatorControllerParameterType.Float);
+            var idle = Open(0);
+            ParameterDriverExpressionTests.Driver(idle, ParameterDriverExpressionTests.Op("Copy", "Face", source: "Upright"));
+            var selected = State(controller.layers[0].stateMachine, Clip("Open", AnimationCurve.Constant(0, 1, 100)));
+            var transition = idle.AddTransition(selected); transition.hasExitTime = false; transition.duration = 0;
+            transition.AddCondition(AnimatorConditionMode.Greater, .5f, "Face");
+            Assert.That(NeutralShapeSampler.Sample(avatar).Single(value => value.Shape == "Open").Weight, Is.EqualTo(100).Within(.01));
+        }
+
+        [Test]
+        public void FixedContactIsOnlyAnInitialValueAndDoesNotSuppressAuthoredDriverWrites()
+        {
+            controller.AddParameter("Pet", AnimatorControllerParameterType.Float); Contact("Pet");
+            var idle = Open(0);
+            ParameterDriverExpressionTests.Driver(idle, ParameterDriverExpressionTests.Op("Set", "Pet", 1));
+            var selected = State(controller.layers[0].stateMachine, Clip("Open", AnimationCurve.Constant(0, 1, 100)));
+            var transition = idle.AddTransition(selected); transition.hasExitTime = false; transition.duration = 0;
+            transition.AddCondition(AnimatorConditionMode.Greater, .25f, "Pet");
+            Assert.That(NeutralShapeSampler.Sample(avatar).Single(value => value.Shape == "Open").Weight, Is.EqualTo(100).Within(.01));
+            Assert.That(controller.parameters.Single(parameter => parameter.name == "Pet").defaultFloat, Is.Zero);
+        }
+
+        [Test]
+        public void FixedContactCannotHideAnotherPlayableLayerWriter()
+        {
+            controller.AddParameter("Pet", AnimatorControllerParameterType.Float); Contact("Pet");
+            var idle = Open(0);
+            var selected = State(controller.layers[0].stateMachine, Clip("Open", AnimationCurve.Constant(0, 1, 100)));
+            var transition = idle.AddTransition(selected); transition.hasExitTime = false; transition.duration = 0;
+            transition.AddCondition(AnimatorConditionMode.Greater, .25f, "Pet");
+            var other = AnimatorController.CreateAnimatorControllerAtPath(folder + "/Action.controller");
+            other.AddParameter("Pet", AnimatorControllerParameterType.Float);
+            var state = State(other.layers[0].stateMachine); other.layers[0].stateMachine.defaultState = state;
+            ParameterDriverExpressionTests.Driver(state, ParameterDriverExpressionTests.Op("Set", "Pet", 1));
+            using (var data = new SerializedObject(descriptor))
+            {
+                var layers = data.FindProperty("baseAnimationLayers"); layers.arraySize = 2;
+                var layer = layers.GetArrayElementAtIndex(1);
+                var type = layer.FindPropertyRelative("type"); type.enumValueIndex = Array.IndexOf(type.enumNames, "Action");
+                layer.FindPropertyRelative("isDefault").boolValue = false;
+                layer.FindPropertyRelative("animatorController").objectReferenceValue = other;
+                data.ApplyModifiedPropertiesWithoutUndo();
+            }
+            Assert.That(Assert.Throws<InvalidOperationException>(() => NeutralShapeSampler.Sample(avatar)).Message,
+                Does.Contain("FX以外").And.Contain("Pet"));
+        }
+
+        private AnimatorState AfkAction(bool reachable, bool driver = true)
+        {
+            var other = AnimatorController.CreateAnimatorControllerAtPath(folder + "/AfkAction.controller");
+            other.AddParameter(new AnimatorControllerParameter {
+                name = "AFK", type = AnimatorControllerParameterType.Bool, defaultBool = true });
+            other.AddParameter("AFK_Step", AnimatorControllerParameterType.Int);
+            var machine = other.layers[0].stateMachine;
+            var idle = State(machine); machine.defaultState = idle;
+            var afk = State(machine, Clip("Open", AnimationCurve.Constant(0, 1, 0)));
+            var transition = idle.AddTransition(afk); transition.hasExitTime = false; transition.duration = 0;
+            transition.AddCondition(reachable ? AnimatorConditionMode.IfNot : AnimatorConditionMode.If, 0, "AFK");
+            if (driver) ParameterDriverExpressionTests.Driver(afk, ParameterDriverExpressionTests.Op("Set", "AFK_Step", 1));
+            SetAction(other); return afk;
+        }
+
+        private AnimationClip TransientOwnershipFixture(string scenario, bool networkSynced = true)
+        {
+            const string signal = "Transition signal";
+            controller.AddParameter(signal, AnimatorControllerParameterType.Int);
+            var idle = Open(75);
+            var clothing = new GameObject("Dormant appearance"); clothing.transform.SetParent(avatar.transform, false);
+            var visual = Clip("Open", AnimationCurve.Constant(0, 1, 0)); visual.name = "Signal appearance branch";
+            AnimationUtility.SetEditorCurve(visual, EditorCurveBinding.FloatCurve(clothing.name, typeof(Transform), "m_LocalPosition.x"),
+                AnimationCurve.Constant(0, 1, 1));
+            var changed = State(controller.layers[0].stateMachine, visual);
+            var transition = idle.AddTransition(changed); transition.hasExitTime = false; transition.duration = 0;
+            transition.AddCondition(AnimatorConditionMode.Equals, 1, signal);
+            var other = AnimatorController.CreateAnimatorControllerAtPath(folder + "/TransientAction.controller");
+            other.AddParameter("AFK", AnimatorControllerParameterType.Bool);
+            other.AddParameter(new AnimatorControllerParameter { name = signal,
+                type = scenario == "type" ? AnimatorControllerParameterType.Float : AnimatorControllerParameterType.Int,
+                defaultInt = scenario == "default" ? 1 : 0 });
+            var machine = other.layers[0].stateMachine;
+            var rest = State(machine); machine.defaultState = rest;
+            var active = State(machine);
+            var entrance = rest.AddTransition(active); entrance.hasExitTime = false; entrance.duration = 0;
+            entrance.AddCondition(scenario == "reachable" || scenario == "random" ? AnimatorConditionMode.IfNot : AnimatorConditionMode.If, 0, "AFK");
+            if (scenario != "unwritten") ParameterDriverExpressionTests.Driver(active, ParameterDriverExpressionTests.Op(
+                scenario == "random" ? "Random" : "Set", signal, 1));
+            if (scenario == "unknown")
+            {
+                var type = AppDomain.CurrentDomain.GetAssemblies().Select(assembly =>
+                    assembly.GetType("VRC.SDK3.Avatars.Components.VRCAnimatorLayerControl")).FirstOrDefault(value => value != null);
+                Assert.That(type, Is.Not.Null); active.AddStateMachineBehaviour(type);
+            }
+            if (scenario == "fxwriter") ParameterDriverExpressionTests.Driver(idle, ParameterDriverExpressionTests.Op("Set", signal, 0));
+            if (scenario == "fxcurve") AnimationUtility.SetEditorCurve((AnimationClip)idle.motion,
+                EditorCurveBinding.FloatCurve("", typeof(Animator), signal), AnimationCurve.Constant(0, 1, 0));
+            if (scenario == "external") Contact(signal);
+            SetAction(other);
+            ConfigureTransientInputMetadata(signal, scenario, networkSynced);
+            return visual;
+        }
+
+        private void ConfigureTransientInputMetadata(string signal, string scenario, bool networkSynced)
+        {
+            Type Sdk(string name) => AppDomain.CurrentDomain.GetAssemblies().Select(assembly => assembly.GetType(name)).FirstOrDefault(value => value != null);
+            var parametersType = Sdk("VRC.SDK3.Avatars.ScriptableObjects.VRCExpressionParameters");
+            var menuType = Sdk("VRC.SDK3.Avatars.ScriptableObjects.VRCExpressionsMenu");
+            Assert.That(parametersType, Is.Not.Null); Assert.That(menuType, Is.Not.Null);
+            var parametersAsset = ScriptableObject.CreateInstance(parametersType);
+            AssetDatabase.CreateAsset(parametersAsset, folder + "/TransientParameters.asset");
+            using (var data = new SerializedObject(parametersAsset))
+            {
+                var parameters = data.FindProperty("parameters"); parameters.arraySize = 1;
+                var item = parameters.GetArrayElementAtIndex(0);
+                item.FindPropertyRelative("name").stringValue = signal;
+                var valueType = item.FindPropertyRelative("valueType"); valueType.enumValueIndex = Array.IndexOf(valueType.enumNames, "Int");
+                item.FindPropertyRelative("defaultValue").floatValue = scenario == "expressionDefault" ? 1 : scenario == "nonfinite" ? float.NaN : 0;
+                item.FindPropertyRelative("saved").boolValue = scenario == "saved";
+                item.FindPropertyRelative("networkSynced").boolValue = networkSynced;
+                data.ApplyModifiedPropertiesWithoutUndo();
+            }
+            var menu = ScriptableObject.CreateInstance(menuType); AssetDatabase.CreateAsset(menu, folder + "/TransientMenu.asset");
+            using (var data = new SerializedObject(menu))
+            {
+                var controls = data.FindProperty("controls"); controls.arraySize =
+                    scenario == "menu" || scenario == "subparameter" || scenario == "cycle" || scenario == "unknownMenu" || scenario == "missingSubmenu" || scenario == "optionalNull" ? 1 : scenario == "shared" ? 2 : 0;
+                if (controls.arraySize > 0)
+                {
+                    var control = controls.GetArrayElementAtIndex(0);
+                    var type = control.FindPropertyRelative("type");
+                    var kind = scenario == "cycle" || scenario == "missingSubmenu" ? "SubMenu" : scenario == "subparameter" ? "RadialPuppet" : "Toggle";
+                    type.enumValueIndex = Array.IndexOf(type.enumNames, kind);
+                    if (scenario == "unknownMenu") type.intValue = 999;
+                    control.FindPropertyRelative("parameter").FindPropertyRelative("name").stringValue = scenario == "menu" ? signal : "";
+                    var subParameters = control.FindPropertyRelative("subParameters"); subParameters.arraySize = scenario == "subparameter" ? 1 : 0;
+                    if (subParameters.arraySize > 0) subParameters.GetArrayElementAtIndex(0).FindPropertyRelative("name").stringValue = signal;
+                    control.FindPropertyRelative("subMenu").objectReferenceValue = scenario == "cycle" ? menu : null;
+                }
+                data.ApplyModifiedPropertiesWithoutUndo();
+            }
+            if (scenario == "shared")
+            {
+                var child = ScriptableObject.CreateInstance(menuType); AssetDatabase.CreateAsset(child, folder + "/SharedTransientMenu.asset");
+                using (var data = new SerializedObject(child))
+                {
+                    var controls = data.FindProperty("controls"); controls.arraySize = 1;
+                    var control = controls.GetArrayElementAtIndex(0);
+                    var type = control.FindPropertyRelative("type"); type.enumValueIndex = Array.IndexOf(type.enumNames, "Toggle");
+                    control.FindPropertyRelative("parameter").FindPropertyRelative("name").stringValue = "Unrelated control";
+                    control.FindPropertyRelative("subParameters").arraySize = 0;
+                    data.ApplyModifiedPropertiesWithoutUndo();
+                }
+                using (var data = new SerializedObject(menu))
+                {
+                    var controls = data.FindProperty("controls");
+                    for (var index = 0; index < controls.arraySize; index++)
+                    {
+                        var control = controls.GetArrayElementAtIndex(index);
+                        var type = control.FindPropertyRelative("type"); type.enumValueIndex = Array.IndexOf(type.enumNames, "SubMenu");
+                        control.FindPropertyRelative("parameter").FindPropertyRelative("name").stringValue = "";
+                        control.FindPropertyRelative("subParameters").arraySize = 0;
+                        control.FindPropertyRelative("subMenu").objectReferenceValue = child;
+                    }
+                    data.ApplyModifiedPropertiesWithoutUndo();
+                }
+            }
+            if (scenario == "optionalNull")
+            {
+                // Use actual SDK fields to create a null optional inline
+                // Parameter and null subParameter array, then inspect their
+                // real Unity serialized representation through the helper.
+                var controls = (System.Collections.IList)menuType.GetField("controls").GetValue(menu);
+                var control = controls[0]; var controlType = control.GetType();
+                controlType.GetField("parameter").SetValue(control, null);
+                controlType.GetField("subParameters").SetValue(control, null);
+            }
+            using (var data = new SerializedObject(descriptor))
+            {
+                data.FindProperty("customExpressions").boolValue = true;
+                data.FindProperty("expressionParameters").objectReferenceValue = parametersAsset;
+                data.FindProperty("expressionsMenu").objectReferenceValue = scenario == "missingMenu" ? null : menu;
+                data.ApplyModifiedPropertiesWithoutUndo();
+            }
+        }
+
+        [TestCase(false)]
+        [TestCase(true)]
+        public void UnsavedNonMenuSignalWithOnlyDormantOtherPlayableWritersDoesNotOwnTheNormalFace(bool networkSynced)
+        {
+            var visual = TransientOwnershipFixture("normal", networkSynced);
+            var metadata = VrChatExpressionMenu.Read(avatar, new VrChatMenuImportPolicy { SkipAll = true });
+            NeutralInputProof.Read(avatar, metadata);
+            Assert.That(metadata.NeutralInputInventoryComplete, Is.True);
+            Assert.That(metadata.ParameterPersistence["Transition signal"].Saved, Is.False);
+            Assert.That(metadata.MenuInputs, Does.Not.Contain("Transition signal"));
+            var layers = ExpressionDependencies.NormalInputLayers(controller, metadata,
+                FixedExpressionContext.Create(controller, metadata.Defaults, metadata), null);
+            Assert.That(layers.SelectMany(layer => layer.Clips).Contains(visual), Is.False);
+            var before = EditorJsonUtility.ToJson(controller);
+            var required = new[] { EditorCurveBinding.FloatCurve("Body", typeof(SkinnedMeshRenderer), "blendShape.Open") };
+            var values = NeutralShapeSampler.Sample(avatar, requiredMorphs: required);
+            Assert.That(values.Single(value => value.Shape == "Open").Weight, Is.EqualTo(75).Within(.01));
+            Assert.That(skin.GetBlendShapeWeight(0), Is.Zero);
+            Assert.That(avatar.transform.Find("Dormant appearance").localPosition, Is.EqualTo(Vector3.zero));
+            Assert.That(EditorJsonUtility.ToJson(controller), Is.EqualTo(before));
+        }
+
+        [TestCase("saved")]
+        [TestCase("menu")]
+        [TestCase("subparameter")]
+        [TestCase("missingMenu")]
+        [TestCase("missingSubmenu")]
+        [TestCase("unknownMenu")]
+        [TestCase("reachable")]
+        [TestCase("random")]
+        [TestCase("unknown")]
+        [TestCase("unwritten")]
+        [TestCase("fxwriter")]
+        [TestCase("fxcurve")]
+        [TestCase("external")]
+        [TestCase("type")]
+        [TestCase("default")]
+        [TestCase("expressionDefault")]
+        [TestCase("nonfinite")]
+        public void SavedExposedUnprovedOrWrittenCustomSignalRetainsItsAppearanceAlternatives(string scenario)
+        {
+            var visual = TransientOwnershipFixture(scenario);
+            if (scenario == "nonfinite")
+            {
+                Assert.That(Assert.Throws<InvalidOperationException>(() => VrChatExpressionMenu.Read(avatar,
+                    new VrChatMenuImportPolicy { SkipAll = true })).Message, Does.Contain("不正な数値"));
+                Assert.That(skin.GetBlendShapeWeight(0), Is.Zero);
+                return;
+            }
+            var metadata = VrChatExpressionMenu.Read(avatar, new VrChatMenuImportPolicy { SkipAll = true });
+            NeutralInputProof.Read(avatar, metadata);
+            var layers = ExpressionDependencies.NormalInputLayers(controller, metadata,
+                FixedExpressionContext.Create(controller, metadata.Defaults, metadata), null);
+            Assert.That(layers.SelectMany(layer => layer.Clips).Contains(visual), Is.True, scenario);
+            if (scenario != "external")
+                Assert.That(Assert.Throws<InvalidOperationException>(() => NeutralShapeSampler.Sample(avatar, requiredMorphs:
+                    new[] { EditorCurveBinding.FloatCurve("Body", typeof(SkinnedMeshRenderer), "blendShape.Open") })).Message,
+                    Does.Contain("必須").And.Contain("Signal appearance branch"));
+            Assert.That(skin.GetBlendShapeWeight(0), Is.Zero);
+            Assert.That(avatar.transform.Find("Dormant appearance").localPosition, Is.EqualTo(Vector3.zero));
+        }
+
+        [TestCase("selected")]
+        [TestCase("remote")]
+        [TestCase("missingPersistence")]
+        [TestCase("missingType")]
+        [TestCase("nonfinite")]
+        public void TransientOwnershipProofRetainsUnknownMetadataAndExplicitOrRemoteInputs(string scenario)
+        {
+            var visual = TransientOwnershipFixture("normal");
+            var metadata = VrChatExpressionMenu.Read(avatar, new VrChatMenuImportPolicy { SkipAll = true });
+            NeutralInputProof.Read(avatar, metadata);
+            if (scenario == "remote") metadata.Defaults["IsLocal"] = 0;
+            if (scenario == "missingPersistence") metadata.ParameterPersistence.Remove("Transition signal");
+            if (scenario == "missingType") metadata.ExpressionParameterTypes.Remove("Transition signal");
+            if (scenario == "nonfinite") metadata.Defaults["Transition signal"] = float.NaN;
+            var selected = scenario == "selected" ? new Dictionary<string, float> { ["Transition signal"] = 1 } : null;
+            var layers = ExpressionDependencies.NormalInputLayers(controller, metadata,
+                FixedExpressionContext.Create(controller, metadata.Defaults, metadata), null, selected);
+            Assert.That(layers.SelectMany(layer => layer.Clips).Contains(visual), Is.True);
+            Assert.That(skin.GetBlendShapeWeight(0), Is.Zero);
+        }
+
+        [TestCase("cycle")]
+        [TestCase("shared")]
+        [TestCase("optionalNull")]
+        public void CompleteMenuInputInventoryHandlesSharedCyclicAndEmptyOptionalSdkInputs(string scenario)
+        {
+            var visual = TransientOwnershipFixture(scenario);
+            var metadata = VrChatExpressionMenu.Read(avatar, new VrChatMenuImportPolicy { SkipAll = true });
+            NeutralInputProof.Read(avatar, metadata);
+            Assert.That(metadata.NeutralInputInventoryComplete, Is.True);
+            Assert.That(metadata.MenuInputs, Does.Not.Contain("Transition signal"));
+            Assert.That(ExpressionDependencies.NormalInputLayers(controller, metadata,
+                FixedExpressionContext.Create(controller, metadata.Defaults, metadata), null).SelectMany(layer => layer.Clips).Contains(visual), Is.False);
+        }
+
+        [TestCase(false)]
+        [TestCase(true)]
+        public void DormantAfkActionCannotChangeTheNormalNeutralFace(bool declaredInFx)
+        {
+            if (declaredInFx) controller.AddParameter("AFK", AnimatorControllerParameterType.Bool);
+            controller.AddParameter("AFK_Step", AnimatorControllerParameterType.Int);
+            var idle = Open(75);
+            var moving = State(controller.layers[0].stateMachine, Clip("Open", AnimationCurve.Linear(0, 0, 10, 100)));
+            var transition = idle.AddTransition(moving); transition.hasExitTime = false; transition.duration = 0;
+            transition.AddCondition(AnimatorConditionMode.Equals, 1, "AFK_Step");
+            AfkAction(false);
+            Assert.That(NeutralShapeSampler.Sample(avatar).Single(value => value.Shape == "Open").Weight, Is.EqualTo(75).Within(.01));
+        }
+
+        [TestCase(false)]
+        [TestCase(true)]
+        public void ReachableActionMorphOrParameterWriterIsStillRejected(bool driver)
+        {
+            controller.AddParameter("AFK_Step", AnimatorControllerParameterType.Int);
+            var idle = Open(75);
+            var changed = State(controller.layers[0].stateMachine, Clip("Open", AnimationCurve.Constant(0, 1, 100)));
+            var transition = idle.AddTransition(changed); transition.hasExitTime = false; transition.duration = 0;
+            transition.AddCondition(AnimatorConditionMode.Equals, 1, "AFK_Step");
+            AfkAction(true, driver);
+            Assert.That(Assert.Throws<InvalidOperationException>(() => NeutralShapeSampler.Sample(avatar)).Message,
+                Does.Contain("FX以外").And.Contain(driver ? "AFK_Step" : "Body/blendShape.Open"));
+        }
+
+        [Test]
+        public void DormantActionDoesNotHideAnUnknownBehaviour()
+        {
+            Open(); var afk = AfkAction(false, false);
+            afk.AddStateMachineBehaviour<UnknownStateCallbackProbe>();
+            Assert.That(Assert.Throws<InvalidOperationException>(() => NeutralShapeSampler.Sample(avatar)).Message,
+                Does.Contain("FX以外").And.Contain(nameof(UnknownStateCallbackProbe)));
+        }
+
+        [Test]
+        public void FxDriverWritingTheFixedContactCannotHideAnActionBranch()
+        {
+            controller.AddParameter("Pet", AnimatorControllerParameterType.Float); Contact("Pet");
+            var idle = Open(75); ParameterDriverExpressionTests.Driver(idle, ParameterDriverExpressionTests.Op("Set", "Pet", 1));
+            var other = AnimatorController.CreateAnimatorControllerAtPath(folder + "/PetAction.controller");
+            other.AddParameter("Pet", AnimatorControllerParameterType.Float);
+            var machine = other.layers[0].stateMachine;
+            var rest = State(machine); machine.defaultState = rest;
+            var active = State(machine, Clip("Open", AnimationCurve.Constant(0, 1, 0)));
+            var transition = rest.AddTransition(active); transition.hasExitTime = false; transition.duration = 0;
+            transition.AddCondition(AnimatorConditionMode.Greater, .25f, "Pet"); SetAction(other);
+            Assert.That(Assert.Throws<InvalidOperationException>(() => NeutralShapeSampler.Sample(avatar)).Message,
+                Does.Contain("FX以外").And.Contain("Body/blendShape.Open"));
+        }
+
+        [TestCase("EyeHeightAsMeters")]
+        [TestCase("EyeHeightAsPercent")]
+        public void UnmeasuredBuiltinInputStillCannotChooseTheNeutralFace(string name)
+        {
+            var idle = Open(0);
+            controller.AddParameter(new AnimatorControllerParameter { name = name, type = AnimatorControllerParameterType.Float, defaultFloat = 1 });
+            var selected = State(controller.layers[0].stateMachine, Clip("Open", AnimationCurve.Constant(0, 1, 100)));
+            var transition = idle.AddTransition(selected); transition.hasExitTime = false; transition.duration = 0;
+            transition.AddCondition(AnimatorConditionMode.Greater, .5f, name);
+            Assert.That(Assert.Throws<NeutralShapeSamplingException>(() => NeutralShapeSampler.Sample(avatar)).Message,
+                Does.Contain("外部入力").And.Contain(name));
         }
 
         [Test]
@@ -204,7 +1310,7 @@ namespace VRVlog.LilToonExporter.Tests
         // branch states on FACE EMOTE PLAYER. Voice gates are AND transitions.
         [TestCase(false)]
         [TestCase(true)]
-        public void GeneratedFaceEmoStyleNestedFxPrunesProvedInactiveVoiceGatesAndRejectsUnprovedOnes(bool waitByVoice)
+        public void GeneratedFaceEmoStyleNestedFxSettlesWithQuietVoiceInEitherWaitMode(bool waitByVoice)
         {
             Open();
             controller.AddParameter("AFK", AnimatorControllerParameterType.Bool);
@@ -261,10 +1367,7 @@ namespace VRVlog.LilToonExporter.Tests
             changed.AddCondition(AnimatorConditionMode.If, 0, "FaceEmo_SYNC_CN_WAIT_FACE_EMOTE_BY_VOICE");
             changed.AddCondition(AnimatorConditionMode.Less, .01f, "Voice");
             if (!waitByVoice) AssertOriginalNestedModePose(mode);
-            if (waitByVoice)
-                Assert.That(Assert.Throws<NeutralShapeSamplingException>(() => NeutralShapeSampler.Sample(avatar)).Message, Does.Contain("Voice"));
-            else
-                Assert.That(NeutralShapeSampler.Sample(avatar).Single(value => value.Shape == "Open").Weight, Is.EqualTo(70).Within(.01));
+            Assert.That(NeutralShapeSampler.Sample(avatar).Single(value => value.Shape == "Open").Weight, Is.EqualTo(70).Within(.01));
         }
 
         // Native routing is checked independently of the exporter's controller
@@ -353,7 +1456,7 @@ namespace VRVlog.LilToonExporter.Tests
         }
 
         [Test]
-        public void ActiveAncestorAnyStateExternalInputIsRetainedForNestedNeutralStates()
+        public void QuietVoicePrunesAncestorAnyStateWhileKeepingTheNestedNeutralState()
         {
             var root = controller.layers[0].stateMachine;
             var child = root.AddStateMachine("Nested face");
@@ -362,15 +1465,28 @@ namespace VRVlog.LilToonExporter.Tests
             var externallyChosen = State(root, Clip("Open", AnimationCurve.Constant(0, 1, 0)));
             var voice = root.AddAnyStateTransition(externallyChosen); voice.hasExitTime = false; voice.duration = 0;
             voice.AddCondition(AnimatorConditionMode.Greater, .5f, "Voice");
-            Assert.That(Assert.Throws<NeutralShapeSamplingException>(() => NeutralShapeSampler.Sample(avatar)).Message, Does.Contain("Voice"));
+            Assert.That(NeutralShapeSampler.Sample(avatar).Single(value => value.Shape == "Open").Weight, Is.EqualTo(100).Within(.01));
         }
 
         [Test]
-        public void AutomaticBlinkWithWriteDefaultsCanAffectTheOpeningAndIsNotExcluded()
+        public void AutomaticBlinkWithWriteDefaultsKeepsTheFullNativeClosureAndConstantRest()
         {
             Open(); var blink = Layer("Blink with implicit writes");
             blink.defaultState = State(blink, Clip("Blink", AnimationCurve.Linear(0, 0, 10, 100)), writeDefaults: true);
-            Assert.Throws<NeutralShapeSamplingException>(() => NeutralShapeSampler.Sample(avatar));
+            Assert.That(NativeOpeningWeight(), Is.EqualTo(100).Within(.01),
+                "This original graph keeps Open at 100; Write Defaults alone does not establish a reset value or prove independence.");
+            var metadata = VrChatExpressionMenu.Read(avatar, new VrChatMenuImportPolicy { SkipAll = true });
+            var automaticRoot = new HashSet<EditorCurveBinding> { EditorCurveBinding.FloatCurve("Body", typeof(SkinnedMeshRenderer), "blendShape.Blink") };
+            var dependencies = ExpressionDependencies.AnalyzeNeutral(controller, automaticRoot, null, metadata,
+                automaticRoot, FixedExpressionContext.Create(controller, metadata.Defaults, metadata), preserveCommittedMorphs: true);
+            Assert.That(dependencies.Morphs, Is.EquivalentTo(automaticRoot), "The output capture itself is deliberately narrow.");
+            Assert.That(dependencies.NeutralDependencyMorphs,
+                Does.Contain(EditorCurveBinding.FloatCurve("Body", typeof(SkinnedMeshRenderer), "blendShape.Open")),
+                "Narrow capture must not erase the coupled automatic layer's full dependency closure.");
+            var values = NeutralShapeSampler.Sample(avatar);
+            Assert.That(values.Single(value => value.Shape == "Open").Weight, Is.EqualTo(100).Within(.01));
+            Assert.That(values.Any(value => value.Shape == "Blink"), Is.False);
+            Assert.That(skin.GetBlendShapeWeight(0), Is.Zero);
         }
 
         [Test]

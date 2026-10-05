@@ -123,7 +123,8 @@ namespace VRVlog.LilToonExporter
                 {
                     expressionBindings.RebindPrepared(transformed.PreparedRendererFor);
                     expressionBindings.RebindAuthoredExpressions(transformed.IsolatedCopyOf);
-                    faceEmoBindings?.RebindPrepared(transformed.PreparedRendererFor);
+                    faceEmoBindings?.RebindPrepared(transformed.PreparedRendererFor,
+                        transformed.ObjectRegistry, transformed.IsolatedCopyOf);
                     blink.RebindPrepared(transformed.PreparedRendererFor);
                     unifiedPreparation?.RebindPrepared(transformed.PreparedRendererFor);
                     blink.VerifyPreparedIdentity(clone);
@@ -142,7 +143,28 @@ namespace VRVlog.LilToonExporter
                         preparedMenuBindings.ExcludesPreparedPath, faceEmoBindings);
                     poses.CollectPrepared(clone, warnings, preparedMenuPolicy);
                     recoveryReport.Stage = "基準形評価";
-                    NeutralShapeSnapshot.Apply(clone, NeutralShapeSampler.Sample(clone, preparedMenuBindings.ExcludesPreparedPath));
+                    var requiredBlinkMorphs = blinkOptions?.Mode == BlinkExportMode.Manual
+                        ? blink.Slots.SelectMany(slot => slot).Where(binding => binding.Weight > 0).Select(binding =>
+                            UnityEditor.EditorCurveBinding.FloatCurve(
+                                UnityEditor.AnimationUtility.CalculateTransformPath(binding.Renderer.transform, clone.transform),
+                                typeof(SkinnedMeshRenderer), "blendShape." + binding.Shape))
+                        : Enumerable.Empty<UnityEditor.EditorCurveBinding>();
+                    // NDMF can remove authoring markers. Keep the source's
+                    // explicit tracking obligations against prepared renderers.
+                    var requiredTrackingShapes = new HashSet<string>((trackingProfile?.expressions ?? Array.Empty<TrackingExpression>())
+                        .Where(expression => expression != null)
+                        .SelectMany(expression => expression.morphs ?? Array.Empty<TrackingMorph>())
+                        .Where(morph => morph != null && morph.weight > 0).Select(morph => morph.shape), StringComparer.Ordinal);
+                    var requiredTrackingMorphs = clone.GetComponentsInChildren<SkinnedMeshRenderer>(true)
+                        .Where(renderer => renderer.sharedMesh != null)
+                        .SelectMany(renderer => requiredTrackingShapes.Where(shape => !string.IsNullOrEmpty(shape) &&
+                            renderer.sharedMesh.GetBlendShapeIndex(shape) >= 0).Select(shape =>
+                            UnityEditor.EditorCurveBinding.FloatCurve(
+                                UnityEditor.AnimationUtility.CalculateTransformPath(renderer.transform, clone.transform),
+                                typeof(SkinnedMeshRenderer), "blendShape." + shape)));
+                    NeutralShapeSnapshot.Apply(clone, NeutralShapeSampler.Sample(clone,
+                        preparedMenuBindings.ExcludesPreparedPath, warnings, requiredBlinkMorphs.Concat(requiredTrackingMorphs)));
+                    AvatarBaseShape.NormalizeSourceWeights(clone, UnityEditor.PlayerSettings.legacyClampBlendShapeWeights);
                     blink.ResolvePreparedNeutral(clone, suppressSharedTextureEmission: suppressSharedTextureEmission,
                         suppressHdrTextureEmission: suppressHdrTextureEmission);
                     var neutral = NeutralShapeSnapshot.Capture(clone);

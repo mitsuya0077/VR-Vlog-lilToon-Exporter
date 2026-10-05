@@ -220,6 +220,358 @@ namespace VRVlog.LilToonExporter.Tests
             Assert.That(avatar.GetComponentInChildren<SkinnedMeshRenderer>().GetBlendShapeWeight(1), Is.Zero);
         }
 
+        [TestCase("Pet", AnimatorControllerParameterType.Float, 0f)]
+        [TestCase("Pet", AnimatorControllerParameterType.Float, 1f)]
+        [TestCase("CNST_TOUCH_EMOTE_LOCK_TRIGGER_L", AnimatorControllerParameterType.Bool, 0f)]
+        [TestCase("CNST_TOUCH_EMOTE_LOCK_TRIGGER_R", AnimatorControllerParameterType.Bool, 1f)]
+        [TestCase("AFK", AnimatorControllerParameterType.Bool, 1f)]
+        public void DirectGestureProbeUsesNormalAndAuthoredContactInputs(string parameter, AnimatorControllerParameterType type, float authoredDefault)
+        {
+            controller.AddParameter(new AnimatorControllerParameter
+            { name = parameter, type = type, defaultFloat = 1 - authoredDefault, defaultBool = authoredDefault == 0 });
+            var baseMachine = controller.layers[0].stateMachine;
+            var idle = State(baseMachine, "No contact", Clip("No contact", ("Pupil removal", 0)));
+            var active = State(baseMachine, "Contact", Clip("Contact", ("Pupil removal", 100)));
+            baseMachine.defaultState = idle;
+            var transition = idle.AddTransition(active); transition.hasExitTime = false; transition.duration = 0;
+            transition.AddCondition(type == AnimatorControllerParameterType.Bool ? AnimatorConditionMode.If : AnimatorConditionMode.Greater,
+                type == AnimatorControllerParameterType.Bool ? 0 : .5f, parameter);
+            var gestureMachine = AddLayer("Fractional gesture"); Menu(gestureMachine);
+            var layers = controller.layers; layers[1].defaultWeight = .5f; controller.layers = layers;
+            var metadata = new VrChatExpressionMenu.Source { Controller = controller };
+            metadata.ExternalParameters.Add(parameter); metadata.Defaults[parameter] = authoredDefault;
+            var normal = parameter == "AFK" ? 0 : authoredDefault;
+            var reference = NativePose(avatar, controller, "Face", Parameters(1).ToDictionary(pair => pair.Key, pair => (int)pair.Value),
+                new Dictionary<string, float> { [parameter] = normal });
+            var selected = (AnimationClip)gestureMachine.states.Single(child => child.state.name == "Selected").state.motion;
+            var entry = new VrChatExpressionMenu.Entry { Name = "Registered gesture" };
+            VrChatGestureExpressions.ReadClip(avatar, selected, entry);
+            var original = EditorJsonUtility.ToJson(controller);
+            VrChatExpressionSampler.ApplyPermanentOverrides(avatar, controller, entry, 1, metadata: metadata);
+            Assert.That(entry.Values.Select(value => value.Shape), Is.EquivalentTo(new[] { "Face size" }),
+                "The selected gesture channel must survive; unrelated native-support channels remain outside capture.");
+            foreach (var value in entry.Values)
+                Assert.That(value.Weight, Is.EqualTo(reference.Weights[value.Shape]).Within(.01), value.Shape);
+            Assert.That(entry.Messages.Any(message => message.Contains(parameter + "=")), Is.True);
+            Assert.That(metadata.Defaults[parameter], Is.EqualTo(authoredDefault));
+            Assert.That(EditorJsonUtility.ToJson(controller), Is.EqualTo(original));
+            Assert.That(avatar.GetComponentInChildren<SkinnedMeshRenderer>().GetBlendShapeWeight(2), Is.Zero);
+        }
+
+        [TestCase("EyeHeightAsMeters", AnimatorControllerParameterType.Float)]
+        [TestCase("Contact trigger", AnimatorControllerParameterType.Trigger)]
+        public void DirectGestureProbeStillRejectsUnresolvedExternalInputs(string parameter, AnimatorControllerParameterType type)
+        {
+            controller.AddParameter(parameter, type);
+            var baseMachine = controller.layers[0].stateMachine;
+            var idle = State(baseMachine, "Unknown neutral", Clip("Unknown neutral", ("Face size", 20)));
+            var active = State(baseMachine, "Unknown active", Clip("Unknown active", ("Face size", 90)));
+            baseMachine.defaultState = idle;
+            var transition = idle.AddTransition(active); transition.hasExitTime = false; transition.duration = 0;
+            transition.AddCondition(type == AnimatorControllerParameterType.Trigger ? AnimatorConditionMode.If : AnimatorConditionMode.Greater,
+                type == AnimatorControllerParameterType.Trigger ? 0 : .5f, parameter);
+            var gestureMachine = AddLayer("Gesture"); Menu(gestureMachine);
+            var layers = controller.layers; layers[1].defaultWeight = .5f; controller.layers = layers;
+            var metadata = new VrChatExpressionMenu.Source { Controller = controller };
+            metadata.ExternalParameters.Add(parameter);
+            var zero = NativePose(avatar, controller, "Face", new Dictionary<string, int> { ["Menu"] = 1 },
+                new Dictionary<string, float> { [parameter] = 0 });
+            var changed = NativePose(avatar, controller, "Face", new Dictionary<string, int> { ["Menu"] = 1 },
+                new Dictionary<string, float> { [parameter] = 1 });
+            Assert.That(Math.Abs(zero.Weights["Face size"] - changed.Weights["Face size"]), Is.GreaterThan(10),
+                "The unresolved input must change the selected native scalar through its lower fractional pose.");
+            var selected = (AnimationClip)gestureMachine.states.Single(child => child.state.name == "Selected").state.motion;
+            var entry = new VrChatExpressionMenu.Entry(); VrChatGestureExpressions.ReadClip(avatar, selected, entry);
+            var original = entry.Values.Select(value => (value.Path, value.Shape, value.Weight)).ToArray();
+            Assert.That(Assert.Catch<InvalidOperationException>(() =>
+                VrChatExpressionSampler.ApplyPermanentOverrides(avatar, controller, entry, 1, metadata: metadata)).Message,
+                Does.Contain(parameter));
+            Assert.That(entry.Values.Select(value => (value.Path, value.Shape, value.Weight)), Is.EqualTo(original));
+        }
+
+        [TestCase(false)]
+        [TestCase(true)]
+        public void DirectScalarSupportKeepsPreparedInfluencingBoneAndWardrobeMorphs(bool writeDefaults)
+        {
+            var renderer = avatar.GetComponentInChildren<SkinnedMeshRenderer>();
+            var bone = new GameObject("Influencing bone"); bone.transform.SetParent(avatar.transform, false);
+            bone.transform.localRotation = Quaternion.Euler(0, 0, 25);
+            renderer.bones = new[] { bone.transform }; renderer.rootBone = bone.transform;
+            mesh.bindposes = new[] { bone.transform.worldToLocalMatrix * renderer.transform.localToWorldMatrix };
+            mesh.boneWeights = Enumerable.Repeat(new BoneWeight { boneIndex0 = 0, weight0 = 1 }, mesh.vertexCount).ToArray();
+            renderer.SetBlendShapeWeight(0, 20); renderer.SetBlendShapeWeight(2, 35);
+            controller.layers[0].stateMachine.defaultState = State(controller.layers[0].stateMachine, "Base", Clip("Base", ("Face size", 30)));
+            var selectedMachine = AddLayer("Fractional player"); Menu(selectedMachine, writeDefaults: writeDefaults);
+            var moving = Clip("Independent additive bone loop");
+            AnimationUtility.SetEditorCurve(moving, EditorCurveBinding.FloatCurve("Influencing bone", typeof(Transform), "localEulerAnglesRaw.z"),
+                AnimationCurve.Linear(0, 0, 1, 60));
+            var settings = AnimationUtility.GetAnimationClipSettings(moving); settings.loopTime = true;
+            AnimationUtility.SetAnimationClipSettings(moving, settings);
+            var support = AddLayer("Independent additive bone"); support.defaultState = State(support, "Loop", moving);
+            var wardrobe = Clip("Prepared wardrobe", ("Pupil removal", 100));
+            AnimationUtility.SetEditorCurve(wardrobe, EditorCurveBinding.FloatCurve("Influencing bone", typeof(Transform), "localEulerAnglesRaw.x"),
+                AnimationCurve.Constant(0, 1, 40));
+            var clothing = AddLayer("Wardrobe"); clothing.defaultState = State(clothing, "On", wardrobe, writeDefaults);
+            var layers = controller.layers; layers[1].defaultWeight = .5f;
+            layers[2].blendingMode = AnimatorLayerBlendingMode.Additive; layers[2].defaultWeight = .5f; controller.layers = layers;
+            var reference = NativePose(avatar, controller, "Face", new Dictionary<string, int> { ["Menu"] = 1 });
+            var selected = selectedMachine.states.Single(child => child.state.name == "Selected").state;
+            var entry = new VrChatExpressionMenu.Entry(); VrChatGestureExpressions.ReadClip(avatar, (AnimationClip)selected.motion, entry);
+            var sourceController = EditorJsonUtility.ToJson(controller); var sourceMesh = EditorJsonUtility.ToJson(mesh);
+            var rotation = bone.transform.localRotation; var before = WorldVertices(renderer);
+            VrChatExpressionSampler.ApplyPermanentOverrides(avatar, controller, entry, 1, writeDefaults, sourceState: selected);
+            Assert.That(entry.Values.Select(value => value.Shape), Is.EquivalentTo(new[] { "Face size" }),
+                "A native wardrobe support layer cannot become an exported facial morph endpoint.");
+            Assert.That(entry.Values.Single().Weight, Is.EqualTo(reference.Weights["Face size"]).Within(.01));
+            Assert.That(bone.transform.localRotation, Is.EqualTo(rotation));
+            Assert.That(renderer.GetBlendShapeWeight(0), Is.EqualTo(20)); Assert.That(renderer.GetBlendShapeWeight(2), Is.EqualTo(35));
+            AssertVertices(before, WorldVertices(renderer));
+            Assert.That(EditorJsonUtility.ToJson(controller), Is.EqualTo(sourceController));
+            Assert.That(EditorJsonUtility.ToJson(mesh), Is.EqualTo(sourceMesh));
+            var mixed = Clip("Explicit selected transform", ("Face size", 80));
+            AnimationUtility.SetEditorCurve(mixed, EditorCurveBinding.FloatCurve("Influencing bone", typeof(Transform), "localEulerAnglesRaw.z"),
+                AnimationCurve.Constant(0, 1, 40));
+            Assert.Throws<InvalidOperationException>(() => VrChatGestureExpressions.ReadClip(avatar, mixed, new VrChatExpressionMenu.Entry()),
+                "Only independent evaluation support is allowed; authored mixed selected clips remain unsupported.");
+        }
+
+        [Test]
+        public void DirectScalarSupportCannotDisableTheCapturedRenderer()
+        {
+            controller.layers[0].stateMachine.defaultState = State(controller.layers[0].stateMachine, "Base", Clip("Base", ("Face size", 30)));
+            var selectedMachine = AddLayer("Fractional player"); Menu(selectedMachine);
+            var disable = Clip("Disable captured renderer");
+            AnimationUtility.SetEditorCurve(disable, EditorCurveBinding.FloatCurve("Face", typeof(SkinnedMeshRenderer), "m_Enabled"),
+                AnimationCurve.Constant(0, 1, 0));
+            var support = AddLayer("Additive activation"); support.defaultState = State(support, "Disable", disable);
+            var layers = controller.layers; layers[1].defaultWeight = .5f; layers[2].blendingMode = AnimatorLayerBlendingMode.Additive;
+            layers[2].defaultWeight = .5f; controller.layers = layers;
+            var selected = selectedMachine.states.Single(child => child.state.name == "Selected").state;
+            var entry = new VrChatExpressionMenu.Entry(); VrChatGestureExpressions.ReadClip(avatar, (AnimationClip)selected.motion, entry);
+            var original = entry.Values.Single().Weight;
+            Assert.That(Assert.Throws<InvalidOperationException>(() =>
+                VrChatExpressionSampler.ApplyPermanentOverrides(avatar, controller, entry, 1, sourceState: selected)).Message,
+                Does.Contain("m_Enabled"));
+            Assert.That(entry.Values.Single().Weight, Is.EqualTo(original));
+            Assert.That(avatar.GetComponentInChildren<SkinnedMeshRenderer>().enabled, Is.True);
+        }
+
+        [TestCase(false, false)]
+        [TestCase(false, true)]
+        [TestCase(true, false)]
+        [TestCase(true, true)]
+        public void DirectScalarProbeDefersUnknownAuthoredChannelsToPreparedResolution(bool generated, bool animated)
+        {
+            Permanent(controller.layers[0].stateMachine); var machine = AddLayer("Fractional direct player"); Menu(machine);
+            var layers = controller.layers; layers[1].defaultWeight = .5f; controller.layers = layers;
+            var selected = machine.states.Single(child => child.state.name == "Selected").state;
+            AnimationUtility.SetEditorCurve((AnimationClip)selected.motion,
+                EditorCurveBinding.FloatCurve("Face", typeof(SkinnedMeshRenderer), "blendShape.Future authored shape"),
+                animated ? AnimationCurve.Linear(0, 20, 1, 80) : AnimationCurve.Constant(0, 1, 20));
+            var entry = new VrChatExpressionMenu.Entry(); VrChatGestureExpressions.ReadClip(avatar, (AnimationClip)selected.motion, entry);
+            VrChatExpressionSampler.ApplyPermanentOverrides(avatar, controller, entry, 1, sourceState: selected);
+            Assert.That(entry.Values.Single(value => value.Shape == "Future authored shape").Weight, Is.EqualTo(20));
+            Assert.That(entry.Values.Any(value => value.Shape == "Face size"), Is.True);
+            if (animated) Assert.That(entry.Animation.Single().Curve.Evaluate(.5), Is.EqualTo(50).Within(1e-9));
+            var menu = new VrChatExpressionMenu.Source(); menu.Entries.Add(entry);
+            var copy = Object.Instantiate(avatar); var preparedMesh = Object.Instantiate(mesh);
+            try
+            {
+                using var bindings = new PreparedExpressionBindings(copy, menu);
+                if (generated) preparedMesh.AddBlendShapeFrame("Future authored shape", 100,
+                    Enumerable.Repeat(Vector3.right * .01f, preparedMesh.vertexCount).ToArray(), null, null);
+                copy.GetComponentInChildren<SkinnedMeshRenderer>().sharedMesh = preparedMesh;
+                bindings.Capture(menu);
+                Assert.That(entry.Error, Is.Null);
+                Assert.That(entry.Values.Any(value => value.Shape == "Future authored shape"), Is.EqualTo(generated));
+                Assert.That(entry.Animation.Any(value => value.Shape == "Future authored shape"), Is.EqualTo(generated && animated));
+                Assert.That(entry.Values.Any(value => value.Shape == "Face size"), Is.True);
+            }
+            finally { Object.DestroyImmediate(copy); Object.DestroyImmediate(preparedMesh); }
+        }
+
+        [Test]
+        public void ProvenBaseStateRetainsItsCallbackAndTheDynamicUpperNativeGraph()
+        {
+            controller.AddParameter("Face input", AnimatorControllerParameterType.Int); Menu(controller.layers[0].stateMachine);
+            var selected = controller.layers[0].stateMachine.states.Single(child => child.state.name == "Selected").state;
+            selected.motion = Clip("Base selected", ("Face size", 80));
+            ParameterDriverExpressionTests.Driver(selected, ParameterDriverExpressionTests.Op("Set", "Face input", 1));
+            var upper = AddLayer("Dynamic upper face");
+            var idle = State(upper, "Idle", Clip("Upper idle", ("Face size", 30)));
+            var active = State(upper, "Active", Clip("Upper active", ("Face size", 20))); upper.defaultState = idle;
+            var transition = idle.AddTransition(active); transition.hasExitTime = false; transition.duration = 0;
+            transition.AddCondition(AnimatorConditionMode.Equals, 1, "Face input");
+            Assert.That(ExpressionDependencies.StationaryMorphBindings(controller), Is.Empty,
+                "Both authored graphs must be non-stationary so the old base-slot early return is exercised.");
+            var expected = NativePose(avatar, controller, "Face", new Dictionary<string, int> { ["Menu"] = 1, ["Face input"] = 1 });
+            Assert.That(expected.Weights["Face size"], Is.EqualTo(20).Within(.01));
+            var entry = new VrChatExpressionMenu.Entry(); VrChatGestureExpressions.ReadClip(avatar, (AnimationClip)selected.motion, entry);
+            var original = EditorJsonUtility.ToJson(controller);
+            VrChatExpressionSampler.ApplyPermanentOverrides(avatar, controller, entry, 0, sourceState: selected);
+            Assert.That(entry.Values.Select(value => value.Shape), Is.EquivalentTo(new[] { "Face size" }));
+            Assert.That(entry.Values.Single().Weight, Is.EqualTo(expected.Weights["Face size"]).Within(.01));
+            Assert.That(EditorJsonUtility.ToJson(controller), Is.EqualTo(original));
+            Assert.That(avatar.GetComponentInChildren<SkinnedMeshRenderer>().GetBlendShapeWeight(0), Is.Zero);
+        }
+
+        [TestCase(false, false)]
+        [TestCase(false, true)]
+        [TestCase(true, false)]
+        [TestCase(true, true)]
+        public void ProvenMovingDirectClipKeepsNativeSupportWithoutAnUnrelatedUpperExpressionReset(bool additive, bool writeDefaults)
+        {
+            controller.layers[0].stateMachine.defaultState = State(controller.layers[0].stateMachine, "Native lower pose",
+                Clip("Native lower pose", ("Face size", 20)));
+            var selectedMachine = AddLayer("Selected gesture"); Menu(selectedMachine, writeDefaults: writeDefaults);
+            var selected = selectedMachine.states.Single(child => child.state.name == "Selected").state;
+            var moving = (AnimationClip)selected.motion;
+            var binding = EditorCurveBinding.FloatCurve("Face", typeof(SkinnedMeshRenderer), "blendShape.Face size");
+            AnimationUtility.SetEditorCurve(moving, binding, AnimationCurve.Linear(0, 20, 1, 80));
+            controller.AddParameter("Other face selection", AnimatorControllerParameterType.Int);
+            var competitor = AddLayer("Other registered face player");
+            var reset = State(competitor, "DEFAULT", Clip("Other default face", ("Face size", 0)));
+            var other = State(competitor, "BYPASS", Clip("Other selected face", ("Face size", 95)));
+            competitor.defaultState = reset;
+            var transition = reset.AddTransition(other); transition.hasExitTime = false; transition.duration = 0;
+            transition.AddCondition(AnimatorConditionMode.Equals, 1, "Other face selection");
+            var support = AddLayer("Authored permanent support");
+            support.defaultState = State(support, "Always", additive ?
+                Clip("Additive authored support", ("Face size", 10), ("Pupil removal", 100)) :
+                Clip("Permanent pupil", ("Pupil removal", 100)), writeDefaults);
+            var layers = controller.layers; layers[1].defaultWeight = .5f;
+            if (additive) { layers[3].blendingMode = AnimatorLayerBlendingMode.Additive; layers[3].defaultWeight = .5f; }
+            controller.layers = layers;
+            var referenceClips = new[] { 20f, 50f, 80f }.ToDictionary(value => value,
+                value => Clip("Independent native selected " + value, ("Face size", value)));
+            var expected = new Dictionary<float, Dictionary<string, float>>();
+            var original = EditorJsonUtility.ToJson(controller);
+            var fullNative = NativePose(avatar, controller, "Face", new Dictionary<string, int> { ["Menu"] = 1 });
+            try
+            {
+                foreach (var pair in referenceClips)
+                {
+                    selected.motion = pair.Value;
+                    expected.Add(pair.Key, NativePose(avatar, controller, "Face", new Dictionary<string, int> { ["Menu"] = 1 },
+                        disabledLayers: new HashSet<int> { 2 }).Weights);
+                }
+            }
+            finally { selected.motion = moving; }
+            Assert.That(Math.Abs(expected[80]["Face size"] - fullNative.Weights["Face size"]), Is.GreaterThan(10),
+                "The unrelated upper default must actually mask the authored animated face in the whole normal controller.");
+            var entry = new VrChatExpressionMenu.Entry(); VrChatGestureExpressions.ReadClip(avatar, moving, entry);
+            Assert.That(entry.Animation.Select(value => value.Shape), Is.EquivalentTo(new[] { "Face size" }));
+            VrChatExpressionSampler.ApplyPermanentOverrides(avatar, controller, entry, 1, writeDefaults, sourceState: selected);
+            Assert.That(entry.Animation.Select(value => value.Shape), Is.EquivalentTo(new[] { "Face size" }),
+                "The explicit moving face must survive rather than becoming a named zero-delta endpoint.");
+            foreach (var sample in new[] { (Time: 0.0, Input: 20f), (Time: .5, Input: 50f), (Time: 1.0, Input: 80f) })
+                Assert.That(entry.Animation.Single().Curve.Evaluate(sample.Time), Is.EqualTo(expected[sample.Input]["Face size"]).Within(.01));
+            Assert.That(entry.Values.Single(value => value.Shape == "Pupil removal").Weight,
+                Is.EqualTo(expected[20]["Pupil removal"]).Within(.01), "Permanent native support must survive competing face selection.");
+            Assert.That(EditorJsonUtility.ToJson(controller), Is.EqualTo(original));
+            Assert.That(AnimationUtility.GetEditorCurve(moving, binding).Evaluate(.5f), Is.EqualTo(50).Within(.01));
+            Assert.That(avatar.GetComponentInChildren<SkinnedMeshRenderer>().GetBlendShapeWeight(0), Is.Zero);
+        }
+
+        [TestCase(false)]
+        [TestCase(true)]
+        public void ProvenMovingDirectClipStillHonorsAProvenPermanentUpperOverride(bool writeDefaults)
+        {
+            Menu(controller.layers[0].stateMachine, writeDefaults: writeDefaults);
+            var selected = controller.layers[0].stateMachine.states.Single(child => child.state.name == "Selected").state;
+            var moving = (AnimationClip)selected.motion;
+            AnimationUtility.SetEditorCurve(moving, EditorCurveBinding.FloatCurve("Face", typeof(SkinnedMeshRenderer), "blendShape.Face size"),
+                AnimationCurve.Linear(0, 20, 1, 80));
+            var permanent = AddLayer("Permanent explicit face override");
+            permanent.defaultState = State(permanent, "Always", Clip("Permanent face", ("Face size", 35)), writeDefaults);
+            var expected = NativePose(avatar, controller, "Face", new Dictionary<string, int> { ["Menu"] = 1 });
+            var original = EditorJsonUtility.ToJson(controller);
+            var entry = new VrChatExpressionMenu.Entry(); VrChatGestureExpressions.ReadClip(avatar, moving, entry);
+            VrChatExpressionSampler.ApplyPermanentOverrides(avatar, controller, entry, 0, writeDefaults, sourceState: selected);
+            Assert.That(entry.Values.Single(value => value.Shape == "Face size").Weight, Is.EqualTo(expected.Weights["Face size"]).Within(.01));
+            Assert.That(expected.Weights["Face size"], Is.EqualTo(35).Within(.01));
+            Assert.That(entry.Animation, Is.Empty, "A real permanent upper override retains its native priority.");
+            Assert.That(EditorJsonUtility.ToJson(controller), Is.EqualTo(original));
+        }
+
+        [Test]
+        public void ProvenMovingDirectClipRetainsTheConfiguredSingleStateBlendTreeSupport()
+        {
+            controller.layers[0].stateMachine.defaultState = State(controller.layers[0].stateMachine, "Lower pose",
+                Clip("Lower pose", ("Face size", 20), ("Pupil removal", 0)));
+            var player = AddLayer("Moving direct player"); Menu(player, writesPupil: true);
+            var selected = player.states.Single(child => child.state.name == "Selected").state;
+            var moving = (AnimationClip)selected.motion;
+            AnimationUtility.SetEditorCurve(moving, EditorCurveBinding.FloatCurve("Face", typeof(SkinnedMeshRenderer), "blendShape.Face size"),
+                AnimationCurve.Constant(0, 1, 0));
+            AnimationUtility.SetEditorCurve(moving, EditorCurveBinding.FloatCurve("Face", typeof(SkinnedMeshRenderer), "blendShape.Pupil removal"),
+                AnimationCurve.Linear(0, 0, 1, 80));
+            controller.AddParameter(new AnimatorControllerParameter
+            { name = "Configured size", type = AnimatorControllerParameterType.Float, defaultFloat = .25f });
+            var configured = AddLayer("Configured size BlendTree");
+            var tree = new BlendTree { name = "Authored size setting", blendType = BlendTreeType.Simple1D,
+                blendParameter = "Configured size", useAutomaticThresholds = false };
+            AssetDatabase.AddObjectToAsset(tree, controller);
+            tree.AddChild(Clip("Small configured size", ("Face size", 20)), 0);
+            tree.AddChild(Clip("Large configured size", ("Face size", 80)), 1);
+            var configuredState = configured.AddState("Always configured"); configuredState.motion = tree;
+            configuredState.writeDefaultValues = false; configured.defaultState = configuredState;
+            var layers = controller.layers; layers[1].defaultWeight = .5f; controller.layers = layers;
+            Assert.That(ExpressionDependencies.StationaryLayers(controller).ContainsKey(2), Is.False);
+            Assert.That(VrChatExpressionSampler.HasEquivalentConstantStates(controller, 2), Is.False,
+                "An always-active BlendTree configuration is not a constant-clip or alternate expression proof.");
+            var referenceClips = new[] { 0f, 40f, 80f }.ToDictionary(value => value,
+                value => Clip("Native direct phase " + value, ("Face size", 0), ("Pupil removal", value)));
+            var expected = new Dictionary<float, Dictionary<string, float>>();
+            var original = EditorJsonUtility.ToJson(controller);
+            try
+            {
+                foreach (var pair in referenceClips)
+                {
+                    selected.motion = pair.Value;
+                    expected.Add(pair.Key, NativePose(avatar, controller, "Face", new Dictionary<string, int> { ["Menu"] = 1 },
+                        new Dictionary<string, float> { ["Configured size"] = .25f }).Weights);
+                }
+            }
+            finally { selected.motion = moving; }
+            Assert.That(expected[0]["Face size"], Is.EqualTo(35).Within(.01));
+            Assert.That(expected[80]["Pupil removal"] - expected[0]["Pupil removal"], Is.GreaterThan(10),
+                "Native configured support must leave the selected authored motion functional.");
+            var entry = new VrChatExpressionMenu.Entry(); VrChatGestureExpressions.ReadClip(avatar, moving, entry);
+            VrChatExpressionSampler.ApplyPermanentOverrides(avatar, controller, entry, 1, sourceState: selected);
+            Assert.That(entry.Values.Single(value => value.Shape == "Face size").Weight,
+                Is.EqualTo(expected[0]["Face size"]).Within(.01), "Merged size settings retain their native upper priority.");
+            Assert.That(entry.Animation.Select(value => value.Shape), Is.EquivalentTo(new[] { "Pupil removal" }));
+            foreach (var sample in new[] { (Time: 0.0, Input: 0f), (Time: .5, Input: 40f), (Time: 1.0, Input: 80f) })
+                Assert.That(entry.Animation.Single().Curve.Evaluate(sample.Time),
+                    Is.EqualTo(expected[sample.Input]["Pupil removal"]).Within(.01));
+            Assert.That(EditorJsonUtility.ToJson(controller), Is.EqualTo(original));
+            Assert.That(controller.parameters.Single(parameter => parameter.name == "Configured size").defaultFloat, Is.EqualTo(.25f));
+        }
+
+        [TestCase("none")]
+        [TestCase("unused")]
+        [TestCase("retained")]
+        public void InactiveProvenStateKeepsAuthoredClipUnlessItsCallbacksAffectRetainedGraph(string influence)
+        {
+            controller.AddParameter("Unused callback", AnimatorControllerParameterType.Int);
+            Menu(controller.layers[0].stateMachine);
+            var player = AddLayer("Inactive direct player"); var selected = State(player, "Selected", Clip("Inactive selected", ("Face size", 80)));
+            player.defaultState = selected; var layers = controller.layers; layers[1].defaultWeight = 0; controller.layers = layers;
+            if (influence != "none") ParameterDriverExpressionTests.Driver(selected,
+                ParameterDriverExpressionTests.Op("Set", influence == "retained" ? "Menu" : "Unused callback", 1));
+            var entry = new VrChatExpressionMenu.Entry(); VrChatGestureExpressions.ReadClip(avatar, (AnimationClip)selected.motion, entry);
+            var original = EditorJsonUtility.ToJson(controller);
+            if (influence == "retained")
+                Assert.That(Assert.Catch<InvalidOperationException>(() =>
+                    VrChatExpressionSampler.ApplyPermanentOverrides(avatar, controller, entry, 1, sourceState: selected)).Message,
+                    Does.Contain("Parameter Driver").And.Contain("Menu"));
+            else VrChatExpressionSampler.ApplyPermanentOverrides(avatar, controller, entry, 1, sourceState: selected);
+            Assert.That(entry.Values.Single().Weight, Is.EqualTo(80), "A dormant slot is never force-activated to replace its authored candidate.");
+            Assert.That(EditorJsonUtility.ToJson(controller), Is.EqualTo(original));
+            Assert.That(avatar.GetComponentInChildren<SkinnedMeshRenderer>().GetBlendShapeWeight(0), Is.Zero);
+        }
+
         [TestCase("different clip")]
         [TestCase("different write defaults")]
         [TestCase("changing parameter curve")]
@@ -332,7 +684,7 @@ namespace VRVlog.LilToonExporter.Tests
         // Independent native Animator playback provides the expected result;
         // it does not use the export sampler or its reconstructed probe graph.
         static (Dictionary<string, float> Weights, Vector3[] Vertices) NativePose(GameObject source, AnimatorController fx,
-            string path, IDictionary<string, int> parameters)
+            string path, IDictionary<string, int> parameters, IDictionary<string, float> fixedInputs = null, ISet<int> disabledLayers = null)
         {
             var copy = Object.Instantiate(source);
             var graph = PlayableGraph.Create("Weighted FX regression reference");
@@ -343,8 +695,21 @@ namespace VRVlog.LilToonExporter.Tests
                 var animator = copy.GetComponent<Animator>(); animator.enabled = true;
                 animator.runtimeAnimatorController = null; animator.applyRootMotion = false; animator.cullingMode = AnimatorCullingMode.AlwaysAnimate;
                 var playable = AnimatorControllerPlayable.Create(graph, fx);
-                for (var index = 0; index < fx.layers.Length; index++) playable.SetLayerWeight(index, index == 0 ? 1 : fx.layers[index].defaultWeight);
+                for (var index = 0; index < fx.layers.Length; index++)
+                    playable.SetLayerWeight(index, disabledLayers?.Contains(index) == true ? 0 : index == 0 ? 1 : fx.layers[index].defaultWeight);
                 var output = AnimationPlayableOutput.Create(graph, "Face", animator); output.SetSourcePlayable(playable);
+                if (fixedInputs != null)
+                    foreach (var input in fixedInputs)
+                        switch (fx.parameters.Single(parameter => parameter.name == input.Key).type)
+                        {
+                            case AnimatorControllerParameterType.Bool: playable.SetBool(input.Key, input.Value != 0); break;
+                            case AnimatorControllerParameterType.Int: playable.SetInteger(input.Key, (int)input.Value); break;
+                            case AnimatorControllerParameterType.Float: playable.SetFloat(input.Key, input.Value); break;
+                            case AnimatorControllerParameterType.Trigger:
+                                if (input.Value != 0) playable.SetTrigger(input.Key); else playable.ResetTrigger(input.Key);
+                                break;
+                            default: throw new InvalidOperationException("The native reference requires a supported input type.");
+                        }
                 graph.Play(); graph.Evaluate(0);
                 for (var frame = 0; frame < 120; frame++) graph.Evaluate(1f / 60f);
                 foreach (var parameter in parameters) playable.SetInteger(parameter.Key, parameter.Value);
@@ -397,6 +762,113 @@ namespace VRVlog.LilToonExporter.Tests
                 Assert.That(Vector3.Distance(expected[index], actual[index]), Is.LessThan(.0005f), "Vertex " + index);
         }
 
+        [TestCase(true)]
+        [TestCase(false)]
+        public async Task SourceFrameRangePolicyPreservesNativeClampedGeometryAndUnlimitedAuthoredMath(bool legacyClamp)
+        {
+            var previous = PlayerSettings.legacyClampBlendShapeWeights;
+            try
+            {
+                PlayerSettings.legacyClampBlendShapeWeights = legacyClamp;
+                await BlendShapeSettingsTestSupport.WaitForEditorUpdates();
+                using var fixture = new AttachmentConnectionTests.Fixture();
+                var originalVertices = fixture.Mesh.vertices;
+                var state = State(controller.layers[0].stateMachine, "Native range oracle", null);
+                controller.layers[0].stateMachine.defaultState = state;
+                foreach (var frames in new[] { new[] { 100f }, new[] { -50f }, new[] { 20f, 80f }, new[] { -20f, 80f },
+                    new[] { -100f, -20f }, new[] { 50f, 200f } })
+                {
+                    fixture.Mesh.ClearBlendShapes();
+                    foreach (var frame in frames)
+                        fixture.Mesh.AddBlendShapeFrame("Range oracle", frame,
+                            Enumerable.Repeat(Vector3.up * (frame / 100f), fixture.Mesh.vertexCount).ToArray(),
+                            new Vector3[fixture.Mesh.vertexCount], new Vector3[fixture.Mesh.vertexCount]);
+                    var inputs = new[] { -200f, -50f, 0f, 10f, 20f, 50f, 80f, 100f, 102.5f, 150f, 200f, 250f };
+                    var native = new Dictionary<float, Vector3[]>();
+                    foreach (var input in inputs)
+                    {
+                        var clip = new AnimationClip { name = "Native range " + input };
+                        AnimationUtility.SetEditorCurve(clip, EditorCurveBinding.FloatCurve("Front", typeof(SkinnedMeshRenderer), "blendShape.Range oracle"),
+                            AnimationCurve.Constant(0, 1, input));
+                        AssetDatabase.AddObjectToAsset(clip, controller); state.motion = clip;
+                        var pose = NativePose(fixture.Source, controller, "Front", new Dictionary<string, int>());
+                        Assert.That(pose.Weights["Range oracle"], Is.EqualTo(input).Within(.001), "Native scalar remains unbounded");
+                        native.Add(input, pose.Vertices);
+                        if (legacyClamp)
+                        {
+                            // This bound was measured independently with native
+                            // Animator playback and direct BakeMesh in Unity 2022.3.
+                            // A positive first frame does not exclude zero.
+                            // A sole negative frame is inert under legacy
+                            // clamp; multiple negative frames use their final
+                            // authored frame as the upper bound.
+                            var effective = frames.Length == 1 && frames[0] < 0 ? 0
+                                : Math.Min(frames.Last(), Math.Max(0f, input));
+                            AssertVertices(originalVertices.Select(vertex => vertex + Vector3.up * (effective / 100f)).ToArray(), pose.Vertices);
+                        }
+                    }
+                    foreach (var rest in new[] { -50f, 150f })
+                    {
+                        var prepared = Object.Instantiate(fixture.Source);
+                        var temporary = new List<Mesh>();
+                        try
+                        {
+                            prepared.GetComponent<Animator>().enabled = false;
+                            var renderer = prepared.transform.Find("Front").GetComponent<SkinnedMeshRenderer>();
+                            renderer.SetBlendShapeWeight(0, rest);
+                            AvatarBaseShape.NormalizeSourceWeights(prepared, legacyClamp);
+                            var effectiveRest = legacyClamp
+                                ? (frames.Length == 1 && frames[0] < 0 ? 0 : Math.Min(frames.Last(), Math.Max(0f, rest)))
+                                : rest;
+                            Assert.That(renderer.GetBlendShapeWeight(0), Is.EqualTo(effectiveRest));
+                            AvatarBaseShape.Preserve(prepared, prepared, temporary, null);
+                            // Zero native rest needs no rebase. The baker still
+                            // owns a mesh copy before appending expression data.
+                            if (ReferenceEquals(renderer.sharedMesh, fixture.Mesh))
+                            {
+                                renderer.sharedMesh = Object.Instantiate(fixture.Mesh);
+                                temporary.Add(renderer.sharedMesh);
+                            }
+                            Vector3[] Expected(float input) => legacyClamp ? native[input]
+                                : originalVertices.Select(vertex => vertex + Vector3.up * (input / 100f)).ToArray();
+                            AssertVertices(Expected(rest), WorldVertices(renderer));
+                            foreach (var input in inputs)
+                            {
+                                var target = renderer.sharedMesh;
+                                var expression = target.blendShapeCount;
+                                AvatarBaseShape.AppendExpression(fixture.Mesh, target, "Static " + input,
+                                    new[] { effectiveRest }, new[] { input }, legacyClamp);
+                                renderer.SetBlendShapeWeight(expression, 100);
+                                AssertVertices(Expected(input), WorldVertices(renderer));
+                                renderer.SetBlendShapeWeight(expression, 0);
+                                var animated = target.blendShapeCount;
+                                AvatarBaseShape.AppendAnimatedShape(fixture.Mesh, target, "Animated " + input,
+                                    0, rest, input, legacyClamp);
+                                renderer.SetBlendShapeWeight(animated, 100);
+                                AssertVertices(Expected(input), WorldVertices(renderer));
+                                renderer.SetBlendShapeWeight(animated, 0);
+                            }
+                        }
+                        finally
+                        {
+                            Object.DestroyImmediate(prepared);
+                            foreach (var owned in temporary) Object.DestroyImmediate(owned);
+                        }
+                    }
+                    Assert.That(fixture.Source.transform.Find("Front").GetComponent<SkinnedMeshRenderer>().sharedMesh, Is.SameAs(fixture.Mesh));
+                    Assert.That(fixture.Mesh.vertices, Is.EqualTo(originalVertices));
+                }
+                // Setting false declares the existing unlimited export math.
+                // Its arithmetic remains checked directly alongside the true
+                // policy's independent native playback/geometry oracle.
+            }
+            finally
+            {
+                PlayerSettings.legacyClampBlendShapeWeights = previous;
+                await BlendShapeSettingsTestSupport.WaitForEditorUpdates();
+            }
+        }
+
         [TestCase(false)]
         [TestCase(true)]
         public void ConstantIndependentEffectAppliesToNeutralAndSelectedExpression(bool writeDefaults)
@@ -422,7 +894,29 @@ namespace VRVlog.LilToonExporter.Tests
                 .FirstOrDefault(type => type != null);
             if (descriptorType == null) Assert.Ignore("Install the real VRChat SDK for neutral FX integration.");
             Menu(controller.layers[0].stateMachine, writeDefaults: writeDefaults);
+            // Establish the pupil channel in the lower native animation pose.
+            // A channel introduced only by a disjoint additive layer may be
+            // inert on an Editor backend; this paired fixture must exercise
+            // an actual additive contribution on an existing channel.
+            foreach (var child in controller.layers[0].stateMachine.states)
+                AnimationUtility.SetEditorCurve((AnimationClip)child.state.motion,
+                    EditorCurveBinding.FloatCurve("Face", typeof(SkinnedMeshRenderer), "blendShape.Pupil removal"),
+                    AnimationCurve.Constant(0, 1, 0));
             Permanent(AddLayer("Weighted permanent"), writeDefaults);
+            if (additive)
+            {
+                // Author a zero additive reference instead of inheriting the
+                // constant clip's first-frame reference, which can cancel its
+                // pupil curve completely in native Mecanim evaluation.
+                var permanentClip = (AnimationClip)controller.layers[1].stateMachine.defaultState.motion;
+                var referenceClip = Clip("Authored zero additive reference", ("Pupil removal", 0));
+                var settings = AnimationUtility.GetAnimationClipSettings(permanentClip);
+                settings.hasAdditiveReferencePose = true;
+                settings.additiveReferencePoseClip = referenceClip;
+                settings.additiveReferencePoseTime = 0;
+                AnimationUtility.SetAnimationClipSettings(permanentClip, settings);
+                AnimationUtility.SetAdditiveReferencePose(permanentClip, referenceClip, 0);
+            }
             var layers = controller.layers; layers[1].defaultWeight = .5f;
             layers[1].blendingMode = additive ? AnimatorLayerBlendingMode.Additive : AnimatorLayerBlendingMode.Override; controller.layers = layers;
             var sourceSkin = avatar.GetComponentInChildren<SkinnedMeshRenderer>(); sourceSkin.SetBlendShapeWeight(2, 20);
@@ -438,6 +932,14 @@ namespace VRVlog.LilToonExporter.Tests
                 data.ApplyModifiedPropertiesWithoutUndo();
             }
             var neutral = NativePose(avatar, controller, "Face", new Dictionary<string, int> { ["Menu"] = 0 });
+            if (additive)
+            {
+                var withoutAdditive = NativePose(avatar, controller, "Face", new Dictionary<string, int> { ["Menu"] = 0 },
+                    disabledLayers: new HashSet<int> { 1 });
+                Assert.That(Math.Abs(neutral.Weights["Pupil removal"] - withoutAdditive.Weights["Pupil removal"]), Is.GreaterThan(.01),
+                    "The authored zero-reference additive fixture must change the independent native pupil pose: full=" +
+                    neutral.Weights["Pupil removal"] + ", disabled=" + withoutAdditive.Weights["Pupil removal"]);
+            }
             var expected = NativePose(avatar, controller, "Face", new Dictionary<string, int> { ["Menu"] = 1 });
             var clip = (AnimationClip)controller.layers[0].stateMachine.states.Single(child => child.state.name == "Selected").state.motion;
             var registeredClip = Object.Instantiate(clip); registeredClip.name = "Weighted registered face";
@@ -471,9 +973,11 @@ namespace VRVlog.LilToonExporter.Tests
             finally { Object.DestroyImmediate(clone); }
         }
 
-        [TestCase(false)]
-        [TestCase(true)]
-        public void NeutralFractionalOverrideKeepsMovingBaseWithoutBakingUnrelatedMorphs(bool writeDefaults)
+        [TestCase(false, false)]
+        [TestCase(false, true)]
+        [TestCase(true, false)]
+        [TestCase(true, true)]
+        public void NeutralWeightedUpperLayerKeepsMovingBaseWithoutBakingUnrelatedMorphs(bool additive, bool writeDefaults)
         {
             var descriptorType = AppDomain.CurrentDomain.GetAssemblies().Select(assembly => assembly.GetType("VRC.SDK3.Avatars.Components.VRCAvatarDescriptor"))
                 .FirstOrDefault(type => type != null);
@@ -484,7 +988,9 @@ namespace VRVlog.LilToonExporter.Tests
             var baseMachine = controller.layers[0].stateMachine;
             baseMachine.defaultState = State(baseMachine, "Moving face", baseClip);
             Permanent(AddLayer("Fractional pupil"), writeDefaults);
-            var layers = controller.layers; layers[1].defaultWeight = .5f; controller.layers = layers;
+            var layers = controller.layers; layers[1].defaultWeight = .5f;
+            layers[1].blendingMode = additive ? AnimatorLayerBlendingMode.Additive : AnimatorLayerBlendingMode.Override;
+            controller.layers = layers;
             var sourceSkin = avatar.GetComponentInChildren<SkinnedMeshRenderer>();
             sourceSkin.SetBlendShapeWeight(1, 12); sourceSkin.SetBlendShapeWeight(2, 20);
             var descriptor = avatar.AddComponent(descriptorType);
@@ -517,6 +1023,111 @@ namespace VRVlog.LilToonExporter.Tests
                 Assert.That(EditorJsonUtility.ToJson(controller), Is.EqualTo(originalController));
             }
             finally { Object.DestroyImmediate(clone); }
+        }
+
+        [TestCase(.5f, false)]
+        [TestCase(.5f, true)]
+        [TestCase(1f, false)]
+        [TestCase(1f, true)]
+        public void NeutralAdditiveDisjointMorphGroupsMatchTheAuthoredNativeController(float weight, bool writeDefaults)
+        {
+            using var fixture = new AttachmentConnectionTests.Fixture();
+            using var menus = new MenuImportSdkRecoveryTests.SdkFixture(fixture.Source);
+            var fx = (AnimatorController)VrChatExpressionMenu.Read(fixture.Source, new VrChatMenuImportPolicy { SkipAll = true }).Controller;
+            var delta = new Vector3[fixture.Mesh.vertexCount]; delta[0] = Vector3.up * .1f;
+            fixture.Mesh.AddBlendShapeFrame("Pupil removal", 100, delta, new Vector3[delta.Length], new Vector3[delta.Length]);
+            var fixedClip = new AnimationClip { name = "Disjoint additive pupil" };
+            AnimationUtility.SetEditorCurve(fixedClip, EditorCurveBinding.FloatCurve("Front", typeof(SkinnedMeshRenderer), "blendShape.Pupil removal"),
+                AnimationCurve.Constant(0, 1, 100));
+            AssetDatabase.AddObjectToAsset(fixedClip, fx);
+            fx.AddLayer("Disjoint additive pupil");
+            var layers = fx.layers; var layer = layers[layers.Length - 1];
+            layer.defaultWeight = weight; layer.blendingMode = AnimatorLayerBlendingMode.Additive;
+            layer.stateMachine.defaultState = State(layer.stateMachine, "Always", fixedClip, writeDefaults); fx.layers = layers;
+            var sourceSkin = fixture.Source.transform.Find("Front").GetComponent<SkinnedMeshRenderer>();
+            var beforeMesh = EditorJsonUtility.ToJson(fixture.Mesh);
+            var beforeController = EditorJsonUtility.ToJson(fx);
+            var beforeDescriptor = EditorJsonUtility.ToJson(menus.Descriptor);
+            var expected = NativePose(fixture.Source, fx, "Front", new Dictionary<string, int> { ["Face"] = 0, ["GestureRight"] = 0 });
+            // A property introduced only by this disjoint additive motion can
+            // be inert in native playback. Preserve that result, as well as
+            // any implicit contribution to the separate Hair detail group.
+            // The paired fractional multi-route fixture above independently
+            // proves an additive effect on an established lower channel.
+            var neutral = NeutralShapeSampler.Sample(fixture.Source);
+            Assert.That(neutral.Select(value => value.Path + "/" + value.Shape),
+                Is.EquivalentTo(new[] { "Front/Hair detail", "Front/Pupil removal" }));
+            foreach (var value in neutral)
+                Assert.That(value.Weight, Is.EqualTo(expected.Weights[value.Shape]).Within(.01), value.Path + "/" + value.Shape);
+            Assert.That(sourceSkin.GetBlendShapeWeight(0), Is.EqualTo(35));
+            Assert.That(sourceSkin.GetBlendShapeWeight(1), Is.Zero);
+            Assert.That(EditorJsonUtility.ToJson(fixture.Mesh), Is.EqualTo(beforeMesh));
+            Assert.That(EditorJsonUtility.ToJson(fx), Is.EqualTo(beforeController));
+            Assert.That(EditorJsonUtility.ToJson(menus.Descriptor), Is.EqualTo(beforeDescriptor));
+        }
+
+        [Test]
+        public void NeutralAdditiveAutomaticSupportKeepsNativeDefaultsWithoutBakingMovingBlink()
+        {
+            controller.layers[0].stateMachine.defaultState = State(controller.layers[0].stateMachine, "Authored face",
+                Clip("Authored face", ("Face size", 35)));
+            var blink = Clip("Live additive blink");
+            var blinkBinding = EditorCurveBinding.FloatCurve("Face", typeof(SkinnedMeshRenderer), "blendShape.Blink");
+            AnimationUtility.SetEditorCurve(blink, blinkBinding, AnimationCurve.Linear(0, 0, 30, 100));
+            var machine = AddLayer("Live additive blink"); machine.defaultState = State(machine, "Live blink", blink);
+            var layers = controller.layers; layers[1].defaultWeight = .5f;
+            layers[1].blendingMode = AnimatorLayerBlendingMode.Additive; controller.layers = layers;
+            var sourceSkin = avatar.GetComponentInChildren<SkinnedMeshRenderer>();
+            sourceSkin.SetBlendShapeWeight(0, 7); sourceSkin.SetBlendShapeWeight(1, 35);
+            var metadata = new VrChatExpressionMenu.Source { Controller = controller };
+            var automatic = new HashSet<EditorCurveBinding> { blinkBinding };
+            var roots = ExpressionDependencies.NeutralRoots(controller, null, metadata, automatic).Single();
+            var dependencies = ExpressionDependencies.AnalyzeNeutral(controller, roots, null, metadata, automatic);
+            Assert.That(dependencies.NativeSupportLayers, Does.Contain(1),
+                "Removing an automatic morph from capture must preserve its native additive stream.");
+            Assert.That(dependencies.Morphs.Contains(blinkBinding), Is.False);
+            var beforeController = EditorJsonUtility.ToJson(controller);
+            var expected = NativePose(avatar, controller, "Face", new Dictionary<string, int>());
+            var neutral = VrChatExpressionSampler.SampleNeutral(avatar, controller, dependencies, metadata, null);
+            Assert.That(neutral.Select(value => value.Shape), Is.EqualTo(new[] { "Face size" }));
+            Assert.That(neutral.Single().Weight, Is.EqualTo(expected.Weights["Face size"]).Within(.01));
+            Assert.That(sourceSkin.GetBlendShapeWeight(0), Is.EqualTo(7));
+            Assert.That(sourceSkin.GetBlendShapeWeight(1), Is.EqualTo(35));
+            Assert.That(EditorJsonUtility.ToJson(controller), Is.EqualTo(beforeController));
+        }
+
+        [TestCase(false)]
+        [TestCase(true)]
+        public void NeutralCommittedRootsRetainNativeClosureAndCheckOtherPlayableEffects(bool otherTouchesCommittedMorph)
+        {
+            controller.layers[0].stateMachine.defaultState = State(controller.layers[0].stateMachine, "Authored face",
+                Clip("Authored face", ("Face size", 35)));
+            Permanent(AddLayer("Implicit default closure"), writeDefaults: true);
+            var metadata = new VrChatExpressionMenu.Source { Controller = controller };
+            var faceBinding = EditorCurveBinding.FloatCurve("Face", typeof(SkinnedMeshRenderer), "blendShape.Face size");
+            var pupilBinding = EditorCurveBinding.FloatCurve("Face", typeof(SkinnedMeshRenderer), "blendShape.Pupil removal");
+            var roots = new HashSet<EditorCurveBinding> { faceBinding };
+            var legacy = ExpressionDependencies.AnalyzeNeutral(controller, roots, null, metadata);
+            Assert.That(legacy.Morphs, Does.Contain(pupilBinding), "Existing callers retain their complete implicit-default capture contract.");
+            var other = AnimatorController.CreateAnimatorControllerAtPath(folder + "/OtherPlayable.controller");
+            other.layers[0].stateMachine.defaultState = State(other.layers[0].stateMachine, "Other playable",
+                Clip("Other playable", (otherTouchesCommittedMorph ? "Face size" : "Pupil removal", 80)));
+            metadata.OtherControllers.Add(other);
+            if (otherTouchesCommittedMorph)
+            {
+                var error = Assert.Throws<InvalidOperationException>(() =>
+                    ExpressionDependencies.AnalyzeNeutral(controller, roots, null, metadata, preserveCommittedMorphs: true));
+                StringAssert.Contains("FX以外のPlayable Layer", error.Message);
+                return;
+            }
+            var dependencies = ExpressionDependencies.AnalyzeNeutral(controller, roots, null, metadata, preserveCommittedMorphs: true);
+            Assert.That(dependencies.Morphs, Is.EquivalentTo(roots));
+            Assert.That(dependencies.Layers, Does.Contain(1), "The native WD layer must remain in the evaluation closure.");
+            Assert.That(dependencies.NativeSupportLayers, Does.Contain(1));
+            var expected = NativePose(avatar, controller, "Face", new Dictionary<string, int>());
+            var neutral = VrChatExpressionSampler.SampleNeutral(avatar, controller, dependencies, metadata, null);
+            Assert.That(neutral.Select(value => value.Shape), Is.EqualTo(new[] { "Face size" }));
+            Assert.That(neutral.Single().Weight, Is.EqualTo(expected.Weights["Face size"]).Within(.01));
         }
 
         [TestCase(false)]

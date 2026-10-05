@@ -198,9 +198,11 @@ namespace VRVlog.LilToonExporter.Tests
             Assert.That(skin.GetBlendShapeWeight(mesh.GetBlendShapeIndex("Blink")), Is.Zero);
         }
 
-        [TestCase(false)]
-        [TestCase(true)]
-        public void FractionalNeutralChecksUnobservedSupportMotions(bool animationEvent)
+        [TestCase(false, false)]
+        [TestCase(false, true)]
+        [TestCase(true, false)]
+        [TestCase(true, true)]
+        public void FractionalNeutralDistinguishesDisconnectedAndReachableUnsupportedSupportMotions(bool animationEvent, bool reachable)
         {
             var baseClip = Clip("Automatic base", "Blink");
             AnimationUtility.SetEditorCurve(baseClip, EditorCurveBinding.FloatCurve("Face", typeof(SkinnedMeshRenderer), "blendShape.Blink"),
@@ -211,12 +213,30 @@ namespace VRVlog.LilToonExporter.Tests
                 new[] { new AnimationEvent { time = 30, functionName = "FutureCallback" } });
             else AnimationUtility.SetObjectReferenceCurve(unsafeClip, EditorCurveBinding.PPtrCurve("Face", typeof(SkinnedMeshRenderer), "m_Mesh"),
                 new[] { new ObjectReferenceKeyframe { time = 0, value = mesh } });
-            State(machine, "Alternative unsupported motion", unsafeClip);
+            var alternative = State(machine, "Alternative unsupported motion", unsafeClip);
+            if (reachable)
+            {
+                var transition = machine.defaultState.AddTransition(alternative);
+                transition.hasExitTime = true; transition.exitTime = 30; transition.duration = 0;
+            }
             FractionalPupil();
             var sourceJson = EditorJsonUtility.ToJson(controller);
-            var error = Assert.Throws<InvalidOperationException>(() => NeutralShapeSampler.Sample(avatar));
-            Assert.That(error.Message, Does.Contain(animationEvent ? "影響範囲" : "差し替え"));
+            var meshJson = EditorJsonUtility.ToJson(mesh);
+            if (reachable)
+            {
+                // A future route must still fail before its unsupported motion
+                // can be mistaken for a permanently safe native support layer.
+                Assert.Catch<InvalidOperationException>(() => NeutralShapeSampler.Sample(avatar));
+            }
+            else
+            {
+                var expected = Native(false, requireRelay: false);
+                var values = NeutralShapeSampler.Sample(avatar);
+                Assert.That(values.Select(value => value.Shape), Is.EquivalentTo(new[] { "Pupil removal" }));
+                Assert.That(values.Single().Weight, Is.EqualTo(expected["Pupil removal"]).Within(.01));
+            }
             Assert.That(EditorJsonUtility.ToJson(controller), Is.EqualTo(sourceJson));
+            Assert.That(EditorJsonUtility.ToJson(mesh), Is.EqualTo(meshJson));
         }
 
         [Test]
