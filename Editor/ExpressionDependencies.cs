@@ -349,12 +349,10 @@ namespace VRVlog.LilToonExporter
                 .Concat(neutralMorphs == null ? Enumerable.Empty<string>() : VrChatParameterDriver.BuiltIn.Where(name => !result.NeutralFixedValues.ContainsKey(name)))
                 .Where(name => result.Parameters.Contains(name) && fixedContext?.Values.ContainsKey(name) != true)
                 .Distinct().OrderBy(n => n, StringComparer.Ordinal).ToArray();
-            if (external.Length > 0)
-            {
-                var message = "外部入力に依存する表情の値を確定できません: " + string.Join(", ", external);
-                if (neutralMorphs != null) throw new NeutralShapeSamplingException(message, dependencyMorphs: result.NeutralDependencyMorphs);
-                throw new InvalidOperationException(message);
-            }
+            // Fixed menu sampling has no authored-rest fallback. Preserve its
+            // existing actionable missing-input diagnostic precedence.
+            if (external.Length > 0 && neutralMorphs == null)
+                throw new InvalidOperationException("外部入力に依存する表情の値を確定できません: " + string.Join(", ", external));
             foreach (var other in otherControllers)
             {
                 var writes = other.Layers.SelectMany(l => l.Writes).Where(result.Parameters.Contains).Distinct().ToArray();
@@ -366,6 +364,13 @@ namespace VRVlog.LilToonExporter
             }
             if (unsafeFxCommands.Count > 0)
                 throw new InvalidOperationException(unsafeFxCommands[0].Location + " / VRCPlayableLayerControl: FXの重みを変更する状態は固定表情に変換できません。");
+            // Missing live inputs can retain authored neutral weights, but must
+            // not hide unsupported writers or callbacks found in the same graph.
+            if (external.Length > 0)
+            {
+                var message = "外部入力に依存する表情の値を確定できません: " + string.Join(", ", external);
+                throw new NeutralShapeSamplingException(message, dependencyMorphs: result.NeutralDependencyMorphs);
+            }
             return result;
         }
 

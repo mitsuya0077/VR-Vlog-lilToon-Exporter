@@ -8,8 +8,9 @@ using UnityEngine;
 
 namespace VRVlog.LilToonExporter
 {
-    // Only known automatic tracking channels may be left live when their
-    // independent FX group cannot provide a stable authored neutral pose.
+    // A valid FX graph can require time or live inputs to choose its rest pose.
+    // Keep this separate from malformed/unsupported graph errors so neutral
+    // preparation can retain authored weights without accepting sampled phases.
     internal sealed class NeutralShapeSamplingException : InvalidOperationException
     {
         internal readonly HashSet<EditorCurveBinding> DependencyMorphs;
@@ -32,6 +33,17 @@ namespace VRVlog.LilToonExporter
             var automatic = AutomaticChannels(prepared);
             var completed = new HashSet<string>(StringComparer.Ordinal);
             var values = new Dictionary<(string Path, string Shape), VrChatExpressionMenu.MorphValue>();
+            var preserved = new HashSet<EditorCurveBinding>();
+            var reported = new HashSet<string>(StringComparer.Ordinal);
+            void Preserve(IEnumerable<EditorCurveBinding> bindings, NeutralShapeSamplingException error)
+            {
+                var targets = new HashSet<EditorCurveBinding>(bindings);
+                preserved.UnionWith(targets);
+                var message = string.Format(ExporterLocalization.T(
+                    "FXの初期状態を固定できなかったため、書き出し用コピーの設定を保持しました（対象: {0}）。FXによる通常時の見た目と異なる場合があります。理由: {1}"),
+                    Describe(targets), error.Message);
+                if (reported.Add(message)) warnings?.Add(message);
+            }
             HashSet<EditorCurveBinding>[] groups;
             try { groups = ExpressionDependencies.NeutralRoots(metadata.Controller, excludedPath, metadata, automatic, fixedContext).ToArray(); }
             catch (InvalidOperationException error)
@@ -52,8 +64,7 @@ namespace VRVlog.LilToonExporter
                 ExpressionDependencies dependencies;
                 try { dependencies = ExpressionDependencies.AnalyzeNeutral(metadata.Controller, roots, excludedPath, metadata, automatic, fixedContext,
                     preserveCommittedMorphs: true); }
-                catch (NeutralShapeSamplingException error) when (roots.All(automatic.Contains) &&
-                    error.DependencyMorphs != null && error.DependencyMorphs.All(automatic.Contains)) { continue; }
+                catch (NeutralShapeSamplingException error) { Preserve(roots, error); continue; }
                 catch (InvalidOperationException error) { throw WithAffected(error, roots); }
                 dependencies.Layers.ExceptWith(randomRestLayers);
                 dependencies.NativeSupportLayers.ExceptWith(randomRestLayers);
@@ -65,11 +76,12 @@ namespace VRVlog.LilToonExporter
                 List<VrChatExpressionMenu.MorphValue> sampled;
                 try { sampled = VrChatExpressionSampler.SampleNeutral(prepared, metadata.Controller, dependencies, metadata, excludedPath,
                     fixedContext, plan, preserveTemporalRest: true); }
-                catch (NeutralShapeSamplingException) when (dependencies.Morphs.All(automatic.Contains) &&
-                    dependencies.NeutralDependencyMorphs.All(automatic.Contains)) { continue; }
+                catch (NeutralShapeSamplingException error) { Preserve(dependencies.Morphs, error); continue; }
                 catch (InvalidOperationException error) { throw WithAffected(error, dependencies.Morphs); }
                 foreach (var value in sampled)
                 {
+                    if (preserved.Contains(EditorCurveBinding.FloatCurve(value.Path,
+                            typeof(SkinnedMeshRenderer), "blendShape." + value.Shape))) continue;
                     var key = (value.Path, value.Shape);
                     if (values.TryGetValue(key, out var previous) && Math.Abs(previous.Weight - value.Weight) > .01f)
                         throw new InvalidOperationException("FXの初期表情を一意に確定できません: " + value.Path + " / " + value.Shape);
@@ -77,22 +89,30 @@ namespace VRVlog.LilToonExporter
                 }
             }
             plan.ReportTemporalRest(warnings);
-            // Different groups can share a native support channel. A later
-            // group must not turn an earlier captured phase into authored rest.
-            return values.Values.Where(value => !plan.TemporalMorphs.Contains(EditorCurveBinding.FloatCurve(value.Path,
+            // All probes start from the same unchanged prepared avatar. If a
+            // later group cannot resolve a shared output, discard earlier
+            // samples for that output too; never combine a partial FX result
+            // with the authored rest selected by the fallback.
+            preserved.UnionWith(plan.TemporalMorphs);
+            return values.Values.Where(value => !preserved.Contains(EditorCurveBinding.FloatCurve(value.Path,
                     typeof(SkinnedMeshRenderer), "blendShape." + value.Shape))).OrderBy(value => value.Path, StringComparer.Ordinal)
                 .ThenBy(value => value.Shape, StringComparer.Ordinal).ToList();
         }
 
         private static InvalidOperationException WithAffected(InvalidOperationException error, IEnumerable<EditorCurveBinding> bindings)
         {
+            var message = "FXの初期表情を確定できません（対象: " + Describe(bindings) + "）: " + error.Message;
+            return error is NeutralShapeSamplingException neutral ? new NeutralShapeSamplingException(message, error, neutral.DependencyMorphs) :
+                new InvalidOperationException(message, error);
+        }
+
+        private static string Describe(IEnumerable<EditorCurveBinding> bindings)
+        {
             var targets = bindings.Select(binding => binding.path + " / " + binding.propertyName.Substring("blendShape.".Length))
                 .Distinct().OrderBy(value => value, StringComparer.Ordinal).ToArray();
             var affected = string.Join(", ", targets.Take(16));
             if (targets.Length > 16) affected += " ほか" + (targets.Length - 16) + "件";
-            var message = "FXの初期表情を確定できません（対象: " + affected + "）: " + error.Message;
-            return error is NeutralShapeSamplingException neutral ? new NeutralShapeSamplingException(message, error, neutral.DependencyMorphs) :
-                new InvalidOperationException(message, error);
+            return affected;
         }
 
         private static HashSet<EditorCurveBinding> AutomaticChannels(GameObject avatar)

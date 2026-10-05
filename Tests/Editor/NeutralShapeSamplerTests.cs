@@ -1259,15 +1259,59 @@ namespace VRVlog.LilToonExporter.Tests
 
         [TestCase("EyeHeightAsMeters")]
         [TestCase("EyeHeightAsPercent")]
-        public void UnmeasuredBuiltinInputStillCannotChooseTheNeutralFace(string name)
+        public void UnmeasuredBuiltinInputKeepsPreparedNeutralInsteadOfChoosingAFace(string name)
         {
             var idle = Open(0);
             controller.AddParameter(new AnimatorControllerParameter { name = name, type = AnimatorControllerParameterType.Float, defaultFloat = 1 });
             var selected = State(controller.layers[0].stateMachine, Clip("Open", AnimationCurve.Constant(0, 1, 100)));
             var transition = idle.AddTransition(selected); transition.hasExitTime = false; transition.duration = 0;
             transition.AddCondition(AnimatorConditionMode.Greater, .5f, name);
-            Assert.That(Assert.Throws<NeutralShapeSamplingException>(() => NeutralShapeSampler.Sample(avatar)).Message,
-                Does.Contain("外部入力").And.Contain(name));
+            skin.SetBlendShapeWeight(0, 31);
+            var warnings = new List<string>();
+            var values = NeutralShapeSampler.Sample(avatar, warnings: warnings);
+            Assert.That(values, Is.Empty);
+            NeutralShapeSnapshot.Apply(avatar, values);
+            Assert.That(skin.GetBlendShapeWeight(0), Is.EqualTo(31));
+            Assert.That(warnings.Any(value => value.Contains(name) && value.Contains("Open")), Is.True);
+        }
+
+        [TestCase("UnknownAction")]
+        [TestCase("ActionMorph")]
+        [TestCase("FxWeight")]
+        public void RecoverableExternalInputCannotHideAnIndependentUnsupportedGraph(string kind)
+        {
+            controller.AddParameter("EyeHeightAsMeters", AnimatorControllerParameterType.Float);
+            var idle = Open(75);
+            var selected = State(controller.layers[0].stateMachine, Clip("Open", AnimationCurve.Constant(0, 1, 100)));
+            var transition = idle.AddTransition(selected); transition.hasExitTime = false; transition.duration = 0;
+            transition.AddCondition(AnimatorConditionMode.Greater, .5f, "EyeHeightAsMeters");
+            string diagnostic;
+            if (kind == "FxWeight")
+            {
+                diagnostic = "VRCPlayableLayerControl";
+                var type = AppDomain.CurrentDomain.GetAssemblies().Select(assembly =>
+                    assembly.GetType("VRC.SDK3.Avatars.Components.VRCPlayableLayerControl")).FirstOrDefault(value => value != null);
+                Assert.That(type, Is.Not.Null);
+                var control = idle.AddStateMachineBehaviour(type);
+                using var data = new SerializedObject(control);
+                var layer = data.FindProperty("layer"); layer.enumValueIndex = Array.IndexOf(layer.enumNames, "FX");
+                data.FindProperty("goalWeight").floatValue = .5f;
+                data.FindProperty("blendDuration").floatValue = 0;
+                data.ApplyModifiedPropertiesWithoutUndo();
+            }
+            else
+            {
+                var action = AfkAction(kind == "ActionMorph", false);
+                if (kind == "UnknownAction") action.AddStateMachineBehaviour<UnknownStateCallbackProbe>();
+                diagnostic = kind == "UnknownAction" ? nameof(UnknownStateCallbackProbe) : "Body/blendShape.Open";
+            }
+            var before = EditorJsonUtility.ToJson(controller);
+            var warnings = new List<string>();
+            var error = Assert.Throws<InvalidOperationException>(() => NeutralShapeSampler.Sample(avatar, warnings: warnings));
+            Assert.That(error.Message, Does.Contain(diagnostic));
+            Assert.That(warnings, Is.Empty, "A recoverable input must not conceal the independent hard failure.");
+            Assert.That(skin.GetBlendShapeWeight(0), Is.Zero);
+            Assert.That(EditorJsonUtility.ToJson(controller), Is.EqualTo(before));
         }
 
         [Test]
@@ -1278,6 +1322,32 @@ namespace VRVlog.LilToonExporter.Tests
             var transition = idle.AddTransition(selected); transition.hasExitTime = false; transition.duration = 0;
             transition.AddCondition(AnimatorConditionMode.Equals, 2, "GestureRight");
             Assert.That(NeutralShapeSampler.Sample(avatar).Single(value => value.Shape == "Open").Weight, Is.EqualTo(100).Within(.01));
+        }
+
+        [TestCase(false)]
+        [TestCase(true)]
+        public void UnresolvedGroupPreservesAuthoredWeightsWithoutDiscardingIndependentRest(bool unresolvedFirst)
+        {
+            controller.AddParameter("EyeHeightAsMeters", AnimatorControllerParameterType.Float);
+            var first = controller.layers[0].stateMachine;
+            var second = Layer("Independent group");
+            var unresolved = unresolvedFirst ? first : second;
+            var resolved = unresolvedFirst ? second : first;
+            resolved.defaultState = State(resolved, Clip("Open", AnimationCurve.Constant(0, 1, 100)));
+            unresolved.defaultState = State(unresolved, Clip("Untouched", AnimationCurve.Constant(0, 1, 63)));
+            var alternate = State(unresolved, Clip("Untouched", AnimationCurve.Constant(0, 1, 91)));
+            var transition = unresolved.defaultState.AddTransition(alternate); transition.hasExitTime = false; transition.duration = 0;
+            transition.AddCondition(AnimatorConditionMode.Greater, .5f, "EyeHeightAsMeters");
+            var warnings = new List<string>();
+            var values = NeutralShapeSampler.Sample(avatar, warnings: warnings,
+                requiredMorphs: new[] { EditorCurveBinding.FloatCurve("Body", typeof(SkinnedMeshRenderer), "blendShape.Untouched") });
+            Assert.That(values.Select(value => value.Shape), Is.EquivalentTo(new[] { "Open" }));
+            Assert.That(values.Single().Weight, Is.EqualTo(100).Within(.01));
+            Assert.That(skin.GetBlendShapeWeight(0), Is.Zero, "Sampling must not change the prepared source.");
+            NeutralShapeSnapshot.Apply(avatar, values);
+            Assert.That(skin.GetBlendShapeWeight(0), Is.EqualTo(100).Within(.01));
+            Assert.That(skin.GetBlendShapeWeight(3), Is.EqualTo(35));
+            Assert.That(warnings.Any(value => value.Contains("Untouched") && value.Contains("EyeHeightAsMeters")), Is.True);
         }
 
         [Test]

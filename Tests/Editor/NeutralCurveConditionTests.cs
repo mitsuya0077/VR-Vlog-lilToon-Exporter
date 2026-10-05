@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Generic;
 using System.Linq;
 using NUnit.Framework;
 using UnityEditor;
@@ -100,10 +101,10 @@ namespace VRVlog.LilToonExporter.Tests
         }
 
         [Test]
-        public void DynamicParameterCurveCannotHideAFutureTimedExit()
+        public void DynamicParameterCurveKeepsPreparedNeutralWhenItsFutureTimedExitIsUnresolved()
         {
             Relay(AnimationCurve.Linear(0, 1, 10, 0));
-            Assert.Throws<NeutralShapeSamplingException>(() => NeutralShapeSampler.Sample(avatar));
+            AssertPreparedFallback();
         }
 
         [Test]
@@ -113,7 +114,7 @@ namespace VRVlog.LilToonExporter.Tests
             var machine = Layer("Competing writer");
             var state = State(machine, "Set relay", null, false);
             ParameterDriverExpressionTests.Driver(state, ParameterDriverExpressionTests.Op("Set", "Relay value", 0));
-            Assert.Throws<NeutralShapeSamplingException>(() => NeutralShapeSampler.Sample(avatar));
+            AssertPreparedFallback();
         }
 
         [Test]
@@ -130,8 +131,28 @@ namespace VRVlog.LilToonExporter.Tests
             var back = second.AddTransition(first);
             back.hasExitTime = true; back.exitTime = .75f; back.duration = 0;
             back.AddCondition(AnimatorConditionMode.Less, .999997f, "Relay value");
-            Assert.Throws<NeutralShapeSamplingException>(() => NeutralShapeSampler.Sample(avatar),
-                "A partial layer must not be rounded to full weight when the exit threshold lies inside that rounding tolerance.");
+            AssertPreparedFallback();
+        }
+
+        void AssertPreparedFallback()
+        {
+            var skin = avatar.GetComponentInChildren<SkinnedMeshRenderer>();
+            skin.SetBlendShapeWeight(0, 27);
+            var before = EditorJsonUtility.ToJson(controller);
+            var metadata = VrChatExpressionMenu.Read(avatar, new VrChatMenuImportPolicy { SkipAll = true });
+            var context = FixedExpressionContext.Create(controller, metadata.Defaults, metadata);
+            var dependencies = ExpressionDependencies.AnalyzeNeutral(controller, new HashSet<EditorCurveBinding> {
+                EditorCurveBinding.FloatCurve("Body", typeof(SkinnedMeshRenderer), "blendShape.Opening") }, null, metadata,
+                fixedContext: context, preserveCommittedMorphs: true);
+            Assert.Throws<NeutralShapeSamplingException>(() => VrChatExpressionSampler.SampleNeutral(
+                avatar, controller, dependencies, metadata, null, context));
+            var warnings = new List<string>();
+            var values = NeutralShapeSampler.Sample(avatar, warnings: warnings);
+            Assert.That(values, Is.Empty, "An unresolved relay must not invent a stable FX opening value.");
+            NeutralShapeSnapshot.Apply(avatar, values);
+            Assert.That(skin.GetBlendShapeWeight(0), Is.EqualTo(27));
+            Assert.That(warnings.Any(value => value.Contains("Opening") && value.Contains("FX")), Is.True);
+            Assert.That(EditorJsonUtility.ToJson(controller), Is.EqualTo(before));
         }
     }
 }
