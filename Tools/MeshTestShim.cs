@@ -44,6 +44,10 @@ namespace UnityEngine
         readonly List<string> names=new List<string>();
         readonly List<List<(float weight,Vector3[] v,Vector3[] n,Vector3[] t)>> frames=new List<List<(float,Vector3[],Vector3[],Vector3[])>>();
         public int vertexCount => _vertices.Length;
+        // Renderer export eligibility is verified with real Unity meshes.
+        // This arithmetic-only shim deliberately does not simulate submeshes.
+        public int subMeshCount => throw new NotSupportedException();
+        public uint GetIndexCount(int submesh) => throw new NotSupportedException();
         public int blendShapeCount => names.Count;
         public string GetBlendShapeName(int i) => names[i];
         public int GetBlendShapeFrameCount(int i) => frames[i].Count;
