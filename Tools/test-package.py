@@ -6,6 +6,7 @@ import tempfile
 import unittest
 import zipfile
 from pathlib import Path
+from unittest import mock
 
 
 def load(name):
@@ -105,6 +106,53 @@ class PackageTests(unittest.TestCase):
         self.git("rm", "--cached", "LICENSE")
         with self.assertRaisesRegex(ValueError, "Required package files"):
             package.build(self.root, self.root / "invalid.zip")
+
+    def test_archive_bytes_are_independent_of_host_os_and_zlib(self):
+        # Include a UTF-8 filename and exact mixed-newline/binary payloads.
+        # No checkout conversion or compressor may rewrite these bytes.
+        inputs = {
+            "Editor/Example.cs": b"first\r\nsecond\nthird\r\n",
+            "Editor/Unicode_\u00e9.cs": "exact UTF-8 payload: \u8868\u60c5\n".encode("utf-8"),
+            "Editor/Binary.shader": bytes(range(256)) * 32,
+        }
+        for name, content in inputs.items():
+            path = self.root / name
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_bytes(content)
+        self.git("add", ".")
+        native_zip_info = zipfile.ZipInfo
+        native_zlib = zipfile.zlib
+        reference = None
+        for creator_system in (0, 3):
+            for has_zlib in (True, False):
+                with self.subTest(creator_system=creator_system, has_zlib=has_zlib):
+                    class HostZipInfo(native_zip_info):
+                        def __init__(self, *args, **kwargs):
+                            super().__init__(*args, **kwargs)
+                            self.create_system = creator_system
+
+                    output = self.root / f"portable-{creator_system}-{has_zlib}.zip"
+                    with mock.patch.object(zipfile, "ZipInfo", HostZipInfo), \
+                            mock.patch.object(zipfile, "zlib", native_zlib if has_zlib else None):
+                        names = package.build(self.root, output)
+                    data = output.read_bytes()
+                    if reference is None:
+                        reference = data
+                    self.assertEqual(data, reference)
+                    with zipfile.ZipFile(output) as archive:
+                        self.assertEqual(archive.namelist(), sorted(names))
+                        self.assertEqual(archive.comment, b"")
+                        for entry in archive.infolist():
+                            self.assertEqual(entry.create_system, 3)
+                            self.assertEqual(entry.compress_type, zipfile.ZIP_STORED)
+                            self.assertEqual(entry.compress_size, entry.file_size)
+                            self.assertEqual(entry.date_time, (2020, 1, 1, 0, 0, 0))
+                            self.assertEqual(entry.external_attr, 0o100644 << 16)
+                            self.assertEqual(entry.extra, b"")
+                            self.assertEqual(entry.comment, b"")
+                            self.assertEqual(archive.read(entry), (self.root / entry.filename).read_bytes())
+                        for name, expected in inputs.items():
+                            self.assertEqual(archive.read(name), expected)
 
     def test_lan_transfer_guide_is_packaged_and_required(self):
         guide = "Documentation~/LanTransfer.md"
