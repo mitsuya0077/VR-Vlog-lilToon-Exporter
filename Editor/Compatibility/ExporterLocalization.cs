@@ -22,6 +22,12 @@ namespace VRVlog.LilToonExporter
         }
 
         static readonly string[] DynamicErrorPrefixes = {
+            "このEditorではVRM内の画像形式を表示できません: ",
+            "保存されたlilToonシェーダーをこのEditorで利用できません: ",
+            "インストール済みlilToonに必要な設定がありません: ",
+            "インストール済みlilToonに必要な画像設定がありません: ",
+            "インストール済みlilToonに描画パスがありません: ",
+            "インストール済みlilToonの描画方式が保存時と一致しません: ",
             "FaceEmoの表情アニメーションが準備前の登録内容と一致していません: ",
             "衣装・体形の処理後にFaceEmoの表情対象が残っていません: ",
             "FaceEmoの表情参照が処理後に重複しています: ",
