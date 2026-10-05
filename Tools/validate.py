@@ -26,7 +26,7 @@ listing = json.loads((root / "source.json").read_text(encoding="utf-8"))
 
 assert package["name"] == "com.vrvlog.liltoon-vrm-exporter"
 assert package["unity"] == "2022.3"
-assert package["version"] == "0.11.11-beta.2"
+assert package["version"] == "0.11.11-beta.3"
 assert one_click.index("AvatarBaseShape.Preserve(clone, clone,") < one_click.index("Vrm10AppearanceExporter.Export(")
 assert "foreach (var mesh in temporaryMeshes) UnityEngine.Object.DestroyImmediate(mesh);" in one_click
 assert package["vpmDependencies"] == {
@@ -341,7 +341,9 @@ assert 'LilToonGlbExtension.Validate(File.ReadAllBytes(temporary));' in output_w
 assert 'File.Replace(temporary, destination, null)' in output_writer
 assert 'File.Move(temporary, destination)' in output_writer
 assert 'finally { if (File.Exists(temporary)) File.Delete(temporary); }' in output_writer
-assert 'session.CreatePreview(attempt.Options)' in recovery_comparison
+assert 'ExportVrmLilToonPreview.Apply(attempt.Bytes, imported.gameObject)' in recovery_comparison
+assert 'session.CreatePreview(' not in recovery_comparison
+assert 'GUILayout.Toolbar(' not in recovery_comparison
 assert 'controlRigGenerationOption: ControlRigGenerationOption.None' in recovery_comparison
 assert '!HasVrmPreview || !session.CanSave' in recovery_comparison
 assert 'BuildSupportText()' in failure_window

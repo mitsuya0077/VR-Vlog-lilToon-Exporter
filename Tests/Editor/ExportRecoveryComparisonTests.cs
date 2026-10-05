@@ -55,7 +55,7 @@ namespace VRVlog.LilToonExporter.Tests
                 {
                     Set(window, "yaw", yaw);
                     window.RefreshPreviewFraming();
-                    image = window.CapturePreview(2, 256, 256);
+                    image = window.CapturePreview(256, 256);
                     var center = render.camera.WorldToViewportPoint(bounds.center);
                     Assert.That(center.x, Is.EqualTo(.5f).Within(.001f), "yaw " + yaw);
                     Assert.That(center.y, Is.EqualTo(.5f).Within(.001f), "yaw " + yaw);

@@ -14,16 +14,14 @@ namespace VRVlog.LilToonExporter
     {
         private ExportRecoverySession session;
         private Action saved;
-        private ExportRecoveryPreview before, after;
-        private PreviewRenderUtility beforeRender, afterRender, vrmRender;
+        private PreviewRenderUtility vrmRender;
+        private IDisposable lilToonPreview;
         private Vrm10Instance imported;
         private CancellationTokenSource loading;
-        private Vector3 center, vrmCenter;
-        private float distance = 3, vrmDistance = 3, yaw;
-        private int tab;
+        private Vector3 vrmCenter;
+        private float vrmDistance = 3, yaw;
         private bool preparing;
         private bool showAppliedRemedies = true;
-        private bool showDisplayExplanation;
         private Vector2 remediesScroll, contentScroll;
         private int previewRevision;
         private string error;
@@ -38,7 +36,6 @@ namespace VRVlog.LilToonExporter
                 .FirstOrDefault(item => item.session == session) ?? CreateInstance<ExportRecoveryComparisonWindow>();
             window.session = session;
             window.saved = saved;
-            window.tab = 0;
             window.titleContent = new GUIContent(ExporterLocalization.T("書き出すVRMを確認"));
             window.minSize = new Vector2(780, 580);
             window.ShowUtility();
@@ -79,15 +76,6 @@ namespace VRVlog.LilToonExporter
             var token = loading.Token;
             try
             {
-                before = session.CreatePreview(new ExportRecoveryOptions());
-                after = session.CreatePreview(attempt.Options);
-                NormalizeForPreview(before.Copy);
-                NormalizeForPreview(after.Copy);
-                beforeRender = CreateRenderer(before.Copy);
-                afterRender = CreateRenderer(after.Copy);
-                var bounds = VisibleBounds(before.Copy);
-                center = bounds.center;
-                distance = Mathf.Max(.5f, bounds.size.magnitude * 1.8f);
                 // UniVRM owns the loaded meshes/materials/textures through its
                 // RuntimeGltfInstance. Destroying this root releases them too.
                 var loaded = await Vrm10.LoadBytesAsync(attempt.Bytes, canLoadVrm0X: false,
@@ -101,13 +89,23 @@ namespace VRVlog.LilToonExporter
                     return;
                 }
                 imported = loaded;
+                // Restore the saved lilToon payload onto the reloaded VRM.
+                // Never substitute a copy of the source avatar for the output.
+                lilToonPreview = ExportVrmLilToonPreview.Apply(attempt.Bytes, imported.gameObject);
                 NormalizeForPreview(imported.gameObject);
                 imported.UpdateType = Vrm10Instance.UpdateTypes.None;
                 vrmRender = CreateRenderer(imported.gameObject);
                 RefreshPreviewFraming();
             }
             catch (OperationCanceledException) { }
-            catch (Exception exception) { if (revision == previewRevision) error = exception.Message; }
+            catch (Exception exception)
+            {
+                if (revision == previewRevision)
+                {
+                    ReleasePreview();
+                    error = exception.Message;
+                }
+            }
             finally
             {
                 if (revision == previewRevision)
@@ -160,12 +158,6 @@ namespace VRVlog.LilToonExporter
 
         internal void RefreshPreviewFraming()
         {
-            if (before?.Copy != null)
-            {
-                var inputBounds = VisibleBounds(before.Copy);
-                center = inputBounds.center;
-                distance = Mathf.Max(.5f, inputBounds.size.magnitude * 1.8f);
-            }
             if (imported != null)
             {
                 // The glTF model may have a different root wrapper/origin from
@@ -220,14 +212,7 @@ namespace VRVlog.LilToonExporter
                     }
                 }
             }
-            tab = GUILayout.Toolbar(tab, new[] { ExporterLocalization.T("書き出すVRM"), ExporterLocalization.T("変更前と比べる") });
-            if (tab == 0)
-            {
-                EditorGUILayout.LabelField(ExporterLocalization.T("保存するVRMファイルの見た目を確認しています。"), EditorStyles.wordWrappedLabel);
-                showDisplayExplanation = EditorGUILayout.Foldout(showDisplayExplanation, ExporterLocalization.T("表示について"));
-                if (showDisplayExplanation) EditorGUILayout.LabelField(ExporterLocalization.T("保存するVRMをUnityで読み込み、標準MToonで表示しています。VR Vlogの専用lilToon表示では質感が異なる場合があります。"), EditorStyles.wordWrappedLabel);
-            }
-            else EditorGUILayout.LabelField(ExporterLocalization.T("対処によって変わる箇所を比較します。保存するファイルの確認は「書き出すVRM」で行えます。"), EditorStyles.wordWrappedLabel);
+            EditorGUILayout.LabelField(ExporterLocalization.T("保存するVRMをlilToonで表示しています。"), EditorStyles.wordWrappedLabel);
             yaw = EditorGUILayout.Slider(ExporterLocalization.T("向き"), yaw, -180, 180);
             using (new EditorGUILayout.HorizontalScope())
             {
@@ -237,15 +222,7 @@ namespace VRVlog.LilToonExporter
             }
             if (preparing) EditorGUILayout.HelpBox(ExporterLocalization.T("書き出すVRMを準備しています…"), MessageType.Info);
             if (error != null) EditorGUILayout.HelpBox(ExporterLocalization.T(error), MessageType.Error);
-            if (tab == 1)
-            {
-                using (new EditorGUILayout.HorizontalScope())
-                {
-                    DrawPreview(beforeRender, ExporterLocalization.T("変更前"));
-                    DrawPreview(afterRender, ExporterLocalization.T("変更後"));
-                }
-            }
-            else DrawPreview(vrmRender, ExporterLocalization.T("書き出すVRM"));
+            DrawPreview(vrmRender, ExporterLocalization.T("書き出すVRM"));
             var changes = ExportAppearanceReport.Changes(session.LastSuccess.Warnings);
             if (changes.Length > 0)
                 EditorGUILayout.HelpBox(ExporterLocalization.T("見た目の変更: ") + ExportAppearanceReport.Summary(changes), MessageType.Warning);
@@ -302,21 +279,19 @@ namespace VRVlog.LilToonExporter
 
         private void PositionCamera(PreviewRenderUtility preview)
         {
-            var target = preview == vrmRender ? vrmCenter : center;
-            var frameDistance = preview == vrmRender ? vrmDistance : distance;
-            preview.camera.farClipPlane = Mathf.Max(100, frameDistance * 3);
-            preview.camera.transform.position = target + Quaternion.Euler(0, yaw, 0) * Vector3.forward * frameDistance;
-            preview.camera.transform.LookAt(target, Vector3.up);
+            preview.camera.farClipPlane = Mathf.Max(100, vrmDistance * 3);
+            preview.camera.transform.position = vrmCenter + Quaternion.Euler(0, yaw, 0) * Vector3.forward * vrmDistance;
+            preview.camera.transform.LookAt(vrmCenter, Vector3.up);
         }
 
         // A validation hook for the very same cameras/materials displayed in
         // this window. The caller owns the returned texture. This is rendering
         // evidence, separate from a capture of the actual Editor window.
-        internal Texture2D CapturePreview(int pane, int width = 512, int height = 512)
+        internal Texture2D CapturePreview(int width = 512, int height = 512)
         {
             if (session == null || !session.HasCurrentSuccess)
                 throw new InvalidOperationException("The preview is no longer current.");
-            var preview = pane == 0 ? beforeRender : pane == 1 ? afterRender : pane == 2 ? vrmRender : null;
+            var preview = vrmRender;
             if (preview == null) throw new InvalidOperationException("The preview is not ready.");
             preview.BeginStaticPreview(new Rect(0, 0, Mathf.Max(1, width), Mathf.Max(1, height)));
             PositionCamera(preview);
@@ -375,14 +350,16 @@ namespace VRVlog.LilToonExporter
         {
             previewRevision++;
             loading?.Cancel(); loading?.Dispose(); loading = null;
-            beforeRender?.Cleanup(); beforeRender = null;
-            afterRender?.Cleanup(); afterRender = null;
+            ReleasePreview();
+            preparing = false;
+        }
+
+        private void ReleasePreview()
+        {
             vrmRender?.Cleanup(); vrmRender = null;
-            before?.Dispose(); before = null;
-            after?.Dispose(); after = null;
+            lilToonPreview?.Dispose(); lilToonPreview = null;
             if (imported != null) Object.DestroyImmediate(imported.gameObject);
             imported = null;
-            preparing = false;
         }
     }
 }
