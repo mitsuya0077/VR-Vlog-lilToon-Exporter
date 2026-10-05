@@ -189,7 +189,7 @@ namespace VRVlog.LilToonExporter.Tests
         // Mirrors the published CGE analog-fist smoothing topology, with names
         // intentionally unrelated to that package: two Motion Time states share
         // nested 1D feedback trees, constant smoothing curves and a linear proxy.
-        private (AnimatorState Waiting, AnimatorState Listening, BlendTree Factor) GestureSmoothing(bool writeDefaults)
+        private (AnimatorState Waiting, AnimatorState Listening, BlendTree Factor) GestureSmoothing(bool writeDefaults, AnimationCurve proxyCurve = null)
         {
             foreach (var name in new[] { "Proxy", "Smoothed", "Factor", "GestureLeftWeight" })
                 controller.AddParameter(new AnimatorControllerParameter { name = name, type = AnimatorControllerParameterType.Float,
@@ -197,7 +197,7 @@ namespace VRVlog.LilToonExporter.Tests
             controller.AddParameter("GestureLeft", AnimatorControllerParameterType.Int);
             AnimationClip SmoothingClip(string name, float value)
             {
-                var clip = Clip(name, EditorCurveBinding.FloatCurve("", typeof(Animator), "Proxy"), AnimationCurve.Linear(0, 0, 1, 1));
+                var clip = Clip(name, EditorCurveBinding.FloatCurve("", typeof(Animator), "Proxy"), proxyCurve ?? AnimationCurve.Linear(0, 0, 1, 1));
                 AnimationUtility.SetEditorCurve(clip, EditorCurveBinding.FloatCurve("", typeof(Animator), "Smoothed"),
                     AnimationCurve.Constant(0, 1f / 60f, value));
                 return clip;
@@ -291,6 +291,89 @@ namespace VRVlog.LilToonExporter.Tests
             }
             else helper.Listening.writeDefaultValues = false;
             Assert.Throws<NeutralShapeSamplingException>(() => Sample());
+        }
+
+        private static void AssertPortableCurveRejected(AnimationCurve curve)
+        {
+            var error = Assert.Throws<InvalidOperationException>(() => VrChatGestureExpressions.ReadCurve(curve));
+            Assert.That(error.Message, Is.EqualTo("Expression animation data is invalid or exceeds the supported limits."),
+                "Internal native sampling must not weaken the portable expression format's validation.");
+        }
+
+        private void AssertNativeBodyAndSourceUnchanged()
+        {
+            var before = EditorJsonUtility.ToJson(controller);
+            var sourceAssets = AssetDatabase.LoadAllAssetsAtPath(folder + "/FX.controller")
+                .ToDictionary(asset => asset, asset => EditorJsonUtility.ToJson(asset));
+            var expected = NativeBodyWeight();
+            var values = Sample();
+            Assert.That(values.Select(value => value.Shape), Is.EqualTo(new[] { "Size" }));
+            Assert.That(values.Single().Weight, Is.EqualTo(expected).Within(.01),
+                "The lower-level sampler must return the native result, without relying on neutral fallback.");
+            Assert.That(skin.GetBlendShapeWeight(0), Is.EqualTo(17));
+            Assert.That(EditorJsonUtility.ToJson(controller), Is.EqualTo(before));
+            foreach (var asset in sourceAssets) Assert.That(EditorJsonUtility.ToJson(asset.Key), Is.EqualTo(asset.Value), asset.Key.name);
+        }
+
+        [TestCase("First incoming", false)]
+        [TestCase("First incoming", true)]
+        [TestCase("Last outgoing", true)]
+        public void GestureSmoothingUnusedEndpointTangentsDoNotRequirePortableEncoding(string endpoint, bool writeDefaults)
+        {
+            // The generated Linear(0, 0).Linear(1, 1) construction can leave
+            // 0/0 in the first incoming tangent. Native interpolation only
+            // reads the first outgoing and last incoming tangents here.
+            var curve = new AnimationCurve(new Keyframe(0, 0, endpoint == "First incoming" ? float.NaN : 0, 1),
+                new Keyframe(1, 1, 1, endpoint == "Last outgoing" ? float.NaN : 0));
+            GestureSmoothing(writeDefaults, curve);
+            var binding = EditorCurveBinding.FloatCurve("", typeof(Animator), "Proxy");
+            var generated = controller.animationClips.Distinct().Select(clip => AnimationUtility.GetEditorCurve(clip, binding))
+                .Where(value => value != null).ToArray();
+            Assert.That(generated.Length, Is.EqualTo(2));
+            foreach (var stored in generated)
+            {
+                var keys = stored.keys;
+                Assert.That(float.IsNaN(endpoint == "First incoming" ? keys[0].inTangent : keys[keys.Length - 1].outTangent), Is.True,
+                    "The regression must retain the generated endpoint metadata through Unity's curve API.");
+                AssertPortableCurveRejected(stored);
+            }
+            AssertNativeBodyAndSourceUnchanged();
+        }
+
+        [TestCase("Constant value")]
+        [TestCase("Dynamic value")]
+        [TestCase("Long time")]
+        [TestCase("Many keys")]
+        public void IndependentNativeParametersAreNotLimitedByPortableMorphDomains(string domain)
+        {
+            var helper = Helper();
+            AnimationCurve curve;
+            switch (domain)
+            {
+                case "Constant value": curve = AnimationCurve.Constant(0, 1, 20001); break;
+                case "Dynamic value": curve = AnimationCurve.Linear(0, 0, 1, 20001); break;
+                case "Long time": curve = AnimationCurve.Linear(0, 0, 3601, 1); break;
+                default:
+                    curve = new AnimationCurve(Enumerable.Range(0, 16385)
+                        .Select(index => new Keyframe(index / 1024f, index % 2, 0, 0)).ToArray());
+                    break;
+            }
+            var binding = EditorCurveBinding.FloatCurve("", typeof(Animator), "Internal helper");
+            AnimationUtility.SetEditorCurve((AnimationClip)helper.motion, binding, curve);
+            AssertPortableCurveRejected(AnimationUtility.GetEditorCurve((AnimationClip)helper.motion, binding));
+            AssertNativeBodyAndSourceUnchanged();
+        }
+
+        [TestCase(true)]
+        [TestCase(false)]
+        public void NativeParameterValidationStillRejectsAnActiveInteriorNaNTangent(bool incoming)
+        {
+            var curve = new AnimationCurve(new Keyframe(0, 0, 0, 1),
+                new Keyframe(.5f, .5f, incoming ? float.NaN : 1, incoming ? 1 : float.NaN), new Keyframe(1, 1, 1, 0));
+            const string context = "Synthetic support / Invalid helper clip / Internal helper";
+            var error = Assert.Throws<InvalidOperationException>(() => VrChatExpressionSampler.ValidateNativeParameterCurve(curve, context));
+            StringAssert.Contains(context, error.Message, "Native malformed-curve errors must identify the offending support curve.");
+            AssertPortableCurveRejected(curve);
         }
     }
 }

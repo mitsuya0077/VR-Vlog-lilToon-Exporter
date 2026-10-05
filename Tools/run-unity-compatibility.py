@@ -119,6 +119,9 @@ BEHAVIOR_CASES = {
         'GestureSmoothingFeedbackAndUnrelatedFacialConsumerKeepNativeBody': 4,
         'GestureSmoothingThatActuallyControlsBodyStillRequiresItsParameterProof': 1,
         'FeedbackWithUnprovedNativeDefaultContributionIsNotExempt': 3,
+        'GestureSmoothingUnusedEndpointTangentsDoNotRequirePortableEncoding': 3,
+        'IndependentNativeParametersAreNotLimitedByPortableMorphDomains': 4,
+        'NativeParameterValidationStillRejectsAnActiveInteriorNaNTangent': 2,
     },
     'NeutralFallbackExportTests': {
         'UnresolvedBodyRestExportsWithIndependentOpenEyesAndAbsoluteEndpoints': 2,
