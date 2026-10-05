@@ -56,92 +56,75 @@ namespace VRVlog.LilToonExporter
             result.ExistingChains = authored.Length;
             result.ExistingJoints = authored.Sum(s => Math.Max(0, s.Joints.Count - 1));
             result.ExistingColliders = copy.GetComponentsInChildren<VRM10SpringBoneCollider>().Length;
-            // Terminal components also contain authored fields and must not be overwritten.
-            var occupied = new HashSet<Transform>(authored.SelectMany(s => s.Joints).Where(j => j != null).Select(j => j.transform));
-            var existing = new HashSet<Transform>(occupied);
+            // Reserve authored terminals and the implicit nodes between joints too.
+            // VRM prohibits sharing any joint, including an otherwise unused tail.
+            var existing = new HashSet<Transform>();
+            foreach (var spring in authored)
+            {
+                Transform previous = null;
+                foreach (var joint in spring.Joints.Where(j => j != null))
+                {
+                    RequireLocal(copy, joint.transform);
+                    existing.Add(joint.transform);
+                    if (previous != null && joint.transform.IsChildOf(previous))
+                        for (var node = joint.transform.parent; node != previous; node = node.parent)
+                            existing.Add(node);
+                    previous = joint.transform;
+                }
+            }
+            // Freeze the authored hierarchy before any virtual endpoints/collider
+            // anchors are created. One conversion must never extend another PB.
+            var children = copy.GetComponentsInChildren<Transform>(true)
+                .ToDictionary(t => t, t => t.Cast<Transform>().Where(c => c.gameObject.activeInHierarchy).ToArray());
             var roots = components.Where(Active).ToDictionary(c => c, c => Root(c));
-            var colliders = new Dictionary<Component, VRM10SpringBoneCollider>();
+            var plans = new List<SpringPlan>();
             foreach (var component in components)
             {
                 if (!Active(component)) { Skip(result, warnings, component, "無効または非表示"); continue; }
                 var root = roots[component];
                 RequireLocal(copy, root);
                 if (!root.gameObject.activeInHierarchy) { Skip(result, warnings, component, "Root Transformが非表示"); continue; }
-                if (existing.Contains(root)) { Skip(result, warnings, component, "既存のVRM揺れ設定を優先"); continue; }
-                var ignored = new HashSet<Transform>(Items(Read<object>(component, "ignoreTransforms", null)).OfType<Transform>());
-                if (Read(component, "ignoreOtherPhysBones", true))
-                    ignored.UnionWith(roots.Where(p => p.Key != component && p.Value != root).Select(p => p.Value));
-                var endpoint = Vector(component, "endpointPosition", Vector3.zero);
-                var multi = EnumNumber(component, "multiChildType", 0);
-                if (multi < 0 || multi > 2) throw Unsupported(component, "Multi-Child Type");
-                var chains = new List<List<Transform>>();
-                var depths = new Dictionary<Transform, int>();
-                var maximumDepth = 0;
-                void Add(List<Transform> chain) { if (chain.Count >= 2) chains.Add(chain); }
-                Transform Tip(Transform parent, Vector3 offset)
-                {
-                    var tip = new GameObject("VRVlog Spring Endpoint").transform;
-                    tip.SetParent(parent, false); tip.localPosition = offset;
-                    return tip;
-                }
-                void Walk(Transform node, List<Transform> path, int depth)
-                {
-                    if (depth > 256) throw Unsupported(component, "256段を超えるボーン階層");
-                    depths[node] = depth; maximumDepth = Math.Max(maximumDepth, depth);
-                    path.Add(node);
-                    var children = node.Cast<Transform>().Where(t => t.gameObject.activeInHierarchy && !ignored.Contains(t)).ToArray();
-                    if (children.Length == 0)
-                    {
-                        if (endpoint.sqrMagnitude > 1e-12f) { path.Add(Tip(node, endpoint)); maximumDepth = Math.Max(maximumDepth, depth + 1); }
-                        Add(path); return;
-                    }
-                    if (children.Length == 1) { Walk(children[0], path, depth + 1); return; }
-                    if (multi == 1)
-                    {
-                        Walk(children[0], path, depth + 1);
-                        foreach (var child in children.Skip(1)) Walk(child, new List<Transform>(), depth + 1);
-                    }
-                    else
-                    {
-                        if (multi == 2)
-                        {
-                            var offset = children.Aggregate(Vector3.zero, (sum, t) => sum + t.localPosition) / children.Length;
-                            if (offset.sqrMagnitude > 1e-12f) path.Add(Tip(node, offset));
-                            else warnings?.Add(component.name + ": 分岐の平均位置がゼロのため分岐元は固定しました。");
-                        }
-                        Add(path);
-                        foreach (var child in children) Walk(child, new List<Transform>(), depth + 1);
-                    }
-                }
-                if (ignored.Contains(root)) { Skip(result, warnings, component, "Root Transformが除外対象"); continue; }
-                Walk(root, new List<Transform>(), 0);
-                chains.RemoveAll(chain =>
-                {
-                    if (!chain.Take(chain.Count - 1).Any(existing.Contains)) return false;
-                    warnings?.Add(component.name + ": 既存VRM揺れ設定と重なる連鎖を省略しました。既存設定は保持します。");
-                    return true;
-                });
-                if (chains.Count == 0) { Skip(result, warnings, component, "有効な連鎖なし（末端位置・除外・既存設定を確認）"); continue; }
-                var moving = chains.SelectMany(c => c.Take(c.Count - 1)).ToArray();
-                if (moving.Distinct().Count() != moving.Length || moving.Any(occupied.Contains))
-                    throw Unsupported(component, "複数PhysBoneが同じボーンを駆動しています。対象の重複を解消してください");
+                plans.Add(Plan(component, root, roots, children, warnings));
+            }
+            // A more local root owns an overlapping moving joint. For the same
+            // root, prefer its attached component, then stable hierarchy/component
+            // order. Only actual nonzero moving pairs participate in ownership.
+            var owners = new Dictionary<Transform, SpringPlan>();
+            foreach (var plan in plans.OrderByDescending(p => p.RootDepth)
+                .ThenByDescending(p => p.Source.transform == p.Root))
+                foreach (var chain in plan.Chains)
+                    for (var i = 0; i < chain.Count - 1; i++)
+                        if (HasLength(chain[i], chain[i + 1]) && !existing.Contains(chain[i].Node) && !owners.ContainsKey(chain[i].Node))
+                            owners.Add(chain[i].Node, plan);
+            var used = new HashSet<Transform>(existing);
+            var colliders = new Dictionary<Component, VRM10SpringBoneCollider>();
+            foreach (var plan in plans)
+            {
+                var component = plan.Source;
+                var normalized = Normalize(plan, owners, existing, used, warnings);
+                if (normalized.Count == 0)
+                { Skip(result, warnings, component, "有効な連鎖なし（除外・既存VRM・優先するPhysBone・長さを確認）"); continue; }
                 var group = ConvertColliders(component, copy, colliders, instance, warnings);
-                foreach (var chain in chains)
+                foreach (var chain in normalized)
                 {
                     var spring = new Vrm10InstanceSpringBone.Spring(component.name);
                     // A head center would cancel the desired hair inertia.
                     if (group != null) spring.ColliderGroups.Add(group);
                     for (var i = 0; i < chain.Count; i++)
                     {
-                        var node = chain[i];
+                        var point = chain[i];
+                        var node = point.Node;
+                        if (node == null)
+                        {
+                            node = new GameObject("VRVlog Spring Endpoint").transform;
+                            node.SetParent(point.Parent, false); node.localPosition = point.Offset;
+                        }
                         var joint = node.GetComponent<VRM10SpringBoneJoint>() ?? node.gameObject.AddComponent<VRM10SpringBoneJoint>();
                         if (i < chain.Count - 1)
                         {
-                            if (Vector3.Distance(node.position, chain[i + 1].position) < 1e-7f)
-                                throw Unsupported(component, "長さゼロのボーン");
-                            var t = maximumDepth > 0 ? (float)depths[node] / maximumDepth : 0;
-                            ApplyForces(component, joint, t);
-                            occupied.Add(node); result.Joints++;
+                            // Curve coordinates always use the unsplit source PB.
+                            var t = plan.MaximumDepth > 0 ? (float)plan.Depths[node] / plan.MaximumDepth : 0;
+                            ApplyForces(component, joint, t); result.Joints++;
                         }
                         spring.Joints.Add(joint);
                     }
@@ -156,6 +139,131 @@ namespace VRVlog.LilToonExporter
             if (result.Converted > 0 && (result.Chains == 0 || result.Joints == 0))
                 throw new InvalidOperationException("PhysBone変換対象から揺れ設定を作成できませんでした。");
             return result;
+        }
+
+        sealed class PlannedJoint
+        {
+            internal Transform Node, Parent;
+            internal Vector3 Offset;
+            internal Vector3 Position => Node != null ? Node.position : Parent.TransformPoint(Offset);
+        }
+
+        sealed class SpringPlan
+        {
+            internal Component Source;
+            internal Transform Root;
+            internal int RootDepth, MaximumDepth;
+            internal readonly List<List<PlannedJoint>> Chains = new List<List<PlannedJoint>>();
+            internal readonly Dictionary<Transform, int> Depths = new Dictionary<Transform, int>();
+        }
+
+        static SpringPlan Plan(Component source, Transform root, Dictionary<Component, Transform> roots,
+            Dictionary<Transform, Transform[]> hierarchy, ICollection<string> warnings)
+        {
+            var plan = new SpringPlan { Source = source, Root = root };
+            for (var parent = root.parent; parent != null; parent = parent.parent) plan.RootDepth++;
+            var ignored = new HashSet<Transform>(Items(Read<object>(source, "ignoreTransforms", null)).OfType<Transform>());
+            if (Read(source, "ignoreOtherPhysBones", true))
+                ignored.UnionWith(roots.Where(p => p.Key != source && p.Value != root && p.Value.gameObject.activeInHierarchy).Select(p => p.Value));
+            var endpoint = Vector(source, "endpointPosition", Vector3.zero);
+            var multi = EnumNumber(source, "multiChildType", 0);
+            if (multi < 0 || multi > 2) throw Unsupported(source, "Multi-Child Type");
+            void Add(List<PlannedJoint> chain) { if (chain.Count >= 2) plan.Chains.Add(chain); }
+            void Walk(Transform node, List<PlannedJoint> path, int depth)
+            {
+                if (depth > 256) throw Unsupported(source, "256段を超えるボーン階層");
+                plan.Depths[node] = depth; plan.MaximumDepth = Math.Max(plan.MaximumDepth, depth);
+                path.Add(new PlannedJoint { Node = node });
+                var children = hierarchy[node].Where(t => !ignored.Contains(t)).ToArray();
+                if (children.Length == 0)
+                {
+                    if (endpoint.sqrMagnitude > 1e-12f)
+                    {
+                        path.Add(new PlannedJoint { Parent = node, Offset = endpoint });
+                        plan.MaximumDepth = Math.Max(plan.MaximumDepth, depth + 1);
+                    }
+                    Add(path); return;
+                }
+                if (children.Length == 1) { Walk(children[0], path, depth + 1); return; }
+                if (multi == 1)
+                {
+                    Walk(children[0], path, depth + 1);
+                    foreach (var child in children.Skip(1)) Walk(child, new List<PlannedJoint>(), depth + 1);
+                }
+                else
+                {
+                    if (multi == 2)
+                    {
+                        var offset = children.Aggregate(Vector3.zero, (sum, t) => sum + t.localPosition) / children.Length;
+                        if (offset.sqrMagnitude > 1e-12f) path.Add(new PlannedJoint { Parent = node, Offset = offset });
+                        else warnings?.Add(source.name + ": 分岐の平均位置がゼロのため分岐元は固定しました。");
+                    }
+                    Add(path);
+                    foreach (var child in children) Walk(child, new List<PlannedJoint>(), depth + 1);
+                }
+            }
+            if (!ignored.Contains(root)) Walk(root, new List<PlannedJoint>(), 0);
+            foreach (var point in plan.Chains.SelectMany(c => c))
+                if (!Finite(point.Position.x) || !Finite(point.Position.y) || !Finite(point.Position.z))
+                    throw Unsupported(source, "ボーン位置が非有限値");
+            foreach (var chain in plan.Chains)
+                for (var i = 0; i < chain.Count - 1; i++)
+                    if (!Finite(Vector3.Distance(chain[i].Position, chain[i + 1].Position)))
+                        throw Unsupported(source, "ボーンの長さが非有限値");
+            return plan;
+        }
+
+        static bool HasLength(PlannedJoint a, PlannedJoint b)
+        {
+            // Unity's approximate Vector3 equality would also remove small but
+            // valid bones. Only coincident finite points have no driving segment.
+            var p = a.Position; var q = b.Position;
+            return p.x != q.x || p.y != q.y || p.z != q.z;
+        }
+
+        static List<List<PlannedJoint>> Normalize(SpringPlan plan, Dictionary<Transform, SpringPlan> owners,
+            HashSet<Transform> existing, HashSet<Transform> used, ICollection<string> warnings)
+        {
+            var output = new List<List<PlannedJoint>>();
+            var overlaps = new HashSet<SpringPlan>();
+            var reserved = false; var zeroLength = false; var boundary = false;
+            foreach (var chain in plan.Chains)
+            {
+                List<PlannedJoint> run = null;
+                bool Keep(int i) => i < chain.Count - 1 && HasLength(chain[i], chain[i + 1]) &&
+                    owners.TryGetValue(chain[i].Node, out var owner) && owner == plan;
+                for (var i = 0; i < chain.Count - 1; i++)
+                {
+                    if (!HasLength(chain[i], chain[i + 1])) zeroLength = true;
+                    if (existing.Contains(chain[i].Node)) reserved = true;
+                    else if (owners.TryGetValue(chain[i].Node, out var owner) && owner != plan) overlaps.Add(owner);
+                    if (!Keep(i)) continue;
+                    if (run == null) run = new List<PlannedJoint>();
+                    if (!used.Add(chain[i].Node)) throw Unsupported(plan.Source, "正規化した関節の重複");
+                    run.Add(chain[i]);
+                    if (Keep(i + 1)) continue;
+                    var terminal = chain[i + 1];
+                    if (terminal.Node != null && (owners.ContainsKey(terminal.Node) || used.Contains(terminal.Node)))
+                    {
+                        // Keep the parent's exact rest length/direction without
+                        // reusing a child owner's joint, even as an inert tail.
+                        var parent = chain[i].Node;
+                        var offset = parent.InverseTransformPoint(terminal.Position);
+                        if (!Finite(offset.x) || !Finite(offset.y) || !Finite(offset.z))
+                            throw Unsupported(plan.Source, "境界末端の位置が非有限値");
+                        terminal = new PlannedJoint { Parent = parent, Offset = offset }; boundary = true;
+                    }
+                    else if (terminal.Node != null) used.Add(terminal.Node);
+                    run.Add(terminal); output.Add(run); run = null;
+                }
+            }
+            if (overlaps.Count > 0)
+                warnings?.Add(plan.Source.name + ": 重複するPhysBoneの可動ボーンは、より局所のRoot Transformを優先しました。同じRootではRoot上のコンポーネント、次に階層・コンポーネント順を優先します。優先対象: " +
+                    string.Join(", ", overlaps.Select(p => p.Source.name + " / " + p.Root.name).OrderBy(n => n, StringComparer.Ordinal)) + "。残る連鎖と各設定を保持したVRM向けの近似です。");
+            if (reserved) warnings?.Add(plan.Source.name + ": 既存VRMの関節・末端を優先し、重ならない連鎖を保持しました。");
+            if (boundary) warnings?.Add(plan.Source.name + ": 関節の共有を避けるため境界に専用末端を作り、元の位置と長さを保持しました。");
+            if (zeroLength) warnings?.Add(plan.Source.name + ": 長さゼロの区間のみ揺れの駆動を省略しました。元のボーン・姿勢と残る連鎖を保持します。");
+            return output;
         }
 
         static void ApplyForces(Component source, VRM10SpringBoneJoint joint, float depth)

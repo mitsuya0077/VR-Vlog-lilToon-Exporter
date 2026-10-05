@@ -23,6 +23,18 @@ namespace VRVlog.LilToonExporter.Tests
         }
         static Transform Child(Transform root, string name, Vector3 position)
         { var t = new GameObject(name).transform; t.SetParent(root, false); t.localPosition = position; return t; }
+        static void AssertUniqueJoints(GameObject avatar)
+        {
+            var joints = avatar.GetComponent<Vrm10Instance>().SpringBone.Springs.SelectMany(s => s.Joints).ToArray();
+            Assert.That(joints.Distinct().Count(), Is.EqualTo(joints.Length), "VRM also prohibits sharing terminal joints.");
+        }
+        static void References(Component component, string name, params Object[] values)
+        {
+            using var data = new SerializedObject(component);
+            var list = data.FindProperty(name); list.arraySize = values.Length;
+            for (var i = 0; i < values.Length; i++) list.GetArrayElementAtIndex(i).objectReferenceValue = values[i];
+            data.ApplyModifiedPropertiesWithoutUndo();
+        }
         static void Set(Component component, string name, object value)
         {
             using var data = new SerializedObject(component);
@@ -84,6 +96,7 @@ namespace VRVlog.LilToonExporter.Tests
                 var springs = copy.GetComponent<Vrm10Instance>().SpringBone.Springs;
                 var moving = springs.SelectMany(s => s.Joints.Take(s.Joints.Count - 1)).ToArray();
                 Assert.That(moving.Distinct().Count(), Is.EqualTo(moving.Length));
+                AssertUniqueJoints(copy);
                 Assert.That(springs.All(s => s.Center == null), Is.True);
                 Assert.That(source.GetComponentsInChildren<Transform>().Length, Is.EqualTo(4));
                 Assert.That(source.GetComponentsInChildren<VRM10SpringBoneJoint>(), Is.Empty);
@@ -194,9 +207,209 @@ namespace VRVlog.LilToonExporter.Tests
                 Object.DestroyImmediate(copy);
                 var second = PhysBone(source); Set(second, "rootTransform", root);
                 copy = Object.Instantiate(source);
-                Assert.Throws<InvalidOperationException>(() => PhysBoneSpringExport.Convert(source, copy, warnings));
+                report = PhysBoneSpringExport.Convert(source, copy, warnings);
+                Assert.That(report.Converted, Is.EqualTo(2), "The second PB can retain the first PB's ignored branch.");
+                AssertUniqueJoints(copy);
+                Assert.That(warnings.Any(w => w.Contains("優先対象")), Is.True);
             }
             finally { Object.DestroyImmediate(copy); Object.DestroyImmediate(source); }
+        }
+
+        [TestCase(false)]
+        [TestCase(true)]
+        public void NestedOwnersKeepRestShapeForcesAndCollidersRegardlessOfComponentTraversal(bool childComponentFirst)
+        {
+            var source = new GameObject("source"); GameObject copy = null;
+            try
+            {
+                var root = Child(source.transform, "parent", Vector3.up);
+                root.localRotation = Quaternion.Euler(10, 20, 30); root.localScale = new Vector3(1.2f, .8f, 1.1f);
+                var middle = Child(root, "middle", Vector3.down * .12f);
+                var childRoot = Child(middle, "child", Vector3.down * .17f);
+                Child(childRoot, "authoredEnd", Vector3.down * .21f);
+                var parent = PhysBone(root.gameObject);
+                var child = PhysBone(childComponentFirst ? source : childRoot.gameObject);
+                Set(child, "rootTransform", childRoot);
+                foreach (var pb in new[] { parent, child })
+                { Set(pb, "ignoreOtherPhysBones", false); Set(pb, "endpointPosition", Vector3.down * .2f); }
+                Set(parent, "pull", .4f); Set(parent, "pullCurve", AnimationCurve.Linear(0, 1, 1, .5f));
+                Set(parent, "limitType", 1); Set(parent, "maxAngleX", 30f);
+                Set(child, "pull", .8f); Set(child, "limitType", 1); Set(child, "maxAngleX", 65f);
+                var colliderType = Sdk("VRC.SDK3.Dynamics.PhysBone.Components.VRCPhysBoneCollider");
+                var a = Child(source.transform, "parentCollider", Vector3.left).gameObject.AddComponent(colliderType);
+                var b = Child(source.transform, "childCollider", Vector3.right).gameObject.AddComponent(colliderType);
+                Set(a, "radius", .025f); Set(b, "radius", .045f);
+                References(parent, "colliders", a); References(child, "colliders", b);
+                var sourceState = source.GetComponentsInChildren<Transform>().ToDictionary(t => t, t => t.localToWorldMatrix);
+                var sourceParent = EditorJsonUtility.ToJson(parent); var sourceChild = EditorJsonUtility.ToJson(child);
+                copy = Object.Instantiate(source);
+                var copiedState = copy.GetComponentsInChildren<Transform>().ToDictionary(t => t, t => t.localToWorldMatrix);
+                var warnings = new List<string>();
+                var result = PhysBoneSpringExport.Convert(source, copy, warnings);
+                Assert.That(result.Converted, Is.EqualTo(2)); Assert.That(result.Chains, Is.EqualTo(2));
+                Assert.That(result.Joints, Is.EqualTo(4)); AssertUniqueJoints(copy);
+                var springs = copy.GetComponent<Vrm10Instance>().SpringBone.Springs;
+                var parentSpring = springs.Single(s => s.Joints[0].name == "parent");
+                var childSpring = springs.Single(s => s.Joints[0].name == "child");
+                Assert.That(parentSpring.Joints.Select(j => j.name).Take(2), Is.EqualTo(new[] { "parent", "middle" }));
+                var parentTail = parentSpring.Joints.Last().transform;
+                var copiedChild = copy.transform.Find("parent/middle/child");
+                Assert.That(parentTail, Is.Not.SameAs(copiedChild));
+                Assert.That(parentTail.parent, Is.SameAs(copiedChild.parent));
+                Assert.That(Vector3.Distance(parentTail.position, copiedChild.position), Is.LessThan(1e-6));
+                Assert.That(Vector3.Distance(parentTail.position, parentTail.parent.position),
+                    Is.EqualTo(Vector3.Distance(childRoot.position, middle.position)).Within(1e-6));
+                Assert.That(parentSpring.Joints[1].m_stiffnessForce, Is.EqualTo(1.4f).Within(1e-5), "Keep original depth 1/4 after splitting.");
+                Assert.That(childSpring.Joints[0].m_stiffnessForce, Is.EqualTo(3.2f).Within(1e-5));
+                Assert.That(parentSpring.Joints[0].m_pitch, Is.EqualTo(30 * Mathf.Deg2Rad).Within(1e-5));
+                Assert.That(childSpring.Joints[0].m_pitch, Is.EqualTo(65 * Mathf.Deg2Rad).Within(1e-5));
+                Assert.That(parentSpring.ColliderGroups.Single().Colliders.Single().Radius, Is.EqualTo(.025f));
+                Assert.That(childSpring.ColliderGroups.Single().Colliders.Single().Radius, Is.EqualTo(.045f));
+                foreach (var pair in sourceState) Assert.That(pair.Key.localToWorldMatrix, Is.EqualTo(pair.Value));
+                foreach (var pair in copiedState) Assert.That(pair.Key.localToWorldMatrix, Is.EqualTo(pair.Value));
+                Assert.That(EditorJsonUtility.ToJson(parent), Is.EqualTo(sourceParent));
+                Assert.That(EditorJsonUtility.ToJson(child), Is.EqualTo(sourceChild));
+                Assert.That(warnings.Any(w => w.Contains("より局所")), Is.True);
+                Assert.That(warnings.Any(w => w.Contains("専用末端")), Is.True);
+                Assert.That(source.GetComponentsInChildren<VRM10SpringBoneJoint>(), Is.Empty);
+            }
+            finally { Object.DestroyImmediate(copy); Object.DestroyImmediate(source); }
+        }
+
+        [TestCase(false)]
+        [TestCase(true)]
+        public void SameRootPrefersAttachedComponentThenStableComponentOrder(bool bothAttached)
+        {
+            var source = new GameObject("source"); GameObject copy = null;
+            try
+            {
+                var root = Child(source.transform, "root", Vector3.down);
+                var remoteOrFirst = PhysBone(bothAttached ? root.gameObject : source);
+                var attachedOrSecond = PhysBone(root.gameObject);
+                Set(remoteOrFirst, "rootTransform", root);
+                Set(remoteOrFirst, "pull", .2f); Set(attachedOrSecond, "pull", .7f);
+                foreach (var pb in new[] { remoteOrFirst, attachedOrSecond }) Set(pb, "endpointPosition", Vector3.down * .1f);
+                copy = Object.Instantiate(source); var warnings = new List<string>();
+                var result = PhysBoneSpringExport.Convert(source, copy, warnings);
+                Assert.That(result.Converted, Is.EqualTo(1)); Assert.That(result.Skipped, Is.EqualTo(1));
+                Assert.That(copy.GetComponent<Vrm10Instance>().SpringBone.Springs.Single().Joints[0].m_stiffnessForce,
+                    Is.EqualTo(bothAttached ? .8f : 2.8f).Within(1e-5));
+                AssertUniqueJoints(copy);
+                Assert.That(warnings.Any(w => w.Contains("同じRoot")), Is.True);
+            }
+            finally { Object.DestroyImmediate(copy); Object.DestroyImmediate(source); }
+        }
+
+        [Test]
+        public void PreexistingVrmImplicitJointsAndTerminalsWinWhileDisjointSegmentsSurvive()
+        {
+            var source = new GameObject("source"); GameObject copy = null;
+            try
+            {
+                var root = Child(source.transform, "root", Vector3.up);
+                var existingRoot = Child(root, "existing", Vector3.down * .1f);
+                var implicitJoint = Child(existingRoot, "implicit", Vector3.down * .1f);
+                var existingTip = Child(implicitJoint, "existingTip", Vector3.down * .1f);
+                var free = Child(existingTip, "free", Vector3.down * .1f);
+                Child(free, "leaf", Vector3.down * .1f);
+                var a = existingRoot.gameObject.AddComponent<VRM10SpringBoneJoint>(); a.m_stiffnessForce = .123f;
+                var b = existingTip.gameObject.AddComponent<VRM10SpringBoneJoint>(); b.m_dragForce = .234f;
+                source.AddComponent<Vrm10Instance>().SpringBone.Springs.Add(new Vrm10InstanceSpringBone.Spring("authored") { Joints = { a, b } });
+                var pb = PhysBone(root.gameObject); Set(pb, "endpointPosition", Vector3.down * .1f);
+                copy = Object.Instantiate(source); var warnings = new List<string>();
+                var result = PhysBoneSpringExport.Convert(source, copy, warnings);
+                Assert.That(result.Converted, Is.EqualTo(1)); Assert.That(result.Chains, Is.EqualTo(2));
+                Assert.That(result.Joints, Is.EqualTo(3)); AssertUniqueJoints(copy);
+                var original = copy.GetComponent<Vrm10Instance>().SpringBone.Springs.Single(s => s.Name == "authored");
+                Assert.That(original.Joints[0].m_stiffnessForce, Is.EqualTo(.123f));
+                Assert.That(original.Joints[1].m_dragForce, Is.EqualTo(.234f));
+                Assert.That(copy.transform.Find("root/existing/implicit").GetComponent<VRM10SpringBoneJoint>(), Is.Null);
+                Assert.That(warnings.Any(w => w.Contains("既存VRM")), Is.True);
+            }
+            finally { Object.DestroyImmediate(copy); Object.DestroyImmediate(source); }
+        }
+
+        [Test]
+        public void GeneratedEndpointsDoNotTurnAnInertNestedPhysBoneIntoAnotherDriver()
+        {
+            var source = new GameObject("source"); GameObject copy = null;
+            try
+            {
+                var root = Child(source.transform, "root", Vector3.up);
+                var leaf = Child(root, "leaf", Vector3.down * .1f);
+                var parent = PhysBone(root.gameObject); Set(parent, "ignoreOtherPhysBones", false);
+                Set(parent, "endpointPosition", Vector3.down * .1f);
+                PhysBone(leaf.gameObject);
+                copy = Object.Instantiate(source);
+                var result = PhysBoneSpringExport.Convert(source, copy, new List<string>());
+                Assert.That(result.Converted, Is.EqualTo(1)); Assert.That(result.Skipped, Is.EqualTo(1));
+                Assert.That(result.Joints, Is.EqualTo(2)); AssertUniqueJoints(copy);
+                Assert.That(copy.GetComponentsInChildren<Transform>().Count(t => t.name == "VRVlog Spring Endpoint"), Is.EqualTo(1));
+            }
+            finally { Object.DestroyImmediate(copy); Object.DestroyImmediate(source); }
+        }
+
+        [Test]
+        public void AParentTailCannotShareTheChildOwnersFirstJoint()
+        {
+            var source = new GameObject("source"); GameObject copy = null;
+            try
+            {
+                var root = Child(source.transform, "root", Vector3.up);
+                var child = Child(root, "child", Vector3.down * .17f);
+                var parent = PhysBone(root.gameObject); Set(parent, "ignoreOtherPhysBones", false);
+                var local = PhysBone(child.gameObject); Set(local, "endpointPosition", Vector3.down * .1f);
+                copy = Object.Instantiate(source);
+                var result = PhysBoneSpringExport.Convert(source, copy, new List<string>());
+                Assert.That(result.Converted, Is.EqualTo(2)); Assert.That(result.Joints, Is.EqualTo(2));
+                AssertUniqueJoints(copy);
+                var parentTail = copy.GetComponent<Vrm10Instance>().SpringBone.Springs.First().Joints.Last().transform;
+                Assert.That(Vector3.Distance(parentTail.position, child.position), Is.LessThan(1e-6));
+            }
+            finally { Object.DestroyImmediate(copy); Object.DestroyImmediate(source); }
+        }
+
+        [Test]
+        public void ZeroLengthPairsKeepBonesAndOriginalDepthForTheRemainingChain()
+        {
+            var source = new GameObject("source"); GameObject copy = null;
+            try
+            {
+                var root = Child(source.transform, "root", Vector3.up);
+                var coincident = Child(root, "coincident", Vector3.zero);
+                Child(coincident, "leaf", Vector3.down * .1f);
+                var pb = PhysBone(root.gameObject); Set(pb, "endpointPosition", Vector3.down * .1f);
+                Set(pb, "pull", .6f); Set(pb, "pullCurve", AnimationCurve.Linear(0, 1, 1, 0));
+                copy = Object.Instantiate(source); var warnings = new List<string>();
+                var result = PhysBoneSpringExport.Convert(source, copy, warnings);
+                Assert.That(result.Converted, Is.EqualTo(1)); Assert.That(result.Joints, Is.EqualTo(2));
+                Assert.That(copy.transform.Find("root").GetComponent<VRM10SpringBoneJoint>(), Is.Null);
+                var first = copy.GetComponent<Vrm10Instance>().SpringBone.Springs.Single().Joints[0];
+                Assert.That(first.name, Is.EqualTo("coincident"));
+                Assert.That(first.m_stiffnessForce, Is.EqualTo(1.6f).Within(1e-5), "Original curve coordinate remains 1/3.");
+                Assert.That(copy.transform.Find("root/coincident").localPosition, Is.EqualTo(Vector3.zero));
+                Assert.That(warnings.Any(w => w.Contains("長さゼロ")), Is.True);
+            }
+            finally { Object.DestroyImmediate(copy); Object.DestroyImmediate(source); }
+        }
+
+        [TestCase("endpointPosition")]
+        [TestCase("rootTransform")]
+        [TestCase("multiChildType")]
+        public void MalformedPhysBoneDataStillStopsConversion(string field)
+        {
+            var source = new GameObject("source"); var outside = new GameObject("outside"); GameObject copy = null;
+            try
+            {
+                var root = Child(source.transform, "root", Vector3.up);
+                var pb = PhysBone(root.gameObject); Set(pb, "endpointPosition", Vector3.down * .1f);
+                if (field == "endpointPosition") Set(pb, field, new Vector3(float.NaN, 0, 0));
+                else if (field == "rootTransform") Set(pb, field, outside.transform);
+                else Set(pb, field, 99);
+                copy = Object.Instantiate(source);
+                Assert.Throws<InvalidOperationException>(() => PhysBoneSpringExport.Convert(source, copy, new List<string>()));
+            }
+            finally { Object.DestroyImmediate(copy); Object.DestroyImmediate(outside); Object.DestroyImmediate(source); }
         }
 
         [Test]
@@ -321,6 +534,11 @@ namespace VRVlog.LilToonExporter.Tests
 
         [TestCase(false)]
         [TestCase(true)]
+        public Task ActualExportImportsNestedOwnersWithoutSharedJointsOrChangedAppearance(bool full) =>
+            ExportImportsSpringsAndMovesHair(full, false, false, false, true);
+
+        [TestCase(false)]
+        [TestCase(true)]
         public async Task InstalledAvatarOptimizerPreservesSpringMotionAndCollisionsAfterFullExport(bool full)
         {
             if (!UnityEditor.PackageManager.PackageInfo.GetAllRegisteredPackages().Any(package =>
@@ -337,7 +555,7 @@ namespace VRVlog.LilToonExporter.Tests
             await ExportImportsSpringsAndMovesHair(full, false, false, true);
         }
 
-        async Task ExportImportsSpringsAndMovesHair(bool full, bool modularAvatar, bool rootCollider, bool avatarOptimizer)
+        async Task ExportImportsSpringsAndMovesHair(bool full, bool modularAvatar, bool rootCollider, bool avatarOptimizer, bool nestedPhysBones = false)
         {
             using var fixture = new AttachmentConnectionTests.Fixture();
             using var controller = avatarOptimizer ? new StaticAnimatorController(fixture.Source.GetComponent<Animator>()) : null;
@@ -355,10 +573,19 @@ namespace VRVlog.LilToonExporter.Tests
                 mode.SetValue(proxy, Enum.Parse(mode.FieldType, "AsChildKeepWorldPose"));
             }
             else hair.parent.SetParent(head, true);
-            Child(hair, "Spring tip", Vector3.down * .15f);
+            var originalTip = Child(hair, "Spring tip", Vector3.down * .15f);
             var pb = PhysBone(hair.gameObject);
             Set(pb, "pull", .25f); Set(pb, "spring", .6f); Set(pb, "gravity", 0f);
             Set(pb, "immobile", 0f); Set(pb, "limitType", 1); Set(pb, "maxAngleX", 60f);
+            Component nested = null;
+            if (nestedPhysBones)
+            {
+                Child(originalTip, "Nested tip", Vector3.down * .1f);
+                nested = PhysBone(originalTip.gameObject);
+                Set(pb, "ignoreOtherPhysBones", false);
+                Set(nested, "endpointPosition", Vector3.down * .1f);
+                Set(nested, "pull", .35f); Set(nested, "spring", .5f); Set(nested, "gravity", 0f);
+            }
             var collider = (rootCollider ? fixture.Source : head.gameObject).AddComponent(Sdk("VRC.SDK3.Dynamics.PhysBone.Components.VRCPhysBoneCollider"));
             Set(collider, "radius", .025f); Set(collider, "position", Vector3.left);
             Component duplicateCollider = null;
@@ -396,6 +623,7 @@ namespace VRVlog.LilToonExporter.Tests
             var sourceWeights = fixture.Mesh.boneWeights;
             var sourceBinds = fixture.Mesh.bindposes;
             var sourcePhysBone = EditorJsonUtility.ToJson(pb);
+            var sourceNested = nested != null ? EditorJsonUtility.ToJson(nested) : null;
             var sourceCollider = EditorJsonUtility.ToJson(collider);
             var sourceDuplicate = duplicateCollider != null ? EditorJsonUtility.ToJson(duplicateCollider) : null;
             var warnings = new List<string>(); Vrm10Instance imported = null;
@@ -408,14 +636,15 @@ namespace VRVlog.LilToonExporter.Tests
                 using (motionSolver)
                 {
                     imported = await Vrm10.LoadBytesAsync(bytes, canLoadVrm0X: false, awaitCaller: new ImmediateCaller(), springboneRuntime: motionSolver);
-                    Assert.That(imported.SpringBone.Springs.Count, Is.EqualTo(1));
+                    Assert.That(imported.SpringBone.Springs.Count, Is.EqualTo(nestedPhysBones ? 2 : 1));
+                    AssertUniqueJoints(imported.gameObject);
                     Assert.That(imported.GetComponentsInChildren<VRM10SpringBoneCollider>().Length, Is.EqualTo(avatarOptimizer ? 1 : 3),
                         avatarOptimizer ? "AAO must actually merge the two referenced equivalent colliders before VRM conversion." :
                         "Both authored unreferenced colliders and the converted collider must survive export.");
                     imported.UpdateType = Vrm10Instance.UpdateTypes.None;
                     Assert.That(motionSolver.ReconstructSpringBone(), Is.True);
                     for (var i = 0; i < 30; i++) motionSolver.Process(1f / 60);
-                    var joint = imported.SpringBone.Springs.Single().Joints[0].transform;
+                    var joint = imported.SpringBone.Springs.Single(s => s.Name == pb.name).Joints[0].transform;
                     Assert.That(joint.GetComponent<VRM10SpringBoneJoint>().m_pitch, Is.EqualTo(60 * Mathf.Deg2Rad).Within(.001));
                     var rest = joint.localRotation;
                     Assert.That(imported.TryGetBoneTransform(HumanBodyBones.Head, out var importedHead), Is.True);
@@ -426,10 +655,11 @@ namespace VRVlog.LilToonExporter.Tests
                     Assert.That(Quaternion.Angle(rest, joint.localRotation), Is.LessThan(1), "Hair must settle after the parent stops.");
                 }
                 Assert.That(motionSolver.m_bufferCombiner.Combined, Is.Null, "The motion solver must release its combined native buffers.");
-                var importedCollider = imported.SpringBone.Springs.Single().ColliderGroups.Single().Colliders.Single();
+                var importedParent = imported.SpringBone.Springs.Single(s => s.Name == pb.name);
+                var importedCollider = importedParent.ColliderGroups.Single().Colliders.Single();
                 Assert.That(importedCollider.Radius, Is.EqualTo(.025f).Within(.00001),
                     "Omitted scene-root components must not shift the group's collider index.");
-                var tip = imported.SpringBone.Springs.Single().Joints.Last().transform;
+                var tip = importedParent.Joints.Last().transform;
                 importedCollider.Offset = importedCollider.transform.InverseTransformPoint(tip.position + Vector3.right * .01f);
                 // The pinned UniVRM rebuild backs up the previous buffer after
                 // disposing it. Give the changed collider a cold, owned solver
@@ -452,6 +682,7 @@ namespace VRVlog.LilToonExporter.Tests
                 Assert.That(fixture.Mesh.boneWeights, Is.EqualTo(sourceWeights));
                 Assert.That(fixture.Mesh.bindposes, Is.EqualTo(sourceBinds));
                 Assert.That(EditorJsonUtility.ToJson(pb), Is.EqualTo(sourcePhysBone));
+                if (nested != null) Assert.That(EditorJsonUtility.ToJson(nested), Is.EqualTo(sourceNested));
                 Assert.That(EditorJsonUtility.ToJson(collider), Is.EqualTo(sourceCollider));
                 if (avatarOptimizer)
                 {

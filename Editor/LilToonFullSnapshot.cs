@@ -23,17 +23,22 @@ namespace VRVlog.LilToonExporter
         readonly HashSet<Texture> resizedWarnings = new HashSet<Texture>();
         ICollection<string> warnings;
         bool suppressSharedTextureEmission, suppressHdrTextureEmission;
+        LilToonInactiveTextureProof inactiveTextures;
 
-        internal static LilToonFullSnapshot Capture(GameObject avatar, bool suppressSharedTextureEmission=false, bool suppressHdrTextureEmission=false, ICollection<string> warnings=null)
+        internal static LilToonFullSnapshot Capture(GameObject avatar, bool suppressSharedTextureEmission=false, bool suppressHdrTextureEmission=false, ICollection<string> warnings=null, GameObject animationSource=null)
         {
-            var result = new LilToonFullSnapshot {suppressSharedTextureEmission=suppressSharedTextureEmission, suppressHdrTextureEmission=suppressHdrTextureEmission, warnings=warnings};
+            var result = new LilToonFullSnapshot {suppressSharedTextureEmission=suppressSharedTextureEmission, suppressHdrTextureEmission=suppressHdrTextureEmission, warnings=warnings,
+                inactiveTextures=new LilToonInactiveTextureProof(avatar, animationSource)};
             foreach (var renderer in ExportRendererSelection.Enumerate(avatar))
             {
                 // UniVRM exports mesh primitives, not particle/trail/line systems.
                 // Their materials must not create bindings to absent glTF meshes.
                 var filter = renderer.GetComponent<MeshFilter>();
                 var mesh = renderer is SkinnedMeshRenderer skin ? skin.sharedMesh : renderer is MeshRenderer && filter != null ? filter.sharedMesh : null;
-                if(mesh==null)continue;
+                // The pinned ModelExporter omits meshes without vertices or
+                // indices. They cannot have a full binding to an output mesh.
+                // Keep their transforms/bones and every nonempty mesh intact.
+                if(!ExportRendererSelection.HasGeometry(mesh))continue;
                 var materials = renderer.sharedMaterials;
                 result.sources.Add(renderer, materials);
                 foreach (var material in materials)
@@ -70,6 +75,15 @@ namespace VRVlog.LilToonExporter
                 {
                     var texture = source.GetTexture(name);
                     var normal = (shader.GetPropertyFlags(i) & ShaderPropertyFlags.Normal) != 0;
+                    // Keep ordinary authored textures, including disabled
+                    // ones. Only an unsupported reference proven unreachable
+                    // by the current official shader can become unassigned.
+                    if (texture != null && !(texture is Texture2D) && !(texture is Cubemap) &&
+                        inactiveTextures?.CanOmit(source, name) == true)
+                    {
+                        texture = null;
+                        warnings?.Add(source.name + ": 無効なlilToonレイヤーで使われない動的画像の参照を省略しました: " + name);
+                    }
                     // Unassigned normal slots use Unity's encoded bump default.
                     // Export that default too, so the canonical decoder never
                     // interprets an app-platform-specific bump texture as RG.

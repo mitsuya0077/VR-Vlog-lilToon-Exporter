@@ -121,6 +121,35 @@ namespace VRVlog.LilToonExporter.Tests
             Assert.That(result.Slots[2].Single().Renderer, Is.SameAs(right));
         }
 
+        [TestCase("Blink_L", "Blink_R")]
+        [TestCase("BlinkLeft", "BlinkRight")]
+        [TestCase("Fcl_EYE_Close_L", "Fcl_EYE_Close_R")]
+        [TestCase("eye_blink_1_L", "eye_blink_1_R")]
+        [TestCase("eye_blink_2_L", "eye_blink_2_R")]
+        public void LegacyEyesOnDifferentRenderersResolveWithoutTrackingEvidence(string leftName, string rightName)
+        {
+            var left = Skin(leftName); var right = Skin(rightName);
+            var result = BlinkExportSession.Resolve(root);
+            Assert.That(result.RequiresUnifiedEvidence, Is.False);
+            Assert.That(result.Slots[0].Select(binding => binding.Renderer), Is.EquivalentTo(new[] { left, right }));
+            Assert.That(result.Slots[1].Single().Renderer, Is.SameAs(left));
+            Assert.That(result.Slots[2].Single().Renderer, Is.SameAs(right));
+            Assert.That(left.sharedMesh.blendShapeCount, Is.EqualTo(1));
+            Assert.That(right.sharedMesh.blendShapeCount, Is.EqualTo(1));
+        }
+
+        [Test] public void CrossRendererLegacyPairsDoNotHideAnUnmatchedThirdRenderer()
+        {
+            Skin("Blink_L"); Skin("Blink_R"); Skin("eye_blink_1_L");
+            Assert.Throws<InvalidOperationException>(() => BlinkExportSession.Resolve(root));
+        }
+
+        [Test] public void CrossRendererLegacySidesCannotMixNameFamilies()
+        {
+            Skin("Blink_L"); Skin("eye_blink_1_R");
+            Assert.Throws<InvalidOperationException>(() => BlinkExportSession.Resolve(root));
+        }
+
         [TestCase(true, false)][TestCase(false, false)][TestCase(true, true)][TestCase(false, true)]
         public void ACompleteUnifiedPairIncludesCompatibleOneSidedEyelashes(bool left, bool normalized)
         {

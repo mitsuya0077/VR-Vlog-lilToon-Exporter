@@ -57,6 +57,7 @@ namespace VRVlog.LilToonExporter
                 if (!string.IsNullOrEmpty(path)) assets.Add(path);
                 if (value is Mesh mesh) { MeshData(hash, mesh); continue; }
                 if (value is Texture texture) { TextureData(hash, texture, queue); continue; }
+                if (value is Material material && material.shader != null) { MaterialData(hash, material, queue); continue; }
                 // Shader/script bytes belong to their dependency hash. Their
                 // compiled payload is not an editable serialized avatar input.
                 if (value is Shader || value is MonoScript) continue;
@@ -65,6 +66,11 @@ namespace VRVlog.LilToonExporter
                 // Explicitly authored bounds and every serialized field remain
                 // part of the source stamp.
                 if (value is SkinnedMeshRenderer skin) hash.Bounds(skin.localBounds);
+                // Reading a generated/imported clip can lazily create its editor
+                // curve view. Settle that view before the first stamp, while
+                // still hashing the runtime curves and all authored metadata.
+                if (value is AnimationClip clip)
+                    foreach (var binding in AnimationUtility.GetCurveBindings(clip)) AnimationUtility.GetEditorCurve(clip, binding);
                 var transform = value as Transform;
                 var driven = transform != null && drivenRotations.Contains(transform);
                 SerializedDataCore(hash, value, queue, driven || capturePartial && transform != null && partial.Contains(transform), driven);
@@ -290,6 +296,31 @@ namespace VRVlog.LilToonExporter
                     for (var layer = 0; layer < readableCubes.cubemapCount; layer++)
                     for (var face = 0; face < 6; face++) hash.Native(readableCubes.GetPixelData<byte>(mip, (CubemapFace)face, layer));
             }
+        }
+
+        static void MaterialData(Digest hash, Material material, Queue<Object> queue)
+        {
+            // Like skinned bounds and clip editor curves, shader defaults are
+            // filled lazily by Unity's read API. Settle them before serializing
+            // the first stamp. Keep every stored field, stale property and
+            // object reference in the hash; no setters or relaxed comparisons.
+            var shader = material.shader;
+            for (var index = 0; index < shader.GetPropertyCount(); index++)
+            {
+                var name = shader.GetPropertyName(index);
+                switch (shader.GetPropertyType(index))
+                {
+                    case UnityEngine.Rendering.ShaderPropertyType.Color: material.GetColor(name); break;
+                    case UnityEngine.Rendering.ShaderPropertyType.Vector: material.GetVector(name); break;
+                    case UnityEngine.Rendering.ShaderPropertyType.Float:
+                    case UnityEngine.Rendering.ShaderPropertyType.Range: material.GetFloat(name); break;
+                    case UnityEngine.Rendering.ShaderPropertyType.Int: material.GetInteger(name); break;
+                    case UnityEngine.Rendering.ShaderPropertyType.Texture:
+                        material.GetTexture(name); material.GetTextureScale(name); material.GetTextureOffset(name); break;
+                    default: throw new NotSupportedException("Unsupported material fingerprint property: " + shader.GetPropertyType(index));
+                }
+            }
+            SerializedData(hash, material, queue);
         }
 
         static void SerializedData(Digest hash, Object value, Queue<Object> queue)

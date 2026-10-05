@@ -195,7 +195,7 @@ namespace VRVlog.LilToonExporter
                 recovery?.Apply();
                 if(exporterVersion!=null) PreserveExtraMaterialSlots(clone,temporaryMeshes);
                 recoveryReport.Stage = "材質保存";
-                var fullSnapshot = exporterVersion != null ? LilToonFullSnapshot.Capture(clone,suppressSharedTextureEmission,suppressHdrTextureEmission, warnings) : null;
+                var fullSnapshot = exporterVersion != null ? LilToonFullSnapshot.Capture(clone,suppressSharedTextureEmission,suppressHdrTextureEmission, warnings, animationSource: source) : null;
                 var fallbackWarnings=fullSnapshot==null?warnings:new List<string>();
                 if (fullSnapshot == null) LilToonMainTextureBaker.ValidateAvatar(clone);
                 LilToonMainTextureBaker.Prepare(clone, temporaryMaterials, temporaryTextures, fallbackWarnings, suppressSharedTextureEmission, suppressHdrTextureEmission, approximationOnly: fullSnapshot != null);

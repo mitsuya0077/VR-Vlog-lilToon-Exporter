@@ -6,6 +6,16 @@ namespace VRVlog.LilToonExporter
 {
     internal static class ExportRendererSelection
     {
+        // Match ModelExporter's empty-geometry exclusion without suppressing
+        // invalid but nonempty topology or changing any shared source mesh.
+        internal static bool HasGeometry(Mesh mesh)
+        {
+            if (mesh == null || mesh.vertexCount == 0) return false;
+            for (var slot = 0; slot < mesh.subMeshCount; slot++)
+                if (mesh.GetIndexCount(slot) != 0) return true;
+            return false;
+        }
+
         public static void RequireActiveRoot(GameObject avatar)
         {
             if (avatar == null) throw new ArgumentNullException(nameof(avatar));

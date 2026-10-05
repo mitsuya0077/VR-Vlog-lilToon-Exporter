@@ -67,7 +67,10 @@ class ExporterProfileResultTests(unittest.TestCase):
     def setUp(self):
         UnityResultTests.setUp(self)
         self.profile = 'exporter-integration'
-        for suite, methods in {**unity_runner.BEHAVIOR_CASES, **unity_runner.INTEGRATION_CASES}.items():
+        methods_by_suite = {suite: dict(methods) for suite, methods in unity_runner.BEHAVIOR_CASES.items()}
+        for suite, methods in unity_runner.INTEGRATION_CASES.items():
+            methods_by_suite.setdefault(suite, {}).update(methods)
+        for suite, methods in methods_by_suite.items():
             name = unity_runner.NAMESPACE + suite
             for method, count in methods.items():
                 variants = unity_runner.INTEGRATION_VARIANTS.get(suite, {}).get(method)
@@ -112,11 +115,23 @@ class ExporterProfileResultTests(unittest.TestCase):
                         self.root.append(removed[-1])
 
     def test_only_behavior_does_not_claim_installed_aao_integration(self):
-        for suite in unity_runner.INTEGRATION_CASES: self.remove(suite)
+        for suite, methods in unity_runner.INTEGRATION_CASES.items():
+            for method in methods: self.remove(suite, method)
         self.profile = 'exporter-behavior'
         self.assertGreater(len(self.check()), 20)
         self.profile = 'exporter-integration'
         with self.assertRaises(SystemExit): self.check()
+
+    def test_shared_physbone_suite_selects_behavior_without_claiming_optional_integration(self):
+        behavior = unity_runner.profile_filters(True, 'exporter-behavior')
+        name = unity_runner.NAMESPACE + 'PhysBoneSpringExportTests'
+        self.assertNotIn(name, behavior)
+        self.assertIn(name + '.ActualExportImportsNestedOwnersWithoutSharedJointsOrChangedAppearance', behavior)
+        self.assertNotIn(name + '.InstalledAvatarOptimizerPreservesSpringMotionAndCollisionsAfterFullExport', behavior)
+        self.assertIn(name, unity_runner.profile_filters(True, 'exporter-integration'))
+        required = unity_runner.required_regressions(True, 'exporter-integration')['PhysBoneSpringExportTests']
+        self.assertIn('ActualExportImportsNestedOwnersWithoutSharedJointsOrChangedAppearance', required)
+        self.assertIn('InstalledAvatarOptimizerPreservesSpringMotionAndCollisionsAfterFullExport', required)
 
     def test_synthetic_mesh_replacement_cannot_replace_official_mesh_deleter_cases(self):
         cases = self.remove('MeshDeleterIntegrationTests', 'DeletedSharedMeshAndMorphSurviveOneClickExportAndReimport')
@@ -261,12 +276,15 @@ class UnityProfilePolicyTests(unittest.TestCase):
             'MergedPermanentPupilHideSurvivesVrmReloadBlinkAndMenuGeometry': 4})
 
     def test_required_case_names_and_counts_match_checked_in_fixtures(self):
-        for suite, methods in {**unity_runner.BEHAVIOR_CASES, **unity_runner.INTEGRATION_CASES}.items():
+        methods_by_suite = {suite: dict(methods) for suite, methods in unity_runner.BEHAVIOR_CASES.items()}
+        for suite, methods in unity_runner.INTEGRATION_CASES.items():
+            methods_by_suite.setdefault(suite, {}).update(methods)
+        for suite, methods in methods_by_suite.items():
             source = (ROOT / 'Tests/Editor' / (suite + '.cs')).read_text(encoding='utf-8-sig')
             # Line-bounded attributes avoid ambiguous nested whitespace repeats
             # when scanning a long class for a later method.
             declarations = dict((method, attributes) for attributes, method in re.findall(
-                r'((?:^[ \t]*\[(?:Test|TestCase\([^\r\n]*\))\][ \t]*\r?\n)+)'
+                r'((?:^[ \t]*\[(?:Test|TestCase\([^\r\n]*\))\][ \t]*(?:\r?\n)?)+)'
                 r'[ \t]*public[ \t]+(?:async[ \t]+)?(?:void|Task)[ \t]+(\w+)\(', source, re.MULTILINE))
             for method, count in methods.items():
                 with self.subTest(suite=suite, method=method):
