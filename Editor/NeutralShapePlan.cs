@@ -1,7 +1,6 @@
 using System;
 using System.Collections.Generic;
 using System.Linq;
-using UniVRM10;
 using UnityEditor;
 using UnityEditor.Animations;
 using UnityEngine;
@@ -15,6 +14,7 @@ namespace VRVlog.LilToonExporter
     internal sealed class NeutralShapePlan
     {
         internal readonly HashSet<EditorCurveBinding> CommittedMorphs;
+        internal bool RetainUnresolvedRest { get; private set; }
         internal readonly HashSet<EditorCurveBinding> PreservedMorphs = new HashSet<EditorCurveBinding>();
         // A changing rest curve has no single native neutral value. Keep that
         // channel's prepared authored appearance, separately from wardrobe
@@ -24,6 +24,9 @@ namespace VRVlog.LilToonExporter
         private readonly GameObject avatar;
         private readonly HashSet<EditorCurveBinding> appearanceBindings = new HashSet<EditorCurveBinding>();
         private readonly HashSet<EditorCurveBinding> unboundAppearanceBindings = new HashSet<EditorCurveBinding>();
+        private readonly HashSet<EditorCurveBinding> constraintBindings = new HashSet<EditorCurveBinding>();
+        private readonly HashSet<EditorCurveBinding> existingProperties = new HashSet<EditorCurveBinding>();
+        private readonly HashSet<AnimationClip> validatedClips = new HashSet<AnimationClip>();
         private readonly Dictionary<EditorCurveBinding, string> reasons = new Dictionary<EditorCurveBinding, string>();
         private readonly Dictionary<string, Transform[]> targets;
         private readonly HashSet<Transform> protectedHierarchy = new HashSet<Transform>();
@@ -42,11 +45,17 @@ namespace VRVlog.LilToonExporter
         internal static NeutralShapePlan Create(GameObject prepared, RuntimeAnimatorController runtime,
             IEnumerable<IEnumerable<EditorCurveBinding>> roots, Func<string, bool> excludedPath = null,
             IEnumerable<EditorCurveBinding> requiredMorphs = null, ICollection<string> warnings = null,
-            VrChatExpressionMenu.Source source = null, FixedExpressionContext fixedContext = null)
+            VrChatExpressionMenu.Source source = null, FixedExpressionContext fixedContext = null, bool retainUnresolvedRest = false)
         {
             var plan = new NeutralShapePlan(prepared, roots.SelectMany(group => group));
+            plan.RetainUnresolvedRest = retainUnresolvedRest;
             plan.ResolveCommittedMorphs();
             var ownershipLayers = ExpressionDependencies.NormalInputLayers(runtime, source, fixedContext, excludedPath);
+            // Validate before any appearance group is preserved. A recoverable
+            // unsupported binding must not conceal malformed data in another
+            // reachable clip. The caller also supplies the neutral probe's
+            // reachable clips through this same preflight entry point.
+            plan.ValidateBindings(ownershipLayers.SelectMany(layer => layer.Clips), excludedPath);
             var customInputs = new HashSet<string>(ExpressionDependencies.Controller(runtime).parameters.Where(parameter =>
                 parameter.type != AnimatorControllerParameterType.Trigger && !VrChatParameterDriver.BuiltIn.Contains(parameter.name) &&
                 source?.ExternalParameters.Contains(parameter.name) != true).Select(parameter => parameter.name), StringComparer.Ordinal);
@@ -70,7 +79,7 @@ namespace VRVlog.LilToonExporter
                 var bindings = AnimationUtility.GetCurveBindings(clip).Concat(AnimationUtility.GetObjectReferenceCurveBindings(clip))
                     .Where(binding => excludedPath?.Invoke(binding.path) != true).ToArray();
                 var appearance = new List<EditorCurveBinding>();
-                foreach (var binding in bindings.Where(binding => IsAppearanceBinding(binding) && !HarmlessActivation(prepared, clip, binding)))
+                foreach (var binding in bindings.Where(binding => plan.IsAppearanceBinding(binding) && !HarmlessActivation(prepared, clip, binding)))
                 {
                     // An alternate layout path absent from the prepared copy
                     // cannot bind in Unity. It is neither a visual change nor
@@ -129,13 +138,10 @@ namespace VRVlog.LilToonExporter
                     }
                 }
             }
-            var required = RequiredChannels(prepared, excludedPath);
-            required.UnionWith(requiredMorphs ?? Enumerable.Empty<EditorCurveBinding>());
-            var conflict = plan.PreservedMorphs.Where(required.Contains).OrderBy(binding => binding.path, StringComparer.Ordinal)
-                .ThenBy(binding => binding.propertyName, StringComparer.Ordinal).FirstOrDefault();
-            if (plan.PreservedMorphs.Any(required.Contains))
-                throw new InvalidOperationException("必須の表情・追跡変形が衣装・材質・Transformの変更と結び付いているため、基準形を確定できません: " +
-                    conflict.path + " / " + conflict.propertyName + " / " + plan.reasons[conflict]);
+            // Rest reconstruction is optional even for a required expression
+            // channel. Preserve its complete prepared appearance here; the
+            // explicit blink/tracking/expression endpoint retains its own
+            // identity and deformation validation later in the export.
             plan.CommittedMorphs.ExceptWith(plan.PreservedMorphs);
             plan.ProtectCommittedHierarchy();
             if (plan.omittedMorphs.Count > 0)
@@ -151,7 +157,7 @@ namespace VRVlog.LilToonExporter
                 var descriptions = plan.PreservedMorphs.OrderBy(binding => binding.path, StringComparer.Ordinal)
                     .ThenBy(binding => binding.propertyName, StringComparer.Ordinal).Select(binding =>
                         binding.path + " / " + binding.propertyName + " (" + plan.reasons[binding] + ")").ToArray();
-                warnings?.Add("FXの衣装・髪・材質に連動するBlendShapeは、書き出し用コピーの現在の見た目を保持しました: " +
+                warnings?.Add(ExporterLocalization.T("FXの衣装・髪・材質・ギミックに連動するBlendShapeは、書き出し用コピーの現在の見た目を保持しました: ") +
                     string.Join(", ", descriptions.Take(8)) + (descriptions.Length > 8 ? " ほか" + (descriptions.Length - 8) + "件" : ""));
             }
             return plan;
@@ -195,6 +201,73 @@ namespace VRVlog.LilToonExporter
 
         internal bool AllowsEvaluationBinding(AnimationClip clip, EditorCurveBinding binding) => EvaluationBindingRejection(clip, binding) == null;
 
+        internal void ValidateBindings(IEnumerable<AnimationClip> clips, Func<string, bool> excludedPath = null)
+        {
+            foreach (var clip in clips.Where(value => value != null).Distinct())
+            {
+                if (validatedClips.Contains(clip)) continue;
+                foreach (var binding in AnimationUtility.GetCurveBindings(clip))
+                {
+                    // Animator parameters are global even when their transform
+                    // path happens to be excluded from mesh export.
+                    if (binding.type != typeof(Animator) && excludedPath?.Invoke(binding.path) == true) continue;
+                    VrChatExpressionSampler.ValidateNativeParameterCurve(AnimationUtility.GetEditorCurve(clip, binding), Describe(clip, binding));
+                    ValidateTarget(clip, binding, false);
+                }
+                foreach (var binding in AnimationUtility.GetObjectReferenceCurveBindings(clip))
+                {
+                    if (excludedPath?.Invoke(binding.path) == true) continue;
+                    var keys = AnimationUtility.GetObjectReferenceCurve(clip, binding);
+                    for (var index = 0; index < keys.Length; index++)
+                        if (!NeutralShapeSnapshot.Finite(keys[index].time) || index > 0 && keys[index].time <= keys[index - 1].time)
+                            throw new InvalidOperationException(ExporterLocalization.T("FXのオブジェクト参照曲線の時刻が不正です: ") + Describe(clip, binding));
+                    ValidateTarget(clip, binding, true);
+                }
+                validatedClips.Add(clip);
+            }
+        }
+
+        private void ValidateTarget(AnimationClip clip, EditorCurveBinding binding, bool objectReference)
+        {
+            // Parameter and morph identities have their own controller/mesh
+            // checks. Missing optional morph targets are resolved separately.
+            if (binding.type == null || binding.path == null || string.IsNullOrEmpty(binding.propertyName))
+                throw new InvalidOperationException(ExporterLocalization.T("FXの見た目の曲線の参照が不正です: ") + Describe(clip, binding));
+            if (binding.type == typeof(Animator) || IsMorph(binding)) return;
+            if (!targets.TryGetValue(binding.path, out var matches))
+            { unboundAppearanceBindings.Add(binding); return; }
+            if (matches.Length != 1)
+                throw new InvalidOperationException("FXの見た目の対象を一意に指定できません: " + Describe(clip, binding));
+            UnityEngine.Object target;
+            if (binding.type == typeof(GameObject)) target = matches[0].gameObject;
+            else
+            {
+                // An unsupported binding type is not evidence of a damaged
+                // object. Leave its classification to the neutral fallback.
+                if (!typeof(Component).IsAssignableFrom(binding.type)) return;
+                var components = matches[0].GetComponents(binding.type);
+                if (components.Length == 0) { unboundAppearanceBindings.Add(binding); return; }
+                if (components.Length != 1)
+                    throw new InvalidOperationException("FXの見た目のComponentを一意に指定できません: " + Describe(clip, binding));
+                target = components[0];
+            }
+            // These Unity animation properties have no direct serialized field
+            // (raw Euler angles and shader/material channels in particular).
+            if (IsBuiltInAppearanceBinding(binding))
+            { existingProperties.Add(binding); return; }
+            using var data = new SerializedObject(target);
+            var property = data.FindProperty(binding.propertyName);
+            if (property == null) return;
+            var scalar = property.propertyType == SerializedPropertyType.Float || property.propertyType == SerializedPropertyType.Integer ||
+                property.propertyType == SerializedPropertyType.Boolean || property.propertyType == SerializedPropertyType.Enum;
+            if (objectReference ? property.propertyType == SerializedPropertyType.ObjectReference : scalar)
+                existingProperties.Add(binding);
+            // Only known constraint implementations may participate in native
+            // scalar sampling. A valid arbitrary MonoBehaviour field is still
+            // unsupported; serialized existence alone proves no independence.
+            if (!objectReference && scalar && IsKnownConstraint(binding.type)) constraintBindings.Add(binding);
+        }
+
         internal void PreserveTemporalRest(AnimationClip clip, EditorCurveBinding binding)
         {
             if (!CommittedMorphs.Contains(binding) || !IsMorph(binding))
@@ -214,18 +287,26 @@ namespace VRVlog.LilToonExporter
         internal string EvaluationBindingRejection(AnimationClip clip, EditorCurveBinding binding)
         {
             if (HarmlessActivation(avatar, clip, binding) || unboundAppearanceBindings.Contains(binding)) return null;
-            if (!appearanceBindings.Contains(binding)) return "記録されていない見た目の曲線です（通常入力での到達範囲外、または未対応のプロパティ）";
+            if (!appearanceBindings.Contains(binding)) return existingProperties.Contains(binding)
+                ? ExporterLocalization.T("対象プロパティは存在しますが、通常入力での到達範囲外、またはBlendShapeへの影響が未対応です")
+                : "記録されていない見た目の曲線です（通常入力での到達範囲外、または未対応のプロパティ）";
             if (!targets.TryGetValue(binding.path, out var matches)) return "見た目の対象パスがありません";
             if (matches.Length != 1) return "見た目の対象を一意に特定できません";
             var target = matches[0];
+            // The probe disables Behaviours. A curve that enables a constraint
+            // can restart component execution, including SDK jobs or external
+            // target references. It still owns its paired appearance, but must
+            // retain the prepared rest instead of running in the native probe.
+            if (constraintBindings.Contains(binding) && binding.propertyName == "m_Enabled")
+                return ExporterLocalization.T("Constraintの有効状態を変更するため、評価中のComponent実行を安全に制限できません");
             // Capture reads only GetBlendShapeWeight on the private probe;
             // no sampled geometry, pose or material is committed. Independent
-            // supported Transform/material curves cannot change that scalar,
+            // supported Transform/material/constraint curves cannot change that scalar,
             // even on an ancestor, root bone or influencing bone. Keep original
             // clips native so their WD/additive stream contribution survives.
-            // Explicitly paired/shared-input morphs were already preserved or
-            // rejected as required above, together with prepared appearance.
-            if (binding.type == typeof(Transform) || IsMaterial(binding)) return null;
+            // Explicitly paired/shared-input morphs were already preserved
+            // above, together with their complete prepared appearance.
+            if (binding.type == typeof(Transform) || IsMaterial(binding) || constraintBindings.Contains(binding)) return null;
             if (protectedHierarchy.Contains(target)) return "基準形のRenderer階層に影響します: " + hierarchyOwners[target];
             return null;
         }
@@ -259,7 +340,31 @@ namespace VRVlog.LilToonExporter
             (binding.propertyName.StartsWith("material.", StringComparison.Ordinal) ||
              binding.propertyName.StartsWith("m_Materials.Array.data[", StringComparison.Ordinal));
 
-        private static bool IsAppearanceBinding(EditorCurveBinding binding)
+        private bool IsAppearanceBinding(EditorCurveBinding binding) => IsBuiltInAppearanceBinding(binding) || constraintBindings.Contains(binding);
+
+        private static bool IsKnownConstraint(Type type)
+        {
+            if (type == null || !typeof(Component).IsAssignableFrom(type)) return false;
+            // Do not accept an arbitrary script merely because it implements
+            // IConstraint. Unity's native constraint types share this assembly.
+            if (typeof(UnityEngine.Animations.IConstraint).IsAssignableFrom(type) &&
+                type.Assembly == typeof(UnityEngine.Animations.ParentConstraint).Assembly) return true;
+            // Optional SDK bridge: no SDK assembly reference is required. Use
+            // the SDK's documented concrete types, never avatar/object names
+            // or a namespace-wide allowance for unknown MonoBehaviours.
+            switch (type.FullName)
+            {
+                case "VRC.SDK3.Dynamics.Constraint.Components.VRCAimConstraint":
+                case "VRC.SDK3.Dynamics.Constraint.Components.VRCLookAtConstraint":
+                case "VRC.SDK3.Dynamics.Constraint.Components.VRCParentConstraint":
+                case "VRC.SDK3.Dynamics.Constraint.Components.VRCPositionConstraint":
+                case "VRC.SDK3.Dynamics.Constraint.Components.VRCRotationConstraint":
+                case "VRC.SDK3.Dynamics.Constraint.Components.VRCScaleConstraint": return true;
+                default: return false;
+            }
+        }
+
+        private static bool IsBuiltInAppearanceBinding(EditorCurveBinding binding)
         {
             if (binding.type == typeof(GameObject)) return binding.propertyName == "m_IsActive";
             if (typeof(Renderer).IsAssignableFrom(binding.type)) return binding.propertyName == "m_Enabled" || IsMaterial(binding);
@@ -272,40 +377,5 @@ namespace VRVlog.LilToonExporter
         private static string Describe(AnimationClip clip, EditorCurveBinding binding) =>
             clip.name + " / " + binding.path + " / " + binding.propertyName;
 
-        private static HashSet<EditorCurveBinding> RequiredChannels(GameObject prepared, Func<string, bool> excludedPath)
-        {
-            var result = new HashSet<EditorCurveBinding>();
-            void Add(SkinnedMeshRenderer renderer, string shape)
-            {
-                if (renderer == null || renderer.sharedMesh == null || string.IsNullOrEmpty(shape) ||
-                    renderer.sharedMesh.GetBlendShapeIndex(shape) < 0 || !renderer.transform.IsChildOf(prepared.transform)) return;
-                var path = AnimationUtility.CalculateTransformPath(renderer.transform, prepared.transform);
-                if (excludedPath?.Invoke(path) != true) result.Add(EditorCurveBinding.FloatCurve(path, typeof(SkinnedMeshRenderer), "blendShape." + shape));
-            }
-            var expression = prepared.GetComponent<Vrm10Instance>()?.Vrm?.Expression;
-            if (expression != null)
-                foreach (var clip in expression.Clips.Select(item => item.Clip).Where(clip => clip != null).Distinct())
-                {
-                    var bindings = clip.MorphTargetBindings ?? Array.Empty<MorphTargetBinding>();
-                    if (bindings.Any(binding => !NeutralShapeSnapshot.Finite(binding.Weight) || binding.Weight < 0 || binding.Weight > 1)) continue;
-                    var first = new HashSet<(string Path, int Shape)>();
-                    foreach (var binding in bindings)
-                    {
-                        if (!first.Add((binding.RelativePath, binding.Index)) || binding.Weight <= 0) continue;
-                        if (!string.IsNullOrEmpty(binding.RelativePath) && excludedPath?.Invoke(binding.RelativePath) == true) continue;
-                        var target = string.IsNullOrEmpty(binding.RelativePath) ? prepared.transform : prepared.transform.Find(binding.RelativePath);
-                        var renderer = target == null ? null : target.GetComponent<SkinnedMeshRenderer>();
-                        if (renderer != null && renderer.sharedMesh != null && binding.Index >= 0 && binding.Index < renderer.sharedMesh.blendShapeCount)
-                            Add(renderer, renderer.sharedMesh.GetBlendShapeName(binding.Index));
-                    }
-                }
-            if (BlinkExportSession.TryDescriptor(prepared, null, out var blink)) Add(blink.Renderer, blink.Shape);
-            var profile = prepared.GetComponentInChildren<VrmTrackingMarker>(true)?.profile;
-            if (profile != null)
-                foreach (var shape in (profile.expressions ?? Array.Empty<TrackingExpression>()).Where(entry => entry != null)
-                    .SelectMany(entry => entry.morphs ?? Array.Empty<TrackingMorph>()).Where(morph => morph != null && morph.weight > 0).Select(morph => morph.shape))
-                    foreach (var renderer in prepared.GetComponentsInChildren<SkinnedMeshRenderer>(true)) Add(renderer, shape);
-            return result;
-        }
     }
 }

@@ -8,9 +8,10 @@ using UnityEngine;
 
 namespace VRVlog.LilToonExporter
 {
-    // A valid FX graph can require time or live inputs to choose its rest pose.
-    // Keep this separate from malformed/unsupported graph errors so neutral
-    // preparation can retain authored weights without accepting sampled phases.
+    // A valid FX graph may need live inputs or unsupported appearance support
+    // to choose its rest pose. Keep such capability limits separate from bad
+    // data and unresolved callbacks: only neutral preparation retains authored
+    // weights, without accepting sampled phases or partial appearance changes.
     internal sealed class NeutralShapeSamplingException : InvalidOperationException
     {
         internal readonly HashSet<EditorCurveBinding> DependencyMorphs;
@@ -53,7 +54,49 @@ namespace VRVlog.LilToonExporter
                         excludedPath?.Invoke(binding.path) != true);
                 throw WithAffected(error, bindings);
             }
-            var plan = NeutralShapePlan.Create(prepared, metadata.Controller, groups, excludedPath, requiredMorphs, warnings, metadata, fixedContext);
+            var planWarnings = new List<string>();
+            var plan = NeutralShapePlan.Create(prepared, metadata.Controller, groups, excludedPath, requiredMorphs, planWarnings, metadata, fixedContext,
+                retainUnresolvedRest: true);
+            // Even when every resolved morph belongs to prepared appearance, retaining
+            // that rest must not hide an unresolved callback or playable writer.
+            // Analyze the complete graph once before ownership removes outputs.
+            var allRoots = new HashSet<EditorCurveBinding>(plan.CommittedMorphs.Concat(plan.PreservedMorphs));
+            if (allRoots.Count > 0)
+            {
+                try { ExpressionDependencies.AnalyzeNeutral(metadata.Controller, allRoots, excludedPath, metadata, automatic, fixedContext,
+                    preserveCommittedMorphs: true); }
+                catch (NeutralShapeSamplingException) { /* Missing live input can retain prepared rest after the data checks below. */ }
+                catch (InvalidOperationException error) { throw WithAffected(error, allRoots); }
+            }
+            // Complete data/callback checks before any group's recoverable
+            // refusal. An unsupported appearance curve must not conceal a bad
+            // parameter curve or event later in the same native support graph.
+            if (allRoots.Count > 0)
+            {
+                var layers = ExpressionDependencies.Inspect(metadata.Controller, excludedPath,
+                    new Dictionary<StateMachineBehaviour, VrChatParameterDriver.Program>(), new List<string>(), true);
+                var fixedValues = ExpressionDependencies.FixedNeutralValues(metadata.Controller, metadata, layers, excludedPath, fixedContext);
+                var reachable = ExpressionDependencies.Inspect(metadata.Controller, excludedPath,
+                    new Dictionary<StateMachineBehaviour, VrChatParameterDriver.Program>(), new List<string>(), true, fixedValues);
+                var needed = new HashSet<string>(reachable.SelectMany(layer => layer.Reads), StringComparer.Ordinal);
+                foreach (var program in reachable.SelectMany(layer => layer.DriverPrograms).Distinct())
+                    for (var index = 0; index < program.Operations.Count; index++)
+                    {
+                        var operation = program.Operations[index];
+                        // Random describes a capability limit, not corrupt
+                        // numeric data. Other read errors on needed inputs must
+                        // be found before a late state or neutral fallback.
+                        if (operation.Kind != "Random" && operation.Error != null && needed.Contains(operation.Destination))
+                            throw new InvalidOperationException(program.Location + " / Parameter Driver " + (index + 1) +
+                                " (" + operation.Kind + " → " + operation.Destination + "): " + operation.Error);
+                    }
+                var clips = ExpressionDependencies.NeutralClips(metadata.Controller, fixedValues, excludedPath);
+                plan.ValidateBindings(clips, excludedPath);
+                foreach (var clip in clips)
+                    if (AnimationUtility.GetAnimationEvents(clip).Length != 0)
+                        throw new InvalidOperationException(ExporterLocalization.T("常時適用FXと表情の影響範囲を確定できません: ") + clip.name + " / AnimationEvent");
+            }
+            foreach (var warning in planWarnings) warnings?.Add(warning);
             var randomRestLayers = NeutralRandomRest.Preserve(metadata.Controller, metadata, plan, excludedPath, fixedContext);
             var randomRestMorphs = new HashSet<EditorCurveBinding>(plan.TemporalMorphs);
             foreach (var roots in groups)

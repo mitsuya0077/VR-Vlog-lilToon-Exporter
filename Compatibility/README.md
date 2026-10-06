@@ -131,9 +131,17 @@ reject callbacks that could change the retained graph.
 An exactly identified moving gesture must retain its native lower, Additive and
 Write Defaults support without an unrelated upper expression's reset. A proved
 permanent upper override and a configured single-state BlendTree's native
-contribution remain authoritative. Disconnected unsupported clips
-must not affect neutral sampling, while a future reachable unsupported clip must
-still reject export.
+contribution remain authoritative. Disconnected unsupported clips must not affect neutral sampling. Native Unity
+and VRChat constraint settings keep their original WD/additive support without
+committing the probe's pose. Unsupported appearance support retains the affected
+prepared neutral weights with a warning; selected expression endpoints still
+require independent validation. Coupled required morphs retain the whole prepared
+appearance as their neutral instead of rejecting export. Bad curves, ambiguous
+bindings, events and unknown callbacks remain errors and are checked before any
+recoverable neutral refusal. A last, stationary, unmasked full Override layer
+that explicitly writes every captured morph can prove those scalars independent
+of lower state inputs and timing. The full native evaluation graph stays intact;
+partial weights and masks do not authorize this exception.
 Copy ownership does not expand through Set/Add/Random or generic reset morphs.
 The transient-input matrix requires an unsaved declared signal with compatible
 types/defaults, no menu input, a raw producer in another playable, no raw FX

@@ -12,6 +12,31 @@ namespace VRVlog.LilToonExporter
     // only narrow which parameter curves need a fixed-value proof.
     internal static class NeutralParameterDependencies
     {
+        // Restrict this proof to the actual last layer: a later WD/additive
+        // layer could otherwise change a channel that appears fully overridden.
+        // Execution dependencies stay intact; only scalar capture is independent.
+        internal static int IndependentTopOverride(RuntimeAnimatorController runtime,
+            ISet<EditorCurveBinding> capturedMorphs, Func<string, bool> excludedPath)
+        {
+            if (capturedMorphs == null || capturedMorphs.Count == 0) return -1;
+            var layers = ExpressionDependencies.Controller(runtime).layers;
+            if (layers.Length == 0) return -1;
+            var index = layers.Length - 1;
+            var layer = layers[index];
+            if (layer.blendingMode != AnimatorLayerBlendingMode.Override || layer.defaultWeight != 1 || layer.avatarMask != null ||
+                !ExpressionDependencies.StationaryLayers(runtime, excludedPath).TryGetValue(index, out var clip) ||
+                AnimationUtility.GetAnimationEvents(clip).Length != 0) return -1;
+            foreach (var binding in capturedMorphs)
+            {
+                if (binding.type != typeof(SkinnedMeshRenderer) || !binding.propertyName.StartsWith("blendShape.", StringComparison.Ordinal) ||
+                    excludedPath?.Invoke(binding.path) == true) return -1;
+                var curve = AnimationUtility.GetEditorCurve(clip, binding);
+                if (curve == null || curve.length == 0 || !VrChatExpressionSampler.IsConstant(curve)) return -1;
+                VrChatGestureExpressions.ReadCurve(curve);
+            }
+            return index;
+        }
+
         internal static HashSet<string> Required(RuntimeAnimatorController runtime, ExpressionDependencies dependencies,
             Func<string, bool> excludedPath)
         {
@@ -23,6 +48,10 @@ namespace VRVlog.LilToonExporter
             // Dependency analysis normally rejects these first. An incomplete
             // graph must never turn into permission to ignore its parameters.
             if (unknown.Count != 0) return null;
+            // No parameter timeline can change these explicit final scalar
+            // values. Structural curve validation and all native support still
+            // run; the sampler also checks the evaluated override weight.
+            if (dependencies.IndependentTopOverrideLayer >= 0) return new HashSet<string>(StringComparer.Ordinal);
             var retained = dependencies.Layers.Concat(dependencies.NativeSupportLayers).Distinct().ToArray();
             var required = new HashSet<string>(StringComparer.Ordinal);
             var internalFloats = new HashSet<string>(controller.parameters.GroupBy(parameter => parameter.name, StringComparer.Ordinal)

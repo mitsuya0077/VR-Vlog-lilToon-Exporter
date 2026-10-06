@@ -27,6 +27,7 @@ namespace VRVlog.LilToonExporter
         internal readonly HashSet<int> Layers = new HashSet<int>();
         internal readonly HashSet<int> NativeSupportLayers = new HashSet<int>();
         internal bool HasFxControls;
+        internal int IndependentTopOverrideLayer = -1;
         internal readonly HashSet<string> Parameters = new HashSet<string>(StringComparer.Ordinal);
         internal readonly HashSet<EditorCurveBinding> Morphs = new HashSet<EditorCurveBinding>();
         // Output capture can be restricted by a prepared neutral plan. Keep
@@ -336,6 +337,8 @@ namespace VRVlog.LilToonExporter
                 result.Morphs.IntersectWith(requiredMorphs);
                 foreach (var index in result.Layers)
                     if (!info[index].Morphs.Overlaps(requiredMorphs)) result.NativeSupportLayers.Add(index);
+                if (neutralMorphs != null)
+                    result.IndependentTopOverrideLayer = NeutralParameterDependencies.IndependentTopOverride(runtime, result.Morphs, excludedPath);
             }
             if (result.Layers.Count == 0) throw new InvalidOperationException("このメニューに対応するFXの表情がありません。");
             result.Parameters.UnionWith(read);
@@ -366,7 +369,9 @@ namespace VRVlog.LilToonExporter
                 throw new InvalidOperationException(unsafeFxCommands[0].Location + " / VRCPlayableLayerControl: FXの重みを変更する状態は固定表情に変換できません。");
             // Missing live inputs can retain authored neutral weights, but must
             // not hide unsupported writers or callbacks found in the same graph.
-            if (external.Length > 0)
+            // A final explicit full override fixes every captured morph even
+            // while the retained lower layers read unresolved live inputs.
+            if (external.Length > 0 && result.IndependentTopOverrideLayer < 0)
             {
                 var message = "外部入力に依存する表情の値を確定できません: " + string.Join(", ", external);
                 throw new NeutralShapeSamplingException(message, dependencyMorphs: result.NeutralDependencyMorphs);
