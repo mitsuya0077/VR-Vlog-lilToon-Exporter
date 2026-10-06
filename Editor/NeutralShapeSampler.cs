@@ -95,6 +95,7 @@ namespace VRVlog.LilToonExporter
                 foreach (var clip in clips)
                     if (AnimationUtility.GetAnimationEvents(clip).Length != 0)
                         throw new InvalidOperationException(ExporterLocalization.T("常時適用FXと表情の影響範囲を確定できません: ") + clip.name + " / AnimationEvent");
+                NeutralAdditionalDataPreflight.Validate(metadata.Controller, metadata, fixedContext, plan, excludedPath);
             }
             foreach (var warning in planWarnings) warnings?.Add(warning);
             var randomRestLayers = NeutralRandomRest.Preserve(metadata.Controller, metadata, plan, excludedPath, fixedContext);

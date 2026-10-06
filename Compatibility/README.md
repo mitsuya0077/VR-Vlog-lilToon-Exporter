@@ -95,7 +95,7 @@ The behavior profile selects these complete classes in addition to compatibility
 - `NeutralShapePipelineTests`, `NeutralShapeExportTests`, `UnifiedExpressionExportTests`
 - `MaSceneReferencePreparationTests`, `NdmfPreparationTests`
 - `FaceEmoPreparedFxIntegrationTests`
-- `AdditionalPlayableCallbackTests`
+- `AdditionalPlayableCallbackTests`, `NeutralLayerControlTests`
 - `TemporalNeutralShapeTests`
 
 They cover fixed external inputs and dormant Action branches; whole prepared
@@ -142,6 +142,17 @@ recoverable neutral refusal. A last, stationary, unmasked full Override layer
 that explicitly writes every captured morph can prove those scalars independent
 of lower state inputs and timing. The full native evaluation graph stays intact;
 partial weights and masks do not authorize this exception.
+
+In `0.11.11-beta.9`, documented SDK Animator/Playable layer-weight commands are
+classified separately from unknown callbacks. An unsupported neutral effect
+retains the affected prepared appearance with a warning; it does not authorize a
+selected endpoint. A full final scalar override can remain independent only of
+commands targeting lower FX layers, never the final layer or the whole FX playable.
+SDK callbacks are not executed or emulated, and a goal weight of one is not a
+no-op proof. Other playable data and reachable parameter writers are checked before
+neutral fallback, including parameters read across controller boundaries. Original
+controllers and avatar settings remain unchanged. See [avatar preservation](AvatarPreservation.md)
+for the body-playable metadata boundary and the difference from running VRChat.
 Copy ownership does not expand through Set/Add/Random or generic reset morphs.
 The transient-input matrix requires an unsaved declared signal with compatible
 types/defaults, no menu input, a raw producer in another playable, no raw FX
