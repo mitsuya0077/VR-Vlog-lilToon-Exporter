@@ -211,8 +211,13 @@ namespace VRVlog.LilToonExporter.Tests
             var unsafeClip = Clip("Unobserved callback or object", "Blink");
             if (animationEvent) AnimationUtility.SetAnimationEvents(unsafeClip,
                 new[] { new AnimationEvent { time = 30, functionName = "FutureCallback" } });
-            else AnimationUtility.SetObjectReferenceCurve(unsafeClip, EditorCurveBinding.PPtrCurve("Face", typeof(SkinnedMeshRenderer), "m_Mesh"),
-                new[] { new ObjectReferenceKeyframe { time = 0, value = mesh } });
+            else
+            {
+                var replacement = Object.Instantiate(mesh); replacement.name = "Unsupported replacement mesh";
+                AssetDatabase.AddObjectToAsset(replacement, controller);
+                AnimationUtility.SetObjectReferenceCurve(unsafeClip, EditorCurveBinding.PPtrCurve("Face", typeof(SkinnedMeshRenderer), "m_Mesh"),
+                    new[] { new ObjectReferenceKeyframe { time = 0, value = replacement } });
+            }
             var alternative = State(machine, "Alternative unsupported motion", unsafeClip);
             if (reachable)
             {
@@ -220,23 +225,42 @@ namespace VRVlog.LilToonExporter.Tests
                 transition.hasExitTime = true; transition.exitTime = 30; transition.duration = 0;
             }
             FractionalPupil();
+            var skin = avatar.GetComponentInChildren<SkinnedMeshRenderer>();
+            var pupil = mesh.GetBlendShapeIndex("Pupil removal");
+            skin.SetBlendShapeWeight(pupil, 17);
             var sourceJson = EditorJsonUtility.ToJson(controller);
             var meshJson = EditorJsonUtility.ToJson(mesh);
-            if (reachable)
+            var skinJson = EditorJsonUtility.ToJson(skin);
+            var warnings = new List<string>();
+            if (reachable && animationEvent)
             {
-                // A future route must still fail before its unsupported motion
-                // can be mistaken for a permanently safe native support layer.
-                Assert.Catch<InvalidOperationException>(() => NeutralShapeSampler.Sample(avatar));
+                // A reachable callback still requires a hard stop, even when
+                // it lies beyond the native sampling window.
+                Assert.Catch<InvalidOperationException>(() => NeutralShapeSampler.Sample(avatar, warnings: warnings));
+            }
+            else if (reachable)
+            {
+                // A fractional override depends on the lower layer's activity.
+                // Retain the prepared rest when a future object swap prevents
+                // proving that support, without applying the replacement mesh.
+                var values = NeutralShapeSampler.Sample(avatar, warnings: warnings);
+                Assert.That(values, Is.Empty);
+                NeutralShapeSnapshot.Apply(avatar, values);
+                Assert.That(warnings.Any(value => value.Contains("Pupil removal") && value.Contains("FX") && value.Contains("m_Mesh")), Is.True);
             }
             else
             {
                 var expected = Native(false, requireRelay: false);
-                var values = NeutralShapeSampler.Sample(avatar);
+                var values = NeutralShapeSampler.Sample(avatar, warnings: warnings);
                 Assert.That(values.Select(value => value.Shape), Is.EquivalentTo(new[] { "Pupil removal" }));
                 Assert.That(values.Single().Weight, Is.EqualTo(expected["Pupil removal"]).Within(.01));
+                Assert.That(Mathf.Abs(values.Single().Weight - 17), Is.GreaterThan(1), "Disconnected motions must not force prepared-rest fallback.");
             }
             Assert.That(EditorJsonUtility.ToJson(controller), Is.EqualTo(sourceJson));
             Assert.That(EditorJsonUtility.ToJson(mesh), Is.EqualTo(meshJson));
+            Assert.That(EditorJsonUtility.ToJson(skin), Is.EqualTo(skinJson));
+            Assert.That(skin.sharedMesh, Is.SameAs(mesh));
+            Assert.That(skin.GetBlendShapeWeight(pupil), Is.EqualTo(17));
         }
 
         [Test]
