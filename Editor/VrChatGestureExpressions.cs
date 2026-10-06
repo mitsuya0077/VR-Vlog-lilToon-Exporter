@@ -203,13 +203,18 @@ namespace VRVlog.LilToonExporter
 
         internal static List<VrChatExpressionMenu.MorphValue> ReadPose(GameObject avatar, AnimationClip clip, Func<string, bool> excludedPath = null)
         {
+            SelectedExpressionAppearance.ValidateClipData(clip, excludedPath);
             if (AnimationUtility.GetObjectReferenceCurveBindings(clip).Any(b => excludedPath?.Invoke(b.path) != true))
                 throw new InvalidOperationException("マテリアル・オブジェクトの差し替えを含む表情アニメーションは未対応です。");
             var result = new List<VrChatExpressionMenu.MorphValue>();
             foreach (var binding in AnimationUtility.GetCurveBindings(clip))
             {
                 if (excludedPath?.Invoke(binding.path) == true) continue;
-                if (!IsMorph(binding)) throw new InvalidOperationException("BlendShape以外の変化を含む表情アニメーションです: " + binding.propertyName);
+                if (!IsMorph(binding))
+                {
+                    if (SelectedExpressionAppearance.IsUnchanged(avatar, clip, binding)) continue;
+                    throw new InvalidOperationException("BlendShape以外の変化を含む表情アニメーションです: " + binding.propertyName);
+                }
                 var curve = AnimationUtility.GetEditorCurve(clip, binding);
                 if (curve == null) throw new InvalidOperationException("表情アニメーションの曲線を読み取れません: " + clip.name);
                 // The standard VRM expression is the first pose. The animated
@@ -236,7 +241,7 @@ namespace VRVlog.LilToonExporter
             var animated = new List<VrChatExpressionMenu.AnimatedMorph>();
             foreach (var binding in AnimationUtility.GetCurveBindings(clip))
             {
-                if (excludedPath?.Invoke(binding.path) == true) continue;
+                if (excludedPath?.Invoke(binding.path) == true || !IsMorph(binding)) continue;
                 var curve = ReadCurve(AnimationUtility.GetEditorCurve(clip, binding));
                 curve.Range(out var minimum, out var maximum);
                 if (minimum == maximum) continue;

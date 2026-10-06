@@ -27,6 +27,7 @@ namespace VRVlog.LilToonExporter
             internal bool LocalOnly;
             internal bool FxControl;
             internal float FxWeight;
+            internal SdkLayerWeightControl LayerWeight;
             internal readonly List<Operation> Operations = new List<Operation>();
         }
 

@@ -1,5 +1,6 @@
 using System;
 using UnityEditor;
+using UnityEditor.Animations;
 using UnityEngine;
 
 namespace VRVlog.LilToonExporter
@@ -14,6 +15,9 @@ namespace VRVlog.LilToonExporter
         internal string Playable;
         internal int LayerIndex;
         internal float GoalWeight, BlendDuration;
+        // Filled by graph inspection, not inferred from the SDK object's name.
+        internal AnimatorState SourceState;
+        internal bool FixedBaseLayer;
 
         internal static SdkLayerWeightControl Read(StateMachineBehaviour value, string location, int fxLayerCount)
         {
@@ -67,7 +71,7 @@ namespace VRVlog.LilToonExporter
                 return new SdkLayerWeightControl
                 {
                     Location = location, AnimatorLayer = animatorLayer, Playable = playable,
-                    LayerIndex = layerIndex, GoalWeight = goal, BlendDuration = duration
+                    LayerIndex = layerIndex, GoalWeight = goal, BlendDuration = duration, FixedBaseLayer = animatorLayer && layerIndex == 0
                 };
             }
         }

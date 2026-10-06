@@ -64,6 +64,13 @@ namespace VRVlog.LilToonExporter
                 foreach (var behaviour in values)
                 {
                     if (dependencies.IgnoredWeightControls.Contains(behaviour)) continue;
+                    if (dependencies.EvaluatedWeightControls.TryGetValue(behaviour, out var weight))
+                    {
+                        var weightAdapter = (ExpressionDriverBehaviour)Own(ScriptableObject.CreateInstance<ExpressionDriverBehaviour>());
+                        weightAdapter.Session = id; weightAdapter.Program = programs.Count;
+                        programs.Add(new VrChatParameterDriver.Program { Location = weight.Location, LayerWeight = weight });
+                        result.Add(weightAdapter); continue;
+                    }
                     if (VrChatParameterDriver.IsTracking(behaviour) || VrChatParameterDriver.IsNonFxPlayableControl(behaviour) ||
                         VrChatParameterDriver.IsTemporaryPoseSpace(behaviour) || VrChatParameterDriver.IsLocomotionControl(behaviour)) continue;
                     if (!dependencies.Drivers.TryGetValue(behaviour, out var program))
@@ -175,6 +182,14 @@ namespace VRVlog.LilToonExporter
             {
                 if (++session.entries > 4096) throw new InvalidOperationException("Parameter Driverの進入回数が上限を超えました。循環する表情は変換できません。");
                 var program = session.programs[programIndex];
+                if (program.LayerWeight != null)
+                {
+                    var weight = program.LayerWeight;
+                    // The SDK's base layer remains at full weight. All other
+                    // indices retain their authored slot in this owned copy.
+                    if (!weight.FixedBaseLayer && weight.LayerIndex > 0) playable.SetLayerWeight(weight.LayerIndex, weight.GoalWeight);
+                    return;
+                }
                 if (program.FxControl)
                 {
                     // Every observed command must preserve full FX weight.
@@ -215,6 +230,17 @@ namespace VRVlog.LilToonExporter
         }
 
         internal void Check() { if (failure != null) throw failure; }
+
+        internal float[] CaptureLayerWeights(AnimatorControllerPlayable playable) => dependencies.EvaluatedWeightControls.Values
+            .Select(control => control.LayerIndex).Distinct().OrderBy(index => index)
+            .Select(index => index == 0 ? 1 : playable.GetLayerWeight(index)).ToArray();
+
+        internal void CheckLayerWeights(AnimatorControllerPlayable playable, float[] expected)
+        {
+            Check();
+            if (!CaptureLayerWeights(playable).SequenceEqual(expected))
+                throw new InvalidOperationException("FXレイヤーの重みが静止しないため、固定表情に変換できません。");
+        }
 
         internal void CheckNeutralFx()
         {

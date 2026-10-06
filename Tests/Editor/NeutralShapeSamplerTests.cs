@@ -1084,7 +1084,7 @@ namespace VRVlog.LilToonExporter.Tests
 
         [TestCase(false)]
         [TestCase(true)]
-        public void FixedMenuStillRejectsActivationIncludingHarmlessNeutralBindings(bool targetExists)
+        public void FixedMenuAcceptsOnlyProvenUnchangedOrUnboundActivation(bool targetExists)
         {
             if (targetExists) new GameObject("Prepared clothing").transform.SetParent(avatar.transform, false);
             controller.AddParameter("Menu", AnimatorControllerParameterType.Int);
@@ -1096,9 +1096,10 @@ namespace VRVlog.LilToonExporter.Tests
             var transition = idle.AddTransition(selected); transition.hasExitTime = false; transition.duration = 0;
             transition.AddCondition(AnimatorConditionMode.Equals, 1, "Menu");
             var metadata = VrChatExpressionMenu.Read(avatar, new VrChatMenuImportPolicy { SkipAll = true });
-            Assert.That(Assert.Throws<InvalidOperationException>(() => VrChatExpressionSampler.SampleFixed(avatar, controller,
-                metadata.Defaults, new Dictionary<string, float> { ["Menu"] = 1 }, metadata: metadata)).Message,
-                Does.Contain("Prepared clothing").And.Contain("m_IsActive"));
+            var values = VrChatExpressionSampler.SampleFixed(avatar, controller, metadata.Defaults,
+                new Dictionary<string, float> { ["Menu"] = 1 }, metadata: metadata);
+            Assert.That(values.Single(value => value.Shape == "Open").Weight, Is.EqualTo(75).Within(.01));
+            Assert.That(skin.GetBlendShapeWeight(mesh.GetBlendShapeIndex("Open")), Is.Zero);
         }
 
         [Test]
