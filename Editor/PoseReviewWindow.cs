@@ -27,6 +27,8 @@ namespace VRVlog.LilToonExporter
         internal bool IsBusy => rebuildRequested || pendingSamples != null;
         float yaw;
         string error;
+        PoseCandidate playing;
+        double playStarted;
 
         internal static void Show(GameObject avatar, PoseExportOptions options, GameObject[] excluded, ExportGimmickOptions gimmicks)
         {
@@ -42,7 +44,19 @@ namespace VRVlog.LilToonExporter
         // candidate per editor update so a batch leaves time for input/repaint.
         void AdvanceRebuild()
         {
-            if (!IsBusy || EditorApplication.isCompiling || EditorApplication.isUpdating) return;
+            if (EditorApplication.isCompiling || EditorApplication.isUpdating) return;
+            if (!IsBusy)
+            {
+                if (playing?.Animation != null && copy != null)
+                {
+                    var animation = playing.Animation;
+                    var elapsed = EditorApplication.timeSinceStartup - playStarted;
+                    ApplyAnimation(animation, animation.Loop ? elapsed % animation.Duration : Math.Min(elapsed, animation.Duration));
+                    if (!animation.Loop && elapsed >= animation.Duration) playing = null;
+                    Repaint();
+                }
+                return;
+            }
             try
             {
                 if (rebuildRequested)
@@ -81,7 +95,7 @@ namespace VRVlog.LilToonExporter
                     renderer.forceMatrixRecalculationPerRender = true;
                 }
                 var animator = copy.GetComponent<Animator>();
-                foreach (var name in VRVlog.Poses.HumanoidPoseData.BoneNames)
+                foreach (var name in VRVlog.Poses.HumanoidAnimationData.BoneNames)
                 { var bone = animator.GetBoneTransform(PoseSampling.HumanBone(name)); if (bone != null) rest[bone] = bone.rotation; }
                 hipsRest = animator.GetBoneTransform(HumanBodyBones.Hips).position;
                 preview = new PreviewRenderUtility(); preview.AddSingleGO(copy);
@@ -95,7 +109,7 @@ namespace VRVlog.LilToonExporter
         void OnGUI()
         {
             if (options == null) return;
-            EditorGUILayout.HelpBox(ExporterLocalization.T("対応した静止ポーズは自動で含まれます。首・顔・視線はアプリの追跡を使います。"), MessageType.Info);
+            EditorGUILayout.HelpBox(ExporterLocalization.T("静止ポーズと手動追加した動くポーズを含めます。動くポーズは開始秒から再生し、頭・首はクリップに指定がある場合だけ含めます。"), MessageType.Info);
             using (new EditorGUI.DisabledScope(IsBusy))
                 if (GUILayout.Button(ExporterLocalization.T("登録情報を再取得"))) RequestRebuild();
             if (error != null) EditorGUILayout.HelpBox(ExporterLocalization.T(error), MessageType.Warning);
@@ -142,12 +156,16 @@ namespace VRVlog.LilToonExporter
                             {
                                 var enabled = !options.Excluded.Contains(row.Id);
                                 var next = EditorGUILayout.Toggle(enabled && row.Error == null, GUILayout.Width(20));
-                                if (next != enabled && row.Error == null) { if (next) options.Excluded.Remove(row.Id); else options.Excluded.Add(row.Id); }
+                                if (next != enabled && row.Error == null)
+                                {
+                                    if (next) options.Excluded.Remove(row.Id); else options.Excluded.Add(row.Id);
+                                    if (row.IsAnimation) RequestRebuild();
+                                }
                             }
                             // Metadata errors must remain repairable.
                             var name = EditorGUILayout.TextField(row.Name);
                             if (name != row.Name) options.Names[row.Id] = row.Name = name;
-                            using (new EditorGUI.DisabledScope(row.Error != null || row.Data == null))
+                            using (new EditorGUI.DisabledScope(row.Error != null || row.Data == null && row.Animation == null))
                                 if (GUILayout.Button(ExporterLocalization.T("プレビュー"), GUILayout.Width(90))) ApplyPreview(row);
                             EditorGUILayout.EndHorizontal();
                             EditorGUILayout.LabelField(row.Source + " / " + row.Category, EditorStyles.miniLabel);
@@ -162,7 +180,8 @@ namespace VRVlog.LilToonExporter
                     var row = options.Manual[i];
                     EditorGUILayout.BeginHorizontal();
                     row.Clip = (AnimationClip)EditorGUILayout.ObjectField(row.Clip, typeof(AnimationClip), false);
-                    EditorGUILayout.LabelField(ExporterLocalization.T("採用秒"), GUILayout.Width(45));
+                    var animated = session?.Entries.Any(entry => entry.IsAnimation && entry.Layers.Count == 1 && entry.Layers[0].Clip == row.Clip) == true;
+                    EditorGUILayout.LabelField(ExporterLocalization.T(animated ? "開始秒" : "採用秒"), GUILayout.Width(45));
                     row.Time = EditorGUILayout.FloatField(row.Time, GUILayout.Width(65));
                     if (GUILayout.Button(ExporterLocalization.T("削除"), GUILayout.Width(45))) remove = i;
                     EditorGUILayout.EndHorizontal();
@@ -189,6 +208,12 @@ namespace VRVlog.LilToonExporter
         }
         void ApplyPreview(PoseCandidate row)
         {
+            playing = null;
+            if (row.Animation != null)
+            {
+                playing = row; playStarted = EditorApplication.timeSinceStartup;
+                ApplyAnimation(row.Animation, 0); return;
+            }
             if (row.Data == null) return;
             var animator = copy.GetComponent<Animator>();
             foreach (var pair in rest) pair.Key.rotation = pair.Value;
@@ -201,6 +226,24 @@ namespace VRVlog.LilToonExporter
             var p = row.Data.HipsOffset;
             animator.GetBoneTransform(HumanBodyBones.Hips).position += new Vector3(-(float)p[0], (float)p[1], (float)p[2]);
         }
+        void ApplyAnimation(VRVlog.Poses.HumanoidAnimationData animation, double time)
+        {
+            var animator = copy.GetComponent<Animator>();
+            foreach (var pair in rest) pair.Key.rotation = pair.Value;
+            var hips = animator.GetBoneTransform(HumanBodyBones.Hips); hips.position = hipsRest;
+            animation.Locate(time, out var left, out var right, out var blend);
+            for (var i = 0; i < animation.Bones.Count; i++)
+            {
+                var target = animator.GetBoneTransform(PoseSampling.HumanBone(animation.Bones[i].Name));
+                var a = left.Rotations[i]; var b = right.Rotations[i];
+                var rotation = Quaternion.Slerp(new Quaternion((float)a[0], -(float)a[1], -(float)a[2], (float)a[3]),
+                    new Quaternion((float)b[0], -(float)b[1], -(float)b[2], (float)b[3]), (float)blend);
+                target.rotation = rotation * rest[target];
+            }
+            var p = Vector3.Lerp(new Vector3(-(float)left.HipsOffset[0], (float)left.HipsOffset[1], (float)left.HipsOffset[2]),
+                new Vector3(-(float)right.HipsOffset[0], (float)right.HipsOffset[1], (float)right.HipsOffset[2]), (float)blend);
+            hips.position += p;
+        }
         void OnDisable()
         {
             EditorApplication.update -= AdvanceRebuild;
@@ -209,6 +252,7 @@ namespace VRVlog.LilToonExporter
         }
         void Cleanup()
         {
+            playing = null;
             pendingSamples?.Dispose(); pendingSamples = null;
             preview?.Cleanup(); preview = null;
             if (copy != null) Object.DestroyImmediate(copy); copy = null;

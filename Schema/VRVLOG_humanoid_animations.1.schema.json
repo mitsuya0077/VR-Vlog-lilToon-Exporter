@@ -1,0 +1,215 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/mitsuya0077/VR-Vlog-lilToon-Exporter/VRVLOG_humanoid_animations/1/schema.json",
+  "title": "VRVLOG_humanoid_animations 1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schemaVersion",
+    "space",
+    "animations"
+  ],
+  "properties": {
+    "schemaVersion": {
+      "const": 1
+    },
+    "space": {
+      "const": "vrm1AvatarRestDelta"
+    },
+    "animations": {
+      "maxItems": 128,
+      "minItems": 1,
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/animation"
+      }
+    }
+  },
+  "$defs": {
+    "bone": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "bone",
+        "node"
+      ],
+      "properties": {
+        "bone": {
+          "enum": [
+            "hips",
+            "spine",
+            "chest",
+            "upperChest",
+            "leftShoulder",
+            "rightShoulder",
+            "leftUpperArm",
+            "leftLowerArm",
+            "leftHand",
+            "rightUpperArm",
+            "rightLowerArm",
+            "rightHand",
+            "leftUpperLeg",
+            "leftLowerLeg",
+            "leftFoot",
+            "leftToes",
+            "rightUpperLeg",
+            "rightLowerLeg",
+            "rightFoot",
+            "rightToes",
+            "leftThumbMetacarpal",
+            "leftThumbProximal",
+            "leftThumbDistal",
+            "leftIndexProximal",
+            "leftIndexIntermediate",
+            "leftIndexDistal",
+            "leftMiddleProximal",
+            "leftMiddleIntermediate",
+            "leftMiddleDistal",
+            "leftRingProximal",
+            "leftRingIntermediate",
+            "leftRingDistal",
+            "leftLittleProximal",
+            "leftLittleIntermediate",
+            "leftLittleDistal",
+            "rightThumbMetacarpal",
+            "rightThumbProximal",
+            "rightThumbDistal",
+            "rightIndexProximal",
+            "rightIndexIntermediate",
+            "rightIndexDistal",
+            "rightMiddleProximal",
+            "rightMiddleIntermediate",
+            "rightMiddleDistal",
+            "rightRingProximal",
+            "rightRingIntermediate",
+            "rightRingDistal",
+            "rightLittleProximal",
+            "rightLittleIntermediate",
+            "rightLittleDistal",
+            "neck",
+            "head"
+          ]
+        },
+        "node": {
+          "minimum": 0,
+          "type": "integer",
+          "maximum": 65535
+        }
+      }
+    },
+    "quaternion": {
+      "maxItems": 4,
+      "minItems": 4,
+      "type": "array",
+      "items": {
+        "minimum": -1.001,
+        "type": "number",
+        "maximum": 1.001
+      },
+      "description": "xyzw; squared magnitude must be within 0.002 of 1 (validated by the shared reader)."
+    },
+    "frame": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "time",
+        "hipsOffset",
+        "rotations"
+      ],
+      "properties": {
+        "time": {
+          "minimum": 0,
+          "type": "number",
+          "maximum": 600
+        },
+        "hipsOffset": {
+          "maxItems": 3,
+          "minItems": 3,
+          "type": "array",
+          "items": {
+            "minimum": -10,
+            "type": "number",
+            "maximum": 10
+          }
+        },
+        "rotations": {
+          "maxItems": 52,
+          "minItems": 1,
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/quaternion"
+          }
+        }
+      }
+    },
+    "animation": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "id",
+        "name",
+        "category",
+        "source",
+        "sourceStartTime",
+        "duration",
+        "loop",
+        "bones",
+        "frames"
+      ],
+      "properties": {
+        "id": {
+          "maxLength": 256,
+          "pattern": "^[^\\u0000-\\u001F\\u007F-\\u009F]*$",
+          "type": "string",
+          "minLength": 1
+        },
+        "name": {
+          "maxLength": 256,
+          "pattern": "^[^\\u0000-\\u001F\\u007F-\\u009F]*$",
+          "type": "string",
+          "minLength": 1
+        },
+        "category": {
+          "maxLength": 256,
+          "pattern": "^[^\\u0000-\\u001F\\u007F-\\u009F]*$",
+          "type": "string"
+        },
+        "source": {
+          "maxLength": 256,
+          "pattern": "^[^\\u0000-\\u001F\\u007F-\\u009F]*$",
+          "type": "string",
+          "minLength": 1
+        },
+        "sourceStartTime": {
+          "minimum": 0,
+          "type": "number",
+          "maximum": 600
+        },
+        "duration": {
+          "exclusiveMinimum": 0,
+          "type": "number",
+          "maximum": 600
+        },
+        "loop": {
+          "type": "boolean"
+        },
+        "bones": {
+          "maxItems": 52,
+          "minItems": 1,
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/bone"
+          }
+        },
+        "frames": {
+          "maxItems": 8192,
+          "minItems": 2,
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/frame"
+          }
+        }
+      }
+    }
+  }
+}
