@@ -5,6 +5,8 @@ using NUnit.Framework;
 using UnityEditor;
 using UnityEditor.Animations;
 using UnityEngine;
+using UnityEngine.Animations;
+using UnityEngine.Playables;
 using Object = UnityEngine.Object;
 
 namespace VRVlog.LilToonExporter.Tests
@@ -187,6 +189,200 @@ namespace VRVlog.LilToonExporter.Tests
             Assert.That(source.Entries.Single().Error, Is.Null);
             Assert.That(source.Entries.Single().Name, Is.EqualTo("FX / Independent smile"));
             Assert.That(Weight(source.Entries.Single()), Is.EqualTo(65).Within(.01));
+        }
+
+        [TestCase(false)]
+        [TestCase(true)]
+        public void NestedExitRouteRetainsItsInnerAndParentTransitionConditions(bool upstreamGate)
+        {
+            controller.AddParameter("FaceMode", AnimatorControllerParameterType.Bool);
+            controller.AddParameter("EnableExit", AnimatorControllerParameterType.Bool);
+            controller.AddParameter("FaceChoice", AnimatorControllerParameterType.Int);
+            controller.AddParameter("ParentPermission", AnimatorControllerParameterType.Bool);
+            var root = controller.layers[0].stateMachine;
+            var nested = root.AddStateMachine("Nested selection");
+            var idle = State(nested, "Nested idle", null); nested.defaultState = idle;
+            var enter = neutral.AddTransition(nested); enter.duration = 0; enter.hasExitTime = false;
+            enter.AddCondition(AnimatorConditionMode.If, 0, "FaceMode");
+            var exitSource = idle;
+            if (upstreamGate)
+            {
+                exitSource = State(nested, "Exit gate", null);
+                Transition(idle, exitSource, "EnableExit", 0, AnimatorConditionMode.If);
+            }
+            var exit = exitSource.AddExitTransition(); exit.duration = 0; exit.hasExitTime = false;
+            exit.AddCondition(AnimatorConditionMode.Equals, 1, "FaceChoice");
+            var face = State(root, "Selected after exit", Clip("Smile", 75));
+            root.AddStateMachineTransition(nested, face).AddCondition(AnimatorConditionMode.If, 0, "ParentPermission");
+            var entry = Read().Entries.Single(); Assert.That(entry.Error, Is.Null);
+            Assert.That(entry.Name, Is.EqualTo("FX / Selected after exit"));
+            Assert.That(entry.Parameters["FaceMode"], Is.EqualTo(1));
+            Assert.That(entry.Parameters["FaceChoice"], Is.EqualTo(1));
+            Assert.That(entry.Parameters["ParentPermission"], Is.EqualTo(1));
+            if (upstreamGate) Assert.That(entry.Parameters["EnableExit"], Is.EqualTo(1));
+            Assert.That(Weight(entry), Is.EqualTo(75).Within(.01));
+        }
+
+        AnimatorState NestedExitSelection(bool anyState)
+        {
+            controller.AddParameter("FaceMode", AnimatorControllerParameterType.Bool);
+            controller.AddParameter("ChooseExitPath", AnimatorControllerParameterType.Bool);
+            controller.AddParameter("FaceChoice", AnimatorControllerParameterType.Int);
+            controller.AddParameter("ParentPermission", AnimatorControllerParameterType.Bool);
+            var root = controller.layers[0].stateMachine;
+            var nested = root.AddStateMachine("Nested selection");
+            nested.defaultState = State(nested, "Nested idle", null);
+            var step = State(nested, "Selected exit path", null);
+            var enter = neutral.AddTransition(nested); enter.duration = 0; enter.hasExitTime = false;
+            enter.AddCondition(AnimatorConditionMode.If, 0, "FaceMode");
+            if (anyState)
+            {
+                var choose = nested.AddAnyStateTransition(step); choose.duration = 0; choose.hasExitTime = false;
+                choose.canTransitionToSelf = false; choose.AddCondition(AnimatorConditionMode.If, 0, "ChooseExitPath");
+            }
+            else nested.AddEntryTransition(step).AddCondition(AnimatorConditionMode.If, 0, "ChooseExitPath");
+            var exit = step.AddExitTransition(); exit.duration = 0; exit.hasExitTime = false;
+            exit.AddCondition(AnimatorConditionMode.Equals, 1, "FaceChoice");
+            var face = State(root, "Selected after exit", Clip("Smile", 75));
+            root.AddStateMachineTransition(nested, face).AddCondition(AnimatorConditionMode.If, 0, "ParentPermission");
+            return face;
+        }
+
+        (int Hash, float Weight) NativeNestedExitSelection()
+        {
+            var clone = Object.Instantiate(avatar); clone.hideFlags = HideFlags.HideAndDontSave;
+            var graph = PlayableGraph.Create("Original nested Exit controller oracle");
+            graph.SetTimeUpdateMode(DirectorUpdateMode.Manual);
+            try
+            {
+                foreach (var behaviour in clone.GetComponentsInChildren<Behaviour>(true)) behaviour.enabled = false;
+                var animator = clone.GetComponent<Animator>(); animator.runtimeAnimatorController = null;
+                animator.enabled = true; animator.applyRootMotion = false; animator.fireEvents = false;
+                animator.cullingMode = AnimatorCullingMode.AlwaysAnimate;
+                // Use the original source controller, without the exporter's
+                // dependency pruning, copying, adapters or state validation.
+                var playable = AnimatorControllerPlayable.Create(graph, controller);
+                var output = AnimationPlayableOutput.Create(graph, "Original FX", animator); output.SetSourcePlayable(playable);
+                graph.Play(); graph.Evaluate(0f);
+                for (var frame = 0; frame < 120; frame++) graph.Evaluate(1f / 60f);
+                playable.SetBool("FaceMode", true); playable.SetBool("ChooseExitPath", true);
+                playable.SetInteger("FaceChoice", 1); playable.SetBool("ParentPermission", true);
+                for (var frame = 0; frame < 120; frame++) graph.Evaluate(1f / 60f);
+                return (playable.GetCurrentAnimatorStateInfo(0).fullPathHash,
+                    clone.GetComponentInChildren<SkinnedMeshRenderer>().GetBlendShapeWeight(0));
+            }
+            finally { graph.Destroy(); Object.DestroyImmediate(clone); }
+        }
+
+        [Test]
+        public void NestedExitFromEntryPreservesItsProvenNativeSelection()
+        {
+            var face = NestedExitSelection(false);
+            var native = NativeNestedExitSelection();
+            Assert.That(native.Hash, Is.EqualTo(Animator.StringToHash(controller.layers[0].name + "." + face.name)),
+                "The original native controller must reach the claimed exported state.");
+            Assert.That(native.Weight, Is.EqualTo(75).Within(.01));
+            var entry = Read().Entries.Single(); Assert.That(entry.Error, Is.Null);
+            Assert.That(entry.Parameters["FaceMode"], Is.EqualTo(1));
+            Assert.That(entry.Parameters["ChooseExitPath"], Is.EqualTo(1));
+            Assert.That(entry.Parameters["FaceChoice"], Is.EqualTo(1));
+            Assert.That(entry.Parameters["ParentPermission"], Is.EqualTo(1));
+            Assert.That(Weight(entry), Is.EqualTo(75).Within(.01));
+        }
+
+        [Test]
+        public void NestedExitBlockedByActiveAnyStateKeepsTheNativeReachabilityDiagnostic()
+        {
+            var face = NestedExitSelection(true);
+            var native = NativeNestedExitSelection();
+            Assert.That(native.Hash, Is.Not.EqualTo(Animator.StringToHash(controller.layers[0].name + "." + face.name)),
+                "The original native graph's persistent AnyState condition must prevent this endpoint too; do not weaken the sampler to accept it.");
+            Assert.That(native.Weight, Is.Not.EqualTo(75).Within(.01));
+            var entry = Read().Entries.Single();
+            Assert.That(entry.Error, Does.Contain("状態に到達").And.Contain(face.name));
+            Assert.That(entry.Values, Is.Empty);
+            Assert.That(entry.Parameters["FaceMode"], Is.EqualTo(1));
+            Assert.That(entry.Parameters["ChooseExitPath"], Is.EqualTo(1));
+            Assert.That(entry.Parameters["FaceChoice"], Is.EqualTo(1));
+            Assert.That(entry.Parameters["ParentPermission"], Is.EqualTo(1));
+        }
+
+        [Test]
+        public void RecursiveNestedExitRetainsEachLevelOfConditions()
+        {
+            controller.AddParameter("FaceMode", AnimatorControllerParameterType.Bool);
+            controller.AddParameter("InnerMode", AnimatorControllerParameterType.Bool);
+            controller.AddParameter("FaceChoice", AnimatorControllerParameterType.Int);
+            controller.AddParameter("MiddlePermission", AnimatorControllerParameterType.Bool);
+            controller.AddParameter("ParentPermission", AnimatorControllerParameterType.Bool);
+            var root = controller.layers[0].stateMachine;
+            var outer = root.AddStateMachine("Outer selection");
+            var idle = State(outer, "Outer idle", null); outer.defaultState = idle;
+            var enter = neutral.AddTransition(outer); enter.duration = 0; enter.hasExitTime = false;
+            enter.AddCondition(AnimatorConditionMode.If, 0, "FaceMode");
+            var inner = outer.AddStateMachine("Inner selection");
+            var wait = State(inner, "Inner idle", null); inner.defaultState = wait;
+            var choose = idle.AddTransition(inner); choose.duration = 0; choose.hasExitTime = false;
+            choose.AddCondition(AnimatorConditionMode.If, 0, "InnerMode");
+            var exit = wait.AddExitTransition(); exit.duration = 0; exit.hasExitTime = false;
+            exit.AddCondition(AnimatorConditionMode.Equals, 1, "FaceChoice");
+            outer.AddStateMachineExitTransition(inner).AddCondition(AnimatorConditionMode.If, 0, "MiddlePermission");
+            var face = State(root, "Selected after recursive exit", Clip("Smile", 85));
+            root.AddStateMachineTransition(outer, face).AddCondition(AnimatorConditionMode.If, 0, "ParentPermission");
+            var entry = Read().Entries.Single(); Assert.That(entry.Error, Is.Null);
+            Assert.That(entry.Parameters.Keys, Is.EquivalentTo(new[] { "FaceMode", "InnerMode", "FaceChoice", "MiddlePermission", "ParentPermission" }));
+            Assert.That(entry.Parameters.Values, Is.All.EqualTo(1)); Assert.That(Weight(entry), Is.EqualTo(85).Within(.01));
+        }
+
+        [Test]
+        public void NestedExitCycleDoesNotSuppressAnIndependentNativeFace()
+        {
+            controller.AddParameter("FaceMode", AnimatorControllerParameterType.Bool);
+            controller.AddParameter("FaceChoice", AnimatorControllerParameterType.Int);
+            controller.AddParameter("IndependentFace", AnimatorControllerParameterType.Bool);
+            var root = controller.layers[0].stateMachine;
+            var nested = root.AddStateMachine("Recursive selection");
+            var idle = State(nested, "Nested idle", null); nested.defaultState = idle;
+            var enter = neutral.AddTransition(nested); enter.duration = 0; enter.hasExitTime = false;
+            enter.AddCondition(AnimatorConditionMode.If, 0, "FaceMode");
+            var exit = idle.AddExitTransition(); exit.duration = 0; exit.hasExitTime = false;
+            exit.AddCondition(AnimatorConditionMode.Equals, 1, "FaceChoice");
+            root.AddStateMachineTransition(nested, nested).AddCondition(AnimatorConditionMode.Equals, 3, "FaceChoice");
+            var face = State(root, "Independent smile", Clip("Smile", 65));
+            Transition(neutral, face, "IndependentFace", 0, AnimatorConditionMode.If);
+            var source = Read(); Assert.That(source.Messages, Is.Empty);
+            var entry = source.Entries.Single(); Assert.That(entry.Error, Is.Null);
+            Assert.That(entry.Parameters.Keys, Is.EqualTo(new[] { "IndependentFace" }));
+            Assert.That(Weight(entry), Is.EqualTo(65).Within(.01));
+        }
+
+        [Test]
+        public void DeepNestedExitPathReportsAnAtomicOptionalDiagnostic()
+        {
+            controller.AddParameter("FaceMode", AnimatorControllerParameterType.Bool);
+            controller.AddParameter("FaceChoice", AnimatorControllerParameterType.Int);
+            var root = controller.layers[0].stateMachine;
+            var previousMachine = root;
+            var previousState = neutral;
+            AnimatorStateMachine first = null;
+            for (var index = 0; index < 8; index++)
+            {
+                var machine = previousMachine.AddStateMachine("Exit gate " + index);
+                var idle = State(machine, "Idle " + index, null); machine.defaultState = idle;
+                var enter = previousState.AddTransition(machine); enter.duration = 0; enter.hasExitTime = false;
+                enter.AddCondition(AnimatorConditionMode.If, 0, "FaceMode");
+                if (first == null) first = machine;
+                else previousMachine.AddStateMachineExitTransition(machine);
+                previousMachine = machine; previousState = idle;
+            }
+            var exit = previousState.AddExitTransition(); exit.duration = 0; exit.hasExitTime = false;
+            exit.AddCondition(AnimatorConditionMode.Equals, 1, "FaceChoice");
+            var face = State(root, "Selected after deep exit", Clip("Smile", 75)); root.AddStateMachineTransition(first, face);
+            var source = new VrChatExpressionMenu.Source { Controller = controller };
+            var authored = new VrChatExpressionMenu.Entry { Id = "menu", Name = "Existing authored expression" }; source.Entries.Add(authored);
+            Assert.DoesNotThrow(() => VrChatFxExpressions.Add(avatar, source));
+            Assert.That(source.Entries.Single(), Is.SameAs(authored));
+            Assert.That(source.Messages.Single(), Does.Contain("条件経路").And.Contain("深すぎる"));
         }
 
         [Test]

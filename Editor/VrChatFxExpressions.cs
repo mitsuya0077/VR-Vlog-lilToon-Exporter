@@ -33,7 +33,7 @@ namespace VRVlog.LilToonExporter
 
         sealed class Edge
         {
-            internal AnimatorStateMachine Owner;
+            internal AnimatorStateMachine Owner, SourceMachine;
             internal AnimatorState Source;
             internal AnimatorTransitionBase Transition;
         }
@@ -194,7 +194,7 @@ namespace VRVlog.LilToonExporter
                     foreach (var child in machine.stateMachines)
                     {
                         foreach (var transition in Enabled(machine.GetStateMachineTransitions(child.stateMachine)))
-                            edges.Add(new Edge { Owner = machine, Transition = transition });
+                            edges.Add(new Edge { Owner = machine, SourceMachine = child.stateMachine, Transition = transition });
                         Index(child.stateMachine, path + "." + child.stateMachine.name, machine, depth + 1);
                     }
                 }
@@ -203,6 +203,31 @@ namespace VRVlog.LilToonExporter
                     .GroupBy(edge => edge.Transition.destinationStateMachine).ToDictionary(group => group.Key, group => group.ToArray());
                 var incomingStates = edges.Where(edge => edge.Transition.destinationState != null)
                     .GroupBy(edge => edge.Transition.destinationState).ToDictionary(group => group.Key, group => group.ToArray());
+                var exits = edges.Where(edge => edge.Transition.isExit)
+                    .GroupBy(edge => edge.Owner).ToDictionary(group => group.Key, group => group.ToArray());
+                IEnumerable<AnimatorCondition[]> SourceGates(Edge edge, HashSet<UnityEngine.Object> stack) =>
+                    edge.Source != null ? StateGates(edge.Source, stack) : edge.SourceMachine != null ? ExitGates(edge.SourceMachine, stack) :
+                        Gates(edge.Owner, stack);
+                IEnumerable<AnimatorCondition[]> ExitGates(AnimatorStateMachine machine, HashSet<UnityEngine.Object> stack)
+                {
+                    Visit();
+                    if (!exits.TryGetValue(machine, out var entries)) yield break;
+                    foreach (var entry in entries)
+                    {
+                        if (stack.Count >= MaximumDepth)
+                            throw new InvalidOperationException("FXの条件経路が深すぎるため、自動表情探索を完全に完了できません。");
+                        // An exit and its machine's entry are distinct graph
+                        // steps. Track the exit edge itself so valid entry
+                        // gates remain available while recursive exits stop.
+                        if (!stack.Add(entry.Transition)) continue;
+                        try
+                        {
+                            foreach (var previous in SourceGates(entry, stack))
+                                yield return previous.Concat(entry.Transition.conditions).ToArray();
+                        }
+                        finally { stack.Remove(entry.Transition); }
+                    }
+                }
                 IEnumerable<AnimatorCondition[]> Gates(AnimatorStateMachine machine, HashSet<UnityEngine.Object> stack)
                 {
                     Visit();
@@ -214,7 +239,7 @@ namespace VRVlog.LilToonExporter
                         if (parents[machine] == null || !incoming.TryGetValue(machine, out var entries))
                         { yield return Array.Empty<AnimatorCondition>(); yield break; }
                         foreach (var entry in entries)
-                            foreach (var previous in entry.Source != null ? StateGates(entry.Source, stack) : Gates(entry.Owner, stack))
+                            foreach (var previous in SourceGates(entry, stack))
                                 yield return previous.Concat(entry.Transition.conditions).ToArray();
                     }
                     finally { stack.Remove(machine); }
@@ -232,8 +257,7 @@ namespace VRVlog.LilToonExporter
                             foreach (var gate in Gates(owner, stack)) yield return gate;
                         if (incomingStates.TryGetValue(state, out entries))
                             foreach (var entry in entries)
-                                foreach (var prior in entry.Source != null ? StateGates(entry.Source, stack) :
-                                    Gates(entry.Owner, stack))
+                                foreach (var prior in SourceGates(entry, stack))
                                     yield return prior.Concat(entry.Transition.conditions).ToArray();
                     }
                     finally { stack.Remove(state); }
@@ -258,8 +282,7 @@ namespace VRVlog.LilToonExporter
                     finally { stack.Remove(machine); }
                 }
                 foreach (var edge in edges)
-                    foreach (var gate in edge.Source != null ? StateGates(edge.Source, new HashSet<UnityEngine.Object>()) :
-                        Gates(edge.Owner, new HashSet<UnityEngine.Object>()))
+                    foreach (var gate in SourceGates(edge, new HashSet<UnityEngine.Object>()))
                         Destination(edge.Transition, gate.Concat(edge.Transition.conditions).ToArray(), new HashSet<AnimatorStateMachine>());
                 // A default BlendTree may expose a face slider without any
                 // transition at all. Include its authored control points too.
