@@ -15,6 +15,17 @@ PROFILES = ('compatibility', 'exporter-behavior', 'exporter-integration')
 # Named cases also prevent a removed regression or one lost
 # parameter variant from turning a smaller, passing XML into release evidence.
 BEHAVIOR_CASES = {
+    'MissingMeshAttributesTests': {
+        'AdditionalVertexStreamsPreserveAuthoredChannelInsteadOfUsingFallback': 4,
+        'DegenerateGeometryReceivesFiniteUnitNormalsWithoutLosingMorphs': 2,
+        'DirectUniVrmExportRepairsOnlyAbsentAttributesAndKeepsAuthoredMorphs': 8,
+        'FailureDuringExportRestoresMissingAttributeSourceMesh': 2,
+        'MissingNormalsWithoutMorphsAlsoExportsThroughMeshWriter': 2,
+        'MissingUv0NeverBorrowsASecondUvChannel': 2,
+        'NormalExporterPreservesMissingAttributeMeshesThroughRealVrmRoundTrip': 12,
+        'SharedStaticMeshRepairsEveryExportedMeshGroupWithoutSplittingSourceIdentity': 1,
+        'SharedStaticMeshKeepsEachRenderersAdditionalStreamsInFullBindings': 2,
+    },
     'AppearanceRecoveryTests': {
         'ActiveOrKeywordEnabledLayersKeepTheOriginalDynamicImageDiagnostic': 3,
         'EmptyMeshDoesNotCreateAFullBindingOrRemoveItsBone': 4,

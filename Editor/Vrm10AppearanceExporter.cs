@@ -13,12 +13,28 @@ namespace VRVlog.LilToonExporter
         internal static byte[] Export(GltfExportSettings settings, GameObject avatar,
             IMaterialExporter materialExporter, ITextureSerializer textureSerializer, VRM10ObjectMeta vrmMeta,
             IDictionary<Material, int> materialIndices = null,
-            Action<ModelExporter, Model, ExportingGltfData> afterExport = null)
+            Action<ModelExporter, Model, ExportingGltfData> afterExport = null,
+            ICollection<string> warnings = null)
         {
             using var arrays = new NativeArrayManager();
+            using var meshPreparation = VrmMeshAttributePreparation.Prepare(avatar, warnings);
             var converter = new ModelExporter();
             var model = converter.Export(settings, arrays, avatar);
             PreserveMorphNormals(converter, arrays, settings);
+            meshPreparation.RestoreSourceMeshKeys(converter);
+            // ModelExporter accepts meshes without UV0, but the pinned
+            // MeshWriter unconditionally reads it. Fill in Unity coordinates
+            // so ConvertCoordinate also flips these UVs exactly once.
+            foreach (var group in model.MeshGroups)
+                foreach (var mesh in group.Meshes)
+                    if (mesh.VertexBuffer.TexCoords == null)
+                    {
+                        var uv = new Vector2[mesh.VertexBuffer.Count];
+                        var buffer = arrays.CreateNativeArray(uv).Reinterpret<byte>(8);
+                        mesh.VertexBuffer.Add(VertexBuffer.TexCoordKey,
+                            new BufferAccessor(arrays, buffer, AccessorValueType.FLOAT, AccessorVectorType.VEC2, uv.Length));
+                        warnings?.Add("未設定のUV0を(0, 0)として保存しました: " + group.Name);
+                    }
             model.ConvertCoordinate(Coordinates.Vrm1);
             using var exporter = new Vrm10Exporter(settings, materialExporter, textureSerializer);
             exporter.Export(avatar, model, converter, new ExportArgs { removeMorphNormal = settings.ExportOnlyBlendShapePosition }, vrmMeta);
@@ -32,16 +48,21 @@ namespace VRVlog.LilToonExporter
         }
 
         // The pinned ModelExporter computes useNormal but only copies each
-        // morph's POSITION buffer. Fill NORMAL from its exact source Mesh map
+        // morph's POSITION buffer. Fill NORMAL from its exact renderer/node map
         // while both buffers still use Unity coordinates and source vertex order.
         // MeshWriter subsequently applies its own submesh index remapping.
         private static void PreserveMorphNormals(ModelExporter converter, NativeArrayManager arrays, GltfExportSettings settings)
         {
             if (settings.ExportOnlyBlendShapePosition) return;
-            foreach (var pair in converter.Meshes)
+            foreach (var pair in converter.Nodes)
             {
-                var source = pair.Key;
-                var group = pair.Value;
+                var group = pair.Value.MeshGroup;
+                if (group == null) continue;
+                var skin = pair.Key.GetComponent<SkinnedMeshRenderer>();
+                var filter = pair.Key.GetComponent<MeshFilter>();
+                var source = skin != null ? skin.sharedMesh : filter != null ? filter.sharedMesh : null;
+                if (source == null)
+                    throw new InvalidOperationException("UniVRMの元メッシュを特定できないため、表情の法線を安全に保存できません。");
                 if (group.Meshes.Count != 1 || group.Meshes[0].VertexBuffer.Count != source.vertexCount ||
                     group.Meshes[0].MorphTargets.Count != source.blendShapeCount)
                     throw new InvalidOperationException("UniVRMの元メッシュとMorphTargetの対応が一致しないため、表情の法線を安全に保存できません。");
