@@ -91,15 +91,24 @@ namespace VRVlog.LilToonExporter
             var name = property.Substring(0, property.Length - 2);
             index = shader.FindPropertyIndex(name);
             if (index < 0 || shader.GetPropertyType(index) != ShaderPropertyType.Color) return false;
+            if ((shader.GetPropertyFlags(index) & ShaderPropertyFlags.HDR) != 0)
+            {
+                // Animator color curves use gamma-authored RGB even for HDR
+                // properties; the HDR material API exposes its shader value.
+                // Compare the actual contribution before any raw-value shortcut.
+                var current = material.GetVector(name)[channel];
+                var applied = channel < 3 && QualitySettings.activeColorSpace == ColorSpace.Linear
+                    ? Mathf.GammaToLinearSpace(value) : value;
+                return Finite(current) && Finite(applied) && current == applied;
+            }
             var color = material.GetColor(name)[channel];
             if (!Finite(color)) return false;
             if (color == value) return true;
             // In Linear projects Unity's ordinary Color APIs can round-trip
             // gamma/linear representations, returning .24999997 for an authored
-            // .25. Match that conversion exactly, never use a generic epsilon. HDR,
-            // alpha and scalar properties retain their exact-value comparison.
+            // .25. Match that conversion exactly, never use a generic epsilon.
+            // Alpha and scalar properties retain their exact-value comparison.
             return channel < 3 && QualitySettings.activeColorSpace == ColorSpace.Linear &&
-                (shader.GetPropertyFlags(index) & ShaderPropertyFlags.HDR) == 0 &&
                 Mathf.LinearToGammaSpace(Mathf.GammaToLinearSpace(value)) == color;
         }
 

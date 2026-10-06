@@ -225,7 +225,8 @@ BEHAVIOR_CASES = {
         'UnusedEndpointTangentsDoNotInvalidateAnOtherwiseConstantNoOp': 1,
         'NoOpProofUsesThePreparedCopyRatherThanAnEarlierAuthoringValue': 2,
         'MixedLilToonGesturePreservesPreparedAppearanceAndMorphEndpointsAfterExport': 4,
-        'MatchingShaderColorChannelsKeepTheirNativeAppliedValue': 4,
+        'MatchingShaderColorChannelsKeepTheirNativeAppliedValue': 2,
+        'MaterialColorAnimationMatchesActualRenderedPixels': 6,
         'ColorCanonicalizationDoesNotRelaxOtherPropertyDomains': 3,
     },
     'VrChatMenuExpressionTests': {

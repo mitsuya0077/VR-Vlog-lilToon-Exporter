@@ -7,7 +7,9 @@ using UniGLTF;
 using UniVRM10;
 using UnityEditor;
 using UnityEditor.Animations;
+using UnityEditor.SceneManagement;
 using UnityEngine;
+using UnityEngine.SceneManagement;
 using F = VRVlog.LilToon.LilToonFullContract;
 using Object = UnityEngine.Object;
 
@@ -212,13 +214,11 @@ namespace VRVlog.LilToonExporter.Tests
             Assert.That(SelectedExpressionAppearance.IsUnchanged(avatar, clip, binding), Is.True);
         }
 
-        [TestCase(false, false)]
-        [TestCase(true, false)]
-        [TestCase(false, true)]
-        [TestCase(true, true)]
-        public void MatchingShaderColorChannelsKeepTheirNativeAppliedValue(bool useStoredColor, bool hdr)
+        [TestCase(false)]
+        [TestCase(true)]
+        public void MatchingShaderColorChannelsKeepTheirNativeAppliedValue(bool useStoredColor)
         {
-            var property = hdr ? "_EmissionColor" : "_Color2nd";
+            const string property = "_Color2nd";
             material.SetColor(property, PreparedColor);
             var shader = material.shader;
             var colorIndex = shader.FindPropertyIndex(property);
@@ -263,18 +263,94 @@ namespace VRVlog.LilToonExporter.Tests
                 Assert.That(SelectedExpressionAppearance.IsUnchanged(avatar, clip, binding), Is.True, diagnostics);
         }
 
-        [TestCase("HDR")]
+        [TestCase("ordinary", false, 1f)]
+        [TestCase("HDR", false, 1f)]
+        [TestCase("HDR", true, 1f)]
+        [TestCase("HDR", false, 4f)]
+        [TestCase("HDR", true, 4f)]
+        [TestCase("Gamma", false, 1f)]
+        public void MaterialColorAnimationMatchesActualRenderedPixels(string kind, bool linearBaseline, float intensity)
+        {
+            Assert.That(QualitySettings.activeColorSpace, Is.EqualTo(UnityEngine.ColorSpace.Linear));
+            Assert.That(SystemInfo.SupportsRenderTextureFormat(RenderTextureFormat.ARGBFloat), Is.True);
+            var shader = Shader.Find("Hidden/VRVlogTests/AppearanceColorProbe");
+            Assert.That(shader, Is.Not.Null); Assert.That(shader.isSupported, Is.True);
+            var property = kind == "ordinary" ? "_Ordinary" : kind == "HDR" ? "_Hdr" : "_Gamma";
+            var probeMaterial = new Material(shader); owned.Add(probeMaterial);
+            probeMaterial.SetFloat("_Which", kind == "ordinary" ? 0 : kind == "HDR" ? 1 : 2);
+            // Fractional alpha also proves it is never gamma-converted; 0/1
+            // would be fixed points and could conceal the wrong conversion.
+            var authored = new Color(PreparedColor.r * intensity, PreparedColor.g * intensity, PreparedColor.b * intensity, .25f);
+            probeMaterial.SetColor(property, linearBaseline ? authored.linear : authored);
+            var baseline = probeMaterial.GetVector(property);
+            var beforeMaterial = EditorJsonUtility.ToJson(probeMaterial);
+            skin.enabled = false;
+            var probe = new GameObject("Probe", typeof(MeshFilter), typeof(MeshRenderer)); probe.transform.SetParent(avatar.transform, false);
+            var quad = new Mesh(); owned.Add(quad);
+            quad.vertices = new[] { new Vector3(-1, -1, 0), new Vector3(1, -1, 0), new Vector3(1, 1, 0), new Vector3(-1, 1, 0) };
+            quad.triangles = new[] { 0, 1, 2, 0, 2, 3 }; quad.RecalculateBounds();
+            probe.GetComponent<MeshFilter>().sharedMesh = quad; probe.GetComponent<MeshRenderer>().sharedMaterial = probeMaterial;
+            foreach (var channel in "rgba")
+                Curve("Probe", typeof(MeshRenderer), "material." + property + "." + channel,
+                    AnimationCurve.Constant(0, 1, authored["rgba".IndexOf(channel)]));
+            var scene = EditorSceneManager.NewPreviewScene();
+            var native = Object.Instantiate(avatar); var nativeMaterial = new Material(probeMaterial); owned.Add(nativeMaterial);
+            var nativeRenderer = native.transform.Find("Probe").GetComponent<MeshRenderer>(); nativeRenderer.sharedMaterial = nativeMaterial;
+            nativeRenderer.gameObject.layer = 31;
+            var cameraObject = new GameObject("Color oracle camera", typeof(Camera));
+            var target = new RenderTexture(16, 16, 24, RenderTextureFormat.ARGBFloat, RenderTextureReadWrite.Linear);
+            var pixels = new Texture2D(16, 16, TextureFormat.RGBAFloat, false, true);
+            var activeTarget = RenderTexture.active;
+            try
+            {
+                SceneManager.MoveGameObjectToScene(native, scene); SceneManager.MoveGameObjectToScene(cameraObject, scene);
+                var camera = cameraObject.GetComponent<Camera>(); camera.enabled = false; camera.orthographic = true; camera.orthographicSize = 1;
+                camera.scene = scene; camera.cullingMask = 1 << 31;
+                camera.nearClipPlane = .1f; camera.farClipPlane = 10; camera.allowHDR = true; camera.allowMSAA = false;
+                camera.clearFlags = CameraClearFlags.SolidColor; camera.backgroundColor = Color.clear;
+                camera.transform.position = new Vector3(0, 0, -2); camera.targetTexture = target; target.Create();
+                Color Render()
+                {
+                    camera.Render(); RenderTexture.active = target;
+                    pixels.ReadPixels(new Rect(0, 0, 16, 16), 0, 0); pixels.Apply(false, false); return pixels.GetPixel(8, 8);
+                }
+                var before = Render();
+                Assert.That(before.a, Is.EqualTo(authored.a)); Assert.That(before.r, Is.GreaterThan(.01f), "The probe quad must actually be rendered.");
+                clip.SampleAnimation(native, .5f);
+                var global = new MaterialPropertyBlock(); nativeRenderer.GetPropertyBlock(global);
+                var slot = new MaterialPropertyBlock(); nativeRenderer.GetPropertyBlock(slot, 0);
+                Assert.That(global.isEmpty, Is.False); Assert.That(slot.isEmpty, Is.True);
+                var after = Render(); var applied = global.GetVector(property);
+                TestContext.WriteLine(kind + " / linearBaseline=" + linearBaseline + " / intensity=" + intensity + "; flags=" + shader.GetPropertyFlags(shader.FindPropertyIndex(property)) +
+                    "; material API=" + baseline.ToString("R") + "; Animator raw=" + applied.ToString("R") +
+                    "; before pixel=" + before.ToString("R") + "; after pixel=" + after.ToString("R"));
+                Assert.That(EditorJsonUtility.ToJson(probeMaterial), Is.EqualTo(beforeMaterial));
+                foreach (var binding in AnimationUtility.GetCurveBindings(clip).Where(binding => binding.propertyName.StartsWith("material.", StringComparison.Ordinal)))
+                {
+                    var channel = "rgba".IndexOf(binding.propertyName[binding.propertyName.Length - 1]);
+                    var renderedUnchanged = Mathf.Abs(before[channel] - after[channel]) <= .000001f;
+                    Assert.That(SelectedExpressionAppearance.IsUnchanged(avatar, clip, binding), Is.EqualTo(renderedUnchanged), binding.propertyName);
+                }
+            }
+            finally
+            {
+                RenderTexture.active = activeTarget; target.Release(); Object.DestroyImmediate(target); Object.DestroyImmediate(pixels);
+                Object.DestroyImmediate(cameraObject); Object.DestroyImmediate(native); EditorSceneManager.ClosePreviewScene(scene);
+            }
+        }
+
+        [TestCase("HDR alpha")]
         [TestCase("alpha")]
         [TestCase("scalar")]
         public void ColorCanonicalizationDoesNotRelaxOtherPropertyDomains(string domain)
         {
             string property; float current;
-            if (domain == "HDR")
+            if (domain == "HDR alpha")
             {
-                material.SetColor("_EmissionColor", PreparedColor); property = "_EmissionColor.r";
+                material.SetColor("_EmissionColor", new Color(.25f, .5f, .75f, .25f)); property = "_EmissionColor.a";
                 var index = material.shader.FindPropertyIndex("_EmissionColor");
                 Assert.That((material.shader.GetPropertyFlags(index) & UnityEngine.Rendering.ShaderPropertyFlags.HDR) != 0, Is.True);
-                current = material.GetColor("_EmissionColor").r;
+                current = material.GetColor("_EmissionColor").a;
             }
             else if (domain == "alpha")
             {
