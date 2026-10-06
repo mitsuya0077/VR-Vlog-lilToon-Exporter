@@ -412,7 +412,7 @@ namespace VRVlog.LilToonExporter.Tests
                     vrm.Expression.CustomClips.Add(expression); root.AddComponent<Vrm10Instance>().Vrm = vrm;
                 };
                 preparation = NdmfExportPreparation.ProcessClone(fixture.Source, fixture.Copy, FakeBridge());
-                Assert.That(NdmfPreparationTests.FakeProcessor.Calls, Is.EqualTo(1));
+                Assert.That(NdmfPreparationTests.FakeProcessor.Calls, Is.EqualTo(2));
                 var preparedSkin = fixture.Copy.transform.Find(generatedPath).GetComponent<SkinnedMeshRenderer>();
                 Assert.That(preparedSkin.sharedMesh.GetBlendShapeName(0), Is.EqualTo("Prepared opening"));
                 Assert.That(NeutralShapeSampler.Sample(fixture.Copy).Single(value => value.Path == generatedPath && value.Shape == "Prepared opening").Weight,

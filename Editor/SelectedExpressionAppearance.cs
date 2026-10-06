@@ -11,6 +11,23 @@ namespace VRVlog.LilToonExporter
     // Read only prepared values; never instantiate or edit source materials.
     internal static class SelectedExpressionAppearance
     {
+        // Native sampling runs after authoring/build passes on the committed
+        // hierarchy. A finite Transform curve whose target is actually absent
+        // cannot affect that graph, regardless of layer weight or blending.
+        // This does not authorize a direct authoring clip before preparation,
+        // nor an Animator parameter output without a root Animator component.
+        internal static bool IsUnboundTransform(GameObject prepared, AnimationClip clip, EditorCurveBinding binding)
+        {
+            if (prepared == null || clip == null || binding.type != typeof(Transform) || binding.isPPtrCurve ||
+                binding.path == null || binding.propertyName == null) return false;
+            if (prepared.GetComponentsInChildren<Transform>(true).Any(transform =>
+                AnimationUtility.CalculateTransformPath(transform, prepared.transform) == binding.path)) return false;
+            if (AnimationUtility.GetAnimatedObject(prepared, binding) != null) return false;
+            VrChatExpressionSampler.ValidateNativeParameterCurve(AnimationUtility.GetEditorCurve(clip, binding),
+                clip.name + " / " + binding.path + " / " + binding.propertyName);
+            return true;
+        }
+
         internal static void ValidateClipData(AnimationClip clip, Func<string, bool> excludedPath = null)
         {
             if (clip == null) throw new ArgumentNullException(nameof(clip));

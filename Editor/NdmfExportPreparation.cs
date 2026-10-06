@@ -87,67 +87,15 @@ namespace VRVlog.LilToonExporter
 
         private static HashSet<Component> RelevantAuthoring(GameObject avatar, Func<Transform, bool> excluded = null)
         {
-            var components = avatar.GetComponentsInChildren<Component>(true)
-                .Where(component => component != null && excluded?.Invoke(component.transform) != true).ToArray();
-            var tags = components.Where(component => IsAuthoringTag(component.GetType()) && !IsCopyAvatarRoot(avatar, component)).ToArray();
-            if (tags.Length == 0) return new HashSet<Component>();
-            var byTransform = components.GroupBy(component => component.transform).ToDictionary(group => group.Key, group => group.ToArray());
-            var required = new HashSet<Transform>();
-            var pending = new Queue<Object>();
-            var visited = new HashSet<Object>();
-            void Require(Transform target)
-            {
-                if (target == null || (target != avatar.transform && !target.IsChildOf(avatar.transform)) || excluded?.Invoke(target) == true) return;
-                for (var node = target; node != null; node = node.parent)
-                {
-                    if (required.Add(node) && byTransform.TryGetValue(node, out var owners))
-                        foreach (var owner in owners)
-                            // Transform's children/parent are hierarchy structure,
-                            // not a reason to process an unused inactive wardrobe.
-                            if (!(owner is Transform) && (!(owner is Renderer renderer) || (renderer.enabled && renderer.gameObject.activeInHierarchy))) pending.Enqueue(owner);
-                    if (node == avatar.transform) break;
-                }
-            }
-            foreach (var component in components)
-                if (component.gameObject.activeInHierarchy) Require(component.transform);
-            while (pending.Count != 0)
-            {
-                var owner = pending.Dequeue();
-                if (owner == null || !visited.Add(owner)) continue;
-                if (owner is Component component)
-                {
-                    var property = FollowingProperty(component);
-                    if (property != null) Require(ReadFollowingTarget(component, property));
-                    if (component is SkinnedMeshRenderer skin)
-                    {
-                        Require(skin.rootBone);
-                        foreach (var bone in skin.bones ?? Array.Empty<Transform>()) Require(bone);
-                    }
-                    if (component is Animator animator && animator.avatar != null && animator.avatar.isValid && animator.avatar.isHuman)
-                        for (var bone = 0; bone < (int)HumanBodyBones.LastBone; bone++) Require(animator.GetBoneTransform((HumanBodyBones)bone));
-                }
-                foreach (var reference in References(owner))
-                {
-                    if (reference is GameObject gameObject) Require(gameObject.transform);
-                    else if (reference is Component dependency)
-                    {
-                        // LOD/settings components can reference unused renderers.
-                        // Apply the same output visibility gate at this entry point.
-                        if (dependency is Renderer renderer && (!renderer.enabled || !renderer.gameObject.activeInHierarchy)) continue;
-                        Require(dependency.transform);
-                    }
-                    else if (IsMutableAsset(reference)) pending.Enqueue(reference);
-                }
-            }
-            return new HashSet<Component>(tags.Where(component => required.Contains(component.transform)));
-        }
-
-        private static void PruneUnusedAuthoring(GameObject clone)
-        {
-            var retained = RelevantAuthoring(clone);
-            foreach (var component in clone.GetComponentsInChildren<Component>(true))
-                if (component != null && IsAuthoringTag(component.GetType()) && !IsCopyAvatarRoot(clone, component) && !retained.Contains(component))
-                    Object.DestroyImmediate(component);
+            // Activation controls the avatar's initial appearance, not whether
+            // authoring participates in a build. MA intentionally traverses
+            // inactive components: an inactive Merge Animator can supply FX,
+            // menu installers and reactive controls can activate clothing, and
+            // another NDMF pass can generate their eventual dependencies. Only
+            // the user's explicit export exclusions may omit authoring.
+            return new HashSet<Component>(avatar.GetComponentsInChildren<Component>(true)
+                .Where(component => component != null && excluded?.Invoke(component.transform) != true &&
+                    IsAuthoringTag(component.GetType()) && !IsCopyAvatarRoot(avatar, component)));
         }
 
         private static bool IsCopyAvatarRoot(GameObject clone, Component component) =>
@@ -228,7 +176,10 @@ namespace VRVlog.LilToonExporter
             RequireOwnedCopy(source, clone);
             EnsureCopyAvatarRoot(clone);
             ResolveMaSceneReferences(clone);
-            ValidateSource(clone, excluded);
+            // Plugins resolve references, apply platform filters and generate
+            // authoring during Resolving/Generating. Validate null targets only
+            // after those canonical phases have supplied their final inputs.
+            ValidateSource(clone, excluded, deferUnresolvedTargets: true);
         }
 
         private static void EnsureCopyAvatarRoot(GameObject clone)
@@ -248,17 +199,16 @@ namespace VRVlog.LilToonExporter
         {
             RequireOwnedCopy(source, clone);
             EnsureCopyAvatarRoot(clone);
-            // Relevance must see MA's effective targets before it decides
-            // whether an inactive dependent authoring tag can be discarded.
+            // Canonical resolution runs with the selected avatar root. Normalize
+            // supported stale direct references only on this owned hierarchy.
             ResolveMaSceneReferences(clone);
             if (!NeedsProcessing(clone))
             {
-                PruneUnusedAuthoring(clone);
                 var lease = new NdmfExportPreparation();
                 try { afterTransforming?.Invoke(lease); return lease; }
                 catch { lease.Dispose(); throw; }
             }
-            ValidateSource(clone);
+            ValidateSource(clone, deferUnresolvedTargets: true);
             var processor = FindType("nadena.dev.ndmf.AvatarProcessor");
             var package = processor != null ? PackageInfo.FindForAssembly(processor.Assembly) : null;
             var bridge = Bridge.Resolve(FindType, package?.version);
@@ -271,10 +221,9 @@ namespace VRVlog.LilToonExporter
         {
             RequireOwnedCopy(source, clone);
             EnsureCopyAvatarRoot(clone);
-            // NDMF processes inactive tags too. Remove only irrelevant tags on
-            // our copy before dependency safety checks or any canonical pass.
+            // Preserve all included authoring, including disabled GameObjects;
+            // NDMF/MA owns the build semantics and pass ordering for those tags.
             ResolveMaSceneReferences(clone);
-            PruneUnusedAuthoring(clone);
             var lease = new NdmfExportPreparation();
             var sourceAssets = Dependencies(source);
             var cloneAssets = Dependencies(clone);
@@ -303,7 +252,19 @@ namespace VRVlog.LilToonExporter
                     lease.ObjectRegistry = context.GetType().GetProperty("ObjectRegistry", BindingFlags.Public | BindingFlags.Instance)?.GetValue(context);
                     try
                     {
-                        Invoke(() => bridge.Process.Invoke(null, new[] { context, bridge.First, bridge.Transforming }));
+                        Invoke(() => bridge.Process.Invoke(null, new[] { context, bridge.First, bridge.Generating }));
+                        if (IsSuccessful(bridge, context))
+                        {
+                            // MA treats missing attachment targets as NonFatal,
+                            // which NDMF.Successful does not reject. After the
+                            // official resolvers and generators have run, ensure
+                            // included attachments are safe and fully resolved
+                            // before MA can silently omit a merge or proxy.
+                            ResolveMaSceneReferences(clone);
+                            ValidateSource(clone);
+                            RequireCopySceneReferences(clone, Dependencies(clone));
+                            Invoke(() => bridge.Process.Invoke(null, new[] { context, bridge.Transforming, bridge.Transforming }));
+                        }
                         if (IsSuccessful(bridge, context))
                         {
                             // Prepared identities must be available while export
@@ -737,14 +698,14 @@ namespace VRVlog.LilToonExporter
 
         // The phase-limited entry point and Finish are internal in the official
         // 1.8.3, 1.13.0 and 1.14.8 sources. Validate the whole bridge before any
-        // processing. The same context must span both ranges so plugins run
+        // processing. The same context must span every range so plugins run
         // once and the final extension cleanup can publish their mappings.
         internal sealed class Bridge
         {
             internal ConstructorInfo Context, DirectoryScope;
             internal MethodInfo Process, Finish, PrimaryPlatform;
             internal PropertyInfo Successful, AssetSaver, GenericPlatform;
-            internal object First, Transforming, Optimizing;
+            internal object First, Generating, Transforming, Optimizing;
 
             internal static Bridge Resolve(Func<string, Type> find, string version)
             {
@@ -772,6 +733,7 @@ namespace VRVlog.LilToonExporter
                     PrimaryPlatform = registry.GetMethod("GetPrimaryPlatformForAvatar", BindingFlags.Public | BindingFlags.Static, null, new[] { typeof(GameObject) }, null),
                     GenericPlatform = generic.GetProperty("Instance", BindingFlags.Public | BindingFlags.Static),
                     First = phase.GetProperty("First", staticMembers)?.GetValue(null),
+                    Generating = phase.GetField("Generating", staticMembers)?.GetValue(null),
                     Transforming = phase.GetField("Transforming", staticMembers)?.GetValue(null),
                     Optimizing = phase.GetField("Optimizing", staticMembers)?.GetValue(null)
                 };
@@ -779,7 +741,7 @@ namespace VRVlog.LilToonExporter
                     result.Process?.ReturnType != typeof(void) || result.Finish?.ReturnType != typeof(void) ||
                     result.Successful?.PropertyType != typeof(bool) || result.Successful.GetMethod == null || result.AssetSaver?.GetMethod == null ||
                     result.PrimaryPlatform?.ReturnType != provider || result.GenericPlatform?.PropertyType != provider ||
-                    !phase.IsInstanceOfType(result.First) || !phase.IsInstanceOfType(result.Transforming) ||
+                    !phase.IsInstanceOfType(result.First) || !phase.IsInstanceOfType(result.Generating) || !phase.IsInstanceOfType(result.Transforming) ||
                     !phase.IsInstanceOfType(result.Optimizing))
                     throw new InvalidOperationException(CompatibilityMessage);
                 return result;

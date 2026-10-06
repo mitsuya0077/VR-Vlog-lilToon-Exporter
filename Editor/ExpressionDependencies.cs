@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using System.Linq;
+using System.Reflection;
 using UnityEditor;
 using UnityEditor.Animations;
 using UnityEngine;
@@ -9,6 +10,47 @@ namespace VRVlog.LilToonExporter
 {
     internal sealed class ExpressionDependencies
     {
+        static readonly Dictionary<Type, bool> InertAuthoringMarkers = new Dictionary<Type, bool>();
+
+        // MA can leave this build-time flag on generated machines when MMD
+        // support is disabled. Its current sealed type contains serialized
+        // data and property accessors only, with no animation/lifecycle code.
+        // Prove that exact API before omitting it from an owned native probe;
+        // future callbacks or additional members remain unsupported.
+        internal static bool IsInertAuthoringMarker(StateMachineBehaviour behaviour)
+        {
+            if (behaviour == null) return false;
+            var type = behaviour.GetType();
+            if (type.FullName != "nadena.dev.modular_avatar.core.ModularAvatarMMDLayerControl" ||
+                type.Assembly.GetName().Name != "nadena.dev.modular-avatar.core") return false;
+            if (InertAuthoringMarkers.TryGetValue(type, out var known)) return known;
+            const BindingFlags declared = BindingFlags.Instance | BindingFlags.Static | BindingFlags.Public |
+                BindingFlags.NonPublic | BindingFlags.DeclaredOnly;
+            var fields = type.GetFields(declared);
+            var properties = type.GetProperties(declared);
+            var methods = type.GetMethods(declared);
+            var constructors = type.GetConstructors(declared);
+            var field = fields.Length == 1 ? fields[0] : null;
+            var property = properties.Length == 1 ? properties[0] : null;
+            var getter = property?.GetGetMethod(true);
+            var setter = property?.GetSetMethod(true);
+            var valid = type.IsSealed && type.BaseType == typeof(StateMachineBehaviour) && type.TypeInitializer == null &&
+                constructors.Length == 1 && constructors[0].GetParameters().Length == 0 &&
+                field != null && !field.IsStatic && field.Name == "m_DisableInMMDMode" && field.FieldType == typeof(bool) &&
+                field.GetCustomAttributes(typeof(SerializeField), false).Length == 1 &&
+                property != null && property.Name == "DisableInMMDMode" && property.PropertyType == typeof(bool) &&
+                property.GetIndexParameters().Length == 0 && getter != null && setter != null &&
+                getter.IsPublic && setter.IsPublic && !getter.IsStatic && !setter.IsStatic && !getter.IsVirtual && !setter.IsVirtual &&
+                getter.GetParameters().Length == 0 && getter.ReturnType == typeof(bool) &&
+                setter.ReturnType == typeof(void) && setter.GetParameters().Length == 1 && setter.GetParameters()[0].ParameterType == typeof(bool) &&
+                methods.Length == 2 && methods.All(method => method == getter || method == setter) && type.GetEvents(declared).Length == 0;
+            InertAuthoringMarkers[type] = valid;
+            return valid;
+        }
+
+        internal static bool HasEffectfulBehaviours(IEnumerable<StateMachineBehaviour> behaviours) => behaviours.Any(behaviour =>
+            !IsInertAuthoringMarker(behaviour));
+
         internal sealed class Layer
         {
             internal readonly HashSet<string> Reads = new HashSet<string>(StringComparer.Ordinal);
@@ -539,10 +581,10 @@ namespace VRVlog.LilToonExporter
                 var layer = layers[index];
                 var machine = layer.stateMachine;
                 if (layer.syncedLayerIndex >= 0 || layer.iKPass || index > 0 && layer.defaultWeight <= 0 ||
-                    machine == null || machine.behaviours.Length != 0 || machine.stateMachines.Length != 0 ||
+                    machine == null || HasEffectfulBehaviours(machine.behaviours) || machine.stateMachines.Length != 0 ||
                     machine.anyStateTransitions.Length != 0 || machine.entryTransitions.Length != 0) continue;
                 var state = machine.defaultState;
-                if (state == null || state.transitions.Length != 0 || state.behaviours.Length != 0 || state.iKOnFeet ||
+                if (state == null || state.transitions.Length != 0 || HasEffectfulBehaviours(state.behaviours) || state.iKOnFeet ||
                     state.timeParameterActive || state.speedParameterActive || state.mirrorParameterActive || state.cycleOffsetParameterActive ||
                     !(state.motion is AnimationClip clip)) continue;
                 if (replacements.TryGetValue(clip, out var replacement)) clip = replacement;
@@ -867,7 +909,7 @@ namespace VRVlog.LilToonExporter
         {
             reads = new HashSet<string>(StringComparer.Ordinal);
             commands = new HashSet<StateMachineBehaviour>();
-            if (machine == null || machine.behaviours.Length != 0 || machine.stateMachines.Length != 0 ||
+            if (machine == null || HasEffectfulBehaviours(machine.behaviours) || machine.stateMachines.Length != 0 ||
                 machine.anyStateTransitions.Length != 0 || machine.entryTransitions.Length != 0) return false;
             var states = new HashSet<AnimatorState>(machine.states.Select(child => child.state));
             if (machine.defaultState == null || !states.Contains(machine.defaultState) || states.Contains(null)) return false;
@@ -875,7 +917,7 @@ namespace VRVlog.LilToonExporter
             {
                 if (state.motion != null || state.writeDefaultValues || state.iKOnFeet || state.timeParameterActive || state.speedParameterActive ||
                     state.mirrorParameterActive || state.cycleOffsetParameterActive || state.behaviours.Any(b =>
-                    !VrChatParameterDriver.IsTracking(b) && !VrChatParameterDriver.IsNonFxPlayableControl(b) && !VrChatParameterDriver.IsTemporaryPoseSpace(b) && !VrChatParameterDriver.IsLocomotionControl(b) &&
+                    !IsInertAuthoringMarker(b) && !VrChatParameterDriver.IsTracking(b) && !VrChatParameterDriver.IsNonFxPlayableControl(b) && !VrChatParameterDriver.IsTemporaryPoseSpace(b) && !VrChatParameterDriver.IsLocomotionControl(b) &&
                     !VrChatParameterDriver.ReadInstantFxControl(b, state.name, out _))) return false;
                 if (state.transitions.Any(t => t.isExit || t.destinationStateMachine != null || !states.Contains(t.destinationState) ||
                     t.hasExitTime || t.duration != 0)) return false;
@@ -956,6 +998,7 @@ namespace VRVlog.LilToonExporter
                 {
                     foreach (var behaviour in behaviours)
                     {
+                        if (IsInertAuthoringMarker(behaviour)) continue;
                         var sdkWeight = SdkLayerWeightControl.Read(behaviour, path, fxLayerCount ?? layers.Length);
                         if (sdkWeight != null)
                         {

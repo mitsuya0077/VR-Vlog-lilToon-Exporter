@@ -30,6 +30,7 @@ namespace VRVlog.LilToonExporter.Tests
             FakeDirectoryScope.FailDispose = false;
             FakeDirectoryScope.Current = "original-directory";
             FakeRegistry.Selected = new FakeProvider();
+            FakeProcessor.GeneratingAction = null;
             FakeProcessor.Action = null;
             FakeProcessor.OptimizationAction = null;
             FakeProcessor.Calls = 0;
@@ -40,6 +41,7 @@ namespace VRVlog.LilToonExporter.Tests
         [TearDown]
         public void TearDown()
         {
+            FakeProcessor.GeneratingAction = null;
             Object.DestroyImmediate(source);
             Object.DestroyImmediate(clone);
             if (original != null) Object.DestroyImmediate(original);
@@ -60,11 +62,13 @@ namespace VRVlog.LilToonExporter.Tests
             };
             using (NdmfExportPreparation.ProcessClone(source, clone, Resolve(), afterTransforming: lease => { }))
             {
-                Assert.AreEqual(2, FakeProcessor.Calls);
+                Assert.AreEqual(3, FakeProcessor.Calls);
                 Assert.AreSame(FakePhase.Start, FakeProcessor.Ranges[0][0]);
-                Assert.AreSame(FakePhase.Transforming, FakeProcessor.Ranges[0][1]);
-                Assert.AreSame(FakePhase.Optimizing, FakeProcessor.Ranges[1][0]);
-                Assert.AreSame(FakePhase.Optimizing, FakeProcessor.Ranges[1][1]);
+                Assert.AreSame(FakePhase.Generating, FakeProcessor.Ranges[0][1]);
+                Assert.AreSame(FakePhase.Transforming, FakeProcessor.Ranges[1][0]);
+                Assert.AreSame(FakePhase.Transforming, FakeProcessor.Ranges[1][1]);
+                Assert.AreSame(FakePhase.Optimizing, FakeProcessor.Ranges[2][0]);
+                Assert.AreSame(FakePhase.Optimizing, FakeProcessor.Ranges[2][1]);
                 Assert.AreSame(FakeRegistry.Selected, FakeContext.Last.Platform);
                 Assert.IsTrue(FakeContext.Last.AssetPath.StartsWith("Assets/VRVlogExportTemp-", StringComparison.Ordinal));
                 Assert.IsTrue(FakeContext.Last.Finished);
@@ -86,10 +90,12 @@ namespace VRVlog.LilToonExporter.Tests
             FakeProcessor.OptimizationAction = root => { throw new InvalidOperationException("Preview must not optimize captured renderers."); };
             using (NdmfExportPreparation.ProcessClone(source, clone, Resolve()))
             {
-                Assert.AreEqual(1, FakeProcessor.Calls);
-                Assert.AreEqual(1, FakeProcessor.Ranges.Count);
+                Assert.AreEqual(2, FakeProcessor.Calls);
+                Assert.AreEqual(2, FakeProcessor.Ranges.Count);
                 Assert.AreSame(FakePhase.Start, FakeProcessor.Ranges[0][0]);
-                Assert.AreSame(FakePhase.Transforming, FakeProcessor.Ranges[0][1]);
+                Assert.AreSame(FakePhase.Generating, FakeProcessor.Ranges[0][1]);
+                Assert.AreSame(FakePhase.Transforming, FakeProcessor.Ranges[1][0]);
+                Assert.AreSame(FakePhase.Transforming, FakeProcessor.Ranges[1][1]);
                 Assert.AreEqual(1, FakeContext.Last.FinishCount);
                 Assert.IsTrue(FakeContext.Last.Saver.Disposed);
                 Assert.AreEqual("original-directory", FakeDirectoryScope.Current);
@@ -117,15 +123,15 @@ namespace VRVlog.LilToonExporter.Tests
             {
                 callbacks++;
                 context = FakeContext.Last;
-                Assert.AreEqual(1, FakeProcessor.Calls);
+                Assert.AreEqual(2, FakeProcessor.Calls);
                 Assert.IsFalse(context.Finished);
                 Assert.IsTrue(UnityEditor.AssetDatabase.IsValidFolder(context.AssetPath));
             }))
             {
                 Assert.AreEqual(1, callbacks);
-                Assert.AreEqual(2, FakeProcessor.Calls);
-                Assert.AreSame(FakePhase.Optimizing, FakeProcessor.Ranges[1][0]);
-                Assert.AreSame(FakePhase.Optimizing, FakeProcessor.Ranges[1][1]);
+                Assert.AreEqual(3, FakeProcessor.Calls);
+                Assert.AreSame(FakePhase.Optimizing, FakeProcessor.Ranges[2][0]);
+                Assert.AreSame(FakePhase.Optimizing, FakeProcessor.Ranges[2][1]);
                 Assert.AreEqual(1, context.FinishCount);
             }
         }
@@ -136,7 +142,7 @@ namespace VRVlog.LilToonExporter.Tests
             FakeProcessor.Action = ReplaceWithGenerated;
             Assert.Throws<InvalidOperationException>(() => NdmfExportPreparation.ProcessClone(source, clone, Resolve(),
                 afterTransforming: lease => { throw new InvalidOperationException("expression preparation failed"); }));
-            Assert.AreEqual(1, FakeProcessor.Calls);
+            Assert.AreEqual(2, FakeProcessor.Calls);
             Assert.AreEqual(1, FakeContext.Last.FinishCount);
             Assert.IsTrue(generated == null);
             Assert.IsTrue(original != null);
@@ -149,7 +155,7 @@ namespace VRVlog.LilToonExporter.Tests
             FakeProcessor.Action = ReplaceWithGenerated;
             Assert.Throws<OperationCanceledException>(() => NdmfExportPreparation.ProcessClone(source, clone, Resolve(),
                 afterTransforming: lease => { throw new OperationCanceledException(); }));
-            Assert.AreEqual(1, FakeProcessor.Calls);
+            Assert.AreEqual(2, FakeProcessor.Calls);
             Assert.AreEqual(1, FakeContext.Last.FinishCount);
             Assert.IsTrue(generated == null);
             Assert.IsTrue(original != null);
@@ -162,7 +168,7 @@ namespace VRVlog.LilToonExporter.Tests
             FakeProcessor.Action = ReplaceWithGenerated;
             FakeProcessor.OptimizationAction = root => { throw new InvalidOperationException("mesh optimization failed"); };
             Assert.Throws<InvalidOperationException>(() => NdmfExportPreparation.ProcessClone(source, clone, Resolve(), afterTransforming: lease => { }));
-            Assert.AreEqual(2, FakeProcessor.Calls);
+            Assert.AreEqual(3, FakeProcessor.Calls);
             Assert.AreEqual(1, FakeContext.Last.FinishCount);
             Assert.IsTrue(generated == null);
             Assert.IsTrue(original != null);
@@ -460,30 +466,31 @@ namespace VRVlog.LilToonExporter.Tests
         }
 
         [Test]
-        public void InjectedCopyRootDoesNotRetainAnUnusedInactiveWardrobeAcrossValidationAndPreparation()
+        public void InjectedCopyRootRetainsInactiveAuthoringAcrossValidationAndPreparation()
         {
             var rootType = InstalledType("nadena.dev.ndmf.runtime.components.NDMFAvatarRoot");
             if (rootType == null) Assert.Ignore("Install NDMF to test its real avatar root marker.");
-            var sourceTag = AddMerge(source, "unused wardrobe", false, null, false);
-            var cloneTag = AddMerge(clone, "unused wardrobe", false, null, false);
+            var sourceTag = AddMerge(source, "inactive wardrobe", false, source.transform, false);
+            var cloneTag = AddMerge(clone, "inactive wardrobe", false, clone.transform, false);
             Assert.IsNull(source.GetComponent(rootType));
             Assert.IsNull(clone.GetComponent(rootType));
             NdmfExportPreparation.ValidateCopy(source, clone);
             var injectedMarker = clone.GetComponent(rootType);
             Assert.IsNotNull(injectedMarker);
-            Assert.IsFalse(NdmfExportPreparation.NeedsProcessing(clone));
-            using (NdmfExportPreparation.Prepare(source, clone)) { }
-            Assert.AreEqual(0, FakeProcessor.Calls);
-            Assert.IsTrue(cloneTag == null && sourceTag != null);
+            Assert.IsTrue(NdmfExportPreparation.NeedsProcessing(clone));
+            FakeProcessor.Action = root => Assert.IsTrue(cloneTag != null);
+            using (NdmfExportPreparation.ProcessClone(source, clone, Resolve())) { }
+            Assert.AreEqual(2, FakeProcessor.Calls);
+            Assert.IsTrue(cloneTag != null && sourceTag != null);
             Assert.AreSame(injectedMarker, clone.GetComponent(rootType));
             Assert.IsNull(source.GetComponent(rootType));
-            Assert.IsFalse(NdmfExportPreparation.NeedsProcessing(clone));
+            Assert.IsTrue(NdmfExportPreparation.NeedsProcessing(clone));
             Assert.AreSame(original, source.GetComponent<SkinnedMeshRenderer>().sharedMesh);
         }
 
         [TestCase(false)]
         [TestCase(true)]
-        public void UnusedInactiveWardrobeDoesNotRequireNdmfOrValidateItsTarget(bool staleExternalTarget)
+        public void InvalidInactiveWardrobeRequiresProcessingAndIsValidated(bool staleExternalTarget)
         {
             var external = new GameObject("unused external target");
             try
@@ -491,11 +498,10 @@ namespace VRVlog.LilToonExporter.Tests
                 var sourceTag = AddMerge(source, "unused wardrobe", false, staleExternalTarget ? external.transform : null, false);
                 var cloneTag = AddMerge(clone, "unused wardrobe", false, staleExternalTarget ? external.transform : null, false);
                 var cloneWardrobe = cloneTag.gameObject;
-                Assert.IsFalse(NdmfExportPreparation.NeedsProcessing(source));
-                NdmfExportPreparation.ValidateSource(source);
-                using (NdmfExportPreparation.Prepare(source, clone)) { }
+                Assert.IsTrue(NdmfExportPreparation.NeedsProcessing(source));
+                Assert.Throws<InvalidOperationException>(() => NdmfExportPreparation.ValidateSource(source));
                 Assert.AreEqual(0, FakeProcessor.Calls);
-                Assert.IsTrue(sourceTag != null && cloneTag == null);
+                Assert.IsTrue(sourceTag != null && cloneTag != null);
                 Assert.IsTrue(cloneWardrobe != null && !cloneWardrobe.activeInHierarchy);
                 Assert.AreSame(clone.transform, cloneWardrobe.transform.parent);
                 Assert.AreSame(original, source.GetComponent<SkinnedMeshRenderer>().sharedMesh);
@@ -505,10 +511,10 @@ namespace VRVlog.LilToonExporter.Tests
 
         [TestCase(false)]
         [TestCase(true)]
-        public void ActiveHolderReferenceToInactiveRendererDoesNotRetainUnusedAuthoring(bool rendererEnabled)
+        public void InactiveAuthoringIsRetainedRegardlessOfRendererVisibility(bool rendererEnabled)
         {
-            var sourceTag = AddMerge(source, "unused referenced wardrobe", false, null, false);
-            var cloneTag = AddMerge(clone, "unused referenced wardrobe", false, null, false);
+            var sourceTag = AddMerge(source, "inactive referenced wardrobe", false, source.transform);
+            var cloneTag = AddMerge(clone, "inactive referenced wardrobe", false, clone.transform);
             var sourceRenderer = sourceTag.gameObject.AddComponent<SkinnedMeshRenderer>();
             var cloneRenderer = cloneTag.gameObject.AddComponent<SkinnedMeshRenderer>();
             sourceRenderer.enabled = rendererEnabled;
@@ -517,11 +523,12 @@ namespace VRVlog.LilToonExporter.Tests
             var cloneHolder = clone.AddComponent<NdmfSharedAssetHolder>();
             sourceHolder.Renderer = sourceRenderer;
             cloneHolder.Renderer = cloneRenderer;
-            Assert.IsFalse(NdmfExportPreparation.NeedsProcessing(source));
+            Assert.IsTrue(NdmfExportPreparation.NeedsProcessing(source));
             NdmfExportPreparation.ValidateSource(source);
-            using (NdmfExportPreparation.Prepare(source, clone)) { }
-            Assert.AreEqual(0, FakeProcessor.Calls);
-            Assert.IsTrue(sourceTag != null && cloneTag == null);
+            FakeProcessor.Action = root => Assert.IsTrue(cloneTag != null);
+            using (NdmfExportPreparation.ProcessClone(source, clone, Resolve())) { }
+            Assert.AreEqual(2, FakeProcessor.Calls);
+            Assert.IsTrue(sourceTag != null && cloneTag != null);
             Assert.IsTrue(sourceRenderer != null && cloneRenderer != null);
             Assert.AreSame(sourceRenderer, sourceHolder.Renderer);
             Assert.AreSame(cloneRenderer, cloneHolder.Renderer);
@@ -529,25 +536,25 @@ namespace VRVlog.LilToonExporter.Tests
         }
 
         [Test]
-        public void MixedActiveAndInactiveAuthoringPrunesOnlyTheUnusedCopyTagBeforeNdmf()
+        public void MixedActiveAndInactiveAuthoringRetainsBothBeforeNdmf()
         {
             var sourceTarget = Child(source.transform, "main rig", Vector3.zero);
             var cloneTarget = Child(clone.transform, "main rig", Vector3.zero);
             var activeSource = AddMerge(source, "used setting", true, sourceTarget);
-            var inactiveSource = AddMerge(source, "unused wardrobe", false, null);
+            var inactiveSource = AddMerge(source, "inactive wardrobe", false, sourceTarget);
             var activeCopy = AddMerge(clone, "used setting", true, cloneTarget);
-            var inactiveCopy = AddMerge(clone, "unused wardrobe", false, null);
+            var inactiveCopy = AddMerge(clone, "inactive wardrobe", false, cloneTarget);
             var inactiveObject = inactiveCopy.gameObject;
             NdmfExportPreparation.ValidateSource(source);
             Assert.IsTrue(NdmfExportPreparation.NeedsProcessing(source));
             FakeProcessor.Action = root =>
             {
-                Assert.IsTrue(activeCopy != null && inactiveCopy == null);
-                Assert.IsFalse(root.GetComponentsInChildren<Component>(true).Any(component => ReferenceEquals(component, inactiveCopy)));
+                Assert.IsTrue(activeCopy != null && inactiveCopy != null);
+                Assert.IsTrue(root.GetComponentsInChildren<Component>(true).Any(component => ReferenceEquals(component, inactiveCopy)));
                 Assert.IsTrue(inactiveObject != null && !inactiveObject.activeInHierarchy);
             };
             using (NdmfExportPreparation.ProcessClone(source, clone, Resolve())) { }
-            Assert.AreEqual(1, FakeProcessor.Calls);
+            Assert.AreEqual(2, FakeProcessor.Calls);
             Assert.IsTrue(activeSource != null && inactiveSource != null);
             Assert.IsFalse(inactiveSource.gameObject.activeInHierarchy);
             Assert.AreSame(source.transform, inactiveSource.transform.parent);
@@ -577,22 +584,51 @@ namespace VRVlog.LilToonExporter.Tests
 
         [TestCase(false)]
         [TestCase(true)]
-        public void InvalidInactiveRigIsValidatedOnlyWhenAnEnabledSkinRequiresIt(bool rendererEnabled)
+        public void InvalidInactiveRigIsValidatedRegardlessOfSkinVisibility(bool rendererEnabled)
         {
             var tag = AddMerge(source, "hidden rig", false, null, false);
             var bone = Child(tag.transform, "bone", Vector3.zero);
             var skin = source.GetComponent<SkinnedMeshRenderer>();
             skin.bones = new[] { bone };
             skin.enabled = rendererEnabled;
-            Assert.AreEqual(rendererEnabled, NdmfExportPreparation.NeedsProcessing(source));
-            if (rendererEnabled)
-            {
-                var error = Assert.Throws<InvalidOperationException>(() => NdmfExportPreparation.ValidateSource(source));
-                StringAssert.Contains("追従先を取得できません", error.Message);
-            }
-            else NdmfExportPreparation.ValidateSource(source);
+            Assert.IsTrue(NdmfExportPreparation.NeedsProcessing(source));
+            var error = Assert.Throws<InvalidOperationException>(() => NdmfExportPreparation.ValidateSource(source));
+            StringAssert.Contains("追従先を取得できません", error.Message);
             Assert.IsTrue(tag != null);
             Assert.AreSame(bone, skin.bones[0]);
+        }
+
+        [Test]
+        public void ExplicitExclusionCanOmitInvalidInactiveAuthoringWithoutEditingTheSource()
+        {
+            var tag = AddMerge(source, "excluded inactive wardrobe", false, null, false);
+            Assert.IsTrue(NdmfExportPreparation.NeedsProcessing(source));
+            Assert.DoesNotThrow(() => NdmfExportPreparation.ValidateSource(source,
+                target => target == tag.transform || target.IsChildOf(tag.transform)));
+            Assert.IsTrue(tag != null);
+            Assert.IsFalse(tag.gameObject.activeSelf);
+            Assert.AreSame(source.transform, tag.transform.parent);
+        }
+
+        [Test]
+        public void UnresolvedFollowingTargetCanReachCanonicalResolutionOnTheOwnedCopy()
+        {
+            var sourceTag = AddMerge(source, "resolver-provided attachment", false, null, false);
+            var copyTag = AddMerge(clone, "resolver-provided attachment", false, null, false);
+            Assert.DoesNotThrow(() => NdmfExportPreparation.ValidateCopy(source, clone));
+            FakeProcessor.GeneratingAction = root =>
+            {
+                var target = Child(root.transform, "generated-by-resolver", Vector3.zero);
+                var reference = copyTag.GetType().GetField("mergeTarget").GetValue(copyTag);
+                reference.GetType().GetMethod("Set", new[] { typeof(GameObject) })
+                    .Invoke(reference, new object[] { target.gameObject });
+            };
+            using (NdmfExportPreparation.ProcessClone(source, clone, Resolve()))
+                Assert.AreSame(clone.transform.Find("generated-by-resolver"), NdmfExportPreparation.FollowingTarget(copyTag));
+            Assert.AreEqual(2, FakeProcessor.Calls);
+            Assert.IsNull(NdmfExportPreparation.FollowingTarget(sourceTag));
+            Assert.IsNull(source.transform.Find("generated-by-resolver"));
+            Assert.IsFalse(sourceTag.gameObject.activeSelf);
         }
 
         [Test]
@@ -605,7 +641,7 @@ namespace VRVlog.LilToonExporter.Tests
             NdmfExportPreparation.ValidateSource(clone);
             FakeProcessor.Action = root => Assert.IsTrue(active != null && middle != null && last != null);
             using (NdmfExportPreparation.ProcessClone(source, clone, Resolve())) { }
-            Assert.AreEqual(1, FakeProcessor.Calls);
+            Assert.AreEqual(2, FakeProcessor.Calls);
             Assert.IsTrue(middle != null && last != null);
         }
 
@@ -816,7 +852,7 @@ namespace VRVlog.LilToonExporter.Tests
         }
         public sealed class FakePhase
         {
-            public static readonly FakePhase Start = new FakePhase(), Transforming = new FakePhase(), Optimizing = new FakePhase();
+            public static readonly FakePhase Start = new FakePhase(), Generating = new FakePhase(), Transforming = new FakePhase(), Optimizing = new FakePhase();
             private static FakePhase First => Start;
         }
         public sealed class FakeDirectoryScope : IDisposable
@@ -856,6 +892,7 @@ namespace VRVlog.LilToonExporter.Tests
         }
         public static class FakeProcessor
         {
+            public static Action<GameObject> GeneratingAction;
             public static Action<GameObject> Action;
             public static Action<GameObject> OptimizationAction;
             public static readonly List<FakePhase[]> Ranges = new List<FakePhase[]>();
@@ -864,7 +901,8 @@ namespace VRVlog.LilToonExporter.Tests
             internal static void ProcessAvatar(FakeContext context, FakePhase first, FakePhase last)
             {
                 Calls++; First = first; Last = last; Ranges.Add(new[] { first, last });
-                if (first == FakePhase.Optimizing) OptimizationAction?.Invoke(context.Root);
+                if (first == FakePhase.Start) GeneratingAction?.Invoke(context.Root);
+                else if (first == FakePhase.Optimizing) OptimizationAction?.Invoke(context.Root);
                 else Action?.Invoke(context.Root);
             }
         }

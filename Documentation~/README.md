@@ -1,6 +1,6 @@
 # VR Vlog lilToon VRM Exporter
 
-このパッケージはプレリリース（ベータ版） **0.11.11-beta.10** です。ALCOMの設定で **Show pre-release packages** を有効にすると選択できます。安定版は引き続き **0.11.10** です。
+このパッケージはプレリリース（ベータ版） **0.11.11-beta.11** です。ALCOMの設定で **Show pre-release packages** を有効にすると選択できます。安定版は引き続き **0.11.10** です。
 
 0.11.10以降では、標準VRM表示・lilToon専用表示の画像を縦横比を保って最大1024×1024へ縮小します。小さい画像は拡大しません。元アバターや画像の設定は変更せず、縮小した画像を結果に表示します。高解像度画像によるメモリ負荷を減らすには、更新後に元アバターからVRMを書き出し直してください。
 
@@ -70,3 +70,5 @@ Aim・Rotation Constraintが有効かつロックされ、回転の全軸を完�
 [MIT License](../LICENSE) · [lilToon](../ThirdPartyNotices/lilToon.md) · [UniVRM](../ThirdPartyNotices/UniVRM.md)
 
 アバター・衣装・テクスチャには各権利者の利用条件が適用されます。
+
+0.11.11-beta.11 は MA の参照解決・生成された表情と、FaceEmo を使わず直接編集した FX の固定表情候補を扱います。ALCOM の **Show pre-release packages** を有効にして選択し、元アバターから再出力してください。対応範囲と省略理由は [互換性の説明](https://github.com/mitsuya0077/VR-Vlog-lilToon-Exporter/blob/main/Compatibility/AvatarPreservation.md#modular-avatar-と直接編集した-fx-の表情) を確認してください。

@@ -49,6 +49,7 @@ namespace VRVlog.LilToonExporter
                     catch (InvalidOperationException error) { entry.Error = error.Message; }
                 }
                 VrChatGestureExpressions.Add(avatar, source, excludedPath);
+                VrChatFxExpressions.Add(avatar, source, excludedPath, menuPolicy);
                 FaceEmoExpressions.Add(avatar, source, excludedPath, authoringSource, faceEmoBindings);
             }
             finally { EditorUtility.ClearProgressBar(); }
@@ -59,9 +60,12 @@ namespace VRVlog.LilToonExporter
         // VRChat inputs are not required to replay the resulting VRM morphs.
         internal static List<MorphValue> SampleFixed(GameObject avatar, RuntimeAnimatorController runtime,
             IDictionary<string, float> defaults, IDictionary<string, float> selected, Func<string, bool> excludedPath = null,
-            VrChatExpressionMenu.Source metadata = null, IList<MorphValue> unevaluated = null, FixedExpressionContext fixedContext = null)
-            => Sample(avatar, runtime, defaults, selected, excludedPath, metadata, unevaluated,
-                fixedContext ?? FixedExpressionContext.Create(runtime, defaults, metadata));
+            VrChatExpressionMenu.Source metadata = null, IList<MorphValue> unevaluated = null, FixedExpressionContext fixedContext = null,
+            int? expectedLayer = null, string expectedStatePath = null)
+            => Evaluate(avatar, runtime, defaults, selected, excludedPath, metadata, unevaluated,
+                StationaryBindings(avatar, runtime, excludedPath),
+                fixedContext: fixedContext ?? FixedExpressionContext.Create(runtime, defaults, metadata),
+                expectedLayer: expectedLayer, expectedStatePath: expectedStatePath);
 
         // Stable, discrete, morph-based FX expressions, including deterministic
         // parameter drivers. Each menu is evaluated from its own fresh defaults.
@@ -198,7 +202,7 @@ namespace VRVlog.LilToonExporter
                 sourceMachines = paths.Single();
                 // The deterministic adapter models state entry. It does not
                 // establish state-machine callback timing or ordering.
-                if (sourceMachines.Any(machine => machine.behaviours.Length != 0))
+                if (sourceMachines.Any(machine => ExpressionDependencies.HasEffectfulBehaviours(machine.behaviours)))
                     throw new InvalidOperationException("表情の元FX状態の親StateMachineにコールバックがあるため、進入順序を確定できません。");
                 sourceBehaviours = originalController.GetStateEffectiveBehaviours(sourceState, layerIndex.Value) ?? Array.Empty<StateMachineBehaviour>();
                 // Explicit state provenance can activate a callback outside the
@@ -502,7 +506,8 @@ namespace VRVlog.LilToonExporter
         private static List<MorphValue> Evaluate(GameObject avatar, RuntimeAnimatorController runtime,
             IDictionary<string, float> defaults, IDictionary<string, float> selected, Func<string, bool> excludedPath,
             VrChatExpressionMenu.Source metadata, IList<MorphValue> unevaluated, IEnumerable<EditorCurveBinding> initialMorphs,
-            bool preserveNativeBasePose = false, FixedExpressionContext fixedContext = null, ISet<string> omittedDriverWrites = null)
+            bool preserveNativeBasePose = false, FixedExpressionContext fixedContext = null, ISet<string> omittedDriverWrites = null,
+            int? expectedLayer = null, string expectedStatePath = null)
         {
             if (fixedContext != null)
             {
@@ -579,6 +584,15 @@ namespace VRVlog.LilToonExporter
                 evaluation.CheckNeutralFx();
                 SetParameters(playable, controller, selected);
                 Advance(graph, 120, remember);
+                void CheckSelectedState()
+                {
+                    if (expectedLayer.HasValue && (expectedLayer.Value < 0 || expectedLayer.Value >= controller.layers.Length ||
+                        string.IsNullOrEmpty(expectedStatePath) || playable.IsInTransition(expectedLayer.Value) ||
+                        !MatchesExpectedStatePath(controller, expectedLayer.Value, expectedStatePath,
+                            playable.GetCurrentAnimatorStateInfo(expectedLayer.Value).fullPathHash)))
+                        throw new InvalidOperationException("FXの表情候補の状態に到達できませんでした。条件・優先順位・Parameter Driverを確認してください: " + expectedStatePath);
+                }
+                CheckSelectedState();
                 ValidateFixedPose(avatar, playable, controller, excludedPath, excludedLayers, equivalentStates,
                     dependencies.NativeSupportLayers, dependencies.Morphs, dependencies: dependencies);
                 var stableWeights = evaluation.CaptureLayerWeights(playable);
@@ -591,6 +605,7 @@ namespace VRVlog.LilToonExporter
                 {
                     Advance(graph, 7 + checkpoint, evaluation.Check);
                     evaluation.CheckLayerWeights(playable, stableWeights);
+                    CheckSelectedState();
                     var nextBindings = ActiveBindings(playable, affected, excludedPath, equivalentStates, neutralAvatar: avatar,
                         unchangedAppearanceClips: unchangedAppearance);
                     if (!bindings.SetEquals(nextBindings)) throw new InvalidOperationException("表情が時間で切り替わるため、固定表情に変換できません。");
@@ -609,6 +624,29 @@ namespace VRVlog.LilToonExporter
                 if (clone != null) UnityEngine.Object.DestroyImmediate(clone);
                 EditorSceneManager.ClosePreviewScene(scene);
             }
+        }
+
+        internal static bool MatchesExpectedStatePath(AnimatorController controller, int layer, string expectedStatePath, int fullPathHash)
+        {
+            var layers = controller == null ? null : controller.layers;
+            if (layers == null || layer < 0 || layer >= layers.Length || string.IsNullOrEmpty(expectedStatePath)) return false;
+            // Inferred paths start at the selected layer name. A renamed layer
+            // can retain its root state-machine name in Unity's compiled hash.
+            // Synced layers use their source machine, not their own empty graph.
+            var source = layer;
+            var visited = new HashSet<int>();
+            while (layers[source].syncedLayerIndex >= 0)
+            {
+                if (!visited.Add(source)) return false;
+                source = layers[source].syncedLayerIndex;
+                if (source < 0 || source >= layers.Length) return false;
+            }
+            var machine = layers[source].stateMachine;
+            if (machine == null) return false;
+            if (fullPathHash == Animator.StringToHash(expectedStatePath)) return true;
+            var prefix = layers[layer].name + ".";
+            return expectedStatePath.StartsWith(prefix, StringComparison.Ordinal) &&
+                fullPathHash == Animator.StringToHash(machine.name + "." + expectedStatePath.Substring(prefix.Length));
         }
 
         // Neutral appearance has no selected menu parameter. Its dependency
@@ -845,7 +883,7 @@ namespace VRVlog.LilToonExporter
                     try
                     {
                         bool HasEffect(IEnumerable<StateMachineBehaviour> behaviours) => behaviours.Any(b =>
-                            !VrChatParameterDriver.IsTracking(b) && !VrChatParameterDriver.IsNonFxPlayableControl(b) && !VrChatParameterDriver.IsTemporaryPoseSpace(b) && !VrChatParameterDriver.IsLocomotionControl(b) && (!VrChatParameterDriver.IsDriver(b) ||
+                            !ExpressionDependencies.IsInertAuthoringMarker(b) && !VrChatParameterDriver.IsTracking(b) && !VrChatParameterDriver.IsNonFxPlayableControl(b) && !VrChatParameterDriver.IsTemporaryPoseSpace(b) && !VrChatParameterDriver.IsLocomotionControl(b) && (!VrChatParameterDriver.IsDriver(b) ||
                             requiredParameters == null || VrChatParameterDriver.Read(b, machine.name).Operations.Any(op => requiredParameters.Contains(op.Destination))));
                         return machine.states.Length + machine.stateMachines.Length > 0 && !HasEffect(machine.behaviours) &&
                             machine.states.All(child => !child.state.writeDefaultValues && !child.state.iKOnFeet && !HasEffect(child.state.behaviours) && MotionIsExcluded(child.state.motion)) &&
@@ -915,6 +953,11 @@ namespace VRVlog.LilToonExporter
         private static bool HarmlessAppearance(GameObject avatar, AnimationClip clip, EditorCurveBinding binding,
             ISet<AnimationClip> unchangedAppearanceClips, Func<string, bool> excludedPath)
         {
+            if (SelectedExpressionAppearance.IsUnboundTransform(avatar, clip, binding))
+            {
+                SelectedExpressionAppearance.ValidateClipData(clip, excludedPath);
+                return true;
+            }
             if (unchangedAppearanceClips == null) return IsHarmlessNeutralActivation(avatar, clip, binding);
             if (!unchangedAppearanceClips.Contains(clip) || !SelectedExpressionAppearance.IsUnchanged(avatar, clip, binding)) return false;
             SelectedExpressionAppearance.ValidateClipData(clip, excludedPath);
@@ -1003,7 +1046,7 @@ namespace VRVlog.LilToonExporter
         {
             var layer = controller.layers[layerIndex];
             var machine = layer.stateMachine;
-            if (layer.syncedLayerIndex >= 0 || layer.iKPass || machine == null || machine.behaviours.Length != 0 ||
+            if (layer.syncedLayerIndex >= 0 || layer.iKPass || machine == null || ExpressionDependencies.HasEffectfulBehaviours(machine.behaviours) ||
                 machine.stateMachines.Length != 0 || machine.states.Length == 0) return false;
             var states = new HashSet<AnimatorState>(machine.states.Select(child => child.state));
             if (states.Contains(null) || machine.defaultState == null || !states.Contains(machine.defaultState)) return false;
@@ -1015,7 +1058,7 @@ namespace VRVlog.LilToonExporter
             var clip = EffectiveClip(machine.defaultState);
             if (clip == null) return false;
             var writeDefaults = machine.defaultState.writeDefaultValues;
-            if (states.Any(state => EffectiveClip(state) != clip || state.writeDefaultValues != writeDefaults || state.behaviours.Length != 0 ||
+            if (states.Any(state => EffectiveClip(state) != clip || state.writeDefaultValues != writeDefaults || ExpressionDependencies.HasEffectfulBehaviours(state.behaviours) ||
                 state.iKOnFeet || state.timeParameterActive || state.speedParameterActive || state.mirrorParameterActive ||
                 state.cycleOffsetParameterActive || state.speed != 1 || state.cycleOffset != 0 || state.mirror)) return false;
             var parameters = new HashSet<string>(controller.parameters.Where(parameter => parameter.type != AnimatorControllerParameterType.Trigger)
@@ -1069,10 +1112,10 @@ namespace VRVlog.LilToonExporter
             {
                 var layer = layers[index]; var machine = layer.stateMachine;
                 if (layer.syncedLayerIndex >= 0 || layer.iKPass || machine == null || machine.stateMachines.Length != 0 ||
-                    machine.behaviours.Length != 0 || machine.anyStateTransitions.Length != 0 || machine.entryTransitions.Length != 0 ||
+                    ExpressionDependencies.HasEffectfulBehaviours(machine.behaviours) || machine.anyStateTransitions.Length != 0 || machine.entryTransitions.Length != 0 ||
                     machine.states.Length != 1 || machine.defaultState != machine.states[0].state) return false;
                 var state = machine.defaultState;
-                if (state == null || state.behaviours.Length != 0 || state.transitions.Length != 0 || state.iKOnFeet ||
+                if (state == null || ExpressionDependencies.HasEffectfulBehaviours(state.behaviours) || state.transitions.Length != 0 || state.iKOnFeet ||
                     state.timeParameterActive || state.speedParameterActive || state.mirrorParameterActive || state.cycleOffsetParameterActive) return false;
                 return state.motion == null || state.motion is AnimationClip clip && AnimationUtility.GetObjectReferenceCurveBindings(clip).Length == 0 &&
                     AnimationUtility.GetCurveBindings(clip).All(binding => IsConstant(AnimationUtility.GetEditorCurve(clip, binding)));
