@@ -58,11 +58,11 @@ namespace VRVlog.LilToonExporter.Tests
             var transition = from.AddTransition(to); transition.duration = 0; transition.hasExitTime = false;
             transition.AddCondition(mode, value, parameter); return transition;
         }
-        VrChatExpressionMenu.Source Read(RuntimeAnimatorController runtime = null)
+        VrChatExpressionMenu.Source Read(RuntimeAnimatorController runtime = null, VrChatExpressionMenu.Source source = null)
         {
             var before = AssetDatabase.LoadAllAssetsAtPath(folder + "/FX.controller")
                 .ToDictionary(asset => asset, asset => EditorJsonUtility.ToJson(asset));
-            var metadata = new VrChatExpressionMenu.Source { Controller = runtime ?? controller };
+            var metadata = source ?? new VrChatExpressionMenu.Source(); metadata.Controller = runtime ?? controller;
             VrChatFxExpressions.Add(avatar, metadata);
             foreach (var pair in before) Assert.That(EditorJsonUtility.ToJson(pair.Key), Is.EqualTo(pair.Value), pair.Key.name);
             Assert.That(avatar.GetComponent<Animator>().runtimeAnimatorController, Is.Null);
@@ -248,7 +248,11 @@ namespace VRVlog.LilToonExporter.Tests
             return face;
         }
 
-        (int Hash, float Weight) NativeNestedExitSelection()
+        (int Hash, float Weight) NativeNestedExitSelection() => NativeSelection(new Dictionary<string, float>
+            { ["FaceMode"] = 1, ["ChooseExitPath"] = 1, ["FaceChoice"] = 1, ["ParentPermission"] = 1 });
+
+        (int Hash, float Weight) NativeSelection(IDictionary<string, float> selected, IDictionary<int, float> layerGoals = null, int observedLayer = 0,
+            Action<AnimatorControllerPlayable> afterDefaults = null, Action<AnimatorControllerPlayable> afterSelectionFrame = null, bool checkStability = false)
         {
             var clone = Object.Instantiate(avatar); clone.hideFlags = HideFlags.HideAndDontSave;
             var graph = PlayableGraph.Create("Original nested Exit controller oracle");
@@ -263,13 +267,35 @@ namespace VRVlog.LilToonExporter.Tests
                 // dependency pruning, copying, adapters or state validation.
                 var playable = AnimatorControllerPlayable.Create(graph, controller);
                 var output = AnimationPlayableOutput.Create(graph, "Original FX", animator); output.SetSourcePlayable(playable);
+                foreach (var parameter in controller.parameters)
+                    if (parameter.type == AnimatorControllerParameterType.Bool) playable.SetBool(parameter.name, parameter.defaultBool);
+                    else if (parameter.type == AnimatorControllerParameterType.Int) playable.SetInteger(parameter.name, parameter.defaultInt);
+                    else if (parameter.type == AnimatorControllerParameterType.Float) playable.SetFloat(parameter.name, parameter.defaultFloat);
                 graph.Play(); graph.Evaluate(0f);
                 for (var frame = 0; frame < 120; frame++) graph.Evaluate(1f / 60f);
-                playable.SetBool("FaceMode", true); playable.SetBool("ChooseExitPath", true);
-                playable.SetInteger("FaceChoice", 1); playable.SetBool("ParentPermission", true);
-                for (var frame = 0; frame < 120; frame++) graph.Evaluate(1f / 60f);
-                return (playable.GetCurrentAnimatorStateInfo(0).fullPathHash,
-                    clone.GetComponentInChildren<SkinnedMeshRenderer>().GetBlendShapeWeight(0));
+                afterDefaults?.Invoke(playable);
+                foreach (var parameter in controller.parameters)
+                    if (selected.TryGetValue(parameter.name, out var value))
+                    {
+                        if (parameter.type == AnimatorControllerParameterType.Bool) playable.SetBool(parameter.name, value != 0);
+                        else if (parameter.type == AnimatorControllerParameterType.Int) playable.SetInteger(parameter.name, Mathf.RoundToInt(value));
+                        else if (parameter.type == AnimatorControllerParameterType.Float) playable.SetFloat(parameter.name, value);
+                    }
+                // Unity alone has no VRChat client layer-control delegate.
+                // Apply its documented goal directly for independent native
+                // composition; never register a process-wide SDK handler.
+                if (layerGoals != null) foreach (var goal in layerGoals) playable.SetLayerWeight(goal.Key, goal.Value);
+                for (var frame = 0; frame < 120; frame++) { graph.Evaluate(1f / 60f); afterSelectionFrame?.Invoke(playable); }
+                var hash = playable.GetCurrentAnimatorStateInfo(observedLayer).fullPathHash;
+                var weight = clone.GetComponentInChildren<SkinnedMeshRenderer>().GetBlendShapeWeight(0);
+                if (checkStability)
+                    for (var frame = 0; frame < 24; frame++)
+                    {
+                        graph.Evaluate(1f / 60f); afterSelectionFrame?.Invoke(playable);
+                        Assert.That(playable.GetCurrentAnimatorStateInfo(observedLayer).fullPathHash, Is.EqualTo(hash));
+                        Assert.That(clone.GetComponentInChildren<SkinnedMeshRenderer>().GetBlendShapeWeight(0), Is.EqualTo(weight).Within(.01));
+                    }
+                return (hash, weight);
             }
             finally { graph.Destroy(); Object.DestroyImmediate(clone); }
         }
@@ -352,7 +378,11 @@ namespace VRVlog.LilToonExporter.Tests
             Transition(neutral, face, "IndependentFace", 0, AnimatorConditionMode.If);
             var source = Read(); Assert.That(source.Messages, Is.Empty);
             var entry = source.Entries.Single(); Assert.That(entry.Error, Is.Null);
-            Assert.That(entry.Parameters.Keys, Is.EqualTo(new[] { "IndependentFace" }));
+            Assert.That(entry.Parameters.Keys, Is.EquivalentTo(new[] { "FaceMode", "IndependentFace" }));
+            Assert.That(entry.Parameters["FaceMode"], Is.EqualTo(0)); Assert.That(entry.Parameters["IndependentFace"], Is.EqualTo(1));
+            var native = NativeSelection(entry.Parameters, checkStability: true);
+            Assert.That(native.Hash, Is.EqualTo(Animator.StringToHash(controller.layers[0].name + "." + face.name)));
+            Assert.That(native.Weight, Is.EqualTo(65).Within(.01));
             Assert.That(Weight(entry), Is.EqualTo(65).Within(.01));
         }
 
@@ -383,6 +413,429 @@ namespace VRVlog.LilToonExporter.Tests
             Assert.DoesNotThrow(() => VrChatFxExpressions.Add(avatar, source));
             Assert.That(source.Entries.Single(), Is.SameAs(authored));
             Assert.That(source.Messages.Single(), Does.Contain("条件経路").And.Contain("深すぎる"));
+        }
+
+        void Parameter(string name, AnimatorControllerParameterType type, float initial)
+        {
+            controller.AddParameter(new AnimatorControllerParameter { name = name, type = type,
+                defaultBool = initial != 0, defaultInt = Mathf.RoundToInt(initial), defaultFloat = initial });
+        }
+
+        (AnimatorStateMachine Machine, AnimatorState Default, AnimatorState Earlier) EntryFaces()
+        {
+            controller.AddParameter("Group", AnimatorControllerParameterType.Int);
+            var nested = controller.layers[0].stateMachine.AddStateMachine("Priority faces");
+            var fallback = State(nested, "Default face", Clip("Fallback smile", 75)); nested.defaultState = fallback;
+            var earlier = State(nested, "Earlier face", Clip("Earlier face", 20));
+            var enter = neutral.AddTransition(nested); enter.duration = 0; enter.hasExitTime = false;
+            enter.AddCondition(AnimatorConditionMode.Equals, 1, "Group");
+            return (nested, fallback, earlier);
+        }
+
+        void AssertNativeFace(VrChatExpressionMenu.Entry entry, string statePath, IDictionary<int, float> goals = null, int observedLayer = 0)
+        {
+            Assert.That(entry.Error, Is.Null);
+            var native = NativeSelection(entry.Parameters, goals, observedLayer);
+            Assert.That(native.Hash, Is.EqualTo(Animator.StringToHash(controller.layers[observedLayer].name + "." + statePath)));
+            Assert.That(native.Weight, Is.EqualTo(Weight(entry)).Within(.01), "The complete exporter pose must match the original native graph.");
+        }
+
+        [TestCase(AnimatorControllerParameterType.Bool, AnimatorConditionMode.If, 1f, 0f)]
+        [TestCase(AnimatorControllerParameterType.Bool, AnimatorConditionMode.IfNot, 0f, 0f)]
+        [TestCase(AnimatorControllerParameterType.Int, AnimatorConditionMode.Equals, 1f, 1f)]
+        [TestCase(AnimatorControllerParameterType.Int, AnimatorConditionMode.NotEqual, 0f, 1f)]
+        [TestCase(AnimatorControllerParameterType.Int, AnimatorConditionMode.Greater, 2f, 1f)]
+        [TestCase(AnimatorControllerParameterType.Int, AnimatorConditionMode.Less, 0f, 1f)]
+        [TestCase(AnimatorControllerParameterType.Float, AnimatorConditionMode.Greater, 1f, .5f)]
+        [TestCase(AnimatorControllerParameterType.Float, AnimatorConditionMode.Less, 0f, .5f)]
+        public void NestedEntryDefaultFallthroughUsesLogicalComparisonBoundaries(AnimatorControllerParameterType type,
+            AnimatorConditionMode mode, float initial, float threshold)
+        {
+            Parameter("Mode", type, initial); var faces = EntryFaces();
+            faces.Machine.AddEntryTransition(faces.Earlier).AddCondition(mode, threshold, "Mode");
+            var source = Read(); Assert.That(source.Entries.Select(entry => entry.Error), Is.All.Null);
+            var fallback = source.Entries.Single(entry => entry.Name == "FX / Default face");
+            Assert.That(fallback.Parameters["Mode"], Is.Not.EqualTo(initial));
+            if (type == AnimatorControllerParameterType.Float) Assert.That(fallback.Parameters["Mode"], Is.EqualTo(threshold));
+            AssertNativeFace(fallback, "Priority faces.Default face"); Assert.That(Weight(fallback), Is.EqualTo(75).Within(.01));
+        }
+
+        [TestCase(true)]
+        [TestCase(false)]
+        public void FloatEntryFallthroughKeepsAdjacentRepresentableBounds(bool greater)
+        {
+            Parameter("Mode", AnimatorControllerParameterType.Float, greater ? 1 : 0); var faces = EntryFaces();
+            var lower = .5f; var upper = .50000006f;
+            var rootEnter = neutral.transitions.Single();
+            rootEnter.AddCondition(greater ? AnimatorConditionMode.Greater : AnimatorConditionMode.Less, greater ? lower : upper, "Mode");
+            faces.Machine.AddEntryTransition(faces.Earlier).AddCondition(greater ? AnimatorConditionMode.Greater : AnimatorConditionMode.Less,
+                greater ? upper : lower, "Mode");
+            var fallback = Read().Entries.Single(entry => entry.Name == "FX / Default face");
+            Assert.That(fallback.Parameters["Mode"], Is.EqualTo(greater ? upper : lower));
+            AssertNativeFace(fallback, "Priority faces.Default face");
+        }
+
+        [Test]
+        public void DefaultBlendTreeUsesEntryFallthroughConstraintsForEveryPoint()
+        {
+            Parameter("Mode", AnimatorControllerParameterType.Int, 1); controller.AddParameter("ExpressionStrength", AnimatorControllerParameterType.Float);
+            var faces = EntryFaces(); faces.Machine.AddEntryTransition(faces.Earlier).AddCondition(AnimatorConditionMode.Equals, 1, "Mode");
+            var tree = new BlendTree { name = "Default faces", blendType = BlendTreeType.Simple1D,
+                blendParameter = "ExpressionStrength", useAutomaticThresholds = false }; AssetDatabase.AddObjectToAsset(tree, controller);
+            tree.AddChild(Clip("Default rest", 30), 0); tree.AddChild(Clip("Default smile", 75), 1); faces.Default.motion = tree;
+            var source = Read(); Assert.That(source.Entries.Select(entry => entry.Error), Is.All.Null);
+            var face = source.Entries.Single(entry => entry.Name.StartsWith("FX / Default face", StringComparison.Ordinal) &&
+                entry.Parameters.TryGetValue("ExpressionStrength", out var value) && value == 1);
+            Assert.That(face.Parameters["Mode"], Is.Not.EqualTo(1)); AssertNativeFace(face, "Priority faces.Default face");
+        }
+
+        [TestCase(false)]
+        [TestCase(true)]
+        public void LaterEntryRequiresEarlierConjunctionToBeFalse(bool readonlyFirst)
+        {
+            Parameter("EarlierA", AnimatorControllerParameterType.Bool, 1); Parameter("EarlierB", AnimatorControllerParameterType.Bool, 1);
+            Parameter("Later", AnimatorControllerParameterType.Bool, 1); var faces = EntryFaces();
+            var earlier = faces.Machine.AddEntryTransition(faces.Earlier); earlier.AddCondition(AnimatorConditionMode.If, 0, "EarlierA");
+            earlier.AddCondition(AnimatorConditionMode.If, 0, "EarlierB");
+            var later = State(faces.Machine, "Later face", Clip("Later face", 85));
+            faces.Machine.AddEntryTransition(later).AddCondition(AnimatorConditionMode.If, 0, "Later");
+            var metadata = new VrChatExpressionMenu.Source(); if (readonlyFirst) metadata.ExternalParameters.Add("EarlierA");
+            var entry = Read(source: metadata).Entries.Single(value => value.Name == "FX / Later face");
+            Assert.That(entry.Parameters[readonlyFirst ? "EarlierB" : "EarlierA"], Is.EqualTo(0));
+            Assert.That(entry.Parameters["Later"], Is.EqualTo(1)); AssertNativeFace(entry, "Priority faces.Later face");
+        }
+
+        [Test]
+        public void OverlappingEntriesKeepPriorityWhenSelectingTheLaterFace()
+        {
+            Parameter("Mode", AnimatorControllerParameterType.Int, 1); var faces = EntryFaces();
+            faces.Machine.AddEntryTransition(faces.Earlier).AddCondition(AnimatorConditionMode.Equals, 1, "Mode");
+            var later = State(faces.Machine, "Later face", Clip("Later face", 85));
+            faces.Machine.AddEntryTransition(later).AddCondition(AnimatorConditionMode.Greater, 0, "Mode");
+            var entry = Read().Entries.Single(value => value.Name == "FX / Later face");
+            Assert.That(entry.Parameters["Mode"], Is.GreaterThan(1)); AssertNativeFace(entry, "Priority faces.Later face");
+        }
+
+        [Test]
+        public void UnconditionalEntryCannotPublishLaterOrDefaultFaces()
+        {
+            Parameter("Mode", AnimatorControllerParameterType.Int, 1); var faces = EntryFaces(); faces.Machine.AddEntryTransition(faces.Earlier);
+            faces.Machine.AddEntryTransition(faces.Default).AddCondition(AnimatorConditionMode.Equals, 1, "Mode");
+            var entry = Read().Entries.Single(); Assert.That(entry.Name, Is.EqualTo("FX / Earlier face"));
+            AssertNativeFace(entry, "Priority faces.Earlier face");
+        }
+
+        [TestCase(false)]
+        [TestCase(true)]
+        public void DisabledEntryCannotSuppressEnabledRoutes(bool solo)
+        {
+            Parameter("Mode", AnimatorControllerParameterType.Int, 1); var faces = EntryFaces();
+            var ignored = faces.Machine.AddEntryTransition(faces.Earlier); ignored.mute = !solo;
+            var active = State(faces.Machine, "Enabled face", Clip("Enabled face", 85));
+            var entry = faces.Machine.AddEntryTransition(active); entry.solo = solo; entry.AddCondition(AnimatorConditionMode.Equals, 1, "Mode");
+            var source = Read(); Assert.That(source.Entries.Any(value => value.Name == "FX / Earlier face"), Is.False);
+            AssertNativeFace(source.Entries.Single(value => value.Name == "FX / Enabled face"), "Priority faces.Enabled face");
+        }
+
+        [TestCase("nested")]
+        [TestCase("entry exit")]
+        [TestCase("default exit")]
+        public void EntryFallthroughPropagatesAcrossNestedAndExitRoutes(string route)
+        {
+            Parameter("Mode", AnimatorControllerParameterType.Int, 1); Parameter("ChooseExit", AnimatorControllerParameterType.Bool, 0);
+            controller.AddParameter("FaceChoice", AnimatorControllerParameterType.Int); var faces = EntryFaces(); faces.Default.motion = null;
+            faces.Machine.AddEntryTransition(faces.Earlier).AddCondition(AnimatorConditionMode.Equals, 1, "Mode");
+            if (route == "nested")
+            {
+                var inner = faces.Machine.AddStateMachine("Inner exit"); var idle = State(inner, "Inner idle", null); inner.defaultState = idle;
+                faces.Machine.AddEntryTransition(inner).AddCondition(AnimatorConditionMode.If, 0, "ChooseExit");
+                var exit = idle.AddExitTransition(); exit.duration = 0; exit.hasExitTime = false;
+                exit.AddCondition(AnimatorConditionMode.Equals, 1, "FaceChoice"); faces.Machine.AddStateMachineExitTransition(inner);
+            }
+            else if (route == "entry exit")
+            {
+                var step = State(faces.Machine, "Selected entry exit", null);
+                faces.Machine.AddEntryTransition(step).AddCondition(AnimatorConditionMode.If, 0, "ChooseExit");
+                var exit = step.AddExitTransition(); exit.duration = 0; exit.hasExitTime = false;
+                exit.AddCondition(AnimatorConditionMode.Equals, 1, "FaceChoice");
+            }
+            else
+            {
+                var exit = faces.Default.AddExitTransition(); exit.duration = 0; exit.hasExitTime = false;
+                exit.AddCondition(AnimatorConditionMode.Equals, 1, "FaceChoice");
+            }
+            var face = State(controller.layers[0].stateMachine, "Face after priority exit", Clip("Exit face", 85));
+            controller.layers[0].stateMachine.AddStateMachineTransition(faces.Machine, face);
+            var native = NativeSelection(new Dictionary<string, float> { ["Group"] = 1, ["Mode"] = 0, ["ChooseExit"] = 1, ["FaceChoice"] = 1 },
+                checkStability: true);
+            Assert.That(native.Hash, Is.EqualTo(Animator.StringToHash(controller.layers[0].name + "." + face.name)));
+            Assert.That(native.Weight, Is.EqualTo(85).Within(.01));
+            var entry = Read().Entries.Single(value => value.Name == "FX / Face after priority exit");
+            Assert.That(entry.Parameters["Mode"], Is.Not.EqualTo(1)); AssertNativeFace(entry, "Face after priority exit");
+        }
+
+        [Test]
+        public void MalformedDirectEntryExitReportsBeforeNativePlayback()
+        {
+            var faces = EntryFaces(); var invalid = faces.Machine.AddEntryTransition(faces.Default);
+            invalid.destinationState = null; invalid.isExit = true;
+            var source = new VrChatExpressionMenu.Source { Controller = controller };
+            var authored = new VrChatExpressionMenu.Entry { Id = "menu", Name = "Existing authored expression" }; source.Entries.Add(authored);
+            Assert.DoesNotThrow(() => Read(source: source));
+            Assert.That(source.Entries.Single(), Is.SameAs(authored));
+            Assert.That(source.Messages.Single(), Does.Contain("EntryからExit"));
+        }
+
+        [Test]
+        public void EntryNegationExpansionReportsAnAtomicDiscoveryBudgetDiagnostic()
+        {
+            var faces = EntryFaces();
+            for (var index = 0; index < 14; index++)
+            {
+                Parameter("A" + index, AnimatorControllerParameterType.Bool, 1); Parameter("B" + index, AnimatorControllerParameterType.Bool, 1);
+                var entry = faces.Machine.AddEntryTransition(faces.Earlier);
+                entry.AddCondition(AnimatorConditionMode.If, 0, "A" + index); entry.AddCondition(AnimatorConditionMode.If, 0, "B" + index);
+            }
+            var source = new VrChatExpressionMenu.Source { Controller = controller };
+            var authored = new VrChatExpressionMenu.Entry { Id = "menu", Name = "Authored face" }; source.Entries.Add(authored);
+            Assert.DoesNotThrow(() => VrChatFxExpressions.Add(avatar, source));
+            Assert.That(source.Entries.Single(), Is.SameAs(authored)); Assert.That(source.Messages.Single(), Does.Contain("探索").And.Contain("上限"));
+        }
+
+        [TestCase(true)]
+        [TestCase(false)]
+        public void DefaultWarmupCanEstablishAnEarlierGateBeforeTheSelectedFace(bool warmup)
+        {
+            Parameter("Mode", AnimatorControllerParameterType.Int, warmup ? 1 : 0);
+            var root = controller.layers[0].stateMachine; var primed = State(root, "Primed", null);
+            Transition(neutral, primed, "Mode", 1); var face = State(root, "Warm selected face", Clip("Warm selected face", 80));
+            Transition(primed, face, "Mode", 2);
+            var native = NativeSelection(new Dictionary<string, float> { ["Mode"] = 2 }); var source = Read();
+            if (warmup)
+            {
+                var entry = source.Entries.Single(); Assert.That(entry.Parameters["Mode"], Is.EqualTo(2));
+                Assert.That(native.Hash, Is.EqualTo(Animator.StringToHash(controller.layers[0].name + "." + face.name)));
+                Assert.That(entry.Error, Is.Null); Assert.That(Weight(entry), Is.EqualTo(native.Weight).Within(.01));
+            }
+            else
+            {
+                Assert.That(native.Hash, Is.Not.EqualTo(Animator.StringToHash(controller.layers[0].name + "." + face.name)));
+                Assert.That(source.Entries, Is.Empty);
+            }
+        }
+
+        [Test]
+        public void StableAnyStatePriorityCanSelectTheLaterNativeFace()
+        {
+            controller.AddParameter("Mode", AnimatorControllerParameterType.Int); var root = controller.layers[0].stateMachine;
+            var earlier = State(root, "Earlier Any face", Clip("Earlier Any face", 20));
+            var later = State(root, "Later Any face", Clip("Later Any face", 85));
+            var first = root.AddAnyStateTransition(earlier); first.duration = 0; first.hasExitTime = false; first.canTransitionToSelf = true;
+            first.AddCondition(AnimatorConditionMode.NotEqual, 2, "Mode");
+            var second = root.AddAnyStateTransition(later); second.duration = 0; second.hasExitTime = false; second.canTransitionToSelf = true;
+            second.AddCondition(AnimatorConditionMode.NotEqual, 1, "Mode");
+            var native = NativeSelection(new Dictionary<string, float> { ["Mode"] = 2 });
+            Assert.That(native.Hash, Is.EqualTo(Animator.StringToHash(controller.layers[0].name + "." + later.name)));
+            var entry = Read().Entries.Single(); Assert.That(entry.Parameters["Mode"], Is.EqualTo(2));
+            Assert.That(entry.Error, Is.Null); Assert.That(Weight(entry), Is.EqualTo(native.Weight).Within(.01));
+        }
+
+        [Test]
+        public void SelfDisabledAnyStatePriorDoesNotHideAStableDriverControlledFace()
+        {
+            Parameter("BlockA", AnimatorControllerParameterType.Bool, 1); controller.AddParameter("SelectFace", AnimatorControllerParameterType.Bool);
+            var root = controller.layers[0].stateMachine;
+            var earlier = State(root, "Default Any face", Clip("Default Any face", 20));
+            var later = State(root, "Stable driver face", Clip("Stable driver face", 85));
+            var first = root.AddAnyStateTransition(earlier); first.duration = 0; first.hasExitTime = false; first.canTransitionToSelf = false;
+            first.AddCondition(AnimatorConditionMode.If, 0, "BlockA");
+            var second = root.AddAnyStateTransition(later); second.duration = 0; second.hasExitTime = false; second.canTransitionToSelf = false;
+            second.AddCondition(AnimatorConditionMode.If, 0, "SelectFace");
+            ParameterDriverExpressionTests.Driver(later, ParameterDriverExpressionTests.Op("Set", "BlockA", 0));
+            var laterHash = Animator.StringToHash(controller.layers[0].name + "." + later.name);
+            var applied = false;
+            var original = NativeSelection(new Dictionary<string, float> { ["SelectFace"] = 1 },
+                afterDefaults: playable => Assert.That(playable.GetCurrentAnimatorStateInfo(0).fullPathHash,
+                    Is.EqualTo(Animator.StringToHash(controller.layers[0].name + "." + earlier.name))),
+                afterSelectionFrame: playable =>
+                {
+                    if (!applied && playable.GetCurrentAnimatorStateInfo(0).fullPathHash == laterHash)
+                    { playable.SetBool("BlockA", false); applied = true; }
+                }, checkStability: true);
+            Assert.That(applied, Is.True, "The original native graph must reach B before applying B's documented Set operation.");
+            Assert.That(original.Hash, Is.EqualTo(laterHash)); Assert.That(original.Weight, Is.EqualTo(85).Within(.01));
+            // Native SDK-adapted sampling succeeds independently of discovery:
+            // defaults establish A, whose self-disabled prior lets B enter,
+            // and B's deterministic Set makes its final pose stable.
+            var metadata = new VrChatExpressionMenu.Source { Controller = controller };
+            var oracle = VrChatExpressionSampler.SampleFixed(avatar, controller, metadata.Defaults,
+                new Dictionary<string, float> { ["SelectFace"] = 1 }, metadata: metadata,
+                expectedLayer: 0, expectedStatePath: controller.layers[0].name + "." + later.name);
+            Assert.That(oracle.Single(value => value.Shape == "Face size").Weight, Is.EqualTo(85).Within(.01));
+            var entry = Read().Entries.Single(); Assert.That(entry.Error, Is.Null);
+            Assert.That(entry.Parameters.Keys, Is.EqualTo(new[] { "SelectFace" })); Assert.That(Weight(entry), Is.EqualTo(85).Within(.01));
+        }
+
+        [TestCase(false)]
+        [TestCase(true)]
+        public void StateTransitionPriorityUsesNativeSelfEligibility(bool self)
+        {
+            controller.AddParameter("Group", AnimatorControllerParameterType.Int); controller.AddParameter("Mode", AnimatorControllerParameterType.Int);
+            var root = controller.layers[0].stateMachine;
+            var earlier = self ? neutral : State(root, "Earlier face", Clip("Earlier face", 20));
+            var first = Transition(neutral, earlier, "Group", 1); first.canTransitionToSelf = !self;
+            first.AddCondition(AnimatorConditionMode.NotEqual, 2, "Mode");
+            var later = State(root, "Later face", Clip("Later face", 85));
+            var second = Transition(neutral, later, "Group", 1); second.AddCondition(AnimatorConditionMode.NotEqual, 1, "Mode");
+            var nativeFirst = NativeSelection(new Dictionary<string, float> { ["Group"] = 1, ["Mode"] = 0 }, checkStability: true);
+            Assert.That(nativeFirst.Hash, Is.EqualTo(Animator.StringToHash(controller.layers[0].name + "." + (self ? later : earlier).name)));
+            Assert.That(nativeFirst.Weight, Is.EqualTo(self ? 85 : 20).Within(.01));
+            if (self)
+            {
+                first.canTransitionToSelf = true;
+                var nativeSelf = NativeSelection(new Dictionary<string, float> { ["Group"] = 1, ["Mode"] = 0 }, checkStability: true);
+                Assert.That(nativeSelf.Hash, Is.EqualTo(Animator.StringToHash(controller.layers[0].name + "." + neutral.name)),
+                    "The same native ordinary self transition takes priority when self transition is enabled.");
+                Assert.That(nativeSelf.Weight, Is.EqualTo(0).Within(.01)); first.canTransitionToSelf = false;
+            }
+            var source = Read(); Assert.That(source.Entries.Select(entry => entry.Error), Is.All.Null);
+            var entry = source.Entries.Single(value => value.Name == "FX / Later face");
+            Assert.That(entry.Parameters["Mode"], Is.EqualTo(self ? 0 : 2)); AssertNativeFace(entry, "Later face");
+        }
+
+        [Test]
+        public void StateMachineExitPriorityKeepsItsInnerGateAndLaterNativeFace()
+        {
+            controller.AddParameter("Group", AnimatorControllerParameterType.Int);
+            controller.AddParameter("SelectExit", AnimatorControllerParameterType.Bool);
+            controller.AddParameter("Choice", AnimatorControllerParameterType.Int);
+            var root = controller.layers[0].stateMachine; var nested = root.AddStateMachine("Exit selection");
+            var idle = State(nested, "Exit source", null); nested.defaultState = idle;
+            var enter = neutral.AddTransition(nested); enter.duration = 0; enter.hasExitTime = false;
+            enter.AddCondition(AnimatorConditionMode.Equals, 1, "Group");
+            var exit = idle.AddExitTransition(); exit.duration = 0; exit.hasExitTime = false;
+            exit.AddCondition(AnimatorConditionMode.If, 0, "SelectExit");
+            var earlier = State(root, "Earlier exit face", Clip("Earlier exit face", 20));
+            var later = State(root, "Later exit face", Clip("Later exit face", 85));
+            root.AddStateMachineTransition(nested, earlier).AddCondition(AnimatorConditionMode.NotEqual, 2, "Choice");
+            root.AddStateMachineTransition(nested, later).AddCondition(AnimatorConditionMode.NotEqual, 1, "Choice");
+            Action<AnimatorControllerPlayable> assertDefault = playable => Assert.That(playable.GetCurrentAnimatorStateInfo(0).fullPathHash,
+                Is.EqualTo(Animator.StringToHash(controller.layers[0].name + "." + neutral.name)));
+            var first = NativeSelection(new Dictionary<string, float> { ["Group"] = 1, ["SelectExit"] = 1, ["Choice"] = 0 },
+                afterDefaults: assertDefault, checkStability: true);
+            Assert.That(first.Hash, Is.EqualTo(Animator.StringToHash(controller.layers[0].name + "." + earlier.name)));
+            Assert.That(first.Weight, Is.EqualTo(20).Within(.01));
+            var native = NativeSelection(new Dictionary<string, float> { ["Group"] = 1, ["SelectExit"] = 1, ["Choice"] = 2 },
+                afterDefaults: assertDefault, checkStability: true);
+            Assert.That(native.Hash, Is.EqualTo(Animator.StringToHash(controller.layers[0].name + "." + later.name)));
+            Assert.That(native.Weight, Is.EqualTo(85).Within(.01));
+            var source = Read(); Assert.That(source.Messages, Is.Empty); Assert.That(source.Entries.Select(value => value.Error), Is.All.Null);
+            var entry = source.Entries.Single(value => value.Name == "FX / Later exit face");
+            Assert.That(entry.Parameters["Group"], Is.EqualTo(1)); Assert.That(entry.Parameters["SelectExit"], Is.EqualTo(1));
+            Assert.That(entry.Parameters["Choice"], Is.EqualTo(2)); Assert.That(Weight(entry), Is.EqualTo(native.Weight).Within(.01));
+        }
+
+        StateMachineBehaviour LayerGoal(AnimatorState state, float goal, int target, float duration = 0)
+        {
+            var type = AppDomain.CurrentDomain.GetAssemblies().Select(assembly =>
+                assembly.GetType("VRC.SDK3.Avatars.Components.VRCAnimatorLayerControl")).FirstOrDefault(value => value != null);
+            if (type == null) Assert.Ignore("Install the real VRChat SDK to validate layer-command discovery.");
+            var control = state.AddStateMachineBehaviour(type);
+            using var data = new SerializedObject(control);
+            var playable = data.FindProperty("playable"); playable.enumValueIndex = Array.IndexOf(playable.enumNames, "FX");
+            data.FindProperty("layer").intValue = target; data.FindProperty("goalWeight").floatValue = goal;
+            data.FindProperty("blendDuration").floatValue = duration; data.ApplyModifiedPropertiesWithoutUndo(); return control;
+        }
+
+        AnimatorState WeightCommandGraph(bool enable, string input = "FaceMode", bool curveRelay = false)
+        {
+            controller.AddParameter(input, AnimatorControllerParameterType.Int); neutral.motion = Clip("Native base face", 20);
+            controller.AddLayer("SDK commands"); controller.AddLayer("Controlled face output");
+            var layers = controller.layers; layers[1].defaultWeight = 1; layers[2].defaultWeight = enable ? 0 : 1; controller.layers = layers;
+            var rest = State(layers[1].stateMachine, "Command rest", null); layers[1].stateMachine.defaultState = rest;
+            var selected = State(layers[1].stateMachine, "Selected command", null); Transition(rest, selected, input, 1);
+            LayerGoal(rest, enable ? 0 : 1, 2); LayerGoal(selected, enable ? 1 : 0, 2);
+            Motion output = Clip("Controlled smile", 80);
+            if (curveRelay)
+            {
+                controller.AddParameter("Internal face output", AnimatorControllerParameterType.Float);
+                var clip = new AnimationClip { name = "Native curve relay" };
+                AnimationUtility.SetEditorCurve(clip, EditorCurveBinding.FloatCurve("", typeof(Animator), "Internal face output"),
+                    AnimationCurve.Constant(0, 1, 1)); AssetDatabase.AddObjectToAsset(clip, controller); output = clip;
+                controller.AddLayer("Final face"); var all = controller.layers; all[3].defaultWeight = 1; controller.layers = all;
+                var idle = State(all[3].stateMachine, "Final rest", Clip("Final rest", 20)); all[3].stateMachine.defaultState = idle;
+                Transition(idle, State(all[3].stateMachine, "Final smile", Clip("Final smile", 80)),
+                    "Internal face output", .5f, AnimatorConditionMode.Greater);
+            }
+            layers[2].stateMachine.defaultState = State(layers[2].stateMachine, "Controlled output", output); return selected;
+        }
+
+        [TestCase(true)]
+        [TestCase(false)]
+        public void EmptySdkLayerCommandKeepsTheNativeFaceLayerComposition(bool enable)
+        {
+            WeightCommandGraph(enable);
+            var entry = Read().Entries.Single(); Assert.That(entry.Name, Is.EqualTo("FX / Selected command"));
+            Assert.That(entry.Parameters.Keys, Is.EqualTo(new[] { "FaceMode" }));
+            Assert.That(Weight(entry), Is.EqualTo(enable ? 80 : 20).Within(.01));
+            AssertNativeFace(entry, "Selected command", new Dictionary<int, float> { [2] = enable ? 1 : 0 }, 1);
+        }
+
+        [Test]
+        public void EmptySdkLayerCommandCanControlAnAnimatorCurveRelayToTheFace()
+        {
+            WeightCommandGraph(true, curveRelay: true);
+            var entry = Read().Entries.Single(); Assert.That(entry.Parameters.Keys, Is.EqualTo(new[] { "FaceMode" }));
+            Assert.That(Weight(entry), Is.EqualTo(80).Within(.01));
+            AssertNativeFace(entry, "Selected command", new Dictionary<int, float> { [2] = 1 }, 1);
+        }
+
+        [Test]
+        public void DriverRelayToSdkLayerCommandKeepsTheActualRootSelection()
+        {
+            WeightCommandGraph(true, "Internal command signal"); controller.AddParameter("UserFace", AnimatorControllerParameterType.Int);
+            var producer = State(controller.layers[0].stateMachine, "Authored command relay", null);
+            Transition(neutral, producer, "UserFace", 1);
+            ParameterDriverExpressionTests.Driver(producer, ParameterDriverExpressionTests.Op("Set", "Internal command signal", 1));
+            var entry = Read().Entries.Single(); Assert.That(entry.Name, Is.EqualTo("FX / Authored command relay"));
+            Assert.That(entry.Parameters.Keys, Is.EqualTo(new[] { "UserFace" })); Assert.That(entry.Error, Is.Null);
+            // Apply the fixture's explicit Set operation and layer goal to
+            // the original graph for an independent native output oracle.
+            var native = NativeSelection(new Dictionary<string, float> { ["UserFace"] = 1, ["Internal command signal"] = 1 },
+                new Dictionary<int, float> { [2] = 1 });
+            Assert.That(native.Hash, Is.EqualTo(Animator.StringToHash(controller.layers[0].name + "." + producer.name)));
+            Assert.That(Weight(entry), Is.EqualTo(native.Weight).Within(.01)); Assert.That(Weight(entry), Is.EqualTo(80).Within(.01));
+        }
+
+        [TestCase("duration")]
+        [TestCase("target")]
+        [TestCase("callback")]
+        public void EmptySdkLayerCommandRetainsUnsupportedOrMalformedDiagnostics(string kind)
+        {
+            var selected = WeightCommandGraph(true);
+            if (kind == "callback") selected.AddStateMachineBehaviour<UnknownStateCallbackProbe>();
+            else
+            {
+                using var data = new SerializedObject(selected.behaviours.Single());
+                if (kind == "duration") data.FindProperty("blendDuration").floatValue = .5f;
+                else data.FindProperty("layer").intValue = 99;
+                data.ApplyModifiedPropertiesWithoutUndo();
+            }
+            var source = Read(); Assert.That(source.Entries.Where(entry => entry.Error == null), Is.Empty);
+            if (kind == "target") Assert.That(source.Messages.Single(), Does.Contain("レイヤー制御").And.Contain("99"));
+            else Assert.That(source.Entries.Single().Error, Is.Not.Null.And.Not.Empty);
+            Assert.That(source.Entries.SelectMany(entry => entry.Values), Is.Empty);
+        }
+
+        [Test]
+        public void ClothingOnlySdkLayerCommandCannotCreateAFacialCandidate()
+        {
+            WeightCommandGraph(true);
+            var output = controller.layers[2].stateMachine.defaultState;
+            var clip = new AnimationClip { name = "Clothing only" };
+            AnimationUtility.SetEditorCurve(clip, EditorCurveBinding.FloatCurve("Clothes", typeof(GameObject), "m_IsActive"),
+                AnimationCurve.Constant(0, 1, 1)); AssetDatabase.AddObjectToAsset(clip, controller); output.motion = clip;
+            var source = Read(); Assert.That(source.Entries, Is.Empty); Assert.That(source.Messages, Is.Empty);
         }
 
         [Test]
@@ -826,8 +1279,9 @@ namespace VRVlog.LilToonExporter.Tests
                 Transition(neutral, state, "FaceChoice", 1);
             }
             var entries = Read().Entries;
-            var rejected = entries.Single(entry => entry.Name == "FX / Lower priority");
-            Assert.That(rejected.Error, Does.Contain("状態に到達")); Assert.That(rejected.Values, Is.Empty);
+            var selected = entries.Single(); Assert.That(selected.Error, Is.Null);
+            Assert.That(selected.Name, Is.EqualTo("FX / Higher priority"));
+            Assert.That(Weight(selected), Is.EqualTo(20).Within(.01));
         }
 
         [Test]

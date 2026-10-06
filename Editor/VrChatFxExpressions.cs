@@ -23,6 +23,7 @@ namespace VRVlog.LilToonExporter
             internal AnimatorState State;
             internal string Path, Error;
             internal Dictionary<string, float> Values, DefaultValues;
+            internal bool SpeculativeWarmStart;
         }
 
         sealed class Point
@@ -31,11 +32,18 @@ namespace VRVlog.LilToonExporter
             internal bool PreservesInputs;
         }
 
+        sealed class Constraint
+        {
+            internal AnimatorCondition Condition;
+            internal bool Negated;
+        }
+
         sealed class Edge
         {
             internal AnimatorStateMachine Owner, SourceMachine;
             internal AnimatorState Source;
             internal AnimatorTransitionBase Transition;
+            internal IEnumerable<AnimatorTransitionBase> PreviousEntries;
         }
 
         internal static void Add(GameObject avatar, VrChatExpressionMenu.Source source,
@@ -95,6 +103,7 @@ namespace VRVlog.LilToonExporter
                         }
                         catch (InvalidOperationException error)
                         {
+                            if (candidate.SpeculativeWarmStart) continue;
                             entry.Error = error.Message; entry.Values.Clear(); entry.Unevaluated.Clear();
                         }
                     }
@@ -133,6 +142,8 @@ namespace VRVlog.LilToonExporter
             // manufacture a facial state by overriding an internal signal.
             var drivers = new Dictionary<StateMachineBehaviour, VrChatParameterDriver.Program>();
             var dependencies = ExpressionDependencies.Inspect(source.Controller, excludedPath, drivers, new List<string>());
+            var weightControls = dependencies.SelectMany(value => value.WeightControls)
+                .GroupBy(pair => pair.Key).ToDictionary(group => group.Key, group => group.First().Value);
             var writtenInputs = new HashSet<string>(dependencies.SelectMany(value => value.CurveWrites.Concat(value.DriverWrites)), StringComparer.Ordinal);
             // Follow graph outputs backwards from morph-reading layers, so an
             // empty state that selects a complete face through driver relays is
@@ -144,6 +155,10 @@ namespace VRVlog.LilToonExporter
             {
                 changed = false;
                 foreach (var dependency in dependencies.Where(value => value.Writes.Overlaps(faceInputs)))
+                    foreach (var input in dependency.Reads) changed |= faceInputs.Add(input);
+                foreach (var dependency in dependencies.Where(value => value.WeightControls.Values.Any(control =>
+                    control.AnimatorLayer && control.Playable == "FX" && (dependencies[control.LayerIndex].Morphs.Count > 0 ||
+                        dependencies[control.LayerIndex].Writes.Overlaps(faceInputs)))))
                     foreach (var input in dependency.Reads) changed |= faceInputs.Add(input);
             } while (changed);
             bool UserInput(string name) => source.ExpressionParameters.Contains(name) || source.MenuInputs.Contains(name);
@@ -186,15 +201,53 @@ namespace VRVlog.LilToonExporter
                         if (child.state == null || paths.ContainsKey(child.state))
                             throw new InvalidOperationException("FXの状態参照が不正です。");
                         paths.Add(child.state, path + "." + child.state.name); owners.Add(child.state, machine);
+                        var previousStateTransitions = new List<AnimatorTransitionBase>();
                         foreach (var transition in Enabled(child.state.transitions))
-                            edges.Add(new Edge { Owner = machine, Source = child.state, Transition = transition });
+                        {
+                            Visit();
+                            // Native Animator also makes an ordinary self
+                            // transition ineligible when this flag is false.
+                            if (transition.destinationState == child.state && !transition.canTransitionToSelf) continue;
+                            edges.Add(new Edge { Owner = machine, Source = child.state, Transition = transition,
+                                PreviousEntries = previousStateTransitions.Take(previousStateTransitions.Count) });
+                            // Timed transitions have an additional native
+                            // eligibility condition, not just their parameters.
+                            if (!transition.hasExitTime) previousStateTransitions.Add(transition);
+                        }
                     }
-                    foreach (var transition in Enabled(machine.anyStateTransitions).Cast<AnimatorTransitionBase>().Concat(Enabled(machine.entryTransitions)))
-                        edges.Add(new Edge { Owner = machine, Transition = transition });
+                    var previousAnyTransitions = new List<AnimatorStateTransition>();
+                    foreach (var transition in Enabled(machine.anyStateTransitions))
+                    {
+                        Visit();
+                        edges.Add(new Edge { Owner = machine, Transition = transition, PreviousEntries = previousAnyTransitions.Take(previousAnyTransitions.Count)
+                            // Without an active source, a self-disabled prior
+                            // may be ineligible during default initialization.
+                            // Its outcome remains subject to the native proof.
+                            .Where(previous => previous.canTransitionToSelf).Cast<AnimatorTransitionBase>() });
+                        if (!transition.hasExitTime) previousAnyTransitions.Add(transition);
+                    }
+                    var previousEntries = new List<AnimatorTransitionBase>();
+                    foreach (var transition in Enabled(machine.entryTransitions))
+                    {
+                        Visit();
+                        // A manually serialized Entry -> Exit has no actual
+                        // source state and can crash native Animator playback.
+                        // Reject it before sampling any inferred candidate.
+                        if (transition.isExit)
+                            throw new InvalidOperationException("FXのEntryからExitへの直接遷移は安全に評価できません。Entryの行き先を実際の状態に設定してください。");
+                        edges.Add(new Edge { Owner = machine, Transition = transition, PreviousEntries = previousEntries.Take(previousEntries.Count) });
+                        previousEntries.Add(transition);
+                    }
                     foreach (var child in machine.stateMachines)
                     {
+                        var previousMachineTransitions = new List<AnimatorTransitionBase>();
                         foreach (var transition in Enabled(machine.GetStateMachineTransitions(child.stateMachine)))
-                            edges.Add(new Edge { Owner = machine, SourceMachine = child.stateMachine, Transition = transition });
+                        {
+                            Visit();
+                            edges.Add(new Edge { Owner = machine, SourceMachine = child.stateMachine, Transition = transition,
+                                PreviousEntries = previousMachineTransitions.Take(previousMachineTransitions.Count) });
+                            previousMachineTransitions.Add(transition);
+                        }
                         Index(child.stateMachine, path + "." + child.stateMachine.name, machine, depth + 1);
                     }
                 }
@@ -205,10 +258,42 @@ namespace VRVlog.LilToonExporter
                     .GroupBy(edge => edge.Transition.destinationState).ToDictionary(group => group.Key, group => group.ToArray());
                 var exits = edges.Where(edge => edge.Transition.isExit)
                     .GroupBy(edge => edge.Owner).ToDictionary(group => group.Key, group => group.ToArray());
-                IEnumerable<AnimatorCondition[]> SourceGates(Edge edge, HashSet<UnityEngine.Object> stack) =>
-                    edge.Source != null ? StateGates(edge.Source, stack) : edge.SourceMachine != null ? ExitGates(edge.SourceMachine, stack) :
+                Constraint[] Append(Constraint[] gate, IEnumerable<AnimatorCondition> conditions) => gate.Concat(
+                    conditions.Select(condition => new Constraint { Condition = condition })).ToArray();
+                IEnumerable<Constraint[]> Fallthrough(Constraint[] gate, IEnumerable<AnimatorTransitionBase> entries)
+                {
+                    var alternatives = new List<Constraint[]> { gate };
+                    foreach (var entry in entries)
+                    {
+                        // !(A && B) is !A || !B. Keep the original comparison
+                        // plus its logical negation, including Float equality
+                        // at the boundary of a negated Greater/Less condition.
+                        if (entry.conditions.Length == 0) yield break;
+                        var next = new List<Constraint[]>();
+                        foreach (var alternative in alternatives)
+                            foreach (var condition in entry.conditions)
+                            {
+                                Visit();
+                                next.Add(alternative.Concat(new[] { new Constraint { Condition = condition, Negated = true } }).ToArray());
+                            }
+                        alternatives = next;
+                    }
+                    foreach (var alternative in alternatives) yield return alternative;
+                }
+                IEnumerable<Constraint[]> SourceGates(Edge edge, HashSet<UnityEngine.Object> stack)
+                {
+                    var gates = edge.Source != null ? StateGates(edge.Source, stack) : edge.SourceMachine != null ? ExitGates(edge.SourceMachine, stack) :
                         Gates(edge.Owner, stack);
-                IEnumerable<AnimatorCondition[]> ExitGates(AnimatorStateMachine machine, HashSet<UnityEngine.Object> stack)
+                    foreach (var gate in gates)
+                        if (edge.PreviousEntries == null) yield return gate;
+                        else foreach (var prior in Fallthrough(gate, edge.PreviousEntries)) yield return prior;
+                }
+                IEnumerable<Constraint[]> DefaultGates(AnimatorStateMachine machine, HashSet<UnityEngine.Object> stack)
+                {
+                    foreach (var gate in Gates(machine, stack))
+                        foreach (var fallback in Fallthrough(gate, Enabled(machine.entryTransitions))) yield return fallback;
+                }
+                IEnumerable<Constraint[]> ExitGates(AnimatorStateMachine machine, HashSet<UnityEngine.Object> stack)
                 {
                     Visit();
                     if (!exits.TryGetValue(machine, out var entries)) yield break;
@@ -223,12 +308,12 @@ namespace VRVlog.LilToonExporter
                         try
                         {
                             foreach (var previous in SourceGates(entry, stack))
-                                yield return previous.Concat(entry.Transition.conditions).ToArray();
+                                yield return Append(previous, entry.Transition.conditions);
                         }
                         finally { stack.Remove(entry.Transition); }
                     }
                 }
-                IEnumerable<AnimatorCondition[]> Gates(AnimatorStateMachine machine, HashSet<UnityEngine.Object> stack)
+                IEnumerable<Constraint[]> Gates(AnimatorStateMachine machine, HashSet<UnityEngine.Object> stack)
                 {
                     Visit();
                     if (stack.Count >= MaximumDepth)
@@ -237,14 +322,14 @@ namespace VRVlog.LilToonExporter
                     try
                     {
                         if (parents[machine] == null || !incoming.TryGetValue(machine, out var entries))
-                        { yield return Array.Empty<AnimatorCondition>(); yield break; }
+                        { yield return Array.Empty<Constraint>(); yield break; }
                         foreach (var entry in entries)
                             foreach (var previous in SourceGates(entry, stack))
-                                yield return previous.Concat(entry.Transition.conditions).ToArray();
+                                yield return Append(previous, entry.Transition.conditions);
                     }
                     finally { stack.Remove(machine); }
                 }
-                IEnumerable<AnimatorCondition[]> StateGates(AnimatorState state, HashSet<UnityEngine.Object> stack)
+                IEnumerable<Constraint[]> StateGates(AnimatorState state, HashSet<UnityEngine.Object> stack)
                 {
                     Visit();
                     if (stack.Count >= MaximumDepth)
@@ -253,62 +338,87 @@ namespace VRVlog.LilToonExporter
                     try
                     {
                         var owner = owners[state];
-                        if (owner.defaultState == state || !incomingStates.TryGetValue(state, out var entries))
+                        if (owner.defaultState == state)
+                            foreach (var gate in DefaultGates(owner, stack)) yield return gate;
+                        else if (!incomingStates.TryGetValue(state, out _))
                             foreach (var gate in Gates(owner, stack)) yield return gate;
-                        if (incomingStates.TryGetValue(state, out entries))
+                        if (incomingStates.TryGetValue(state, out var entries))
                             foreach (var entry in entries)
                                 foreach (var prior in SourceGates(entry, stack))
-                                    yield return prior.Concat(entry.Transition.conditions).ToArray();
+                                    yield return Append(prior, entry.Transition.conditions);
                     }
                     finally { stack.Remove(state); }
                 }
-                var routes = new List<(AnimatorState State, AnimatorCondition[] Conditions)>();
-                void Destination(AnimatorTransitionBase transition, AnimatorCondition[] conditions, HashSet<AnimatorStateMachine> stack)
+                int WarmPrefix(Constraint[] gate) => gate.All(constraint => !string.IsNullOrEmpty(constraint.Condition.parameter) &&
+                    defaults.TryGetValue(constraint.Condition.parameter, out var value) &&
+                    Matches(constraint.Condition, value) != constraint.Negated) ? gate.Length : 0;
+                var routes = new List<(AnimatorState State, Constraint[] Conditions, int WarmPrefix)>();
+                void Destination(AnimatorTransitionBase transition, Constraint[] conditions, HashSet<AnimatorStateMachine> stack, int warmPrefix)
                 {
                     Visit();
                     if (transition.destinationState != null && paths.ContainsKey(transition.destinationState))
-                        routes.Add((transition.destinationState, conditions));
+                        routes.Add((transition.destinationState, conditions, warmPrefix));
                     var machine = transition.destinationStateMachine;
                     if (machine == null || !parents.ContainsKey(machine) || !stack.Add(machine)) return;
                     try
                     {
+                        var previousEntries = new List<AnimatorTransitionBase>();
                         foreach (var entry in Enabled(machine.entryTransitions))
                         {
-                            Destination(entry, conditions.Concat(entry.conditions).ToArray(), stack);
+                            foreach (var prior in Fallthrough(conditions, previousEntries))
+                                Destination(entry, Append(prior, entry.conditions), stack, warmPrefix);
                             if (entry.conditions.Length == 0) return;
+                            previousEntries.Add(entry);
                         }
-                        if (machine.defaultState != null) routes.Add((machine.defaultState, conditions));
+                        if (machine.defaultState != null)
+                            foreach (var fallback in Fallthrough(conditions, previousEntries)) routes.Add((machine.defaultState, fallback, warmPrefix));
                     }
                     finally { stack.Remove(machine); }
                 }
                 foreach (var edge in edges)
                     foreach (var gate in SourceGates(edge, new HashSet<UnityEngine.Object>()))
-                        Destination(edge.Transition, gate.Concat(edge.Transition.conditions).ToArray(), new HashSet<AnimatorStateMachine>());
+                        Destination(edge.Transition, Append(gate, edge.Transition.conditions), new HashSet<AnimatorStateMachine>(), WarmPrefix(gate));
                 // A default BlendTree may expose a face slider without any
                 // transition at all. Include its authored control points too.
                 foreach (var state in paths.Keys)
                     if (EffectiveMotion(controller, state, layer) is BlendTree)
-                        foreach (var gate in StateGates(state, new HashSet<UnityEngine.Object>())) routes.Add((state, gate));
+                        foreach (var gate in StateGates(state, new HashSet<UnityEngine.Object>())) routes.Add((state, gate, WarmPrefix(gate)));
                 foreach (var route in routes)
                 {
                     var motion = EffectiveMotion(controller, route.State, layer);
-                    var driverMorph = (controller.GetStateEffectiveBehaviours(route.State, layer) ?? Array.Empty<StateMachineBehaviour>())
+                    var behaviours = controller.GetStateEffectiveBehaviours(route.State, layer) ?? Array.Empty<StateMachineBehaviour>();
+                    var driverMorph = behaviours
                         .Any(behaviour => behaviour != null && drivers.TryGetValue(behaviour, out var program) &&
                             (program.Error != null || program.Operations.Any(operation => faceInputs.Contains(operation.Destination))));
-                    if (!driverMorph && !HasFaceOutput(motion, replacements, excludedPath, faceInputs, new HashSet<Motion>(), Visit)) continue;
+                    var weightMorph = behaviours.Any(behaviour => behaviour != null && weightControls.TryGetValue(behaviour, out var control) &&
+                        control.AnimatorLayer && control.Playable == "FX" && (dependencies[control.LayerIndex].Morphs.Count > 0 ||
+                            dependencies[control.LayerIndex].Writes.Overlaps(faceInputs)));
+                    if (!driverMorph && !weightMorph && !HasFaceOutput(motion, replacements, excludedPath, faceInputs, new HashSet<Motion>(), Visit)) continue;
                     var points = motion is BlendTree tree ? Points(tree, Selectable, new HashSet<BlendTree>(), Visit).ToArray() :
                         new[] { new Point() };
                     if (points.Length == 0) continue;
                     foreach (var point in points)
                     {
-                        if (!route.Conditions.Any(condition => Selectable(condition.parameter)) && !point.Values.Keys.Any(Selectable)) continue;
+                        if (!route.Conditions.Any(constraint => Selectable(constraint.Condition.parameter)) && !point.Values.Keys.Any(Selectable)) continue;
                         var values = Solve(route.Conditions, point.Values, parameters, defaults, Selectable, out var error);
+                        var speculativeWarmStart = false;
+                        // A gate established during the sampler's native default
+                        // initialization need not remain true after selection.
+                        // Only try this when that past gate matches every default
+                        // and is the reason the current conjunction is unsolvable.
+                        // Full native reachability/stability must still succeed.
+                        if (values == null && route.WarmPrefix > 0)
+                        {
+                            values = Solve(route.Conditions.Skip(route.WarmPrefix), point.Values, parameters, defaults, Selectable, out error);
+                            speculativeWarmStart = true;
+                        }
                         if (values == null || error == null && values.All(pair => defaults.TryGetValue(pair.Key, out var value) && value == pair.Value)) continue;
                         if (!emitted.Add(layer + "/" + paths[route.State] + "/" + Assignment(values) + "/" + error)) continue;
                         if (++candidates > MaximumCandidates)
                             throw new InvalidOperationException("FXの自動表情候補が256件を超えています。表情の登録を整理してください。");
                         yield return new Candidate { Layer = layer, State = route.State, Path = paths[route.State], Values = values,
-                            DefaultValues = point.PreservesInputs ? values.Keys.ToDictionary(name => name,
+                            SpeculativeWarmStart = speculativeWarmStart,
+                            DefaultValues = point.PreservesInputs || weightMorph ? values.Keys.ToDictionary(name => name,
                                 name => defaults.TryGetValue(name, out var value) ? value : 0, StringComparer.Ordinal) : null,
                             Error = paths.Values.Count(path => path == paths[route.State]) != 1 ? "FXの表情状態のパスが重複しています。状態名を確認してください。" : error };
                     }
@@ -316,13 +426,13 @@ namespace VRVlog.LilToonExporter
             }
         }
 
-        static Dictionary<string, float> Solve(IEnumerable<AnimatorCondition> conditions, IDictionary<string, float> point,
+        static Dictionary<string, float> Solve(IEnumerable<Constraint> conditions, IDictionary<string, float> point,
             IDictionary<string, AnimatorControllerParameter> parameters, IDictionary<string, float> defaults,
             Func<string, bool> selectable, out string error)
         {
             error = null;
             var result = new Dictionary<string, float>(point, StringComparer.Ordinal);
-            foreach (var group in conditions.GroupBy(condition => condition.parameter))
+            foreach (var group in conditions.GroupBy(constraint => constraint.Condition.parameter))
             {
                 if (string.IsNullOrEmpty(group.Key) || !parameters.TryGetValue(group.Key, out var parameter))
                 { error = "FXの条件のパラメーターがありません: " + group.Key; return result; }
@@ -330,24 +440,24 @@ namespace VRVlog.LilToonExporter
                 { error = "Triggerの条件は固定表情として再現できません: " + group.Key; return result; }
                 var constraints = group.ToArray();
                 var current = result.TryGetValue(group.Key, out var selected) ? selected : defaults[group.Key];
-                if (!Finite(current) || constraints.Any(condition => !Finite(condition.threshold)))
+                if (!Finite(current) || constraints.Any(constraint => !Finite(constraint.Condition.threshold)))
                 { error = "FXの条件の値が不正です: " + group.Key; return result; }
-                if (constraints.Any(condition => !ValidMode(parameter.type, condition.mode)))
+                if (constraints.Any(constraint => !ValidMode(parameter.type, constraint.Condition.mode)))
                 { error = "FXの条件の型と比較方法を再現できません: " + group.Key; return result; }
-                bool Accept(float value) => constraints.All(condition => Matches(condition, value));
+                bool Accept(float value) => constraints.All(constraint => Matches(constraint.Condition, value) != constraint.Negated);
                 if (!selectable(group.Key) || result.ContainsKey(group.Key))
                 { if (!Accept(current)) return null; }
                 else
                 {
                     var options = new List<float> { current };
-                    foreach (var condition in constraints)
+                    foreach (var constraint in constraints)
                     {
+                        var condition = constraint.Condition;
                         var step = parameter.type == AnimatorControllerParameterType.Int ? 1f : Mathf.Max(.001f, Mathf.Abs(condition.threshold) * .0001f);
-                        if (condition.mode == AnimatorConditionMode.If) options.Add(1);
-                        else if (condition.mode == AnimatorConditionMode.IfNot) options.Add(0);
+                        if (condition.mode == AnimatorConditionMode.If || condition.mode == AnimatorConditionMode.IfNot) { options.Add(0); options.Add(1); }
                         else { options.Add(condition.threshold); options.Add(condition.threshold + step); options.Add(condition.threshold - step); }
                     }
-                    var boundaries = constraints.Select(condition => condition.threshold).Distinct().OrderBy(value => value).ToArray();
+                    var boundaries = constraints.Select(constraint => constraint.Condition.threshold).Distinct().OrderBy(value => value).ToArray();
                     for (var index = 1; index < boundaries.Length; index++)
                     {
                         var middle = ((double)boundaries[index - 1] + boundaries[index]) * .5;
