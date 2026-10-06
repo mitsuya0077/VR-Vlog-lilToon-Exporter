@@ -146,6 +146,50 @@ namespace VRVlog.LilToonExporter.Tests
         }
 
         [Test]
+        public void NestedMachineEntryRetainsItsPrecedingStateGate()
+        {
+            controller.AddParameter("EnableFaces", AnimatorControllerParameterType.Bool);
+            controller.AddParameter("FaceMode", AnimatorControllerParameterType.Bool);
+            controller.AddParameter("FaceChoice", AnimatorControllerParameterType.Int);
+            var root = controller.layers[0].stateMachine;
+            var gate = State(root, "Face gate", null);
+            Transition(neutral, gate, "EnableFaces", 0, AnimatorConditionMode.If);
+            var nested = root.AddStateMachine("Authored faces");
+            var idle = State(nested, "Nested neutral", Clip("Nested neutral", 0)); nested.defaultState = idle;
+            var face = State(nested, "Nested smile", Clip("Smile", 65));
+            var enter = gate.AddTransition(nested); enter.duration = 0; enter.hasExitTime = false;
+            enter.AddCondition(AnimatorConditionMode.If, 0, "FaceMode");
+            Transition(idle, face, "FaceChoice", 2);
+            var entry = Read().Entries.Single(value => value.Name == "FX / Nested smile");
+            Assert.That(entry.Parameters["EnableFaces"], Is.EqualTo(1));
+            Assert.That(entry.Parameters["FaceMode"], Is.EqualTo(1));
+            Assert.That(entry.Parameters["FaceChoice"], Is.EqualTo(2));
+            Assert.That(entry.Error, Is.Null); Assert.That(Weight(entry), Is.EqualTo(65).Within(.01));
+        }
+
+        [Test]
+        public void NestedEntryStateCycleTerminatesWithoutLosingAnIndependentExpression()
+        {
+            controller.AddParameter("EnableFaces", AnimatorControllerParameterType.Bool);
+            controller.AddParameter("FaceMode", AnimatorControllerParameterType.Bool);
+            controller.AddParameter("FaceChoice", AnimatorControllerParameterType.Int);
+            var root = controller.layers[0].stateMachine;
+            var gate = State(root, "Face gate", null);
+            Transition(neutral, gate, "EnableFaces", 0, AnimatorConditionMode.If);
+            var nested = root.AddStateMachine("Nested relay");
+            var idle = State(nested, "Relay idle", null); nested.defaultState = idle;
+            var enter = gate.AddTransition(nested); enter.duration = 0; enter.hasExitTime = false;
+            enter.AddCondition(AnimatorConditionMode.If, 0, "FaceMode");
+            Transition(idle, gate, "FaceMode", 0, AnimatorConditionMode.If);
+            var face = State(root, "Independent smile", Clip("Smile", 65)); Transition(neutral, face, "FaceChoice", 2);
+            var source = Read();
+            Assert.That(source.Messages, Is.Empty);
+            Assert.That(source.Entries.Single().Error, Is.Null);
+            Assert.That(source.Entries.Single().Name, Is.EqualTo("FX / Independent smile"));
+            Assert.That(Weight(source.Entries.Single()), Is.EqualTo(65).Within(.01));
+        }
+
+        [Test]
         public void OneDimensionalTreePublishesAuthoredSelectionsThroughNativeBlending()
         {
             controller.AddParameter("ExpressionStrength", AnimatorControllerParameterType.Float);
@@ -212,6 +256,87 @@ namespace VRVlog.LilToonExporter.Tests
             Assert.That(Weight(entry), Is.EqualTo(30).Within(.01));
         }
 
+        [TestCase(true)]
+        [TestCase(false)]
+        public void RuntimeParentKeepsInnerUserControlAtTheFixedEnvironment(bool active)
+        {
+            controller.AddParameter("ExpressionStrength", AnimatorControllerParameterType.Float);
+            controller.AddParameter("GestureRightWeight", AnimatorControllerParameterType.Float);
+            var child = new BlendTree { name = "User faces", blendType = BlendTreeType.Simple1D,
+                blendParameter = "ExpressionStrength", useAutomaticThresholds = false };
+            var root = new BlendTree { name = "Runtime parent", blendType = BlendTreeType.Simple1D,
+                blendParameter = "GestureRightWeight", useAutomaticThresholds = false };
+            AssetDatabase.AddObjectToAsset(child, controller); AssetDatabase.AddObjectToAsset(root, controller);
+            child.AddChild(Clip("Weak face", 20), 0); child.AddChild(Clip("Strong face", 80), 1);
+            root.AddChild(active ? (Motion)child : Clip("Runtime rest", 35), 0);
+            root.AddChild(active ? Clip("Other runtime face", 35) : (Motion)child, 1); neutral.motion = root;
+            var source = Read();
+            if (active)
+            {
+                var entry = source.Entries.Single(); Assert.That(entry.Error, Is.Null);
+                Assert.That(entry.Parameters.Keys, Is.EqualTo(new[] { "ExpressionStrength" }));
+                Assert.That(entry.Parameters["ExpressionStrength"], Is.EqualTo(1));
+                Assert.That(Weight(entry), Is.EqualTo(80).Within(.01));
+            }
+            else
+            {
+                Assert.That(source.Entries, Is.Empty);
+                Assert.That(source.Messages.Single(), Does.Contain("顔の変化がない"));
+            }
+        }
+
+        [TestCase(true)]
+        [TestCase(false)]
+        public void GeneratedParentKeepsItsAuthoredValueWhileDiscoveringInnerUserControls(bool active)
+        {
+            controller.AddParameter("ExpressionStrength", AnimatorControllerParameterType.Float);
+            controller.AddParameter(new AnimatorControllerParameter { name = "__MA/ActiveSelfProxy/Gate##0",
+                type = AnimatorControllerParameterType.Float, defaultFloat = active ? 1 : 0 });
+            var child = new BlendTree { name = "User faces", blendType = BlendTreeType.Simple1D,
+                blendParameter = "ExpressionStrength", useAutomaticThresholds = false };
+            var root = new BlendTree { name = "Generated parent", blendType = BlendTreeType.Simple1D,
+                blendParameter = "__MA/ActiveSelfProxy/Gate##0", useAutomaticThresholds = false };
+            AssetDatabase.AddObjectToAsset(child, controller); AssetDatabase.AddObjectToAsset(root, controller);
+            child.AddChild(Clip("Weak face", 20), 0); child.AddChild(Clip("Strong face", 80), 1);
+            root.AddChild(Clip("Inactive face", 35), 0); root.AddChild(child, 1); neutral.motion = root;
+            var source = Read();
+            if (active)
+            {
+                var entry = source.Entries.Single(); Assert.That(entry.Error, Is.Null);
+                Assert.That(entry.Parameters.Keys, Is.EqualTo(new[] { "ExpressionStrength" }));
+                Assert.That(Weight(entry), Is.EqualTo(80).Within(.01));
+            }
+            else
+            {
+                Assert.That(source.Entries, Is.Empty);
+                Assert.That(source.Messages.Single(), Does.Contain("顔の変化がない"));
+            }
+        }
+
+        [Test]
+        public void DirectTreeRetainsReadonlyWeightsWhileDiscoveringItsNestedUserControl()
+        {
+            controller.AddParameter("ExpressionStrength", AnimatorControllerParameterType.Float);
+            controller.AddParameter(new AnimatorControllerParameter { name = "__MA/ActiveSelfProxy/Gate##0",
+                type = AnimatorControllerParameterType.Float, defaultFloat = .5f });
+            controller.AddParameter("IsLocal", AnimatorControllerParameterType.Float);
+            var child = new BlendTree { name = "User faces", blendType = BlendTreeType.Simple1D,
+                blendParameter = "ExpressionStrength", useAutomaticThresholds = false };
+            var root = new BlendTree { name = "Mixed readonly direct weights", blendType = BlendTreeType.Direct };
+            AssetDatabase.AddObjectToAsset(child, controller); AssetDatabase.AddObjectToAsset(root, controller);
+            child.AddChild(Clip("Weak face", 20), 0); child.AddChild(Clip("Strong face", 80), 1);
+            root.AddChild(child); root.AddChild(Clip("Constant contribution", 20));
+            var children = root.children; children[0].directBlendParameter = "__MA/ActiveSelfProxy/Gate##0";
+            children[1].directBlendParameter = "IsLocal"; root.children = children;
+            using (var data = new SerializedObject(root))
+            { data.FindProperty("m_NormalizedBlendValues").boolValue = false; data.ApplyModifiedPropertiesWithoutUndo(); }
+            neutral.motion = root;
+            var entry = Read().Entries.Single(); Assert.That(entry.Error, Is.Null);
+            Assert.That(entry.Parameters.Keys, Is.EqualTo(new[] { "ExpressionStrength" }));
+            Assert.That(Weight(entry), Is.EqualTo(60).Within(.01),
+                "The generated half-weight and normal local weight must both remain in native composition.");
+        }
+
         [Test]
         public void TwoDimensionalTreeUsesItsAuthoredCoordinates()
         {
@@ -258,6 +383,127 @@ namespace VRVlog.LilToonExporter.Tests
             ParameterDriverExpressionTests.Driver(selected, ParameterDriverExpressionTests.Op("Set", "LowerChoice", 1));
             var entry = Read().Entries.Single(value => value.Name == "FX / Callback smile");
             Assert.That(entry.Error, Is.Null); Assert.That(Weight(entry), Is.EqualTo(70).Within(.01));
+        }
+
+        [TestCase(false)]
+        [TestCase(true)]
+        public void DriverOnlyRootControlKeepsCompleteNativeFaceWithoutSelectingItsInternalOutputs(bool relay)
+        {
+            controller.AddParameter("FaceMode", AnimatorControllerParameterType.Int);
+            controller.AddParameter("MouthChoice", AnimatorControllerParameterType.Int);
+            controller.AddParameter("EyelidChoice", AnimatorControllerParameterType.Int);
+            neutral.motion = null;
+            var selected = State(controller.layers[0].stateMachine, "Authored whole face", null);
+            Transition(neutral, selected, "FaceMode", 1);
+            var producer = selected;
+            if (relay)
+            {
+                controller.AddParameter("FaceRelay", AnimatorControllerParameterType.Int);
+                ParameterDriverExpressionTests.Driver(selected, ParameterDriverExpressionTests.Op("Set", "FaceRelay", 1));
+                controller.AddLayer("Relay"); var layers = controller.layers; layers[layers.Length - 1].defaultWeight = 1; controller.layers = layers;
+                var machine = layers[layers.Length - 1].stateMachine;
+                var idle = State(machine, "Relay idle", null); machine.defaultState = idle;
+                producer = State(machine, "Relay whole face", null); Transition(idle, producer, "FaceRelay", 1);
+            }
+            ParameterDriverExpressionTests.Driver(producer, ParameterDriverExpressionTests.Op("Set", "MouthChoice", 1),
+                ParameterDriverExpressionTests.Op("Set", "EyelidChoice", 1));
+            controller.AddLayer("Mouth"); controller.AddLayer("Eyelids");
+            var outputs = controller.layers; outputs[outputs.Length - 2].defaultWeight = 1; outputs[outputs.Length - 1].defaultWeight = 1;
+            controller.layers = outputs;
+            var mouth = outputs[outputs.Length - 2].stateMachine;
+            var mouthRest = State(mouth, "Mouth rest", Clip("Mouth rest", 0)); mouth.defaultState = mouthRest;
+            Transition(mouthRest, State(mouth, "Selected mouth", Clip("Selected mouth", 75)), "MouthChoice", 1);
+            AnimationClip EyelidClip(string name, float weight)
+            {
+                var clip = new AnimationClip { name = name };
+                AnimationUtility.SetEditorCurve(clip, EditorCurveBinding.FloatCurve("Face", typeof(SkinnedMeshRenderer), "blendShape.Blink"),
+                    AnimationCurve.Constant(0, 1, weight)); AssetDatabase.AddObjectToAsset(clip, controller); return clip;
+            }
+            var eyelids = outputs[outputs.Length - 1].stateMachine;
+            var eyelidRest = State(eyelids, "Eyelid rest", EyelidClip("Eyelid rest", 0)); eyelids.defaultState = eyelidRest;
+            Transition(eyelidRest, State(eyelids, "Selected eyelids", EyelidClip("Selected eyelids", 100)), "EyelidChoice", 1);
+            var entry = Read().Entries.Single(); Assert.That(entry.Error, Is.Null);
+            Assert.That(entry.Name, Is.EqualTo("FX / Authored whole face"));
+            Assert.That(entry.Parameters.Keys, Is.EqualTo(new[] { "FaceMode" }));
+            Assert.That(Weight(entry), Is.EqualTo(75).Within(.01));
+            Assert.That(entry.Values.Single(value => value.Shape == "Blink").Weight, Is.EqualTo(100).Within(.01));
+            Assert.That(entry.Values, Has.Count.EqualTo(2), "Internal mouth/eyelid/relay values must never become partial inferred selections.");
+            Assert.That(avatar.GetComponentInChildren<SkinnedMeshRenderer>().GetBlendShapeWeight(1), Is.EqualTo(0));
+        }
+
+        [Test]
+        public void ExplicitlyDeclaredDriverOutputRemainsAnAuthoredInput()
+        {
+            controller.AddParameter("FaceChoice", AnimatorControllerParameterType.Int);
+            var writer = State(controller.layers[0].stateMachine, "Unselected producer", null);
+            ParameterDriverExpressionTests.Driver(writer, ParameterDriverExpressionTests.Op("Set", "FaceChoice", 0));
+            var face = State(controller.layers[0].stateMachine, "Declared user face", Clip("Smile", 75));
+            Transition(neutral, face, "FaceChoice", 1);
+            var source = new VrChatExpressionMenu.Source { Controller = controller };
+            source.ExpressionParameters.Add("FaceChoice"); VrChatFxExpressions.Add(avatar, source);
+            var entry = source.Entries.Single(); Assert.That(entry.Error, Is.Null);
+            Assert.That(entry.Parameters["FaceChoice"], Is.EqualTo(1)); Assert.That(Weight(entry), Is.EqualTo(75).Within(.01));
+        }
+
+        [TestCase(false)]
+        [TestCase(true)]
+        public void AnimatorCurveRelayKeepsTheAuthoredRootControlAndNativeOverrideOutput(bool overrideClip)
+        {
+            controller.AddParameter("ExpressionStrength", AnimatorControllerParameterType.Float);
+            controller.AddParameter("__MA/ActiveSelfProxy/Gate##0", AnimatorControllerParameterType.Float);
+            AnimationClip Output(string name, float value)
+            {
+                var clip = new AnimationClip { name = name };
+                AnimationUtility.SetEditorCurve(clip, EditorCurveBinding.FloatCurve("", typeof(Animator), "__MA/ActiveSelfProxy/Gate##0"),
+                    AnimationCurve.Constant(0, 1, value)); AssetDatabase.AddObjectToAsset(clip, controller); return clip;
+            }
+            var tree = new BlendTree { name = "Authored activation slider", blendType = BlendTreeType.Simple1D,
+                blendParameter = "ExpressionStrength", useAutomaticThresholds = false }; AssetDatabase.AddObjectToAsset(tree, controller);
+            tree.AddChild(Output("Inactive relay", 0), 0);
+            var selectedOutput = new AnimationClip { name = "Authored output placeholder" }; AssetDatabase.AddObjectToAsset(selectedOutput, controller);
+            var actual = Output("Active relay", 1); tree.AddChild(overrideClip ? selectedOutput : actual, 1); neutral.motion = tree;
+            controller.AddLayer("Reactive face"); var layers = controller.layers; layers[1].defaultWeight = 1; controller.layers = layers;
+            var idle = State(layers[1].stateMachine, "Reactive neutral", Clip("Reactive neutral", 0)); layers[1].stateMachine.defaultState = idle;
+            Transition(idle, State(layers[1].stateMachine, "Reactive smile", Clip("Reactive smile", 85)),
+                "__MA/ActiveSelfProxy/Gate##0", .5f, AnimatorConditionMode.Greater);
+            var runtime = overrideClip ? new AnimatorOverrideController(controller) : null;
+            try
+            {
+                if (runtime != null) runtime[selectedOutput] = actual;
+                var entry = Read(runtime).Entries.Single(); Assert.That(entry.Error, Is.Null);
+                Assert.That(entry.Parameters.Keys, Is.EqualTo(new[] { "ExpressionStrength" }));
+                Assert.That(entry.Parameters["ExpressionStrength"], Is.EqualTo(1));
+                Assert.That(Weight(entry), Is.EqualTo(85).Within(.01));
+            }
+            finally { if (runtime != null) Object.DestroyImmediate(runtime); }
+        }
+
+        [Test]
+        public void CurveOnlyStateCandidateUsesTheEffectiveOverrideBindings()
+        {
+            controller.AddParameter("FaceChoice", AnimatorControllerParameterType.Int);
+            controller.AddParameter("Internal face output", AnimatorControllerParameterType.Float);
+            neutral.motion = null;
+            var placeholder = new AnimationClip { name = "Source placeholder" }; AssetDatabase.AddObjectToAsset(placeholder, controller);
+            var actual = new AnimationClip { name = "Actual relay" };
+            AnimationUtility.SetEditorCurve(actual, EditorCurveBinding.FloatCurve("", typeof(Animator), "Internal face output"),
+                AnimationCurve.Constant(0, 1, 1)); AssetDatabase.AddObjectToAsset(actual, controller);
+            var selected = State(controller.layers[0].stateMachine, "Author-selected relay", placeholder);
+            Transition(neutral, selected, "FaceChoice", 1);
+            controller.AddLayer("Face output"); var layers = controller.layers; layers[1].defaultWeight = 1; controller.layers = layers;
+            var idle = State(layers[1].stateMachine, "Output neutral", Clip("Output neutral", 0)); layers[1].stateMachine.defaultState = idle;
+            Transition(idle, State(layers[1].stateMachine, "Output smile", Clip("Output smile", 75)),
+                "Internal face output", .5f, AnimatorConditionMode.Greater);
+            var runtime = new AnimatorOverrideController(controller);
+            try
+            {
+                runtime[placeholder] = actual;
+                var entry = Read(runtime).Entries.Single(); Assert.That(entry.Error, Is.Null);
+                Assert.That(entry.Name, Is.EqualTo("FX / Author-selected relay"));
+                Assert.That(entry.Parameters.Keys, Is.EqualTo(new[] { "FaceChoice" }));
+                Assert.That(Weight(entry), Is.EqualTo(75).Within(.01));
+            }
+            finally { Object.DestroyImmediate(runtime); }
         }
 
         [Test]

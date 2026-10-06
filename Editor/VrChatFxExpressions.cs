@@ -22,7 +22,13 @@ namespace VRVlog.LilToonExporter
             internal int Layer;
             internal AnimatorState State;
             internal string Path, Error;
-            internal Dictionary<string, float> Values;
+            internal Dictionary<string, float> Values, DefaultValues;
+        }
+
+        sealed class Point
+        {
+            internal Dictionary<string, float> Values = new Dictionary<string, float>(StringComparer.Ordinal);
+            internal bool PreservesInputs;
         }
 
         sealed class Edge
@@ -71,9 +77,26 @@ namespace VRVlog.LilToonExporter
                             entry.Values.AddRange(VrChatExpressionSampler.SampleFixed(avatar, source.Controller, source.Defaults,
                                 entry.Parameters, excludedPath, source, entry.Unevaluated, context,
                                 candidate.Layer, candidate.Path));
+                            if (candidate.DefaultValues != null)
+                            {
+                                // A readonly parent may make an authored inner
+                                // knot inactive. Prove its actual effect against
+                                // native defaults with the same dependency roots.
+                                var baseline = new VrChatExpressionMenu.Entry();
+                                baseline.Values.AddRange(VrChatExpressionSampler.SampleFixed(avatar, source.Controller, source.Defaults,
+                                    candidate.DefaultValues, excludedPath, source, baseline.Unevaluated, context));
+                                if (SamePose(baseline, entry))
+                                {
+                                    source.Messages.Add("FXの表情候補は通常の出力環境で顔の変化がないため追加していません: " + entry.Name);
+                                    continue;
+                                }
+                            }
                             entry.Messages.Add("FXの条件・BlendTreeの設定値から表情を読み込みました: " + assignment);
                         }
-                        catch (InvalidOperationException error) { entry.Error = error.Message; }
+                        catch (InvalidOperationException error)
+                        {
+                            entry.Error = error.Message; entry.Values.Clear(); entry.Unevaluated.Clear();
+                        }
                     }
                     // Existing authored menu and gesture labels remain primary.
                     // Evaluate first: equal clips alone do not prove equal native
@@ -104,17 +127,29 @@ namespace VRVlog.LilToonExporter
                 value.type == AnimatorControllerParameterType.Int ? value.defaultInt : value.defaultFloat, StringComparer.Ordinal);
             foreach (var pair in source.Defaults) defaults[pair.Key] = pair.Value;
             foreach (var pair in context.Values) defaults[pair.Key] = pair.Value;
-            // Animator-written values are graph outputs (for example an MA
-            // activeSelf proxy), not independent controls. Retain parameters
+            // Animator- and driver-written values are graph outputs (for example
+            // an MA activeSelf proxy), not independent controls. Retain parameters
             // explicitly declared as user expression/menu inputs, but do not
             // manufacture a facial state by overriding an internal signal.
-            var curveInputs = new HashSet<string>(ExpressionDependencies.Inspect(source.Controller, excludedPath,
-                new Dictionary<StateMachineBehaviour, VrChatParameterDriver.Program>(), new List<string>())
-                .SelectMany(value => value.CurveWrites), StringComparer.Ordinal);
+            var drivers = new Dictionary<StateMachineBehaviour, VrChatParameterDriver.Program>();
+            var dependencies = ExpressionDependencies.Inspect(source.Controller, excludedPath, drivers, new List<string>());
+            var writtenInputs = new HashSet<string>(dependencies.SelectMany(value => value.CurveWrites.Concat(value.DriverWrites)), StringComparer.Ordinal);
+            // Follow graph outputs backwards from morph-reading layers, so an
+            // empty state that selects a complete face through driver relays is
+            // discovered through its authored root control, not relay outputs.
+            var faceInputs = new HashSet<string>(dependencies.Where(value => value.Morphs.Count > 0)
+                .SelectMany(value => value.Reads), StringComparer.Ordinal);
+            bool changed;
+            do
+            {
+                changed = false;
+                foreach (var dependency in dependencies.Where(value => value.Writes.Overlaps(faceInputs)))
+                    foreach (var input in dependency.Reads) changed |= faceInputs.Add(input);
+            } while (changed);
             bool UserInput(string name) => source.ExpressionParameters.Contains(name) || source.MenuInputs.Contains(name);
             bool Selectable(string name) => !string.IsNullOrEmpty(name) && !VrChatParameterDriver.BuiltIn.Contains(name) &&
                 !source.ExternalParameters.Contains(name) && !TrackingParameter(name) &&
-                (UserInput(name) || !curveInputs.Contains(name) && !GeneratedParameter(name));
+                (UserInput(name) || !writtenInputs.Contains(name) && !GeneratedParameter(name));
             var replacements = ExpressionDependencies.Overrides(source.Controller);
             var layers = controller.layers;
             var nodes = 0;
@@ -168,20 +203,23 @@ namespace VRVlog.LilToonExporter
                     .GroupBy(edge => edge.Transition.destinationStateMachine).ToDictionary(group => group.Key, group => group.ToArray());
                 var incomingStates = edges.Where(edge => edge.Transition.destinationState != null)
                     .GroupBy(edge => edge.Transition.destinationState).ToDictionary(group => group.Key, group => group.ToArray());
-                IEnumerable<AnimatorCondition[]> Gates(AnimatorStateMachine machine, HashSet<AnimatorStateMachine> stack)
+                IEnumerable<AnimatorCondition[]> Gates(AnimatorStateMachine machine, HashSet<UnityEngine.Object> stack)
                 {
-                    if (parents[machine] == null || !incoming.TryGetValue(machine, out var entries))
-                    { yield return Array.Empty<AnimatorCondition>(); yield break; }
+                    Visit();
+                    if (stack.Count >= MaximumDepth)
+                        throw new InvalidOperationException("FXの条件経路が深すぎるため、自動表情探索を完全に完了できません。");
                     if (!stack.Add(machine)) yield break;
                     try
                     {
+                        if (parents[machine] == null || !incoming.TryGetValue(machine, out var entries))
+                        { yield return Array.Empty<AnimatorCondition>(); yield break; }
                         foreach (var entry in entries)
-                            foreach (var previous in Gates(entry.Owner, stack))
+                            foreach (var previous in entry.Source != null ? StateGates(entry.Source, stack) : Gates(entry.Owner, stack))
                                 yield return previous.Concat(entry.Transition.conditions).ToArray();
                     }
                     finally { stack.Remove(machine); }
                 }
-                IEnumerable<AnimatorCondition[]> StateGates(AnimatorState state, HashSet<AnimatorState> stack)
+                IEnumerable<AnimatorCondition[]> StateGates(AnimatorState state, HashSet<UnityEngine.Object> stack)
                 {
                     Visit();
                     if (stack.Count >= MaximumDepth)
@@ -191,11 +229,11 @@ namespace VRVlog.LilToonExporter
                     {
                         var owner = owners[state];
                         if (owner.defaultState == state || !incomingStates.TryGetValue(state, out var entries))
-                            foreach (var gate in Gates(owner, new HashSet<AnimatorStateMachine>())) yield return gate;
+                            foreach (var gate in Gates(owner, stack)) yield return gate;
                         if (incomingStates.TryGetValue(state, out entries))
                             foreach (var entry in entries)
                                 foreach (var prior in entry.Source != null ? StateGates(entry.Source, stack) :
-                                    Gates(entry.Owner, new HashSet<AnimatorStateMachine>()))
+                                    Gates(entry.Owner, stack))
                                     yield return prior.Concat(entry.Transition.conditions).ToArray();
                     }
                     finally { stack.Remove(state); }
@@ -220,30 +258,35 @@ namespace VRVlog.LilToonExporter
                     finally { stack.Remove(machine); }
                 }
                 foreach (var edge in edges)
-                    foreach (var gate in edge.Source != null ? StateGates(edge.Source, new HashSet<AnimatorState>()) :
-                        Gates(edge.Owner, new HashSet<AnimatorStateMachine>()))
+                    foreach (var gate in edge.Source != null ? StateGates(edge.Source, new HashSet<UnityEngine.Object>()) :
+                        Gates(edge.Owner, new HashSet<UnityEngine.Object>()))
                         Destination(edge.Transition, gate.Concat(edge.Transition.conditions).ToArray(), new HashSet<AnimatorStateMachine>());
                 // A default BlendTree may expose a face slider without any
                 // transition at all. Include its authored control points too.
                 foreach (var state in paths.Keys)
                     if (EffectiveMotion(controller, state, layer) is BlendTree)
-                        foreach (var gate in StateGates(state, new HashSet<AnimatorState>())) routes.Add((state, gate));
+                        foreach (var gate in StateGates(state, new HashSet<UnityEngine.Object>())) routes.Add((state, gate));
                 foreach (var route in routes)
                 {
                     var motion = EffectiveMotion(controller, route.State, layer);
-                    if (!HasMorph(motion, replacements, excludedPath, new HashSet<Motion>(), Visit)) continue;
+                    var driverMorph = (controller.GetStateEffectiveBehaviours(route.State, layer) ?? Array.Empty<StateMachineBehaviour>())
+                        .Any(behaviour => behaviour != null && drivers.TryGetValue(behaviour, out var program) &&
+                            (program.Error != null || program.Operations.Any(operation => faceInputs.Contains(operation.Destination))));
+                    if (!driverMorph && !HasFaceOutput(motion, replacements, excludedPath, faceInputs, new HashSet<Motion>(), Visit)) continue;
                     var points = motion is BlendTree tree ? Points(tree, Selectable, new HashSet<BlendTree>(), Visit).ToArray() :
-                        new[] { new Dictionary<string, float>(StringComparer.Ordinal) };
+                        new[] { new Point() };
                     if (points.Length == 0) continue;
                     foreach (var point in points)
                     {
-                        if (!route.Conditions.Any(condition => Selectable(condition.parameter)) && !point.Keys.Any(Selectable)) continue;
-                        var values = Solve(route.Conditions, point, parameters, defaults, Selectable, out var error);
+                        if (!route.Conditions.Any(condition => Selectable(condition.parameter)) && !point.Values.Keys.Any(Selectable)) continue;
+                        var values = Solve(route.Conditions, point.Values, parameters, defaults, Selectable, out var error);
                         if (values == null || error == null && values.All(pair => defaults.TryGetValue(pair.Key, out var value) && value == pair.Value)) continue;
                         if (!emitted.Add(layer + "/" + paths[route.State] + "/" + Assignment(values) + "/" + error)) continue;
                         if (++candidates > MaximumCandidates)
                             throw new InvalidOperationException("FXの自動表情候補が256件を超えています。表情の登録を整理してください。");
                         yield return new Candidate { Layer = layer, State = route.State, Path = paths[route.State], Values = values,
+                            DefaultValues = point.PreservesInputs ? values.Keys.ToDictionary(name => name,
+                                name => defaults.TryGetValue(name, out var value) ? value : 0, StringComparer.Ordinal) : null,
                             Error = paths.Values.Count(path => path == paths[route.State]) != 1 ? "FXの表情状態のパスが重複しています。状態名を確認してください。" : error };
                     }
                 }
@@ -296,7 +339,7 @@ namespace VRVlog.LilToonExporter
             return result;
         }
 
-        static IEnumerable<Dictionary<string, float>> Points(BlendTree tree, Func<string, bool> selectable,
+        static IEnumerable<Point> Points(BlendTree tree, Func<string, bool> selectable,
             HashSet<BlendTree> stack, Action visit)
         {
             visit();
@@ -309,29 +352,33 @@ namespace VRVlog.LilToonExporter
                 {
                     visit();
                     var child = children[index];
-                    var point = new Dictionary<string, float>(StringComparer.Ordinal);
+                    if (tree.blendType != BlendTreeType.Direct && (tree.blendType == BlendTreeType.Simple1D ? !Finite(child.threshold) :
+                        !Finite(child.position.x) || !Finite(child.position.y)))
+                        throw new InvalidOperationException("FXのBlendTreeの設定値が不正です。");
+                    var point = new Point();
                     if (tree.blendType == BlendTreeType.Direct)
                     {
-                        if (children.Any(value => !selectable(value.directBlendParameter))) continue;
-                        foreach (var value in children) point[value.directBlendParameter] = 0;
-                        point[child.directBlendParameter] = 1;
+                        point.PreservesInputs = children.Any(value => !selectable(value.directBlendParameter));
+                        foreach (var value in children.Where(value => selectable(value.directBlendParameter))) point.Values[value.directBlendParameter] = 0;
+                        if (selectable(child.directBlendParameter)) point.Values[child.directBlendParameter] = 1;
                     }
                     else
                     {
-                        if (!selectable(tree.blendParameter)) continue;
-                        point[tree.blendParameter] = tree.blendType == BlendTreeType.Simple1D ? child.threshold : child.position.x;
+                        if (selectable(tree.blendParameter))
+                            point.Values[tree.blendParameter] = tree.blendType == BlendTreeType.Simple1D ? child.threshold : child.position.x;
+                        else point.PreservesInputs = true;
                         if (tree.blendType != BlendTreeType.Simple1D)
                         {
-                            if (!selectable(tree.blendParameterY)) continue;
-                            point[tree.blendParameterY] = child.position.y;
+                            if (selectable(tree.blendParameterY)) point.Values[tree.blendParameterY] = child.position.y;
+                            else point.PreservesInputs = true;
                         }
                     }
-                    if (point.Values.Any(value => !Finite(value))) throw new InvalidOperationException("FXのBlendTreeの設定値が不正です。");
+                    if (point.Values.Values.Any(value => !Finite(value))) throw new InvalidOperationException("FXのBlendTreeの設定値が不正です。");
                     if (!(child.motion is BlendTree nested)) { yield return point; continue; }
                     var innerPoints = Points(nested, selectable, stack, visit).ToArray();
-                    // An inner tree driven by a reserved runtime signal stays
-                    // at the explicit fixed export environment. Its enclosing
-                    // user-controlled knot remains a valid composed selection.
+                    // Empty trees do not erase a surrounding user selection.
+                    // Readonly inputs at every level stay in the native graph;
+                    // only authored user knots become selected assignments.
                     if (innerPoints.Length == 0) { yield return point; continue; }
                     foreach (var inner in innerPoints)
                     {
@@ -339,8 +386,9 @@ namespace VRVlog.LilToonExporter
                         // knot is still an authored input value when the outer
                         // tree clamps or blends at that value; sample the full
                         // native tree rather than imposing parent-knot equality.
-                        var combined = new Dictionary<string, float>(point, StringComparer.Ordinal);
-                        foreach (var pair in inner) combined[pair.Key] = pair.Value;
+                        var combined = new Point { Values = new Dictionary<string, float>(point.Values, StringComparer.Ordinal),
+                            PreservesInputs = point.PreservesInputs || inner.PreservesInputs };
+                        foreach (var pair in inner.Values) combined.Values[pair.Key] = pair.Value;
                         yield return combined;
                     }
                 }
@@ -348,7 +396,8 @@ namespace VRVlog.LilToonExporter
             finally { stack.Remove(tree); }
         }
 
-        static bool HasMorph(Motion motion, IDictionary<AnimationClip, AnimationClip> replacements, Func<string, bool> excludedPath,
+        static bool HasFaceOutput(Motion motion, IDictionary<AnimationClip, AnimationClip> replacements, Func<string, bool> excludedPath,
+            ISet<string> faceInputs,
             HashSet<Motion> stack, Action visit)
         {
             if (motion == null) return false;
@@ -360,10 +409,12 @@ namespace VRVlog.LilToonExporter
                 if (motion is AnimationClip clip)
                 {
                     if (replacements.TryGetValue(clip, out var replacement)) clip = replacement;
-                    return AnimationUtility.GetCurveBindings(clip).Any(binding => excludedPath?.Invoke(binding.path) != true &&
-                        binding.type == typeof(SkinnedMeshRenderer) && binding.propertyName.StartsWith("blendShape.", StringComparison.Ordinal));
+                    return AnimationUtility.GetCurveBindings(clip).Any(binding =>
+                        binding.type == typeof(Animator) && faceInputs.Contains(binding.propertyName) ||
+                        excludedPath?.Invoke(binding.path) != true && binding.type == typeof(SkinnedMeshRenderer) &&
+                        binding.propertyName.StartsWith("blendShape.", StringComparison.Ordinal));
                 }
-                return motion is BlendTree tree && tree.children.Any(child => HasMorph(child.motion, replacements, excludedPath, stack, visit));
+                return motion is BlendTree tree && tree.children.Any(child => HasFaceOutput(child.motion, replacements, excludedPath, faceInputs, stack, visit));
             }
             finally { stack.Remove(motion); }
         }

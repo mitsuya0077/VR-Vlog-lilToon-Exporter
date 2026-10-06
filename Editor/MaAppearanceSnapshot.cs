@@ -182,16 +182,46 @@ namespace VRVlog.LilToonExporter
                             result.Add(node.gameObject);
                 }
             }
+            void CollectMotion(Motion motion, Transform basis)
+            {
+                // Merge Motion stores a Motion asset rather than a controller.
+                // SerializedObject does not descend into referenced BlendTree
+                // assets, so visit the complete authored graph explicitly.
+                var pending = new Stack<Motion>();
+                var visited = new HashSet<Motion>();
+                if (motion != null) pending.Push(motion);
+                while (pending.Count != 0)
+                {
+                    var current = pending.Pop();
+                    if (current == null || !visited.Add(current)) continue;
+                    if (visited.Count > 8192)
+                        throw new InvalidOperationException("Modular Avatar activation Motion graph exceeds the supported analysis limit.");
+                    if (current is AnimationClip clip) Collect(clip, basis);
+                    else if (current is UnityEditor.Animations.BlendTree tree)
+                        foreach (var child in tree.children)
+                            if (child.motion != null) pending.Push(child.motion);
+                }
+            }
             foreach (var component in root.GetComponentsInChildren<Component>(true).Where(value => value != null))
             {
                 var basis = root.transform;
                 if (component is Animator animator) basis = animator.transform;
-                else if (component.GetType().FullName == Ma + "ModularAvatarMergeAnimator" &&
-                    component.GetType().GetField("pathMode").GetValue(component).ToString() == "Relative")
+                else
                 {
-                    var reference = component.GetType().GetField("relativePathRoot").GetValue(component);
-                    var target = reference?.GetType().GetMethod("Get", new[] { typeof(Component) }).Invoke(reference, new object[] { component }) as GameObject;
-                    basis = target == null ? component.transform : target.transform;
+                    var type = component.GetType();
+                    var animatorMerge = type.FullName == Ma + "ModularAvatarMergeAnimator";
+                    var motionMerge = type.FullName == Ma + "ModularAvatarMergeBlendTree";
+                    if ((animatorMerge || motionMerge) &&
+                        type.GetField(animatorMerge ? "pathMode" : "PathMode").GetValue(component).ToString() == "Relative")
+                    {
+                        var reference = type.GetField(animatorMerge ? "relativePathRoot" : "RelativePathRoot").GetValue(component);
+                        // MA resolves both relative roots against the build's
+                        // avatar root, even when the component is nested under
+                        // another root marker, then falls back to its own object.
+                        var target = reference?.GetType().GetMethod("Get", new[] { typeof(Component) })
+                            .Invoke(reference, new object[] { root.transform }) as GameObject;
+                        basis = target == null ? component.transform : target.transform;
+                    }
                 }
                 using (var serialized = new UnityEditor.SerializedObject(component))
                 {
@@ -201,7 +231,7 @@ namespace VRVlog.LilToonExporter
                         if (property.propertyType != UnityEditor.SerializedPropertyType.ObjectReference) continue;
                         if (property.objectReferenceValue is RuntimeAnimatorController controller)
                             foreach (var clip in controller.animationClips) Collect(clip, basis);
-                        else if (property.objectReferenceValue is AnimationClip clip) Collect(clip, basis);
+                        else if (property.objectReferenceValue is Motion motion) CollectMotion(motion, basis);
                     }
                 }
             }

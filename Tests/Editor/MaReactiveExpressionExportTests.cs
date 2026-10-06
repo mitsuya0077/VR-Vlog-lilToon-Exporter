@@ -10,6 +10,8 @@ using UniVRM10;
 using UnityEditor;
 using UnityEditor.Animations;
 using UnityEngine;
+using UnityEngine.Animations;
+using UnityEngine.Playables;
 using Object = UnityEngine.Object;
 
 namespace VRVlog.LilToonExporter.Tests
@@ -125,6 +127,162 @@ namespace VRVlog.LilToonExporter.Tests
                 foreach (var value in owned) Object.DestroyImmediate(value);
                 Object.DestroyImmediate(mesh); AssetDatabase.DeleteAsset(folder);
             }
+        }
+
+        [TestCase(0, false)]
+        [TestCase(0, true)]
+        [TestCase(1, false)]
+        [TestCase(1, true)]
+        [TestCase(2, false)]
+        [TestCase(2, true)]
+        public void MergeMotionActivationKeepsNonMenuReactionThroughCanonicalBuild(int pathMode, bool nestedTree)
+        {
+            RequirePackages();
+            var mergeType = Installed(Ma + "ModularAvatarMergeBlendTree");
+            if (mergeType == null) Assert.Ignore("Install the real MA Merge Motion component.");
+            using var fixture = new AttachmentConnectionTests.Fixture();
+            var descriptor = fixture.Source.AddComponent(Installed("VRC.SDK3.Avatars.Components.VRCAvatarDescriptor"));
+            ConfigureGeometry(fixture.Mesh);
+            var front = fixture.Source.transform.Find("Front").GetComponent<SkinnedMeshRenderer>();
+            var back = fixture.Source.transform.Find("Back").GetComponent<SkinnedMeshRenderer>();
+            front.SetBlendShapeWeight(1, 25); back.SetBlendShapeWeight(1, 25);
+            var tool = new GameObject("Merge tool"); tool.transform.SetParent(fixture.Source.transform, false);
+            var explicitRoot = new GameObject("Motion root"); explicitRoot.transform.SetParent(fixture.Source.transform, false);
+            var basis = pathMode == 0 ? fixture.Source : pathMode == 1 ? tool : explicitRoot;
+            var gate = new GameObject("Gate"); gate.transform.SetParent(basis.transform, false);
+            AppearancePreparationTests.AddRule(gate, "ModularAvatarShapeChanger", "Shapes", "ChangedShape", front.gameObject,
+                ("ShapeName", "Smile"), ("ChangeType", 1), ("Value", 100f));
+            gate.SetActive(false);
+            // A same-named object at the wrong base must remain constant. It
+            // prevents an incorrect absolute/fallback basis from passing by
+            // conservatively retaining every shape changer in the hierarchy.
+            var decoy = new GameObject("Gate"); decoy.transform.SetParent(pathMode == 0 ? tool.transform : fixture.Source.transform, false);
+            AppearancePreparationTests.AddRule(decoy, "ModularAvatarShapeChanger", "Shapes", "ChangedShape", back.gameObject,
+                ("ShapeName", "Smile"), ("ChangeType", 1), ("Value", 100f));
+            decoy.SetActive(false);
+            var folderName = "__MaMergeMotion_" + Guid.NewGuid().ToString("N");
+            AssetDatabase.CreateFolder("Assets", folderName); var folder = "Assets/" + folderName;
+            var owned = new List<Mesh>();
+            GameObject oracle = null;
+            try
+            {
+                var controller = AnimatorController.CreateAnimatorControllerAtPath(folder + "/FX.controller");
+                controller.AddParameter("Menu", AnimatorControllerParameterType.Float);
+                var idle = controller.layers[0].stateMachine.AddState("Neutral"); idle.writeDefaultValues = false;
+                controller.layers[0].stateMachine.defaultState = idle;
+                var menu = ScriptableObject.CreateInstance(Installed("VRC.SDK3.Avatars.ScriptableObjects.VRCExpressionsMenu"));
+                var parameters = ScriptableObject.CreateInstance(Installed("VRC.SDK3.Avatars.ScriptableObjects.VRCExpressionParameters"));
+                AssetDatabase.CreateAsset(menu, folder + "/Menu.asset"); AssetDatabase.CreateAsset(parameters, folder + "/Parameters.asset");
+                ConfigureMenu(menu, parameters, AnimatorControllerParameterType.Float);
+                ConfigureDescriptor(descriptor, controller, menu, parameters);
+                var clip = new AnimationClip { name = "Authored non-menu activation" };
+                var binding = EditorCurveBinding.FloatCurve("Gate", typeof(GameObject), "m_IsActive");
+                AnimationUtility.SetEditorCurve(clip, binding, AnimationCurve.Constant(0, 1, 1));
+                AssetDatabase.CreateAsset(clip, folder + "/Activation.anim");
+                Motion motion = clip;
+                if (nestedTree)
+                {
+                    var off = new AnimationClip { name = "Authored non-menu deactivation" };
+                    AnimationUtility.SetEditorCurve(off, binding, AnimationCurve.Constant(0, 1, 0));
+                    AssetDatabase.CreateAsset(off, folder + "/Deactivation.anim");
+                    for (var i = 0; i < 2; i++)
+                    {
+                        var tree = new BlendTree { name = "Nested activation " + i, blendType = BlendTreeType.Simple1D,
+                            blendParameter = "Menu", useAutomaticThresholds = false };
+                        tree.children = i == 0 ? new[] { new ChildMotion { motion = off, threshold = 0, timeScale = 1 },
+                            new ChildMotion { motion = motion, threshold = 1, timeScale = 1 } } :
+                            new[] { new ChildMotion { motion = motion, threshold = 0, timeScale = 1 } };
+                        AssetDatabase.CreateAsset(tree, folder + "/Tree" + i + ".asset"); motion = tree;
+                    }
+                }
+                var merge = tool.AddComponent(mergeType);
+                mergeType.GetProperty("Motion").SetValue(merge, motion);
+                var mode = mergeType.GetField("PathMode"); mode.SetValue(merge, Enum.Parse(mode.FieldType, pathMode == 0 ? "Absolute" : "Relative"));
+                if (pathMode == 2)
+                {
+                    var reference = mergeType.GetField("RelativePathRoot").GetValue(merge);
+                    reference.GetType().GetMethod("Set", new[] { typeof(GameObject) }).Invoke(reference, new object[] { explicitRoot });
+                    Assert.That(reference.GetType().GetMethod("Get", new[] { typeof(Component) })
+                        .Invoke(reference, new object[] { fixture.Source.transform }), Is.SameAs(explicitRoot));
+                }
+                var settingsType = Installed(Ma + "ModularAvatarVRChatSettings");
+                settingsType.GetProperty("MMDWorldSupport").SetValue(fixture.Source.AddComponent(settingsType), false);
+                Assert.That(gate.GetComponentsInParent<Component>(true).All(value => value.GetType().FullName != Ma + "ModularAvatarMenuItem"), Is.True);
+                var authored = fixture.Source.GetComponentsInChildren<Component>(true).Cast<Object>()
+                    .Concat(AssetDatabase.FindAssets("", new[] { folder }).SelectMany(guid => AssetDatabase.LoadAllAssetsAtPath(AssetDatabase.GUIDToAssetPath(guid))))
+                    .Append(fixture.Mesh).Distinct().ToArray();
+                var before = authored.ToDictionary(value => value, value => EditorJsonUtility.ToJson(value));
+                var expectedOff = WorldVertices(front);
+                front.SetBlendShapeWeight(1, 100); var expectedOn = WorldVertices(front); front.SetBlendShapeWeight(1, 25);
+                // Establish the actual official MA result without our snapshot.
+                // Merge Motion's direct clip is a constant activation endpoint;
+                // the nested tree supplies the real user-controlled 0/1 choice.
+                oracle = Object.Instantiate(fixture.Source);
+                Vector3[][] oracleVertices;
+                using (NdmfExportPreparation.Prepare(fixture.Source, oracle))
+                    oracleVertices = NativeMergeMotionEndpoints(oracle, nestedTree, expectedOff, expectedOn);
+                Object.DestroyImmediate(fixture.Copy); fixture.Copy = Object.Instantiate(fixture.Source);
+                MaAppearanceSnapshot.Apply(fixture.Source, fixture.Copy, owned);
+                var path = AnimationUtility.CalculateTransformPath(gate.transform, fixture.Source.transform);
+                var decoyPath = AnimationUtility.CalculateTransformPath(decoy.transform, fixture.Source.transform);
+                Assert.That(fixture.Copy.transform.Find(path).GetComponentInChildren(Installed(Ma + "ModularAvatarShapeChanger"), true), Is.Not.Null);
+                Assert.That(fixture.Copy.transform.Find(decoyPath).GetComponentInChildren(Installed(Ma + "ModularAvatarShapeChanger"), true), Is.Null);
+                Assert.That(fixture.Copy.transform.Find("Front").GetComponent<SkinnedMeshRenderer>().GetBlendShapeWeight(1), Is.EqualTo(25));
+                using (NdmfExportPreparation.Prepare(fixture.Source, fixture.Copy))
+                {
+                    var actual = NativeMergeMotionEndpoints(fixture.Copy, nestedTree, expectedOff, expectedOn);
+                    for (var phase = 0; phase < actual.Length; phase++)
+                        for (var i = 0; i < actual[phase].Length; i++)
+                            Assert.That(Vector3.Distance(actual[phase][i], oracleVertices[phase][i]), Is.LessThan(.0005f),
+                                "Snapshot preparation must preserve the official MA native endpoint.");
+                }
+                foreach (var value in authored) Assert.That(EditorJsonUtility.ToJson(value), Is.EqualTo(before[value]), value.name);
+                Assert.That(gate.activeSelf, Is.False); Assert.That(decoy.activeSelf, Is.False);
+                Assert.That(front.sharedMesh, Is.SameAs(fixture.Mesh)); Assert.That(front.GetBlendShapeWeight(1), Is.EqualTo(25));
+            }
+            finally { if (oracle != null) Object.DestroyImmediate(oracle); foreach (var mesh in owned) Object.DestroyImmediate(mesh); AssetDatabase.DeleteAsset(folder); }
+        }
+
+        static Vector3[][] NativeMergeMotionEndpoints(GameObject prepared, bool selectedTree, Vector3[] expectedOff, Vector3[] expectedOn)
+        {
+            var runtime = VrChatExpressionMenu.Read(prepared).Controller;
+            Assert.That(runtime, Is.Not.Null);
+            var controller = ExpressionDependencies.Controller(runtime);
+            var probe = Object.Instantiate(prepared);
+            var graph = PlayableGraph.Create("MA Merge Motion independent native reference");
+            try
+            {
+                var animator = probe.GetComponent<Animator>(); animator.runtimeAnimatorController = null;
+                animator.enabled = true; animator.applyRootMotion = false; animator.fireEvents = false;
+                animator.cullingMode = AnimatorCullingMode.AlwaysAnimate;
+                graph.SetTimeUpdateMode(DirectorUpdateMode.Manual);
+                var playable = AnimatorControllerPlayable.Create(graph, runtime);
+                AnimationPlayableOutput.Create(graph, "Face", animator).SetSourcePlayable(playable);
+                foreach (var parameter in controller.parameters)
+                    switch (parameter.type)
+                    {
+                        case AnimatorControllerParameterType.Float: playable.SetFloat(parameter.name, parameter.defaultFloat); break;
+                        case AnimatorControllerParameterType.Int: playable.SetInteger(parameter.name, parameter.defaultInt); break;
+                        case AnimatorControllerParameterType.Bool: playable.SetBool(parameter.name, parameter.defaultBool); break;
+                    }
+                graph.Play(); graph.Evaluate(0);
+                var selections = selectedTree ? new[] { 0f, 1f, 0f } : new[] { 1f };
+                var result = new List<Vector3[]>();
+                var skin = probe.transform.Find("Front").GetComponent<SkinnedMeshRenderer>();
+                foreach (var selection in selections)
+                {
+                    if (selectedTree) playable.SetFloat("Menu", selection);
+                    for (var frame = 0; frame < 120; frame++) graph.Evaluate(1f / 60f);
+                    var expected = selection == 1 ? expectedOn : expectedOff;
+                    Assert.That(skin.GetBlendShapeWeight(skin.sharedMesh.GetBlendShapeIndex("Smile")), Is.EqualTo(selection == 1 ? 100 : 25).Within(.001f),
+                        "Official MA must evaluate the authored non-menu activation endpoint " + selection);
+                    var vertices = WorldVertices(skin); Assert.That(vertices.Length, Is.EqualTo(expected.Length));
+                    for (var i = 0; i < vertices.Length; i++) Assert.That(Vector3.Distance(vertices[i], expected[i]), Is.LessThan(.0005f));
+                    result.Add(vertices);
+                }
+                return result.ToArray();
+            }
+            finally { graph.Destroy(); Object.DestroyImmediate(probe); }
         }
 
         [TestCase(false, AnimatorControllerParameterType.Int)]
