@@ -63,6 +63,7 @@ namespace VRVlog.LilToonExporter
                 var result = new List<StateMachineBehaviour>();
                 foreach (var behaviour in values)
                 {
+                    if (ExpressionDependencies.IsInertAuthoringMarker(behaviour)) continue;
                     if (dependencies.IgnoredWeightControls.Contains(behaviour)) continue;
                     if (dependencies.EvaluatedWeightControls.TryGetValue(behaviour, out var weight))
                     {

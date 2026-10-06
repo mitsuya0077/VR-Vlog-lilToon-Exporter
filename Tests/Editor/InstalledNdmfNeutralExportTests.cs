@@ -65,6 +65,58 @@ namespace VRVlog.LilToonExporter.Tests
                 Assert.That(Vector3.Distance(actual[i], expected[i]), Is.LessThan(.0001f), message + " vertex " + i);
         }
 
+        [Test]
+        public void InstalledModularAvatarProcessesAnInactiveMergeAnimatorForPreparedFx()
+        {
+            var descriptorType = InstalledType("VRC.SDK3.Avatars.Components.VRCAvatarDescriptor");
+            var mergeType = InstalledType("nadena.dev.modular_avatar.core.ModularAvatarMergeAnimator");
+            if (descriptorType == null || mergeType == null)
+                Assert.Ignore("Install the real VRChat SDK, Modular Avatar and NDMF for inactive FX authoring.");
+            using var fixture = new AttachmentConnectionTests.Fixture();
+            var folderName = "__InstalledInactiveMa_" + Guid.NewGuid().ToString("N");
+            AssetDatabase.CreateFolder("Assets", folderName);
+            var folder = "Assets/" + folderName;
+            try
+            {
+                fixture.Mesh.ClearBlendShapes();
+                fixture.Mesh.AddBlendShapeFrame("Opening", 100,
+                    Enumerable.Repeat(Vector3.up * .03f, fixture.Mesh.vertexCount).ToArray(), null, null);
+                var sourceFront = fixture.Source.transform.Find("Front").GetComponent<SkinnedMeshRenderer>();
+                var sourceWeight = sourceFront.GetBlendShapeWeight(0);
+                SetFx(fixture.Source.AddComponent(descriptorType), DefaultController(folder + "/Base.controller"));
+                var clip = new AnimationClip { name = "Inactive MA facial FX" };
+                var binding = EditorCurveBinding.FloatCurve("Front", typeof(SkinnedMeshRenderer), "blendShape.Opening");
+                AnimationUtility.SetEditorCurve(clip, binding, AnimationCurve.Constant(0, 1, 75));
+                var controller = DefaultController(folder + "/Inactive.controller", clip);
+                var setting = new GameObject("Inactive FX authoring");
+                setting.transform.SetParent(fixture.Source.transform, false);
+                setting.SetActive(false);
+                var merge = setting.AddComponent(mergeType);
+                mergeType.GetField("animator").SetValue(merge, controller);
+                var pathMode = mergeType.GetField("pathMode");
+                pathMode.SetValue(merge, Enum.Parse(pathMode.FieldType, "Absolute"));
+                var sourceSettings = EditorJsonUtility.ToJson(merge);
+                Object.DestroyImmediate(fixture.Copy);
+                fixture.Copy = Object.Instantiate(fixture.Source);
+
+                using (NdmfExportPreparation.Prepare(fixture.Source, fixture.Copy))
+                {
+                    Assert.That(NeutralShapeSampler.Sample(fixture.Copy)
+                        .Single(value => value.Path == "Front" && value.Shape == "Opening").Weight,
+                        Is.EqualTo(75), "Inactive MA authoring must participate in its canonical FX merge.");
+                    Assert.That(fixture.Copy.GetComponentsInChildren<Component>(true)
+                        .Any(component => component != null && component.GetType() == mergeType), Is.False);
+                    Assert.That(setting.activeSelf, Is.False);
+                    Assert.That(setting.GetComponent(mergeType), Is.SameAs(merge));
+                    Assert.That(EditorJsonUtility.ToJson(merge), Is.EqualTo(sourceSettings));
+                    Assert.That(AnimationUtility.GetEditorCurve(clip, binding).Evaluate(0), Is.EqualTo(75));
+                    Assert.That(sourceFront.GetBlendShapeWeight(0), Is.EqualTo(sourceWeight),
+                        "Canonical preparation must preserve the source's authored neutral weight.");
+                }
+            }
+            finally { AssetDatabase.DeleteAsset(folder); }
+        }
+
         [TestCase(false)]
         [TestCase(true)]
         public async Task InstalledModularAvatarRetargetsMovedRendererDefaultFxAndAuthoredEndpointInRealVrm(bool fullLilToon)

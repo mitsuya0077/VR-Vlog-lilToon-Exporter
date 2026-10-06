@@ -49,13 +49,24 @@ namespace VRVlog.LilToonExporter
                 CopyOverride(simulator, analyzer, "MenuItemOverrides", "ForceMenuItems", parameterMap, analyzeClone ? map : null);
                 var analysis = analyzerType.GetMethod("Analyze").Invoke(analyzer, new object[] { analyzeClone ? clone : source });
                 var states = (IDictionary)Field(analysis, "InitialStates");
+                // Simulator selections describe the appearance to freeze, not
+                // the complete set of states a menu can select. Analyze the
+                // unforced copy separately so selecting a menu in SceneView
+                // cannot erase its other expressions before MA generates FX.
+                var authored = analyzerType.GetConstructor(new[] { contextType }).Invoke(new[] { context });
+                analyzerType.GetField("OptimizeShapes", Members).SetValue(authored, false);
+                var authoredAnalysis = analyzerType.GetMethod("Analyze").Invoke(authored, new object[] { clone });
+                var dynamic = DynamicProperties(clone, (IDictionary)Field(authoredAnalysis, "Shapes"));
+                var retained = new HashSet<Component>();
+                foreach (DictionaryEntry shape in (IDictionary)Field(authoredAnalysis, "Shapes"))
+                    if (dynamic.Contains(Property(shape.Key)))
+                        foreach (var rule in (IEnumerable)Field(shape.Value, "actionGroups"))
+                            if (Field(rule, "ControllingObject") is Component controller) retained.Add(controller);
                 var selectorType = Required(Ma + "editor.IMeshSelector");
                 var selectors = new Dictionary<SkinnedMeshRenderer, IList>();
-                // Preview toggles control only the Editor display. Freeze all
-                // authored operations resolved by MA (including its simulator
-                // selections) before removing their components from the copy.
-                // Otherwise preview-off exports silently discard build-time
-                // mesh deletion, shape, material and visibility operations.
+                // Freeze irreversible geometry and constant appearance using
+                // MA's own resolved simulator selection. Reversible reactions
+                // stay authored so the canonical build can generate their FX.
                 foreach (DictionaryEntry state in states)
                 {
                     var original = (Object)Field(state.Key, "TargetObject");
@@ -63,6 +74,11 @@ namespace VRVlog.LilToonExporter
                     var target = original;
                     if (!analyzeClone && !map.TryGetValue(original, out target)) continue;
                     var name = (string)Field(state.Key, "PropertyName");
+                    // The original weights/material/visibility are the off
+                    // endpoint from which MA generates reversible reactions.
+                    // Writing the currently selected pose here would turn both
+                    // endpoints into the same expression.
+                    if (dynamic.Contains((target, name))) continue;
                     if (target is GameObject go && name == "m_IsActive" && state.Value is float active)
                         go.SetActive(active > .5f);
                     else if (target is SkinnedMeshRenderer skin && name.StartsWith("blendShape.", StringComparison.Ordinal) && state.Value is float weight)
@@ -91,10 +107,20 @@ namespace VRVlog.LilToonExporter
                     owned.Add(mesh);
                     pair.Key.sharedMesh = mesh;
                 }
-                // The frozen operations must not generate animation or delete
+                // Frozen operations must not generate animation or delete
                 // morphs again during the following NDMF build passes.
                 foreach (var component in components)
                 {
+                    if (retained.Contains(component))
+                    {
+                        if (component.GetType().Name != "ModularAvatarShapeChanger") continue;
+                        // Delete is an irreversible geometry snapshot. A mixed
+                        // component can still generate its independent Set rules.
+                        var shapes = (IList)component.GetType().GetProperty("Shapes").GetValue(component);
+                        for (var i = shapes.Count - 1; i >= 0; i--)
+                            if (Field(shapes[i], "ChangeType").ToString() == "Delete") shapes.RemoveAt(i);
+                        if (shapes.Count != 0) continue;
+                    }
                     if (component.GetType().Name == "ModularAvatarMeshCutter")
                         foreach (var filter in component.GetComponents<Component>())
                             if (filter != null && filter.GetType().GetInterfaces().Any(i => i.FullName == Ma + "vertex_filters.IMeshSelectorBehavior"))
@@ -106,6 +132,80 @@ namespace VRVlog.LilToonExporter
             {
                 throw new InvalidOperationException("Modular Avatar の現在の表示を固定できませんでした。MA " + Compatibility.DependencyPolicy.ModularAvatarReference + " / NDMF " + Compatibility.DependencyPolicy.NdmfReference + " で確認済みのプレビュー API が必要です。ALCOM でパッケージを確認してください。原本は変更していません。", error);
             }
+        }
+
+        static (Object Target, string Name) Property(object key) =>
+            ((Object)Field(key, "TargetObject"), (string)Field(key, "PropertyName"));
+
+        // Let MA describe dependencies between reactions. Menu conditions and
+        // authored activation curves can vary; object toggles propagate that
+        // variability to any reaction controlled by the affected hierarchy.
+        static HashSet<(Object Target, string Name)> DynamicProperties(GameObject root, IDictionary properties)
+        {
+            var animated = AnimatedActivationObjects(root);
+            var result = new HashSet<(Object, string)>();
+            bool changed;
+            do
+            {
+                changed = false;
+                foreach (DictionaryEntry property in properties)
+                {
+                    var key = Property(property.Key);
+                    if (key.Name.StartsWith("deletedShape.", StringComparison.Ordinal) || result.Contains(key)) continue;
+                    foreach (var rule in (IEnumerable)Field(property.Value, "actionGroups"))
+                        foreach (var condition in (IEnumerable)Field(rule, "ControllingConditions"))
+                        {
+                            var reference = Field(condition, "DebugReference") as Component;
+                            var gameObject = Field(condition, "ReferenceObject") as GameObject;
+                            var menu = reference != null && reference.GetType().FullName == Ma + "ModularAvatarMenuItem";
+                            if (menu || gameObject != null && (animated.Contains(gameObject) || result.Contains((gameObject, "m_IsActive"))))
+                                changed |= result.Add(key);
+                        }
+                }
+            } while (changed);
+            return result;
+        }
+
+        static HashSet<GameObject> AnimatedActivationObjects(GameObject root)
+        {
+            var result = new HashSet<GameObject>();
+            void Collect(AnimationClip clip, Transform basis)
+            {
+                if (clip == null || basis == null) return;
+                foreach (var binding in UnityEditor.AnimationUtility.GetCurveBindings(clip))
+                {
+                    if (binding.type != typeof(GameObject) || binding.propertyName != "m_IsActive") continue;
+                    // Duplicate paths remain the build/sampler's diagnostic;
+                    // retain every possible dependency instead of freezing one.
+                    foreach (var node in basis.GetComponentsInChildren<Transform>(true))
+                        if (UnityEditor.AnimationUtility.CalculateTransformPath(node, basis) == binding.path)
+                            result.Add(node.gameObject);
+                }
+            }
+            foreach (var component in root.GetComponentsInChildren<Component>(true).Where(value => value != null))
+            {
+                var basis = root.transform;
+                if (component is Animator animator) basis = animator.transform;
+                else if (component.GetType().FullName == Ma + "ModularAvatarMergeAnimator" &&
+                    component.GetType().GetField("pathMode").GetValue(component).ToString() == "Relative")
+                {
+                    var reference = component.GetType().GetField("relativePathRoot").GetValue(component);
+                    var target = reference?.GetType().GetMethod("Get", new[] { typeof(Component) }).Invoke(reference, new object[] { component }) as GameObject;
+                    basis = target == null ? component.transform : target.transform;
+                }
+                using (var serialized = new UnityEditor.SerializedObject(component))
+                {
+                    var property = serialized.GetIterator();
+                    while (property.Next(true))
+                    {
+                        if (property.propertyType != UnityEditor.SerializedPropertyType.ObjectReference) continue;
+                        if (property.objectReferenceValue is RuntimeAnimatorController controller)
+                            foreach (var clip in controller.animationClips) Collect(clip, basis);
+                        else if (property.objectReferenceValue is AnimationClip clip) Collect(clip, basis);
+                    }
+                }
+            }
+            return result;
         }
 
         static Dictionary<string, string> ParameterMap(object analyzer, Dictionary<Object, Object> objects)

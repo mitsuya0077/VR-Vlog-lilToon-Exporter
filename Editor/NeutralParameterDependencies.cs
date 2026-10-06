@@ -86,7 +86,7 @@ namespace VRVlog.LilToonExporter
             ISet<EditorCurveBinding> capturedMorphs)
         {
             var machine = layer.stateMachine;
-            if (layer.syncedLayerIndex >= 0 || layer.iKPass || machine == null || machine.behaviours.Length != 0 ||
+            if (layer.syncedLayerIndex >= 0 || layer.iKPass || machine == null || ExpressionDependencies.HasEffectfulBehaviours(machine.behaviours) ||
                 machine.stateMachines.Length != 0 || machine.anyStateTransitions.Length != 0 || machine.entryTransitions.Length != 0 ||
                 machine.states.Length == 0) return false;
             var states = new HashSet<AnimatorState>(machine.states.Select(child => child.state));
@@ -128,7 +128,8 @@ namespace VRVlog.LilToonExporter
             return states.All(state => !state.iKOnFeet && state.writeDefaultValues == machine.defaultState.writeDefaultValues &&
                 state.transitions.All(transition => !transition.isExit && transition.destinationStateMachine == null &&
                     states.Contains(transition.destinationState)) &&
-                state.behaviours.All(behaviour => behaviour != null && drivers.TryGetValue(behaviour, out var program) &&
+                state.behaviours.All(behaviour => ExpressionDependencies.IsInertAuthoringMarker(behaviour) ||
+                    behaviour != null && drivers.TryGetValue(behaviour, out var program) &&
                     !program.FxControl && program.Error == null && program.Operations.All(operation => operation.Kind == "Set" &&
                         operation.Error == null && internalFloats.Contains(operation.Destination) && Finite(operation.Value))) &&
                 MotionHasUniformBindings(state.motion));

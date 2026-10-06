@@ -25,6 +25,7 @@ namespace VRVlog.LilToonExporter.Tests
         [TearDown]
         public void TearDown()
         {
+            NdmfPreparationTests.FakeProcessor.GeneratingAction = null;
             NdmfPreparationTests.FakeProcessor.Action = null;
             NdmfPreparationTests.FakeProcessor.OptimizationAction = null;
             if (clone != null) Object.DestroyImmediate(clone);
@@ -224,6 +225,8 @@ namespace VRVlog.LilToonExporter.Tests
             Assert.That(EditorJsonUtility.ToJson(merge), Is.EqualTo(sourceSettings));
             Assert.That(RawMergePath(), Is.EqualTo(referencePath));
             clone = Object.Instantiate(source);
+            Assert.DoesNotThrow(() => NdmfExportPreparation.ValidateCopy(source, clone),
+                "An unresolved target must reach NDMF's Resolving and MA validation passes.");
             Assert.Throws<InvalidOperationException>(() => NdmfExportPreparation.Prepare(source, clone));
             Assert.That(EditorJsonUtility.ToJson(merge), Is.EqualTo(sourceSettings));
         }
@@ -279,6 +282,40 @@ namespace VRVlog.LilToonExporter.Tests
             copiedArm.localRotation = Quaternion.Euler(0, 0, -60);
             copiedSleeve.BakeMesh(after);
             Assert.That(Vector3.Distance(before.vertices[0], after.vertices[0]), Is.GreaterThan(.1f));
+        }
+
+        [Test]
+        public void InstalledMaMergesAnInactiveNestedArmatureWithItsDeclaredTargets()
+        {
+            CreateFixture();
+            clothingRig.gameObject.SetActive(false);
+            var nestedMerge = clothingArm.gameObject.AddComponent(merge.GetType());
+            var mode = merge.GetType().GetField("LockMode");
+            if (mode != null) mode.SetValue(nestedMerge, Enum.Parse(mode.FieldType, "NotLocked"));
+            merge.GetType().GetField("mangleNames").SetValue(nestedMerge, false);
+            SetRawReference(nestedMerge, "mergeTarget", mainArm.gameObject, "MainRig/UpperArm.L");
+            var sourceSettings = EditorJsonUtility.ToJson(merge);
+            var nestedSettings = EditorJsonUtility.ToJson(nestedMerge);
+            var vertices = originalMesh.vertices;
+            clone = Object.Instantiate(source);
+            NdmfExportPreparation.ValidateCopy(source, clone);
+            using (NdmfExportPreparation.Prepare(source, clone))
+            {
+                var copiedArm = clone.transform.Find("MainRig/UpperArm.L");
+                var copiedSleeve = clone.transform.Find("Sleeve").GetComponent<SkinnedMeshRenderer>();
+                var before = Own(new Mesh());
+                var after = Own(new Mesh());
+                copiedSleeve.BakeMesh(before);
+                copiedArm.localRotation = Quaternion.Euler(0, 0, -60);
+                copiedSleeve.BakeMesh(after);
+                Assert.That(Vector3.Distance(before.vertices[0], after.vertices[0]), Is.GreaterThan(.1f),
+                    "The nested inactive rig must follow its declared primary arm after canonical MA processing.");
+                Assert.That(merge != null && nestedMerge != null, Is.True);
+                Assert.That(EditorJsonUtility.ToJson(merge), Is.EqualTo(sourceSettings));
+                Assert.That(EditorJsonUtility.ToJson(nestedMerge), Is.EqualTo(nestedSettings));
+                Assert.That(clothingRig.gameObject.activeSelf, Is.False);
+                AssertSourceFixtureIntact(sourceSettings, vertices);
+            }
         }
 
         void AssertSourceFixtureIntact(string sourceSettings, Vector3[] vertices)
@@ -411,7 +448,7 @@ namespace VRVlog.LilToonExporter.Tests
                 "The same nonempty path has a different native root after detaching only the selected subtree.");
             Assert.That(EffectiveSerializedTarget(copiedMerge, "mergeTarget"), Is.Null);
             var error = Assert.Throws<InvalidOperationException>(() => NdmfExportPreparation.Prepare(source, clone));
-            StringAssert.Contains("追従先を取得できません", error.Message);
+            StringAssert.Contains("Modular Avatar", error.Message);
             Assert.That(EditorJsonUtility.ToJson(merge), Is.EqualTo(sourceSettings));
             Assert.That(source.transform.parent, Is.SameAs(enclosing.transform));
         }
@@ -543,7 +580,7 @@ namespace VRVlog.LilToonExporter.Tests
             using (NdmfExportPreparation.ProcessClone(source, clone, FakeBridge()))
                 for (var i = 0; i < 2; i++)
                     AssertRawReference(setting, "m_shapes.Array.data[" + i + "].Object", externalRig.gameObject, "Sleeve");
-            Assert.That(NdmfPreparationTests.FakeProcessor.Calls, Is.EqualTo(1));
+            Assert.That(NdmfPreparationTests.FakeProcessor.Calls, Is.EqualTo(2));
         }
 
         [Test]
@@ -571,7 +608,7 @@ namespace VRVlog.LilToonExporter.Tests
         }
 
         [Test]
-        public void ActiveMaPathReferenceRetainsTheRequiredInactiveAuthoringBeforePruning()
+        public void ActiveMaPathReferenceRetainsTheRequiredInactiveAuthoringBeforeCanonicalBuild()
         {
             CreateFixture();
             var toggleType = InstalledType(MaNamespace + "ModularAvatarObjectToggle");
@@ -602,7 +639,7 @@ namespace VRVlog.LilToonExporter.Tests
             NdmfPreparationTests.FakeProcessor.Action = root =>
             {
                 Assert.That(copiedInactiveMerge != null, Is.True,
-                    "Resolve the active toggle's MA path before pruning the inactive target's required authoring.");
+                    "Resolve the active toggle's MA path while preserving inactive target authoring.");
                 Assert.That(copiedWardrobe.GetComponent(merge.GetType()), Is.SameAs(copiedInactiveMerge));
                 Assert.That(copiedWardrobe.gameObject.activeInHierarchy, Is.False);
                 AssertRawReference(root.transform.Find("active toggle setting").GetComponent(toggleType),
@@ -616,11 +653,11 @@ namespace VRVlog.LilToonExporter.Tests
                 Assert.That(inactiveWardrobe.gameObject.activeInHierarchy, Is.False);
                 Assert.That(inactiveMerge != null, Is.True);
             }
-            Assert.That(NdmfPreparationTests.FakeProcessor.Calls, Is.EqualTo(1));
+            Assert.That(NdmfPreparationTests.FakeProcessor.Calls, Is.EqualTo(2));
         }
 
         [Test]
-        public void EarlyResolutionOfAnUnusedInactiveUnresolvedMaTagStillAllowsItToBePruned()
+        public void InactiveUnresolvedMaSceneReferenceIsRejectedWithoutSilentlyDroppingItsAuthoring()
         {
             CreateFixture();
             var unused = Child(source.transform, "unused inactive wardrobe", Vector3.zero);
@@ -632,20 +669,15 @@ namespace VRVlog.LilToonExporter.Tests
             clone = Object.Instantiate(source);
             var copiedUnused = clone.transform.Find("unused inactive wardrobe");
             ResetFakeBridge();
-            NdmfPreparationTests.FakeProcessor.Action = root =>
-            {
-                Assert.That(copiedUnused != null, Is.True);
-                Assert.That(copiedUnused.GetComponent(merge.GetType()), Is.Null);
-                Assert.That(copiedUnused.gameObject.activeInHierarchy, Is.False);
-            };
-            using (NdmfExportPreparation.ProcessClone(source, clone, FakeBridge()))
-            {
-                AssertRawReference(unusedMerge, "mergeTarget", externalRig.gameObject, "missing rig");
-                Assert.That(unusedMerge != null, Is.True);
-                Assert.That(unused.parent, Is.SameAs(source.transform));
-                Assert.That(unused.gameObject.activeInHierarchy, Is.False);
-            }
-            Assert.That(NdmfPreparationTests.FakeProcessor.Calls, Is.EqualTo(1));
+            Assert.Throws<InvalidOperationException>(() => NdmfExportPreparation.ProcessClone(source, clone, FakeBridge()));
+            Assert.That(NdmfPreparationTests.FakeProcessor.Calls, Is.Zero,
+                "The unresolved external scene edge must stop before any plugin can mutate that other avatar.");
+            Assert.That(copiedUnused.GetComponent(merge.GetType()), Is.Not.Null);
+            Assert.That(copiedUnused.gameObject.activeInHierarchy, Is.False);
+            AssertRawReference(unusedMerge, "mergeTarget", externalRig.gameObject, "missing rig");
+            Assert.That(unusedMerge != null, Is.True);
+            Assert.That(unused.parent, Is.SameAs(source.transform));
+            Assert.That(unused.gameObject.activeInHierarchy, Is.False);
         }
 
         static void ResetFakeBridge()
@@ -659,6 +691,7 @@ namespace VRVlog.LilToonExporter.Tests
             NdmfPreparationTests.FakeDirectoryScope.Current = "scene-reference fixture";
             NdmfPreparationTests.FakeRegistry.Selected = new NdmfPreparationTests.FakeProvider();
             NdmfPreparationTests.FakeProcessor.Calls = 0;
+            NdmfPreparationTests.FakeProcessor.GeneratingAction = null;
             NdmfPreparationTests.FakeProcessor.Action = null;
             NdmfPreparationTests.FakeProcessor.OptimizationAction = null;
             NdmfPreparationTests.FakeProcessor.Ranges.Clear();

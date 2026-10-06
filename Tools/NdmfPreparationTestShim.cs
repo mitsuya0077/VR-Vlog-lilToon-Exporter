@@ -226,6 +226,7 @@ namespace NUnit.Framework
         public static void Greater(float a,float b,string message = null) => IsTrue(a>b,message);
         public static void GreaterOrEqual(int a,int b) => IsTrue(a>=b);
         public static T Throws<T>(Action action) where T : Exception { Assertions++; try { action(); } catch (T error) { return error; } throw new Exception("Expected " + typeof(T).Name); }
+        public static void DoesNotThrow(Action action) { Assertions++; action(); }
         public static void Ignore(string reason) => throw new IgnoredException();
     }
     public static class StringAssert { public static void Contains(string part,string value) => Assert.IsTrue(value.Contains(part)); }

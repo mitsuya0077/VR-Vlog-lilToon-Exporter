@@ -221,7 +221,11 @@ namespace VRVlog.LilToonExporter.Tests
                 clone = Object.Instantiate(source);
                 using var exclusions = new ExportObjectExclusions(source, new[] { omitted });
                 MaAppearanceSnapshot.Apply(source, clone, owned, exclusions);
-                Assert.That(clone.GetComponentInChildren<SkinnedMeshRenderer>().GetBlendShapeWeight(0), Is.EqualTo(forceOff ? 25 : 75));
+                Assert.That(clone.GetComponentInChildren<SkinnedMeshRenderer>().GetBlendShapeWeight(0), Is.EqualTo(25),
+                    "The scene preview must not replace the off endpoint of a selectable reaction.");
+                Assert.That(clone.GetComponentsInChildren<Component>(true).Any(component => component != null &&
+                    component.GetType().Name == "ModularAvatarShapeChanger"), Is.True,
+                    "Canonical MA must receive the authored Set rule for both menu states.");
                 Assert.That(UnityEditor.EditorJsonUtility.ToJson(item), Is.EqualTo(before));
                 Assert.That(skin.GetBlendShapeWeight(0), Is.EqualTo(25));
             }
