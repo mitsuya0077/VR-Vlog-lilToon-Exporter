@@ -831,7 +831,7 @@ namespace VRVlog.LilToonExporter.Tests
             else
             {
                 property = kind == "activation" ? "m_IsActive" : "m_Size.x";
-                if (kind == "unknown") skin.gameObject.AddComponent<BoxCollider>();
+                if (kind == "unknown") skin.gameObject.AddComponent<BoxCollider>().size = Vector3.one;
                 AnimationUtility.SetEditorCurve(future, EditorCurveBinding.FloatCurve("Body", kind == "activation" ? typeof(GameObject) : typeof(BoxCollider), property),
                     AnimationCurve.Constant(0, 1, kind == "activation" ? 0 : 4));
             }

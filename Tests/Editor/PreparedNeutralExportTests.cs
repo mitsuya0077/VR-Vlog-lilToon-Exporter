@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Generic;
 using System.Linq;
 using System.Threading.Tasks;
 using NUnit.Framework;
@@ -157,12 +158,13 @@ namespace VRVlog.LilToonExporter.Tests
         }
 
         [Test]
-        public void OneClickManualBlinkCannotFreezeOnlyTheMorphHalfOfAWardrobeConfiguration()
+        public async Task OneClickManualBlinkPreservesCoupledPreparedAppearanceAndAbsoluteClosure()
         {
             var type = DescriptorType(); if (type == null) Assert.Ignore("Install the real VRChat SDK.");
             using var fixture = new AttachmentConnectionTests.Fixture();
             var folderName = "__ManualBlinkAppearance_" + Guid.NewGuid().ToString("N");
             AssetDatabase.CreateFolder("Assets", folderName); var folder = "Assets/" + folderName;
+            Vrm10Instance imported = null; GameObject expected = null;
             try
             {
                 var cap = AppearanceCoupledFx(fixture, type, folder, out var controller);
@@ -170,26 +172,53 @@ namespace VRVlog.LilToonExporter.Tests
                 var options = new BlinkExportOptions { Mode = BlinkExportMode.Manual };
                 options.Both.Add(new BlinkShapeBinding { Renderer = front, Shape = "Cap mask", Weight = 100 });
                 var beforeController = EditorJsonUtility.ToJson(controller);
-                var error = Assert.Throws<InvalidOperationException>(() => UniVrmOneClickExporter.Export(fixture.Source,
-                    "Manual blink appearance conflict", "Tests", blinkOptions: options));
-                Assert.That(error.Message, Does.Contain("必須").And.Contain("Front").And.Contain("blendShape.Cap mask").And.Contain("Cap"));
+                var beforeMesh = EditorJsonUtility.ToJson(fixture.Mesh); var warnings = new List<string>();
+                expected = Object.Instantiate(fixture.Source);
+                foreach (var behaviour in expected.GetComponentsInChildren<Behaviour>(true)) behaviour.enabled = false;
+                var bytes = UniVrmOneClickExporter.Export(fixture.Source,
+                    "Manual blink with retained wardrobe neutral", "Tests", warnings, blinkOptions: options);
+                imported = await Vrm10.LoadBytesAsync(bytes, canLoadVrm0X: false, awaitCaller: new ImmediateCaller());
+                Assert.That(imported.Vrm.Expression.Blink, Is.Not.Null);
+                Assert.That(imported.GetComponentsInChildren<Renderer>(true).Any(renderer => renderer.name == "Cap"), Is.False,
+                    "The prepared hidden wardrobe must not become visible with its associated FX morph.");
+                Assert.That(warnings.Any(value => value.Contains("Cap mask") && value.Contains("m_IsActive")), Is.True);
+                foreach (var input in new[] { 0f, 1f, 0f })
+                {
+                    imported.Runtime.Expression.SetWeight(ExpressionKey.Blink, input); imported.Runtime.Process();
+                    foreach (var path in new[] { "Front", "Back" })
+                    {
+                        var reference = expected.transform.Find(path).GetComponent<SkinnedMeshRenderer>();
+                        reference.SetBlendShapeWeight(0, path == "Front" && input == 1 ? 100 : 25);
+                        var output = imported.GetComponentsInChildren<SkinnedMeshRenderer>().Single(skin => skin.name == path);
+                        AssertWorldVertices(reference, output, path + " / blink " + input);
+                    }
+                }
                 Assert.That(cap.activeSelf, Is.False);
                 Assert.That(front.GetBlendShapeWeight(0), Is.EqualTo(25));
                 Assert.That(front.sharedMesh, Is.SameAs(fixture.Mesh));
                 Assert.That(EditorJsonUtility.ToJson(controller), Is.EqualTo(beforeController));
+                Assert.That(EditorJsonUtility.ToJson(fixture.Mesh), Is.EqualTo(beforeMesh));
+                Assert.That(fixture.Source.GetComponentsInChildren<SkinnedMeshRenderer>().All(skin => skin.sharedMesh == fixture.Mesh && skin.GetBlendShapeWeight(0) == 25), Is.True);
                 Assert.That(options.Both.Single().Renderer, Is.SameAs(front));
+                Assert.That(options.Both.Single().Shape, Is.EqualTo("Cap mask")); Assert.That(options.Both.Single().Weight, Is.EqualTo(100));
             }
-            finally { AssetDatabase.DeleteAsset(folder); }
+            finally
+            {
+                if (imported != null) Object.DestroyImmediate(imported.gameObject);
+                if (expected != null) Object.DestroyImmediate(expected);
+                AssetDatabase.DeleteAsset(folder);
+            }
         }
 
         [Test]
-        public void OneClickKeepsSourceTrackingObligationsWhenThePreparedCopyNoLongerHasTheMarker()
+        public async Task OneClickKeepsSourceTrackingEndpointsAndPreparedRestAfterMarkerRemoval()
         {
             var type = DescriptorType(); if (type == null) Assert.Ignore("Install the real VRChat SDK.");
             using var fixture = new AttachmentConnectionTests.Fixture();
             var folderName = "__StrippedTrackingAppearance_" + Guid.NewGuid().ToString("N");
             AssetDatabase.CreateFolder("Assets", folderName); var folder = "Assets/" + folderName;
             var profile = ScriptableObject.CreateInstance<VrmTrackingProfile>();
+            Vrm10Instance imported = null; GameObject expected = null;
             try
             {
                 var cap = AppearanceCoupledFx(fixture, type, folder, out var controller);
@@ -209,19 +238,59 @@ namespace VRVlog.LilToonExporter.Tests
                 }
                 finally { Object.DestroyImmediate(probe); }
                 var beforeController = EditorJsonUtility.ToJson(controller);
+                var beforeMesh = EditorJsonUtility.ToJson(fixture.Mesh); var beforeProfile = EditorJsonUtility.ToJson(profile);
                 var front = fixture.Source.transform.Find("Front").GetComponent<SkinnedMeshRenderer>();
-                var error = Assert.Throws<InvalidOperationException>(() => UniVrmOneClickExporter.Export(fixture.Source,
-                    "Stripped marker appearance conflict", "Tests", excludedObjects: new[] { markerObject },
-                    blinkOptions: new BlinkExportOptions { Mode = BlinkExportMode.None }));
-                Assert.That(error.Message, Does.Contain("必須").And.Contain("blendShape.Cap mask").And.Contain("Cap"));
+                expected = Object.Instantiate(fixture.Source);
+                foreach (var behaviour in expected.GetComponentsInChildren<Behaviour>(true)) behaviour.enabled = false;
+                var warnings = new List<string>();
+                var bytes = UniVrmOneClickExporter.Export(fixture.Source,
+                    "Stripped marker with retained wardrobe neutral", "Tests", warnings, excludedObjects: new[] { markerObject },
+                    blinkOptions: new BlinkExportOptions { Mode = BlinkExportMode.None });
+                imported = await Vrm10.LoadBytesAsync(bytes, canLoadVrm0X: false, awaitCaller: new ImmediateCaller());
+                Assert.That(VrmTrackingExpressions.Names.All(name => imported.Vrm.Expression.CustomClips.Any(clip => clip.name == name)), Is.True,
+                    "Every explicit source tracking endpoint must survive removal of its authoring marker from the prepared copy.");
+                Assert.That(imported.GetComponentsInChildren<Renderer>(true).Any(renderer => renderer.name == "Cap"), Is.False);
+                Assert.That(warnings.Any(value => value.Contains("Cap mask") && value.Contains("m_IsActive")), Is.True);
+                foreach (var input in new[] { 0f, 1f, 0f })
+                {
+                    imported.Runtime.Expression.SetWeight(ExpressionKey.CreateCustom("JawOpen"), input); imported.Runtime.Process();
+                    foreach (var path in new[] { "Front", "Back" })
+                    {
+                        var reference = expected.transform.Find(path).GetComponent<SkinnedMeshRenderer>(); reference.SetBlendShapeWeight(0, input == 1 ? 100 : 25);
+                        var output = imported.GetComponentsInChildren<SkinnedMeshRenderer>().Single(skin => skin.name == path);
+                        AssertWorldVertices(reference, output, path + " / tracking " + input);
+                    }
+                }
                 Assert.That(markerObject.GetComponent<VrmTrackingMarker>().profile, Is.SameAs(profile));
                 Assert.That(markerObject.transform.parent, Is.SameAs(fixture.Source.transform));
                 Assert.That(cap.activeSelf, Is.False);
                 Assert.That(front.GetBlendShapeWeight(0), Is.EqualTo(25));
                 Assert.That(front.sharedMesh, Is.SameAs(fixture.Mesh));
                 Assert.That(EditorJsonUtility.ToJson(controller), Is.EqualTo(beforeController));
+                Assert.That(EditorJsonUtility.ToJson(fixture.Mesh), Is.EqualTo(beforeMesh));
+                Assert.That(EditorJsonUtility.ToJson(profile), Is.EqualTo(beforeProfile));
+                Assert.That(fixture.Source.GetComponentsInChildren<SkinnedMeshRenderer>().All(skin => skin.sharedMesh == fixture.Mesh && skin.GetBlendShapeWeight(0) == 25), Is.True);
             }
-            finally { Object.DestroyImmediate(profile); AssetDatabase.DeleteAsset(folder); }
+            finally
+            {
+                if (imported != null) Object.DestroyImmediate(imported.gameObject);
+                if (expected != null) Object.DestroyImmediate(expected);
+                Object.DestroyImmediate(profile); AssetDatabase.DeleteAsset(folder);
+            }
+        }
+
+        static void AssertWorldVertices(SkinnedMeshRenderer expected, SkinnedMeshRenderer actual, string context)
+        {
+            var reference = new Mesh(); var output = new Mesh();
+            try
+            {
+                expected.BakeMesh(reference, false); actual.BakeMesh(output, false);
+                Assert.That(output.vertexCount, Is.EqualTo(reference.vertexCount), context);
+                for (var index = 0; index < reference.vertexCount; index++)
+                    Assert.That(Vector3.Distance(expected.transform.TransformPoint(reference.vertices[index]), actual.transform.TransformPoint(output.vertices[index])),
+                        Is.LessThan(.0005f), context + " / vertex " + index);
+            }
+            finally { Object.DestroyImmediate(reference); Object.DestroyImmediate(output); }
         }
 
         static GameObject AppearanceCoupledFx(AttachmentConnectionTests.Fixture fixture, Type descriptorType, string folder,
@@ -233,6 +302,8 @@ namespace VRVlog.LilToonExporter.Tests
             foreach (var skin in fixture.Source.GetComponentsInChildren<SkinnedMeshRenderer>())
             { skin.SetBlendShapeWeight(0, 25); skin.sharedMaterial.shader = Shader.Find("lilToon"); }
             var cap = new GameObject("Cap"); cap.transform.SetParent(fixture.Source.transform, false); cap.SetActive(false);
+            cap.AddComponent<MeshFilter>().sharedMesh = fixture.Mesh;
+            cap.AddComponent<MeshRenderer>().sharedMaterial = fixture.Source.transform.Find("Front").GetComponent<SkinnedMeshRenderer>().sharedMaterial;
             controller = DefaultFx(folder + "/FX.controller", "Front", "Cap mask", 100);
             var clip = (AnimationClip)controller.layers[0].stateMachine.defaultState.motion;
             AnimationUtility.SetEditorCurve(clip, EditorCurveBinding.FloatCurve("Back", typeof(SkinnedMeshRenderer), "blendShape.Cap mask"),

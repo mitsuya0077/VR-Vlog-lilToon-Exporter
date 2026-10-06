@@ -250,8 +250,8 @@ BEHAVIOR_CASES = {
     },
     'PreparedNeutralExportTests': {
         'IndependentLoopOnTheInfluencingSkinBoneKeepsPreparedGeometryAndAuthoredEndpoints': 1,
-        'OneClickManualBlinkCannotFreezeOnlyTheMorphHalfOfAWardrobeConfiguration': 1,
-        'OneClickKeepsSourceTrackingObligationsWhenThePreparedCopyNoLongerHasTheMarker': 1,
+        'OneClickManualBlinkPreservesCoupledPreparedAppearanceAndAbsoluteClosure': 1,
+        'OneClickKeepsSourceTrackingEndpointsAndPreparedRestAfterMarkerRemoval': 1,
         'AutomaticBlinkUsesFxOpenNeutralWhenSerializedUnifiedClosureIsFullyClosed': 2,
         'NdmfGeneratedShapeAndReboundFxUsePreparedMeshAndRendererPathInRealVrm': 8,
     },

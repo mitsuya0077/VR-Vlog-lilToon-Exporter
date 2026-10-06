@@ -823,7 +823,8 @@ namespace VRVlog.LilToonExporter
                     throw new InvalidOperationException("常時適用FXと表情の影響範囲を確定できません。");
                 var objectChange = ObjectChangeDiagnostic(clip, excludedPath, neutralPlan);
                 if (objectChange != null)
-                    throw UnsupportedAppearance(neutralPlan, "表情への遷移にマテリアル・オブジェクトの差し替えが含まれます。 " + objectChange);
+                    throw UnsupportedAppearance(neutralPlan, "表情への遷移にマテリアル・オブジェクトの差し替えが含まれます。" +
+                        (neutralPlan?.RetainUnresolvedRest == true ? " " + objectChange : ""));
                 foreach (var binding in AnimationUtility.GetCurveBindings(clip))
                 {
                     if (binding.type == typeof(Animator) || excludedPath?.Invoke(binding.path) == true) continue;
@@ -854,7 +855,8 @@ namespace VRVlog.LilToonExporter
                         throw new InvalidOperationException("常時適用FXと表情の影響範囲を確定できません。");
                     var objectChange = ObjectChangeDiagnostic(info.clip, excludedPath, neutralPlan);
                     if (objectChange != null)
-                        throw UnsupportedAppearance(neutralPlan, "表情への遷移にマテリアル・オブジェクトの差し替えが含まれます。 " + objectChange);
+                        throw UnsupportedAppearance(neutralPlan, "表情への遷移にマテリアル・オブジェクトの差し替えが含まれます。" +
+                            (neutralPlan?.RetainUnresolvedRest == true ? " " + objectChange : ""));
                     foreach (var binding in AnimationUtility.GetCurveBindings(info.clip))
                     {
                         if (binding.type == typeof(Animator)) continue; // Parameter curves are checked for stability separately.
@@ -1156,7 +1158,8 @@ namespace VRVlog.LilToonExporter
                     if (info.weight <= 0.00001f || info.clip == null) continue;
                     var objectChange = ObjectChangeDiagnostic(info.clip, excludedPath, neutralPlan);
                     if (objectChange != null)
-                        throw UnsupportedAppearance(neutralPlan, "マテリアル・オブジェクトの差し替えを含む表情は未対応です。 " + objectChange);
+                        throw UnsupportedAppearance(neutralPlan, "マテリアル・オブジェクトの差し替えを含む表情は未対応です。" +
+                            (neutralPlan?.RetainUnresolvedRest == true ? " " + objectChange : ""));
                     foreach (var binding in AnimationUtility.GetCurveBindings(info.clip))
                     {
                         if (binding.type == typeof(Animator)) continue;
