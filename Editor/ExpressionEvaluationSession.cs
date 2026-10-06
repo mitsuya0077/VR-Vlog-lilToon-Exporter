@@ -63,6 +63,7 @@ namespace VRVlog.LilToonExporter
                 var result = new List<StateMachineBehaviour>();
                 foreach (var behaviour in values)
                 {
+                    if (dependencies.IgnoredWeightControls.Contains(behaviour)) continue;
                     if (VrChatParameterDriver.IsTracking(behaviour) || VrChatParameterDriver.IsNonFxPlayableControl(behaviour) ||
                         VrChatParameterDriver.IsTemporaryPoseSpace(behaviour) || VrChatParameterDriver.IsLocomotionControl(behaviour)) continue;
                     if (!dependencies.Drivers.TryGetValue(behaviour, out var program))

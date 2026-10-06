@@ -21,12 +21,14 @@ namespace VRVlog.LilToonExporter
             internal readonly HashSet<AnimationClip> Clips = new HashSet<AnimationClip>();
             internal readonly List<VrChatParameterDriver.Program> DriverPrograms = new List<VrChatParameterDriver.Program>();
             internal readonly Dictionary<StateMachineBehaviour, VrChatParameterDriver.Program> FxCommands = new Dictionary<StateMachineBehaviour, VrChatParameterDriver.Program>();
+            internal readonly Dictionary<StateMachineBehaviour, SdkLayerWeightControl> WeightControls = new Dictionary<StateMachineBehaviour, SdkLayerWeightControl>();
             internal bool WriteDefaults, HasBindings, EmptyMotion, FxControl, DynamicMorph, Timed, NonMorphBindings;
         }
 
         internal readonly HashSet<int> Layers = new HashSet<int>();
         internal readonly HashSet<int> NativeSupportLayers = new HashSet<int>();
         internal bool HasFxControls;
+        internal readonly HashSet<StateMachineBehaviour> IgnoredWeightControls = new HashSet<StateMachineBehaviour>();
         internal int IndependentTopOverrideLayer = -1;
         internal readonly HashSet<string> Parameters = new HashSet<string>(StringComparer.Ordinal);
         internal readonly HashSet<EditorCurveBinding> Morphs = new HashSet<EditorCurveBinding>();
@@ -62,9 +64,11 @@ namespace VRVlog.LilToonExporter
         internal static void ValidateProbeBehaviours(RuntimeAnimatorController runtime, Func<string, bool> excludedPath)
         {
             var unknown = new List<string>();
-            Inspect(runtime, excludedPath, new Dictionary<StateMachineBehaviour, VrChatParameterDriver.Program>(), unknown);
+            var layers = Inspect(runtime, excludedPath, new Dictionary<StateMachineBehaviour, VrChatParameterDriver.Program>(), unknown);
             if (unknown.Count > 0)
                 throw new InvalidOperationException("FXの影響範囲を確定できないState Behaviourがあります: " + string.Join(", ", unknown));
+            var weight = layers.SelectMany(layer => layer.WeightControls.Values).FirstOrDefault(control => control.Playable == "FX");
+            if (weight != null) throw WeightControlCapability(weight, false);
         }
 
         internal static HashSet<string> SelectedLayerDriverWrites(RuntimeAnimatorController runtime, int layerIndex, Func<string, bool> excludedPath)
@@ -73,7 +77,25 @@ namespace VRVlog.LilToonExporter
             var layers = Inspect(runtime, excludedPath, new Dictionary<StateMachineBehaviour, VrChatParameterDriver.Program>(), unknown);
             if (unknown.Count > 0)
                 throw new InvalidOperationException("FXの影響範囲を確定できないState Behaviourがあります: " + string.Join(", ", unknown));
+            var weight = layers.SelectMany(layer => layer.WeightControls.Values).FirstOrDefault(control => control.Playable == "FX");
+            if (weight != null) throw WeightControlCapability(weight, false);
             return layers[layerIndex].DriverWrites;
+        }
+
+        internal static void ValidateAdditionalProbeBehaviours(RuntimeAnimatorController runtime,
+            VrChatExpressionMenu.Source source, FixedExpressionContext fixedContext, ISet<EditorCurveBinding> morphs)
+        {
+            foreach (var other in InspectOtherControllers(runtime, source, fixedContext))
+            {
+                var writes = other.Layers.SelectMany(layer => layer.Morphs).Where(morphs.Contains)
+                    .Select(binding => binding.path + "/" + binding.propertyName).Distinct();
+                var unresolved = other.Unknown.Concat(writes).ToArray();
+                if (unresolved.Length > 0)
+                    throw new InvalidOperationException("FX以外のPlayable Layerからの変更を再現できません: " +
+                        other.Runtime.name + " / " + string.Join(", ", unresolved));
+                var weight = other.Layers.SelectMany(layer => layer.WeightControls.Values).FirstOrDefault(control => control.Playable == "FX");
+                if (weight != null) throw WeightControlCapability(weight, false);
+            }
         }
 
         internal static ExpressionDependencies Analyze(RuntimeAnimatorController runtime, IEnumerable<string> selected,
@@ -135,7 +157,7 @@ namespace VRVlog.LilToonExporter
                 }
                 if (controller != runtime)
                     rawOther.AddRange(Inspect(controller, null, new Dictionary<StateMachineBehaviour, VrChatParameterDriver.Program>(), unknown,
-                        knownSdkControls: new List<string>(), fxLayerCount: Controller(runtime).layers.Length));
+                        typedConditions: true, fxLayerCount: Controller(runtime).layers.Length));
             }
             // Unknown callbacks can invalidate every constant. Retain their
             // complete clip graph so the dependency guards diagnose them.
@@ -202,6 +224,7 @@ namespace VRVlog.LilToonExporter
             var controller = Controller(runtime);
             var unknown = new List<string>();
             var info = Inspect(runtime, excludedPath, result.Drivers, unknown, true);
+            var rawWeightControls = info.SelectMany(layer => layer.WeightControls.Keys).ToArray();
             var nativeHasBindings = info.Select(layer => layer.HasBindings).ToArray();
             result.HasFxControls = info.Any(layer => layer.FxControl);
             // Arbitrary behaviours can affect any parameter, layer or scene
@@ -366,7 +389,26 @@ namespace VRVlog.LilToonExporter
                         string.Join(", ", writes.Concat(other.Unknown).Concat(otherMorphs)));
             }
             if (unsafeFxCommands.Count > 0)
-                throw new InvalidOperationException(unsafeFxCommands[0].Location + " / VRCPlayableLayerControl: FXの重みを変更する状態は固定表情に変換できません。");
+            {
+                var message = unsafeFxCommands[0].Location + " / VRCPlayableLayerControl: FXの重みを変更する状態は固定表情に変換できません。";
+                if (neutralMorphs != null) throw new NeutralShapeSamplingException(message, dependencyMorphs: result.NeutralDependencyMorphs);
+                throw new InvalidOperationException(message);
+            }
+            var weightControls = info.SelectMany(layer => layer.WeightControls.Values)
+                .Concat(otherControllers.SelectMany(other => other.Layers).SelectMany(layer => layer.WeightControls.Values))
+                .Where(control => control.Playable == "FX").ToArray();
+            // A documented SDK weight command is a known effect, not an arbitrary
+            // callback. Retain prepared rest if its effect cannot be reproduced.
+            // Only a final explicit full override can make all captured scalars
+            // independent of every controlled lower layer. Global/top controls
+            // invalidate that proof even when their goal happens to be one.
+            var unresolvedWeight = weightControls.FirstOrDefault(control => neutralMorphs == null ||
+                result.IndependentTopOverrideLayer < 0 || !control.AnimatorLayer || control.LayerIndex >= result.IndependentTopOverrideLayer);
+            if (unresolvedWeight != null) throw WeightControlCapability(unresolvedWeight, neutralMorphs != null, result.NeutralDependencyMorphs);
+            // The controller copy retains every state, including states proven
+            // unreachable from fixed inputs. These exact validated identities
+            // can be removed only after the capability/reachability guards pass.
+            result.IgnoredWeightControls.UnionWith(rawWeightControls);
             // Missing live inputs can retain authored neutral weights, but must
             // not hide unsupported writers or callbacks found in the same graph.
             // A final explicit full override fixes every captured morph even
@@ -377,6 +419,17 @@ namespace VRVlog.LilToonExporter
                 throw new NeutralShapeSamplingException(message, dependencyMorphs: result.NeutralDependencyMorphs);
             }
             return result;
+        }
+
+        private static InvalidOperationException WeightControlCapability(SdkLayerWeightControl control, bool neutral,
+            IEnumerable<EditorCurveBinding> morphs = null)
+        {
+            var message = ExporterLocalization.T("FXのレイヤー重み制御の影響範囲を固定表情として再現できません: ") +
+                control.Location + " / " + (control.AnimatorLayer ? "VRCAnimatorLayerControl" : "VRCPlayableLayerControl") +
+                " / " + control.Playable + (control.AnimatorLayer ? " layer " + control.LayerIndex : "") +
+                " / goalWeight=" + control.GoalWeight.ToString(System.Globalization.CultureInfo.InvariantCulture) +
+                " / blendDuration=" + control.BlendDuration.ToString(System.Globalization.CultureInfo.InvariantCulture);
+            return neutral ? new NeutralShapeSamplingException(message, dependencyMorphs: morphs) : new InvalidOperationException(message);
         }
 
         // A permanent override does not read a menu parameter, so parameter-
@@ -512,13 +565,16 @@ namespace VRVlog.LilToonExporter
             return result;
         }
 
-        private sealed class OtherControllerInspection
+        internal sealed class OtherControllerInspection
         {
             internal RuntimeAnimatorController Runtime;
             internal Layer[] Layers;
             internal readonly List<string> Unknown = new List<string>();
-            internal readonly List<string> KnownSdkControls = new List<string>();
         }
+
+        internal static List<OtherControllerInspection> InspectNeutralOtherControllers(RuntimeAnimatorController runtime,
+            VrChatExpressionMenu.Source source, FixedExpressionContext fixedContext) =>
+            InspectOtherControllers(runtime, source, fixedContext);
 
         // Other playable layers share the avatar's inputs. A dormant AFK or
         // station branch cannot write the sampled face when its fixed input
@@ -534,18 +590,14 @@ namespace VRVlog.LilToonExporter
             {
                 var item = new OtherControllerInspection { Runtime = other };
                 item.Layers = Inspect(other, null, new Dictionary<StateMachineBehaviour, VrChatParameterDriver.Program>(), item.Unknown,
-                    knownSdkControls: item.KnownSdkControls, fxLayerCount: Controller(runtime).layers.Length);
+                    typedConditions: true, fxLayerCount: Controller(runtime).layers.Length);
                 result.Add(item);
             }
-            void RetainKnownControls()
-            {
-                foreach (var item in result) item.Unknown.AddRange(item.KnownSdkControls);
-            }
             if (fixedContext == null || result.Count == 0 || result.Any(item => item.Unknown.Count > 0))
-            { RetainKnownControls(); return result; }
+                return result;
             var fxUnknown = new List<string>();
             var fx = Inspect(runtime, null, new Dictionary<StateMachineBehaviour, VrChatParameterDriver.Program>(), fxUnknown, true);
-            if (fxUnknown.Count > 0) { RetainKnownControls(); return result; }
+            if (fxUnknown.Count > 0) return result;
             var written = new HashSet<string>(fx.SelectMany(layer => layer.Writes)
                 .Concat(result.SelectMany(item => item.Layers).SelectMany(layer => layer.Writes)), StringComparer.Ordinal);
             var declarations = new[] { runtime }.Concat(result.Select(item => item.Runtime))
@@ -572,46 +624,14 @@ namespace VRVlog.LilToonExporter
                 }
                 // Known SDK weight commands cannot mutate an Animator input,
                 // so they do not invalidate this typed reachability proof.
-                // They remain unsupported effects: every reachable command is
-                // rejected, including commands on an active ancestor machine.
-                item.Unknown.Clear(); item.KnownSdkControls.Clear();
+                // Keep each reachable effect separate from arbitrary callbacks,
+                // including commands on an active ancestor machine.
+                item.Unknown.Clear();
                 item.Layers = Inspect(item.Runtime, null, new Dictionary<StateMachineBehaviour, VrChatParameterDriver.Program>(),
-                    item.Unknown, neutralFixed: invariant, knownSdkControls: item.KnownSdkControls,
+                    item.Unknown, neutralFixed: invariant, typedConditions: true,
                     fxLayerCount: Controller(runtime).layers.Length);
-                item.Unknown.AddRange(item.KnownSdkControls);
             }
             return result;
-        }
-
-        // Read only the documented SDK data. Never execute SDK delegates or
-        // turn a layer-weight effect into a parameter writer/no-op. The source
-        // metadata retains no body playable-slot identities, so only FX target
-        // indices can be resolved here; other targets remain conservative.
-        private static bool IsKnownAdditionalFxWeightControl(StateMachineBehaviour behaviour, int? fxLayerCount)
-        {
-            if (behaviour == null || !fxLayerCount.HasValue) return false;
-            var name = behaviour.GetType().FullName;
-            var animatorLayer = name == "VRC.SDK3.Avatars.Components.VRCAnimatorLayerControl" || name == "VRC.SDKBase.VRC_AnimatorLayerControl";
-            var playableLayer = name == "VRC.SDK3.Avatars.Components.VRCPlayableLayerControl" || name == "VRC.SDKBase.VRC_PlayableLayerControl";
-            if (!animatorLayer && !playableLayer) return false;
-            using (var data = new SerializedObject(behaviour))
-            {
-                var target = data.FindProperty(animatorLayer ? "playable" : "layer");
-                var goal = data.FindProperty("goalWeight");
-                var duration = data.FindProperty("blendDuration");
-                if (target == null || target.propertyType != SerializedPropertyType.Enum ||
-                    target.enumValueIndex < 0 || target.enumValueIndex >= target.enumNames.Length || target.enumNames[target.enumValueIndex] != "FX" ||
-                    goal == null || goal.propertyType != SerializedPropertyType.Float ||
-                    duration == null || duration.propertyType != SerializedPropertyType.Float ||
-                    !NeutralShapeSnapshot.Finite(goal.floatValue) || goal.floatValue < 0 || goal.floatValue > 1 ||
-                    !NeutralShapeSnapshot.Finite(duration.floatValue) || duration.floatValue < 0) return false;
-                if (!animatorLayer) return true;
-                var layer = data.FindProperty("layer");
-                // Index zero is a valid SDK base-layer target, whose weight is
-                // fixed at one. Even that command is retained when reachable.
-                return layer != null && layer.propertyType == SerializedPropertyType.Integer &&
-                    layer.intValue >= 0 && layer.intValue < fxLayerCount.Value;
-            }
         }
 
         internal static bool IsFalse(AnimatorTransitionBase transition, IDictionary<string, float> fixedValues)
@@ -817,13 +837,13 @@ namespace VRVlog.LilToonExporter
 
         internal static Layer[] Inspect(RuntimeAnimatorController runtime, Func<string, bool> excludedPath,
             Dictionary<StateMachineBehaviour, VrChatParameterDriver.Program> drivers, List<string> unknown, bool allowFxControls = false,
-            IDictionary<string, float> neutralFixed = null, List<string> knownSdkControls = null, int? fxLayerCount = null)
+            IDictionary<string, float> neutralFixed = null, bool typedConditions = false, int? fxLayerCount = null)
         {
             var controller = Controller(runtime);
             var replacements = Overrides(runtime);
             var layers = controller.layers;
             var result = new Layer[layers.Length];
-            var conditionTypes = knownSdkControls == null ? null : controller.parameters.GroupBy(parameter => parameter.name, StringComparer.Ordinal)
+            var conditionTypes = !typedConditions && neutralFixed == null ? null : controller.parameters.GroupBy(parameter => parameter.name, StringComparer.Ordinal)
                 .Where(group => group.Count() == 1).ToDictionary(group => group.Key, group => group.Single().type, StringComparer.Ordinal);
             for (var index = 0; index < layers.Length; index++)
             {
@@ -854,20 +874,20 @@ namespace VRVlog.LilToonExporter
                 {
                     foreach (var behaviour in behaviours)
                     {
-                        if (VrChatParameterDriver.IsTracking(behaviour) || VrChatParameterDriver.IsNonFxPlayableControl(behaviour) ||
+                        var sdkWeight = SdkLayerWeightControl.Read(behaviour, path, fxLayerCount ?? layers.Length);
+                        if (sdkWeight != null)
+                        {
+                            if (allowFxControls && onState && VrChatParameterDriver.ReadInstantFxControl(behaviour, path, out var control))
+                            {
+                                info.FxControl = true;
+                                if (!info.FxCommands.ContainsKey(behaviour)) info.FxCommands.Add(behaviour, control);
+                                if (!drivers.ContainsKey(behaviour)) drivers.Add(behaviour, control);
+                            }
+                            else if (!info.WeightControls.ContainsKey(behaviour)) info.WeightControls.Add(behaviour, sdkWeight);
+                            continue;
+                        }
+                        if (VrChatParameterDriver.IsTracking(behaviour) ||
                             VrChatParameterDriver.IsTemporaryPoseSpace(behaviour) || VrChatParameterDriver.IsLocomotionControl(behaviour)) continue;
-                        if (allowFxControls && onState && VrChatParameterDriver.ReadInstantFxControl(behaviour, path, out var control))
-                        {
-                            info.FxControl = true;
-                            if (!info.FxCommands.ContainsKey(behaviour)) info.FxCommands.Add(behaviour, control);
-                            if (!drivers.ContainsKey(behaviour)) drivers.Add(behaviour, control);
-                            continue;
-                        }
-                        if (knownSdkControls != null && IsKnownAdditionalFxWeightControl(behaviour, fxLayerCount))
-                        {
-                            knownSdkControls.Add(path + " / " + behaviour.GetType().Name + " (FXレイヤーの重み制御)");
-                            continue;
-                        }
                         if (!VrChatParameterDriver.IsDriver(behaviour))
                         {
                             unknown.Add(path + " / " + (behaviour == null ? "欠けたBehaviour" : behaviour.GetType().Name));

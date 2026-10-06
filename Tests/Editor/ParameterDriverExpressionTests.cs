@@ -775,9 +775,10 @@ namespace VRVlog.LilToonExporter.Tests
         [Test]
         public void FxCommandsOnStateMachinesAreNotSilentlySkippedByStateCallbacks()
         {
-            Gate().motion = Clip("Menu face", 75); NeutralFxGate();
+            Gate().motion = Clip("Menu face", 75);
+            var machine = Layer("Dance gate"); machine.defaultState = State(machine, "Neutral");
             var type = AppDomain.CurrentDomain.GetAssemblies().Select(a => a.GetType("VRC.SDK3.Avatars.Components.VRCPlayableLayerControl")).First(t => t != null);
-            var control = controller.layers[controller.layers.Length - 1].stateMachine.AddStateMachineBehaviour(type);
+            var control = machine.AddStateMachineBehaviour(type);
             using (var data = new SerializedObject(control))
             {
                 var layer = data.FindProperty("layer");
@@ -786,8 +787,10 @@ namespace VRVlog.LilToonExporter.Tests
                 data.FindProperty("blendDuration").floatValue = 0;
                 data.ApplyModifiedPropertiesWithoutUndo();
             }
+            var before = EditorJsonUtility.ToJson(control);
             Assert.That(Assert.Throws<InvalidOperationException>(() => Sample()).Message,
-                Does.Contain("Dance gate").And.Contain("影響範囲"));
+                Does.Contain("Dance gate").And.Contain("VRCPlayableLayerControl").And.Contain("重み制御"));
+            Assert.That(EditorJsonUtility.ToJson(control), Is.EqualTo(before));
         }
 
         [TestCase(false, false)]
@@ -901,7 +904,7 @@ namespace VRVlog.LilToonExporter.Tests
             PlayableControl(state, target); metadata.OtherControllers.Add(other);
             if (supported) Assert.That(Sample().Single(v => v.Shape == "Face size").Weight, Is.EqualTo(75).Within(.01));
             else Assert.That(Assert.Throws<InvalidOperationException>(() => Sample()).Message,
-                Does.Contain("FX以外").And.Contain("Other control").And.Contain("VRCPlayableLayerControl"));
+                Does.Contain("重み制御").And.Contain("Other control").And.Contain("VRCPlayableLayerControl"));
         }
 
         [Test]
@@ -1052,10 +1055,9 @@ namespace VRVlog.LilToonExporter.Tests
         public void UnknownBehaviourIsRejectedWithItsLocation()
         {
             var gate = Gate(); Driver(gate, Op("Set", "Face", 1)); FaceLayer();
-            var type = AppDomain.CurrentDomain.GetAssemblies().Select(a => a.GetType("VRC.SDK3.Avatars.Components.VRCAnimatorLayerControl")).FirstOrDefault(t => t != null);
-            Assert.That(type, Is.Not.Null); gate.AddStateMachineBehaviour(type);
+            gate.AddStateMachineBehaviour<UnknownStateCallbackProbe>();
             Assert.That(Assert.Throws<InvalidOperationException>(() => Sample()).Message,
-                Does.Contain("Select face").And.Contain("VRCAnimatorLayerControl").And.Contain("影響範囲"));
+                Does.Contain("Select face").And.Contain(nameof(UnknownStateCallbackProbe)).And.Contain("影響範囲"));
         }
 
         [Test]

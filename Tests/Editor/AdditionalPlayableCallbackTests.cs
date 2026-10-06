@@ -43,7 +43,7 @@ namespace VRVlog.LilToonExporter.Tests
             // makes the dormant branch disappear.
             action.AddParameter(new AnimatorControllerParameter { name = "AFK", type = AnimatorControllerParameterType.Bool, defaultBool = true });
             waiting = State(action.layers[0].stateMachine, "Waiting", Empty()); action.layers[0].stateMachine.defaultState = waiting;
-            command = State(action.layers[0].stateMachine, "Command", Morph(0));
+            command = State(action.layers[0].stateMachine, "Command", Empty());
             gate = Transition(waiting, command); gate.AddCondition(AnimatorConditionMode.If, 0, "AFK");
             source = new VrChatExpressionMenu.Source { Controller = fx };
             source.Defaults["IsLocal"] = 1; source.Defaults["Menu"] = 0;
@@ -99,13 +99,15 @@ namespace VRVlog.LilToonExporter.Tests
             using (var data = new SerializedObject(descriptor))
             {
                 data.FindProperty("customizeAnimationLayers").boolValue = true;
-                var layers = data.FindProperty("baseAnimationLayers"); layers.arraySize = 2;
-                for (var i = 0; i < 2; i++)
+                var controllers = new[] { fx }.Concat(source.OtherControllers).ToArray();
+                var kinds = new[] { "FX", "Action", "Gesture", "Additive" };
+                var layers = data.FindProperty("baseAnimationLayers"); layers.arraySize = controllers.Length;
+                for (var i = 0; i < controllers.Length; i++)
                 {
                     var item = layers.GetArrayElementAtIndex(i); var type = item.FindPropertyRelative("type");
-                    type.enumValueIndex = Array.IndexOf(type.enumNames, i == 0 ? "FX" : "Action");
+                    type.enumValueIndex = Array.IndexOf(type.enumNames, kinds[i]);
                     item.FindPropertyRelative("isDefault").boolValue = false;
-                    item.FindPropertyRelative("animatorController").objectReferenceValue = i == 0 ? fx : action;
+                    item.FindPropertyRelative("animatorController").objectReferenceValue = controllers[i];
                 }
                 data.ApplyModifiedPropertiesWithoutUndo();
             }
@@ -139,11 +141,44 @@ namespace VRVlog.LilToonExporter.Tests
                 initialMorphs: new[] { OpenBinding }, preserveNativeBasePose: true, fixedContext: context);
         }
 
-        private void AssertAdditionalRejected(string behaviour = "VRCAnimatorLayerControl", IDictionary<string, float> selection = null, bool fixedInputs = true)
+        private void AssertAdditionalRejected(string behaviour = "VRCAnimatorLayerControl", IDictionary<string, float> selection = null,
+            bool fixedInputs = true, string hardReason = null)
         {
-            var error = Assert.Throws<InvalidOperationException>(() => Analyze(selection, fixedInputs));
-            Assert.That(error.Message, Does.Contain("FX以外").And.Contain(behaviour));
+            SetDescriptorControllers();
+            var originals = new Object[] { fx, action, skin, mesh }.Concat(source.OtherControllers).Distinct().ToArray();
+            var before = originals.Select(value => EditorJsonUtility.ToJson(value)).ToArray();
+            if (hardReason == nameof(UnknownStateCallbackProbe))
+            {
+                var error = Assert.Throws<InvalidOperationException>(() => Analyze(selection, fixedInputs));
+                Assert.That(error.Message, Does.Contain("FX以外").And.Contain(hardReason));
+                Assert.That(Assert.Throws<InvalidOperationException>(() => NeutralShapeSampler.Sample(avatar)).Message, Does.Contain(hardReason));
+            }
+            else if (selection != null)
+            {
+                var error = Assert.Throws<InvalidOperationException>(() => Analyze(selection, fixedInputs));
+                Assert.That(error.Message, Does.Contain(behaviour));
+            }
+            else
+            {
+                var error = Assert.Throws<NeutralShapeSamplingException>(() => Analyze(selection, fixedInputs));
+                Assert.That(error.Message, Does.Contain(behaviour).And.Contain("重み制御"));
+                if (fixedInputs)
+                {
+                    if (hardReason != null)
+                        Assert.That(Assert.Throws<InvalidOperationException>(() => NeutralShapeSampler.Sample(avatar)).Message, Does.Contain(hardReason));
+                    else
+                    {
+                        var warnings = new List<string>();
+                        var values = NeutralShapeSampler.Sample(avatar, warnings: warnings);
+                        Assert.That(values, Is.Empty);
+                        NeutralShapeSnapshot.Apply(avatar, values);
+                        Assert.That(warnings.Any(value => value.Contains("Open") && value.Contains(behaviour) && value.Contains("重み制御")), Is.True);
+                    }
+                }
+            }
             Assert.That(skin.GetBlendShapeWeight(0), Is.EqualTo(35));
+            Assert.That(skin.sharedMesh, Is.SameAs(mesh));
+            for (var i = 0; i < originals.Length; i++) Assert.That(EditorJsonUtility.ToJson(originals[i]), Is.EqualTo(before[i]));
         }
 
         [TestCase("animator", .1f, 1)]
@@ -152,6 +187,7 @@ namespace VRVlog.LilToonExporter.Tests
         [TestCase("playable", 2f, 0)]
         public void DormantSdkFxWeightCommandsPermitNeutralAndFixedSelectionWithoutSourceMutation(string kind, float duration, int index)
         {
+            command.motion = Morph(0);
             var control = AddControl(command, kind, duration, index);
             var beforeFx = EditorJsonUtility.ToJson(fx); var beforeOther = EditorJsonUtility.ToJson(action);
             var beforeControl = EditorJsonUtility.ToJson(control); var beforeGate = EditorJsonUtility.ToJson(gate);
@@ -279,17 +315,9 @@ namespace VRVlog.LilToonExporter.Tests
                 var third = Controller("Third"); var state = State(third.layers[0].stateMachine, "Unknown", Empty());
                 third.layers[0].stateMachine.defaultState = state; state.AddStateMachineBehaviour<UnknownStateCallbackProbe>(); source.OtherControllers.Add(third);
             }
-            if (location == "dormant") AssertAdditionalRejected(nameof(UnknownStateCallbackProbe));
-            else
-            {
-                // A later arbitrary callback invalidates the earlier branch's
-                // constant proof, so its retained SDK command is diagnosed
-                // first. That ordering must not hide either safety obligation.
-                AssertAdditionalRejected();
-                Assert.That(source.OtherControllers.Remove(action), Is.True);
-                try { AssertAdditionalRejected(nameof(UnknownStateCallbackProbe)); }
-                finally { source.OtherControllers.Insert(0, action); }
-            }
+            // A valid earlier weight command must not hide a genuinely unknown
+            // callback in this or another controller behind neutral fallback.
+            AssertAdditionalRejected(hardReason: nameof(UnknownStateCallbackProbe));
         }
 
         [TestCase("negativeIndex")]
@@ -303,7 +331,7 @@ namespace VRVlog.LilToonExporter.Tests
         [TestCase("negativeDuration")]
         [TestCase("nanDuration")]
         [TestCase("infiniteDuration")]
-        public void UnresolvedOrMalformedAnimatorLayerCommandsNeverAuthorizePruning(string problem)
+        public void AnimatorLayerMetadataDistinguishesValidBodyTargetsFromMalformedCommands(string problem)
         {
             var control = AddControl(command);
             using (var data = new SerializedObject(control))
@@ -313,7 +341,8 @@ namespace VRVlog.LilToonExporter.Tests
                     case "negativeIndex": data.FindProperty("layer").intValue = -1; break;
                     case "outOfRangeIndex": data.FindProperty("layer").intValue = fx.layers.Length; break;
                     case "unknownTarget": data.FindProperty("playable").intValue = int.MaxValue; break;
-                    case "bodyTarget": var target = data.FindProperty("playable"); target.enumValueIndex = Array.IndexOf(target.enumNames, "Action"); break;
+                    case "bodyTarget": var target = data.FindProperty("playable"); target.enumValueIndex = Array.IndexOf(target.enumNames, "Action");
+                        data.FindProperty("layer").intValue = 0; break;
                     case "negativeWeight": data.FindProperty("goalWeight").floatValue = -.1f; break;
                     case "largeWeight": data.FindProperty("goalWeight").floatValue = 1.1f; break;
                     case "nanWeight": data.FindProperty("goalWeight").floatValue = float.NaN; break;
@@ -324,7 +353,38 @@ namespace VRVlog.LilToonExporter.Tests
                 }
                 data.ApplyModifiedPropertiesWithoutUndo();
             }
-            AssertAdditionalRejected();
+            var beforeControl = EditorJsonUtility.ToJson(control);
+            var beforeFx = EditorJsonUtility.ToJson(fx); var beforeOther = EditorJsonUtility.ToJson(action);
+            if (problem == "bodyTarget")
+            {
+                Assert.That(Analyze().Morphs.Contains(OpenBinding), Is.True);
+                var warnings = new List<string>();
+                Assert.That(NeutralShapeSampler.Sample(avatar, warnings: warnings).Single().Weight, Is.EqualTo(75).Within(.01));
+                Assert.That(warnings, Is.Empty);
+            }
+            else
+            {
+                var error = Assert.Throws<InvalidOperationException>(() => Analyze());
+                Assert.That(error.Message, Does.Contain("FXのレイヤー制御に不正な設定があります").And.Contain("VRCAnimatorLayerControl").And.Contain("Command"));
+                Assert.That(Assert.Throws<InvalidOperationException>(() => NeutralShapeSampler.Sample(avatar)).Message,
+                    Does.Contain("FXのレイヤー制御に不正な設定があります"));
+            }
+            Assert.That(skin.GetBlendShapeWeight(0), Is.EqualTo(35));
+            Assert.That(skin.sharedMesh, Is.SameAs(mesh));
+            Assert.That(EditorJsonUtility.ToJson(control), Is.EqualTo(beforeControl));
+            Assert.That(EditorJsonUtility.ToJson(fx), Is.EqualTo(beforeFx));
+            Assert.That(EditorJsonUtility.ToJson(action), Is.EqualTo(beforeOther));
+        }
+
+        [Test]
+        public void ReachableAdditionalMorphWriterRemainsHardDespiteKnownWeightCommand()
+        {
+            AddControl(command); command.motion = Morph(0); action.layers[0].stateMachine.defaultState = command;
+            var before = EditorJsonUtility.ToJson(skin);
+            Assert.That(Assert.Throws<InvalidOperationException>(() => Analyze()).Message, Does.Contain("FX以外").And.Contain("blendShape.Open"));
+            Assert.That(Assert.Throws<InvalidOperationException>(() => NeutralShapeSampler.Sample(avatar)).Message, Does.Contain("FX以外"));
+            Assert.That(EditorJsonUtility.ToJson(skin), Is.EqualTo(before));
+            Assert.That(skin.GetBlendShapeWeight(0), Is.EqualTo(35));
         }
 
         [TestCase(AnimatorControllerParameterType.Trigger)]

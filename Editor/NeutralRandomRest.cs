@@ -29,7 +29,7 @@ namespace VRVlog.LilToonExporter
             foreach (var controller in metadata.OtherControllers.Where(value => value != null))
                 other.AddRange(ExpressionDependencies.Inspect(controller, null,
                     new Dictionary<StateMachineBehaviour, VrChatParameterDriver.Program>(), unknown,
-                    knownSdkControls: new List<string>(), fxLayerCount: layers.Length));
+                    typedConditions: true, fxLayerCount: layers.Length));
             if (unknown.Count != 0) return result;
             var original = ExpressionDependencies.Controller(runtime);
             var definitions = original.layers;

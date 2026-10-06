@@ -122,6 +122,15 @@ namespace VRVlog.LilToonExporter
             // can enable a stationary layer whose serialized default weight is
             // zero, as well as disable one that the probe would otherwise keep.
             ExpressionDependencies.ValidateProbeBehaviours(runtime, excludedPath);
+            metadata = metadata ?? VrChatExpressionMenu.Read(avatar, new VrChatMenuImportPolicy { SkipAll = true });
+            if (metadata.OtherControllers.Count > 0)
+            {
+                if (!metadata.NeutralInputInventoryComplete) NeutralInputProof.Read(avatar, metadata);
+                var inputContext = FixedExpressionContext.Create(runtime, metadata.Defaults, metadata);
+                var outputMorphs = new HashSet<EditorCurveBinding>(entry.Values.Select(value =>
+                    EditorCurveBinding.FloatCurve(value.Path, typeof(SkinnedMeshRenderer), "blendShape." + value.Shape)));
+                ExpressionDependencies.ValidateAdditionalProbeBehaviours(runtime, metadata, inputContext, outputMorphs);
+            }
             var stationaryBindings = StationaryBindings(avatar, runtime, excludedPath);
             var permanent = ExpressionDependencies.StationaryLayers(runtime, excludedPath);
             var originalController = ExpressionDependencies.Controller(runtime);
@@ -210,7 +219,6 @@ namespace VRVlog.LilToonExporter
             // unmodelled ancestor callbacks remain a conservative rejection.
             var omittedDriverWrites = nativeSlot && sourceState == null ?
                 ExpressionDependencies.SelectedLayerDriverWrites(runtime, layerIndex.Value, excludedPath) : null;
-            metadata = metadata ?? VrChatExpressionMenu.Read(avatar, new VrChatMenuImportPolicy { SkipAll = true });
             if (!metadata.NeutralInputInventoryComplete) NeutralInputProof.Read(avatar, metadata);
             var defaults = metadata.Defaults;
             // Direct gesture/registered clips use the same explicit normal

@@ -999,7 +999,7 @@ namespace VRVlog.LilToonExporter.Tests
         }
 
         [TestCase(false)] [TestCase(true)]
-        public void AppearanceOnlyPreparedRestCannotHideUnknownPlayableOrFxWeight(bool fxWeight)
+        public void AppearanceOnlyPreparedRestRetainsKnownFxWeightButRejectsUnknownPlayable(bool fxWeight)
         {
             var state = Open(75); skin.SetBlendShapeWeight(0, 17);
             var type = VrcParentConstraintType();
@@ -1025,11 +1025,22 @@ namespace VRVlog.LilToonExporter.Tests
                 AfkAction(false, false).AddStateMachineBehaviour<UnknownStateCallbackProbe>();
                 diagnostic = nameof(UnknownStateCallbackProbe);
             }
-            var before = EditorJsonUtility.ToJson(controller); var warnings = new List<string>();
-            var error = Assert.Throws<InvalidOperationException>(() => NeutralShapeSampler.Sample(avatar, warnings: warnings));
-            Assert.That(error.Message, Does.Contain(diagnostic)); Assert.That(warnings, Is.Empty);
+            var before = EditorJsonUtility.ToJson(controller); var beforeMesh = EditorJsonUtility.ToJson(mesh);
+            var beforeClip = EditorJsonUtility.ToJson(state.motion); var warnings = new List<string>();
+            if (fxWeight)
+            {
+                Assert.That(NeutralShapeSampler.Sample(avatar, warnings: warnings), Is.Empty);
+                Assert.That(warnings.Any(value => value.Contains("Open")), Is.True, string.Join("\n", warnings));
+            }
+            else
+            {
+                var error = Assert.Throws<InvalidOperationException>(() => NeutralShapeSampler.Sample(avatar, warnings: warnings));
+                Assert.That(error.Message, Does.Contain(diagnostic)); Assert.That(warnings, Is.Empty);
+            }
             Assert.That(skin.GetBlendShapeWeight(0), Is.EqualTo(17));
             Assert.That(EditorJsonUtility.ToJson(controller), Is.EqualTo(before));
+            Assert.That(skin.sharedMesh, Is.SameAs(mesh)); Assert.That(EditorJsonUtility.ToJson(mesh), Is.EqualTo(beforeMesh));
+            Assert.That(EditorJsonUtility.ToJson(state.motion), Is.EqualTo(beforeClip));
         }
 
         [TestCase("m_LocalPosition.anything")]
@@ -1316,12 +1327,7 @@ namespace VRVlog.LilToonExporter.Tests
             entrance.AddCondition(scenario == "reachable" || scenario == "random" ? AnimatorConditionMode.IfNot : AnimatorConditionMode.If, 0, "AFK");
             if (scenario != "unwritten") ParameterDriverExpressionTests.Driver(active, ParameterDriverExpressionTests.Op(
                 scenario == "random" ? "Random" : "Set", signal, 1));
-            if (scenario == "unknown")
-            {
-                var type = AppDomain.CurrentDomain.GetAssemblies().Select(assembly =>
-                    assembly.GetType("VRC.SDK3.Avatars.Components.VRCAnimatorLayerControl")).FirstOrDefault(value => value != null);
-                Assert.That(type, Is.Not.Null); active.AddStateMachineBehaviour(type);
-            }
+            if (scenario == "unknown") active.AddStateMachineBehaviour<UnknownStateCallbackProbe>();
             if (scenario == "fxwriter") ParameterDriverExpressionTests.Driver(idle, ParameterDriverExpressionTests.Op("Set", signal, 0));
             if (scenario == "fxcurve") AnimationUtility.SetEditorCurve((AnimationClip)idle.motion,
                 EditorCurveBinding.FloatCurve("", typeof(Animator), signal), AnimationCurve.Constant(0, 1, 0));
@@ -1476,7 +1482,7 @@ namespace VRVlog.LilToonExporter.Tests
                 {
                     var error = Assert.Throws<InvalidOperationException>(() => NeutralShapeSampler.Sample(avatar, requiredMorphs: required, warnings: warnings));
                     Assert.That(error.Message, Does.Contain("TransientAction").And.Contain("Transition signal").And.Contain("Playable Layer"));
-                    if (scenario == "unknown") Assert.That(error.Message, Does.Contain("VRCAnimatorLayerControl"));
+                    if (scenario == "unknown") Assert.That(error.Message, Does.Contain(nameof(UnknownStateCallbackProbe)));
                     Assert.That(warnings, Is.Empty);
                 }
                 else
@@ -1598,7 +1604,7 @@ namespace VRVlog.LilToonExporter.Tests
         [TestCase("UnknownAction")]
         [TestCase("ActionMorph")]
         [TestCase("FxWeight")]
-        public void RecoverableExternalInputCannotHideAnIndependentUnsupportedGraph(string kind)
+        public void RecoverableExternalInputRetainsKnownFxWeightButRejectsUnknownOrOtherMorphWriters(string kind)
         {
             controller.AddParameter("EyeHeightAsMeters", AnimatorControllerParameterType.Float);
             var idle = Open(75);
@@ -1625,13 +1631,24 @@ namespace VRVlog.LilToonExporter.Tests
                 if (kind == "UnknownAction") action.AddStateMachineBehaviour<UnknownStateCallbackProbe>();
                 diagnostic = kind == "UnknownAction" ? nameof(UnknownStateCallbackProbe) : "Body/blendShape.Open";
             }
-            var before = EditorJsonUtility.ToJson(controller);
+            var before = EditorJsonUtility.ToJson(controller); var beforeMesh = EditorJsonUtility.ToJson(mesh);
+            var beforeClip = EditorJsonUtility.ToJson(idle.motion);
             var warnings = new List<string>();
-            var error = Assert.Throws<InvalidOperationException>(() => NeutralShapeSampler.Sample(avatar, warnings: warnings));
-            Assert.That(error.Message, Does.Contain(diagnostic));
-            Assert.That(warnings, Is.Empty, "A recoverable input must not conceal the independent hard failure.");
+            if (kind == "FxWeight")
+            {
+                Assert.That(NeutralShapeSampler.Sample(avatar, warnings: warnings), Is.Empty);
+                Assert.That(warnings.Any(value => value.Contains("Open") && value.Contains(diagnostic)), Is.True, string.Join("\n", warnings));
+            }
+            else
+            {
+                var error = Assert.Throws<InvalidOperationException>(() => NeutralShapeSampler.Sample(avatar, warnings: warnings));
+                Assert.That(error.Message, Does.Contain(diagnostic));
+                Assert.That(warnings, Is.Empty, "A recoverable input must not conceal the independent hard failure.");
+            }
             Assert.That(skin.GetBlendShapeWeight(0), Is.Zero);
             Assert.That(EditorJsonUtility.ToJson(controller), Is.EqualTo(before));
+            Assert.That(skin.sharedMesh, Is.SameAs(mesh)); Assert.That(EditorJsonUtility.ToJson(mesh), Is.EqualTo(beforeMesh));
+            Assert.That(EditorJsonUtility.ToJson(idle.motion), Is.EqualTo(beforeClip));
         }
 
         [Test]
