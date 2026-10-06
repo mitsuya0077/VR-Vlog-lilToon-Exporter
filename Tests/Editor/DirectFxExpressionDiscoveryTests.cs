@@ -1017,6 +1017,83 @@ namespace VRVlog.LilToonExporter.Tests
             Assert.That(entries.Select(Weight), Is.EqualTo(new[] { 40f, 85f }).Within(.01));
         }
 
+        void InvalidateTreeControl(string name, string fault)
+        {
+            var declarations = controller.parameters;
+            if (fault == "missing") controller.RemoveParameter(Array.FindIndex(declarations, value => value.name == name));
+            else
+            {
+                declarations.Single(value => value.name == name).type = (AnimatorControllerParameterType)Enum.Parse(typeof(AnimatorControllerParameterType), fault);
+                controller.parameters = declarations;
+            }
+        }
+
+        void AssertRejectedTreeControl(string name, string fault)
+        {
+            var authored = new VrChatExpressionMenu.Entry { Id = "menu", Name = "Existing authored face" };
+            var source = new VrChatExpressionMenu.Source(); source.Entries.Add(authored); Read(source: source);
+            Assert.That(source.Entries.Single(), Is.SameAs(authored), "A malformed inferred tree must not replace authored expressions or publish any arbitrary subset.");
+            Assert.That(source.Messages.Single(), Does.Contain("BlendTree").And.Contain(name).And.Contain(fault == "missing" ? "Controllerにありません" : "Float型"));
+            Assert.That(source.Entries.SelectMany(value => value.Values), Is.Empty);
+        }
+
+        [TestCase(BlendTreeType.Simple1D, "ControlX", "missing")]
+        [TestCase(BlendTreeType.Simple1D, "ControlX", "Bool")]
+        [TestCase(BlendTreeType.Simple1D, "ControlX", "Int")]
+        [TestCase(BlendTreeType.Simple1D, "ControlX", "Trigger")]
+        [TestCase(BlendTreeType.SimpleDirectional2D, "ControlY", "missing")]
+        [TestCase(BlendTreeType.FreeformDirectional2D, "ControlY", "Int")]
+        [TestCase(BlendTreeType.FreeformCartesian2D, "ControlX", "missing")]
+        [TestCase(BlendTreeType.FreeformCartesian2D, "ControlY", "missing")]
+        [TestCase(BlendTreeType.FreeformCartesian2D, "ControlX", "Int")]
+        [TestCase(BlendTreeType.FreeformCartesian2D, "ControlY", "Bool")]
+        [TestCase(BlendTreeType.FreeformCartesian2D, "ControlY", "Trigger")]
+        [TestCase(BlendTreeType.Direct, "ControlX", "missing")]
+        [TestCase(BlendTreeType.Direct, "ControlY", "missing")]
+        [TestCase(BlendTreeType.Direct, "ControlY", "Int")]
+        public void BlendTreeControlDeclarationsAreRequiredBeforeDiscovery(BlendTreeType kind, string brokenControl, string fault)
+        {
+            controller.AddParameter("ControlX", AnimatorControllerParameterType.Float); controller.AddParameter("ControlY", AnimatorControllerParameterType.Float);
+            var tree = new BlendTree { name = "Authored native face controls", blendType = kind, blendParameter = "ControlX",
+                blendParameterY = "ControlY", useAutomaticThresholds = false }; AssetDatabase.AddObjectToAsset(tree, controller);
+            if (kind == BlendTreeType.Simple1D) { tree.AddChild(Clip("Rest", 0), 0); tree.AddChild(Clip("Face", 80), 1); }
+            else if (kind == BlendTreeType.Direct)
+            {
+                tree.AddChild(Clip("Rest", 0)); tree.AddChild(Clip("Face", 80)); var children = tree.children;
+                children[0].directBlendParameter = "ControlX"; children[1].directBlendParameter = "ControlY"; tree.children = children;
+            }
+            else { tree.AddChild(Clip("Rest", 0), Vector2.zero); tree.AddChild(Clip("Right", 40), Vector2.right); tree.AddChild(Clip("Face", 80), Vector2.up); }
+            neutral.motion = tree;
+            // Prove the authored knot in the original complete native tree,
+            // then reproduce deletion/type replacement in the actual source
+            // controller. The malformed graph must never reach native sampling.
+            var native = NativeSelection(new Dictionary<string, float> { ["ControlX"] = kind == BlendTreeType.Simple1D ? 1 : 0, ["ControlY"] = 1 },
+                checkStability: true);
+            Assert.That(native.Hash, Is.EqualTo(Animator.StringToHash(controller.layers[0].name + "." + neutral.name)));
+            Assert.That(native.Weight, Is.EqualTo(80).Within(.01));
+            InvalidateTreeControl(brokenControl, fault); AssertRejectedTreeControl(brokenControl, fault);
+        }
+
+        [TestCase(false, "missing")]
+        [TestCase(false, "Int")]
+        [TestCase(true, "missing")]
+        [TestCase(true, "Bool")]
+        public void NestedTreeRequiresBothUserAndReadonlyControlDeclarations(bool readonlyOuter, string fault)
+        {
+            var outerControl = "__MA/ActiveSelfProxy/Gate##0"; Parameter(outerControl, AnimatorControllerParameterType.Float, 1);
+            controller.AddParameter("UserFace", AnimatorControllerParameterType.Float);
+            var inner = new BlendTree { name = "Nested user face", blendType = BlendTreeType.Simple1D,
+                blendParameter = "UserFace", useAutomaticThresholds = false }; AssetDatabase.AddObjectToAsset(inner, controller);
+            inner.AddChild(Clip("Nested rest", 0), 0); inner.AddChild(Clip("Nested selected face", 80), 1);
+            var outer = new BlendTree { name = "Readonly generated parent", blendType = BlendTreeType.Simple1D,
+                blendParameter = outerControl, useAutomaticThresholds = false }; AssetDatabase.AddObjectToAsset(outer, controller);
+            outer.AddChild(Clip("Inactive", 0), 0); outer.AddChild(inner, 1); neutral.motion = outer;
+            var native = NativeSelection(new Dictionary<string, float> { ["UserFace"] = 1 }, checkStability: true);
+            Assert.That(native.Weight, Is.EqualTo(80).Within(.01));
+            var brokenControl = readonlyOuter ? outerControl : "UserFace";
+            InvalidateTreeControl(brokenControl, fault); AssertRejectedTreeControl(brokenControl, fault);
+        }
+
         [Test]
         public void StateEntryDriverKeepsItsCallbackDependentNativeLayerComposition()
         {

@@ -394,7 +394,7 @@ namespace VRVlog.LilToonExporter
                         control.AnimatorLayer && control.Playable == "FX" && (dependencies[control.LayerIndex].Morphs.Count > 0 ||
                             dependencies[control.LayerIndex].Writes.Overlaps(faceInputs)));
                     if (!driverMorph && !weightMorph && !HasFaceOutput(motion, replacements, excludedPath, faceInputs, new HashSet<Motion>(), Visit)) continue;
-                    var points = motion is BlendTree tree ? Points(tree, Selectable, new HashSet<BlendTree>(), Visit).ToArray() :
+                    var points = motion is BlendTree tree ? Points(tree, parameters, Selectable, new HashSet<BlendTree>(), Visit).ToArray() :
                         new[] { new Point() };
                     if (points.Length == 0) continue;
                     foreach (var point in points)
@@ -472,7 +472,7 @@ namespace VRVlog.LilToonExporter
             return result;
         }
 
-        static IEnumerable<Point> Points(BlendTree tree, Func<string, bool> selectable,
+        static IEnumerable<Point> Points(BlendTree tree, IDictionary<string, AnimatorControllerParameter> parameters, Func<string, bool> selectable,
             HashSet<BlendTree> stack, Action visit)
         {
             visit();
@@ -481,6 +481,23 @@ namespace VRVlog.LilToonExporter
             try
             {
                 var children = tree.children;
+                void ValidateControl(string name)
+                {
+                    if (string.IsNullOrEmpty(name) || !parameters.TryGetValue(name, out var parameter))
+                        throw new InvalidOperationException("FXのBlendTreeの入力パラメーターがControllerにありません: " + tree.name + " / " + (name ?? "(未指定)"));
+                    if (parameter.type != AnimatorControllerParameterType.Float)
+                        throw new InvalidOperationException("FXのBlendTreeの入力パラメーターはFloat型である必要があります: " + tree.name + " / " + name);
+                }
+                // Validate native controls even when they are readonly or
+                // generated. An undeclared input is not a selectable knot:
+                // native SetParameters cannot apply the inferred assignment.
+                if (tree.blendType == BlendTreeType.Direct)
+                    foreach (var child in children) ValidateControl(child.directBlendParameter);
+                else
+                {
+                    ValidateControl(tree.blendParameter);
+                    if (tree.blendType != BlendTreeType.Simple1D) ValidateControl(tree.blendParameterY);
+                }
                 for (var index = 0; index < children.Length; index++)
                 {
                     visit();
@@ -508,7 +525,7 @@ namespace VRVlog.LilToonExporter
                     }
                     if (point.Values.Values.Any(value => !Finite(value))) throw new InvalidOperationException("FXのBlendTreeの設定値が不正です。");
                     if (!(child.motion is BlendTree nested)) { yield return point; continue; }
-                    var innerPoints = Points(nested, selectable, stack, visit).ToArray();
+                    var innerPoints = Points(nested, parameters, selectable, stack, visit).ToArray();
                     // Empty trees do not erase a surrounding user selection.
                     // Readonly inputs at every level stay in the native graph;
                     // only authored user knots become selected assignments.

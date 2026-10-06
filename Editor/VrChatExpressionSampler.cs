@@ -588,7 +588,8 @@ namespace VRVlog.LilToonExporter
                 {
                     if (expectedLayer.HasValue && (expectedLayer.Value < 0 || expectedLayer.Value >= controller.layers.Length ||
                         string.IsNullOrEmpty(expectedStatePath) || playable.IsInTransition(expectedLayer.Value) ||
-                        playable.GetCurrentAnimatorStateInfo(expectedLayer.Value).fullPathHash != Animator.StringToHash(expectedStatePath)))
+                        !MatchesExpectedStatePath(controller, expectedLayer.Value, expectedStatePath,
+                            playable.GetCurrentAnimatorStateInfo(expectedLayer.Value).fullPathHash)))
                         throw new InvalidOperationException("FXの表情候補の状態に到達できませんでした。条件・優先順位・Parameter Driverを確認してください: " + expectedStatePath);
                 }
                 CheckSelectedState();
@@ -623,6 +624,29 @@ namespace VRVlog.LilToonExporter
                 if (clone != null) UnityEngine.Object.DestroyImmediate(clone);
                 EditorSceneManager.ClosePreviewScene(scene);
             }
+        }
+
+        internal static bool MatchesExpectedStatePath(AnimatorController controller, int layer, string expectedStatePath, int fullPathHash)
+        {
+            var layers = controller == null ? null : controller.layers;
+            if (layers == null || layer < 0 || layer >= layers.Length || string.IsNullOrEmpty(expectedStatePath)) return false;
+            // Inferred paths start at the selected layer name. A renamed layer
+            // can retain its root state-machine name in Unity's compiled hash.
+            // Synced layers use their source machine, not their own empty graph.
+            var source = layer;
+            var visited = new HashSet<int>();
+            while (layers[source].syncedLayerIndex >= 0)
+            {
+                if (!visited.Add(source)) return false;
+                source = layers[source].syncedLayerIndex;
+                if (source < 0 || source >= layers.Length) return false;
+            }
+            var machine = layers[source].stateMachine;
+            if (machine == null) return false;
+            if (fullPathHash == Animator.StringToHash(expectedStatePath)) return true;
+            var prefix = layers[layer].name + ".";
+            return expectedStatePath.StartsWith(prefix, StringComparison.Ordinal) &&
+                fullPathHash == Animator.StringToHash(machine.name + "." + expectedStatePath.Substring(prefix.Length));
         }
 
         // Neutral appearance has no selected menu parameter. Its dependency

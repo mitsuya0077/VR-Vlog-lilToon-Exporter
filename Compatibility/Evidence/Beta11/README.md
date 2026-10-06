@@ -22,7 +22,7 @@ and return to neutral. The MA suite also compares direct Merge Motion clips and
 nested BlendTrees against the canonical build without appearance freezing,
 using absolute, implicit relative and explicit relative binding roots. All 15
 MA regressions fail on the specified main; all 15 pass with this PR.
-The direct FX discovery suite passes all 93 cases, including parameter-driver
+The direct FX discovery suite covers 111 cases, including parameter-driver
 and Animator-curve relays, preceding state gates for nested machines, and user
 controls inside runtime/generated parent trees without overriding those parents.
 Nested Exit paths retain entry, source-state and parent transition conditions,
@@ -34,6 +34,12 @@ selections and empty SDK layer-control states also preserve the complete face.
 Their original-controller oracles verify state reachability and stable geometry;
 SDK Set/weight goals are independently applied where Unity alone has no client
 delegate. Malformed direct Entry-to-Exit metadata is diagnosed before playback.
+BlendTree inputs must have declared Float parameters, including readonly and
+nested controls; missing or incompatible declarations retain an optional
+diagnostic without publishing false selections or discarding authored entries.
+Six additional state-path cases use original native Animator playback to check
+renamed layer roots, nested paths and synced source roots, while preserving the
+existing unsupported-sync diagnostic and rejecting a different candidate state.
 
 Environment: Unity 2022.3.22f1, UniGLTF/UniVRM 0.131.0, lilToon 2.3.4,
 Modular Avatar 1.18.7, NDMF 1.14.8, VRChat SDK 3.10.5,

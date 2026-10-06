@@ -377,6 +377,8 @@ BEHAVIOR_CASES = {
         'DirectTreeRetainsReadonlyWeightsWhileDiscoveringItsNestedUserControl': 1,
         'TwoDimensionalTreeUsesItsAuthoredCoordinates': 1,
         'DirectTreeUsesExplicitOneHotControlsInsteadOfFlattenedLeaves': 1,
+        'BlendTreeControlDeclarationsAreRequiredBeforeDiscovery': 14,
+        'NestedTreeRequiresBothUserAndReadonlyControlDeclarations': 4,
         'StateEntryDriverKeepsItsCallbackDependentNativeLayerComposition': 1,
         'DriverOnlyRootControlKeepsCompleteNativeFaceWithoutSelectingItsInternalOutputs': 2,
         'ExplicitlyDeclaredDriverOutputRemainsAnAuthoredInput': 1,
@@ -398,6 +400,11 @@ BEHAVIOR_CASES = {
         'InstalledMaMarkerCannotMakeAnUnknownCallbackSafe': 1,
         'NativeProcessedControllerCanRetainAFiniteTransformCurveWithNoTarget': 2,
         'TheSameTransformCurveOnALiveOrInactiveTargetStillRejectsTheNativeExpression': 2,
+    },
+    'InferredStatePathTests': {
+        'RenamedLayerDiscoversItsReachableFaceUsingTheNativeMachineRoot': 2,
+        'RenamedRootStillRejectsADifferentCandidateState': 2,
+        'SyncedCandidateUsesItsActualSourceMachineRootAndRejectsOtherStates': 2,
     },
     'MaReactiveExpressionExportTests': {
         'MixedMenuSetAndDeleteKeepsSetWithoutReapplyingDeletion': 1,
