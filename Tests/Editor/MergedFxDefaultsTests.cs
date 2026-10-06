@@ -1886,7 +1886,7 @@ namespace VRVlog.LilToonExporter.Tests
         [TestCase(true, 0f)]
         [TestCase(false, 1f)]
         [TestCase(true, 1f)]
-        public void DirectClipProbeRejectsOriginalAnimatorLayerControlInsteadOfUsingDefaultWeight(bool standalone, float goalWeight)
+        public void DirectClipProbeAppliesOriginalAnimatorLayerControlUsingNativeWeights(bool standalone, float goalWeight)
         {
             var type = AppDomain.CurrentDomain.GetAssemblies().Select(assembly => assembly.GetType("VRC.SDK3.Avatars.Components.VRCAnimatorLayerControl"))
                 .FirstOrDefault(candidate => candidate != null);
@@ -1918,13 +1918,43 @@ namespace VRVlog.LilToonExporter.Tests
                 AnimationCurve.Linear(0, 0, 1, 80));
             var entry = new VrChatExpressionMenu.Entry();
             VrChatGestureExpressions.ReadClip(avatar, clip, entry);
-            var error = Assert.Throws<InvalidOperationException>(() =>
-                VrChatExpressionSampler.ApplyPermanentOverrides(avatar, controller, entry, standalone ? (int?)null : 0));
-            Assert.That(error.Message, Does.Contain("影響範囲").And.Contain("VRCAnimatorLayerControl").And.Contain(controlling.name));
-            Assert.That(entry.Values.Single(value => value.Shape == "Pupil removal").Weight, Is.Zero,
-                "The entry must not be partially rewritten using the wrong stationary layer weight.");
-            Assert.That(entry.Animation.Single(value => value.Shape == "Pupil removal").Curve.Evaluate(.5), Is.EqualTo(40).Within(.01));
+            // Replay three authored curve values through an independent native
+            // graph with the documented SDK goal weight, not the contradictory
+            // serialized default. No SDK callback/exporter adapter is present.
+            var expected = new Dictionary<float, float>();
+            foreach (var input in new[] { 0f, 40f, 80f })
+            {
+                var reference = AnimatorController.CreateAnimatorControllerAtPath(folder + "/SdkWeightReference" + input + ".controller");
+                var sample = new AnimationClip { name = "Native sample " + input };
+                AnimationUtility.SetEditorCurve(sample, EditorCurveBinding.FloatCurve("Face", typeof(SkinnedMeshRenderer), "blendShape.Face size"), AnimationCurve.Constant(0, 1, 75));
+                AnimationUtility.SetEditorCurve(sample, EditorCurveBinding.FloatCurve("Face", typeof(SkinnedMeshRenderer), "blendShape.Pupil removal"), AnimationCurve.Constant(0, 1, input));
+                AssetDatabase.AddObjectToAsset(sample, reference);
+                reference.layers[0].stateMachine.defaultState = State(reference.layers[0].stateMachine, "Direct clip", sample);
+                if (standalone)
+                {
+                    reference.AddLayer("Original base"); var nativeLayers = reference.layers;
+                    nativeLayers[1].defaultWeight = 1;
+                    nativeLayers[1].stateMachine.defaultState = State(nativeLayers[1].stateMachine, "Original default", (AnimationClip)machine.defaultState.motion);
+                    reference.layers = nativeLayers;
+                }
+                reference.AddLayer("Controlled permanent"); var finalLayers = reference.layers; var upper = finalLayers[finalLayers.Length - 1];
+                upper.defaultWeight = goalWeight;
+                upper.stateMachine.defaultState = State(upper.stateMachine, "Permanent", (AnimationClip)controller.layers[1].stateMachine.defaultState.motion);
+                reference.layers = finalLayers;
+                expected.Add(input, NativePose(avatar, reference, "Face", new Dictionary<string, int>()).Weights["Pupil removal"]);
+            }
+            var before = AssetDatabase.LoadAllAssetsAtPath(folder + "/FX.controller").ToDictionary(value => value, value => EditorJsonUtility.ToJson(value));
+            var beforeMesh = EditorJsonUtility.ToJson(mesh);
+            VrChatExpressionSampler.ApplyPermanentOverrides(avatar, controller, entry, standalone ? (int?)null : 0,
+                sourceState: standalone ? null : selected);
+            var animation = entry.Animation.SingleOrDefault(value => value.Shape == "Pupil removal");
+            foreach (var point in new[] { (Time: 0f, Input: 0f), (Time: .5f, Input: 40f), (Time: 1f, Input: 80f) })
+                Assert.That(animation?.Curve.Evaluate(point.Time) ?? entry.Values.Single(value => value.Shape == "Pupil removal").Weight,
+                    Is.EqualTo(expected[point.Input]).Within(.01), "Native effective pupil at " + point.Time);
+            foreach (var pair in before) Assert.That(EditorJsonUtility.ToJson(pair.Key), Is.EqualTo(pair.Value), pair.Key.name);
+            Assert.That(EditorJsonUtility.ToJson(mesh), Is.EqualTo(beforeMesh));
             Assert.That(avatar.GetComponentInChildren<SkinnedMeshRenderer>().GetBlendShapeWeight(2), Is.Zero);
+            Assert.That(avatar.GetComponentInChildren<SkinnedMeshRenderer>().sharedMesh, Is.SameAs(mesh));
             Assert.That(controller.layers[1].defaultWeight, Is.EqualTo(1 - goalWeight));
             Assert.That(controlling.behaviours, Does.Contain(control));
         }

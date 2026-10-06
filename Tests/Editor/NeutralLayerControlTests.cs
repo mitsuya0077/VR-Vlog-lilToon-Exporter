@@ -471,9 +471,10 @@ namespace VRVlog.LilToonExporter.Tests
         [TestCase(true, false)]
         [TestCase(false, true)]
         [TestCase(true, true)]
-        public void ExplicitSelectedExpressionsCannotIgnoreReachableSdkFxWeightEffects(bool otherController, bool global)
+        public void ExplicitSelectedExpressionsEvaluateInstantFxLayerControlsAndRejectUnmodelledEffects(bool otherController, bool global)
         {
             controller.AddParameter("Menu", AnimatorControllerParameterType.Int);
+            controller.layers[0].stateMachine.defaultState.motion = Clip(controller, "Uncontrolled body underlay", new[] { "Body" }, "Body size", 30);
             var selected = State(controller.layers[BodyLayer].stateMachine, "Selected face", Clip(controller, "Selected face", new[] { "Body" }, "Body size", 80));
             Transition(bodyState, selected, "Menu", AnimatorConditionMode.Equals, 1);
             var state = controlState;
@@ -485,9 +486,20 @@ namespace VRVlog.LilToonExporter.Tests
             }
             Control(state, global: global); var before = CaptureAssets();
             var source = VrChatExpressionMenu.Read(avatar, new VrChatMenuImportPolicy { SkipAll = true });
-            var error = Assert.Throws<InvalidOperationException>(() => VrChatExpressionSampler.SampleFixed(avatar, controller, source.Defaults,
-                new Dictionary<string, float> { ["Menu"] = 1 }, null, source));
-            Assert.That(error.Message, Does.Contain(global ? "VRCPlayableLayerControl" : "VRCAnimatorLayerControl"));
+            if (!otherController && !global)
+            {
+                var values = VrChatExpressionSampler.SampleFixed(avatar, controller, source.Defaults,
+                    new Dictionary<string, float> { ["Menu"] = 1 }, null, source);
+                Assert.That(values.Single(value => value.Shape == "Body size").Weight, Is.EqualTo(30).Within(.01),
+                    "The real SDK command disables the selected 80 layer, exposing the independently authored 30 underlay.");
+                Assert.That(values.Single(value => value.Shape == "Open").Weight, Is.EqualTo(100).Within(.01));
+            }
+            else
+            {
+                var error = Assert.Throws<InvalidOperationException>(() => VrChatExpressionSampler.SampleFixed(avatar, controller, source.Defaults,
+                    new Dictionary<string, float> { ["Menu"] = 1 }, null, source));
+                Assert.That(error.Message, Does.Contain(global ? "VRCPlayableLayerControl" : "VRCAnimatorLayerControl"));
+            }
             AssertSourceUnchanged(before);
         }
 

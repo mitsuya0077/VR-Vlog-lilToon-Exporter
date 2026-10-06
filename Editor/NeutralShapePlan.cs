@@ -15,6 +15,7 @@ namespace VRVlog.LilToonExporter
     {
         internal readonly HashSet<EditorCurveBinding> CommittedMorphs;
         internal bool RetainUnresolvedRest { get; private set; }
+        internal bool AllowUnchangedAppearance { get; private set; }
         internal readonly HashSet<EditorCurveBinding> PreservedMorphs = new HashSet<EditorCurveBinding>();
         // A changing rest curve has no single native neutral value. Keep that
         // channel's prepared authored appearance, separately from wardrobe
@@ -45,12 +46,20 @@ namespace VRVlog.LilToonExporter
         internal static NeutralShapePlan Create(GameObject prepared, RuntimeAnimatorController runtime,
             IEnumerable<IEnumerable<EditorCurveBinding>> roots, Func<string, bool> excludedPath = null,
             IEnumerable<EditorCurveBinding> requiredMorphs = null, ICollection<string> warnings = null,
-            VrChatExpressionMenu.Source source = null, FixedExpressionContext fixedContext = null, bool retainUnresolvedRest = false)
+            VrChatExpressionMenu.Source source = null, FixedExpressionContext fixedContext = null, bool retainUnresolvedRest = false,
+            bool allowUnchangedAppearance = false)
         {
             var plan = new NeutralShapePlan(prepared, roots.SelectMany(group => group));
             plan.RetainUnresolvedRest = retainUnresolvedRest;
+            plan.AllowUnchangedAppearance = allowUnchangedAppearance;
             plan.ResolveCommittedMorphs();
             var ownershipLayers = ExpressionDependencies.NormalInputLayers(runtime, source, fixedContext, excludedPath);
+            var definitions = ExpressionDependencies.Controller(runtime).layers;
+            // Matching raw values prove an Override contribution. Additive
+            // defaults/reference poses can change another layer's appearance;
+            // do not discard ownership based on a per-clip comparison there.
+            var unchangedClips = allowUnchangedAppearance
+                ? VrChatExpressionSampler.UnchangedAppearanceClips(runtime, Enumerable.Range(0, definitions.Length)) : null;
             // Validate before any appearance group is preserved. A recoverable
             // unsupported binding must not conceal malformed data in another
             // reachable clip. The caller also supplies the neutral probe's
@@ -81,6 +90,8 @@ namespace VRVlog.LilToonExporter
                 var appearance = new List<EditorCurveBinding>();
                 foreach (var binding in bindings.Where(binding => plan.IsAppearanceBinding(binding) && !HarmlessActivation(prepared, clip, binding)))
                 {
+                    if (unchangedClips?.Contains(clip) == true &&
+                        SelectedExpressionAppearance.IsUnchanged(prepared, clip, binding)) continue;
                     // An alternate layout path absent from the prepared copy
                     // cannot bind in Unity. It is neither a visual change nor
                     // evidence that accompanying morphs belong to appearance.
