@@ -198,7 +198,9 @@ namespace VRVlog.LilToonExporter
                 var filter = renderer.GetComponent<MeshFilter>();
                 var mesh = renderer is SkinnedMeshRenderer skin ? skin.sharedMesh : filter != null ? filter.sharedMesh : null;
                 if (mesh == null) throw new InvalidOperationException("描画メッシュがありません。");
-                var group = converter.Meshes[mesh];
+                // Nodes retain the exact group for this renderer, including
+                // shared static meshes with different additional streams.
+                var group = converter.Nodes[renderer.gameObject].MeshGroup;
                 var meshIndex = model.MeshGroups.IndexOf(group);
                 var gltfMesh = storage.Gltf.meshes[meshIndex];
                 if (gltfMesh.primitives.Count != entry.Value.Length) throw new InvalidOperationException("材質スロットとprimitiveの対応が一致しません。");

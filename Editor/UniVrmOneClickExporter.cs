@@ -227,7 +227,7 @@ namespace VRVlog.LilToonExporter
                         blink.Bind(converter, model, storage);
                         poses.Bind(converter, model, storage);
                         optimizerBindings.Bind(converter, model, storage);
-                    });
+                    }, warnings: warnings);
                 recoveryReport.Stage = "出力検査";
                 exported = ExportSkinRoots.Repair(exported, warnings);
                 exported = blink.Apply(VrmExpressionBindings.AddMissing(VrmMenuExpressions.Add(exported, expressions), warnings, inferBlink: false));
