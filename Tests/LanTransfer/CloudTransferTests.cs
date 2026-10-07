@@ -204,19 +204,21 @@ namespace VRVlog.LilToonExporter.LanTransfer.Tests
             }
         }
 
-        [Test]
-        public async Task LegacyFifteenMinuteCreateResponseCannotExtendTheCloudLifetime()
+        [TestCase(900)][TestCase(0)]
+        public async Task RejectedCreateLifetimeCancelsTheReservedTransferWithoutUploading(int rejectedLifetimeSeconds)
         {
             var currentTime = DateTimeOffset.UtcNow.ToUnixTimeSeconds();
             using (var fixture = new Fixture(29))
             using (var session = new CloudVrmTransferSession(fixture.Source, fixture.Transport, () => currentTime))
             {
                 fixture.Transport.Now = () => currentTime;
-                fixture.Transport.LifetimeSeconds = 900;
+                fixture.Transport.LifetimeSeconds = rejectedLifetimeSeconds;
                 try { await session.UploadAsync(); Assert.That(false, Is.True); } catch (InvalidOperationException) { }
                 Assert.That(session.State, Is.EqualTo(CloudTransferState.Failed));
                 Assert.That(fixture.Transport.Parts.Count, Is.EqualTo(0));
                 Assert.That(fixture.Transport.PublishCalls, Is.EqualTo(0));
+                Assert.That(fixture.Transport.CancelCalls, Is.EqualTo(1));
+                Assert.That(fixture.Transport.AuthenticatedCorrectly, Is.True);
                 Assert.That(session.Qr == null, Is.True);
             }
         }
