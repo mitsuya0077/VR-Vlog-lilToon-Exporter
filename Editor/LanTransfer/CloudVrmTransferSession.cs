@@ -115,6 +115,7 @@ namespace VRVlog.LilToonExporter.LanTransfer
         private readonly object gate = new object();
         private readonly CloudVrmTransferSource source;
         private readonly ICloudTransferTransport transport;
+        private readonly Func<long> now;
         private readonly CancellationTokenSource stop = new CancellationTokenSource();
         private string id, readToken, uploadToken;
         private FileStream activeReader;
@@ -130,13 +131,17 @@ namespace VRVlog.LilToonExporter.LanTransfer
         internal string Message => State == CloudTransferState.Preparing ? "転送の準備中…"
             : State == CloudTransferState.Uploading ? "アバターを一時アップロードしています。"
             : State == CloudTransferState.Ready ? "スマホのVR Vlogで「PCから受け取る」を開き、QRを読み取ってください。"
-            : State == CloudTransferState.Completed ? "スマホへの保存が完了しました。クラウドの転送用コピーを削除しました。"
+            : State == CloudTransferState.Completed ? "スマホへの保存が完了しました。クラウドの転送用コピーは削除対象になりました。"
             : State == CloudTransferState.Canceled ? "転送を中止しました。"
             : State == CloudTransferState.Expired ? "受取期限が切れました。新しいQRを作成できます。"
             : "転送を続けられませんでした。接続を確認して新しいQRを作成してください。混雑時は時間を置いて試してください。";
 
-        internal CloudVrmTransferSession(CloudVrmTransferSource source, ICloudTransferTransport transport = null)
-        { this.source = source ?? throw new ArgumentNullException(nameof(source)); this.transport = transport ?? new CloudTransferTransport(); }
+        internal CloudVrmTransferSession(CloudVrmTransferSource source, ICloudTransferTransport transport = null, Func<long> now = null)
+        {
+            this.source = source ?? throw new ArgumentNullException(nameof(source));
+            this.transport = transport ?? new CloudTransferTransport();
+            this.now = now ?? (() => DateTimeOffset.UtcNow.ToUnixTimeSeconds());
+        }
 
         internal async Task UploadAsync(CancellationToken cancellation = default)
         {
@@ -149,9 +154,9 @@ namespace VRVlog.LilToonExporter.LanTransfer
                     var fields = await Send("POST", "/v2/transfers", null, Encoding.UTF8.GetBytes(CloudTransferProtocol.CreateBody(source.Name, source.Size, source.FileHash)), "application/json", ct).ConfigureAwait(false);
                     fields.Exact("v", "id", "token", "uploadToken", "expiresAt", "partSize");
                     var newId = fields.Text("id"); var token = fields.Text("token"); var owner = fields.Text("uploadToken"); var expiry = fields.Number("expiresAt");
-                    var now = DateTimeOffset.UtcNow.ToUnixTimeSeconds();
+                    var currentTime = now();
                     if (fields.Number("v") != 2 || !CloudTransferProtocol.IsHex(newId, 32) || !CloudTransferProtocol.IsToken(token) || !CloudTransferProtocol.IsToken(owner)
-                        || token == owner || fields.Number("partSize") != CloudTransferProtocol.PartSize || expiry <= now || expiry > now + (CloudTransferProtocol.LifetimeMinutes + 1) * 60) throw CloudTransferProtocol.Invalid();
+                        || token == owner || fields.Number("partSize") != CloudTransferProtocol.PartSize || expiry <= currentTime || expiry > currentTime + (CloudTransferProtocol.LifetimeMinutes + 1) * 60) throw CloudTransferProtocol.Invalid();
                     lock (gate) { id = newId; readToken = token; uploadToken = owner; expiresAt = expiry; if (!disposed && state != CloudTransferState.Canceled) state = CloudTransferState.Uploading; }
                     ct.ThrowIfCancellationRequested();
                     using (var reader = source.OpenRead())
@@ -182,6 +187,7 @@ namespace VRVlog.LilToonExporter.LanTransfer
                     published.Exact("v", "id", "token", "name", "size", "sha256", "expiresAt");
                     if (published.Number("v") != 2 || published.Text("id") != id || published.Text("token") != readToken || published.Text("name") != source.Name
                         || published.Number("size") != source.Size || published.Text("sha256") != source.FileHash || published.Number("expiresAt") != expiresAt) throw CloudTransferProtocol.Invalid();
+                    CheckExpiry(); // A successful publication response may arrive after its deadline.
                     lock (gate)
                     {
                         ct.ThrowIfCancellationRequested();
@@ -202,29 +208,41 @@ namespace VRVlog.LilToonExporter.LanTransfer
         {
             if (State != CloudTransferState.Ready) return;
             CheckExpiry();
-            var fields = await Send("GET", Path, uploadToken, null, null, cancellation).ConfigureAwait(false);
-            var remote = fields.Text("state");
-            lock (gate)
+            using (var linked = CancellationTokenSource.CreateLinkedTokenSource(stop.Token, cancellation))
             {
-                if (state != CloudTransferState.Ready) return;
-                switch (remote)
+                var fields = await Send("GET", Path, uploadToken, null, null, linked.Token).ConfigureAwait(false);
+                var remote = fields.Text("state");
+                lock (gate)
                 {
-                    case "ready": return;
-                    case "completed": state = CloudTransferState.Completed; break;
-                    case "cancelled": state = CloudTransferState.Canceled; break;
-                    case "expired": state = CloudTransferState.Expired; break;
-                    case "failed": state = CloudTransferState.Failed; break;
-                    default: throw CloudTransferProtocol.Invalid();
+                    if (state != CloudTransferState.Ready) return;
+                    switch (remote)
+                    {
+                        case "ready": return;
+                        case "completed": state = CloudTransferState.Completed; break;
+                        case "cancelled": state = CloudTransferState.Canceled; break;
+                        case "expired": state = CloudTransferState.Expired; break;
+                        case "failed": state = CloudTransferState.Failed; break;
+                        default: throw CloudTransferProtocol.Invalid();
+                    }
+                    qr = null;
                 }
-                qr = null;
             }
         }
         private string Path => "/v2/transfers/" + id;
-        private void CheckExpiry()
+        internal bool ExpireIfDue()
         {
             lock (gate)
-                if (expiresAt != 0 && DateTimeOffset.UtcNow.ToUnixTimeSeconds() >= expiresAt)
-                { state = CloudTransferState.Expired; qr = null; throw new InvalidOperationException(Message); }
+            {
+                if (state >= CloudTransferState.Completed || expiresAt == 0 || now() < expiresAt) return false;
+                state = CloudTransferState.Expired; qr = null;
+                stop.Cancel(); activeReader?.Dispose(); activeReader = null;
+                return true;
+            }
+        }
+        private void CheckExpiry()
+        {
+            ExpireIfDue();
+            if (State == CloudTransferState.Expired) throw new InvalidOperationException(Message);
         }
         private async Task<CloudTransferProtocol.Fields> Send(string method, string path, string token, byte[] body, string type, CancellationToken ct, bool parse = true)
         {

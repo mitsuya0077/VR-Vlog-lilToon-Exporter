@@ -140,6 +140,60 @@ namespace VRVlog.LilToonExporter.LanTransfer.Tests
         }
 
         [Test]
+        public async Task DeadlineExpiresIndependentlyOfAnUnfinishedStatusRequest()
+        {
+            var currentTime = DateTimeOffset.UtcNow.ToUnixTimeSeconds();
+            using (var fixture = new Fixture(11))
+            using (var session = new CloudVrmTransferSession(fixture.Source, fixture.Transport, () => currentTime))
+            {
+                await session.UploadAsync();
+                fixture.Transport.StatusRelease = new TaskCompletionSource<bool>();
+                var polling = session.RefreshAsync();
+                Assert.That(polling.IsCompleted, Is.False);
+                currentTime = session.ExpiresAt;
+                Assert.That(session.ExpireIfDue(), Is.True);
+                Assert.That(session.State, Is.EqualTo(CloudTransferState.Expired));
+                Assert.That(session.Qr == null, Is.True);
+                Assert.That(fixture.Transport.StatusCancellationObserved, Is.True);
+                try { await polling; Assert.That(false, Is.True); } catch (OperationCanceledException) { }
+                Assert.That(session.ExpireIfDue(), Is.False);
+            }
+        }
+
+        [Test]
+        public async Task PublicationResponsePastDeadlineCannotExposeAnExpiredQr()
+        {
+            var currentTime = DateTimeOffset.UtcNow.ToUnixTimeSeconds();
+            using (var fixture = new Fixture(13))
+            using (var session = new CloudVrmTransferSession(fixture.Source, fixture.Transport, () => currentTime))
+            {
+                fixture.Transport.BeforePublish = () => currentTime = session.ExpiresAt;
+                try { await session.UploadAsync(); Assert.That(false, Is.True); } catch (InvalidOperationException) { }
+                Assert.That(session.State, Is.EqualTo(CloudTransferState.Expired));
+                Assert.That(session.Qr == null, Is.True);
+                Assert.That(fixture.Transport.CancelCalls, Is.EqualTo(1));
+            }
+        }
+
+        [Test]
+        public async Task ConfirmedPhoneSaveKeepsItsOutcomeAfterTheDeadlineWithoutClaimingCloudDeletion()
+        {
+            var currentTime = DateTimeOffset.UtcNow.ToUnixTimeSeconds();
+            using (var fixture = new Fixture(15))
+            using (var session = new CloudVrmTransferSession(fixture.Source, fixture.Transport, () => currentTime))
+            {
+                await session.UploadAsync();
+                fixture.Transport.RemoteState = "completed";
+                await session.RefreshAsync();
+                currentTime = session.ExpiresAt + 1;
+                Assert.That(session.ExpireIfDue(), Is.False);
+                Assert.That(session.State, Is.EqualTo(CloudTransferState.Completed));
+                Assert.That(session.Message.Contains("削除対象"), Is.True);
+                Assert.That(session.Message.Contains("削除しました"), Is.False);
+            }
+        }
+
+        [Test]
         public void FlatParserRejectsAmbiguousAndUnboundedServiceMetadata()
         {
             foreach (var body in new[] { "{\"v\":2,\"v\":2}", "{\"size\":1.0}", "{\"size\":01}", "{\"id\":{}}", "{\"id\":[]}", "{\"id\":true}", "{\"id\":\"x\",}", "{}tail", new string(' ', 4097) })
@@ -207,6 +261,8 @@ namespace VRVlog.LilToonExporter.LanTransfer.Tests
             internal bool AuthenticatedCorrectly = true;
             internal Action BeforePublish;
             internal TaskCompletionSource<bool> CreateRelease;
+            internal TaskCompletionSource<bool> StatusRelease;
+            internal bool StatusCancellationObserved;
             private string id; private long expiry;
             internal FakeTransport(CloudVrmTransferSource source) { this.source = source; }
             public async Task<CloudTransferResponse> SendAsync(string method, string path, string token, byte[] body, string contentType, CancellationToken cancellation)
@@ -240,6 +296,9 @@ namespace VRVlog.LilToonExporter.LanTransfer.Tests
                     return new CloudTransferResponse(200, CloudTransferProtocol.Qr(id, ReadToken, source.Name, source.Size, hash, expiry).Substring(LanTransferProtocol.QrPrefix.Length));
                 }
                 Assert.That(method, Is.EqualTo("GET"));
+                if (StatusRelease != null)
+                    using (cancellation.Register(() => { StatusCancellationObserved = true; StatusRelease.TrySetCanceled(); }))
+                        await StatusRelease.Task;
                 return new CloudTransferResponse(Failure == "poll-failure" ? 503 : 200, "{\"state\":\"" + RemoteState + "\"}");
             }
         }

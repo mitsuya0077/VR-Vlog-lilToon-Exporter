@@ -71,6 +71,9 @@ namespace VRVlog.LilToonExporter.LanTransfer
         }
         private void Poll()
         {
+            // Expiry cannot depend on a status request finishing. This also
+            // interrupts a pending poll and unlocks fresh-session issuance.
+            session?.ExpireIfDue();
             if (uploading?.IsCompleted == true)
             {
                 if (uploading.IsFaulted) { _ = uploading.Exception; error = session?.Message; }
@@ -84,7 +87,11 @@ namespace VRVlog.LilToonExporter.LanTransfer
             }
             if (polling?.IsCompleted == true)
             {
-                if (polling.IsFaulted) { _ = polling.Exception; error = "転送の状態を確認できませんでした。インターネット接続を確認してください。"; }
+                if (polling.IsFaulted)
+                {
+                    _ = polling.Exception;
+                    error = session?.Terminal == true ? null : "転送の状態を確認できませんでした。インターネット接続を確認してください。";
+                }
                 else error = null;
                 polling = null;
             }
