@@ -18,6 +18,7 @@ namespace VRVlog.LilToonExporter
             internal string Kind, Destination, Source;
             internal float Value, SourceMin, SourceMax, DestinationMin, DestinationMax;
             internal bool ConvertRange;
+            internal bool UnresolvedRandom;
             internal string Error;
         }
 
@@ -143,7 +144,16 @@ namespace VRVlog.LilToonExporter
                                     if (op.SourceMin == op.SourceMax) throw new InvalidOperationException("Copy元の範囲が0です。");
                                 }
                                 break;
-                            case "Random": op.Error = "Randomは固定表情の値を確定できません。"; break;
+                            case "Random":
+                                // Prepared-rest fallback cannot authorize malformed data.
+                                var minimum = Number(item, "valueMin");
+                                var maximum = Number(item, "valueMax");
+                                var chance = Number(item, "chance");
+                                if (minimum > maximum || chance < 0 || chance > 1)
+                                    throw new InvalidOperationException("Driverの数値が不正です: Random");
+                                op.UnresolvedRandom = true;
+                                op.Error = "Randomは固定表情の値を確定できません。";
+                                break;
                             default: throw new InvalidOperationException("未対応の操作です。");
                         }
                     }
@@ -166,6 +176,40 @@ namespace VRVlog.LilToonExporter
             return number;
         }
 
+        private sealed class RandomCapability : InvalidOperationException
+        {
+            internal RandomCapability(string message) : base(message) { }
+        }
+
+        internal static bool IsRandomCapability(Exception error)
+        {
+            for (; error != null; error = error.InnerException)
+                if (error is RandomCapability) return true;
+            return false;
+        }
+
+        internal static void ValidateTargets(Program program, IDictionary<string, AnimatorControllerParameterType> types,
+            ISet<string> needed)
+        {
+            if (program.Error != null) throw new InvalidOperationException(program.Location + " / Parameter Driver: " + program.Error);
+            for (var index = 0; index < program.Operations.Count; index++)
+            {
+                var operation = program.Operations[index];
+                if (!needed.Contains(operation.Destination)) continue;
+                var label = program.Location + " / Parameter Driver " + (index + 1) + " (" + operation.Kind + " → " + operation.Destination + ")";
+                if (!operation.UnresolvedRandom && operation.Error != null)
+                    throw new InvalidOperationException(label + ": " + operation.Error);
+                if (BuiltIn.Contains(operation.Destination) || !types.TryGetValue(operation.Destination, out var type) ||
+                    type == AnimatorControllerParameterType.Trigger)
+                    throw new InvalidOperationException(label + ": Parameter Driver の書き込み先の型が不正です。");
+                if (operation.Kind == "Copy" && (string.IsNullOrEmpty(operation.Source) || !types.TryGetValue(operation.Source, out var sourceType) ||
+                    sourceType == AnimatorControllerParameterType.Trigger))
+                    throw new InvalidOperationException(label + ": Parameter Driver Copy の参照先の型が不正です。");
+                if (operation.Kind == "Add" && type == AnimatorControllerParameterType.Bool)
+                    throw new InvalidOperationException(label + ": Bool への Add は未対応です。");
+            }
+        }
+
         internal static void Execute(Program program, IDictionary<string, AnimatorControllerParameterType> types,
             ISet<string> expressionParameters, ISet<string> needed, bool isLocal, Func<string, double> read, Action<string, double> write,
             ISet<string> suppliedInputs = null)
@@ -181,10 +225,11 @@ namespace VRVlog.LilToonExporter
                 var label = program.Location + " / Parameter Driver " + (index + 1) + " (" + op.Kind + " → " + op.Destination + ")";
                 try
                 {
-                    if (op.Error != null) throw new InvalidOperationException(op.Error);
                     if (BuiltIn.Contains(op.Destination)) throw new InvalidOperationException("VRChat組み込みパラメーターへの書き込みはできません。");
                     if (!types.TryGetValue(op.Destination, out var type) || type == AnimatorControllerParameterType.Trigger)
                         throw new InvalidOperationException("書き込み先の型を解決できません。");
+                    if (op.UnresolvedRandom) throw new RandomCapability(op.Error);
+                    if (op.Error != null) throw new InvalidOperationException(op.Error);
                     double value;
                     if (op.Kind == "Copy")
                     {
@@ -219,7 +264,7 @@ namespace VRVlog.LilToonExporter
                         throw new InvalidOperationException("演算結果がパラメーターの範囲を超えます。");
                     write(op.Destination, value);
                 }
-                catch (InvalidOperationException error) { throw new InvalidOperationException(label + ": " + error.Message); }
+                catch (InvalidOperationException error) { throw new InvalidOperationException(label + ": " + error.Message, error); }
             }
         }
     }

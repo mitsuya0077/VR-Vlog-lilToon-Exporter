@@ -79,17 +79,14 @@ namespace VRVlog.LilToonExporter
                 var reachable = ExpressionDependencies.Inspect(metadata.Controller, excludedPath,
                     new Dictionary<StateMachineBehaviour, VrChatParameterDriver.Program>(), new List<string>(), true, fixedValues);
                 var needed = new HashSet<string>(reachable.SelectMany(layer => layer.Reads), StringComparer.Ordinal);
+                var types = ExpressionDependencies.Controller(metadata.Controller).parameters
+                    .ToDictionary(parameter => parameter.name, parameter => parameter.type, StringComparer.Ordinal);
                 foreach (var program in reachable.SelectMany(layer => layer.DriverPrograms).Distinct())
-                    for (var index = 0; index < program.Operations.Count; index++)
-                    {
-                        var operation = program.Operations[index];
-                        // Random describes a capability limit, not corrupt
-                        // numeric data. Other read errors on needed inputs must
-                        // be found before a late state or neutral fallback.
-                        if (operation.Kind != "Random" && operation.Error != null && needed.Contains(operation.Destination))
-                            throw new InvalidOperationException(program.Location + " / Parameter Driver " + (index + 1) +
-                                " (" + operation.Kind + " → " + operation.Destination + "): " + operation.Error);
-                    }
+                {
+                    // Check the entire needed program before Random can stop
+                    // native evaluation and retain the authored rest component.
+                    VrChatParameterDriver.ValidateTargets(program, types, needed);
+                }
                 var clips = ExpressionDependencies.NeutralClips(metadata.Controller, fixedValues, excludedPath);
                 plan.ValidateBindings(clips, excludedPath);
                 foreach (var clip in clips)
@@ -98,7 +95,7 @@ namespace VRVlog.LilToonExporter
                 NeutralAdditionalDataPreflight.Validate(metadata.Controller, metadata, fixedContext, plan, excludedPath);
             }
             foreach (var warning in planWarnings) warnings?.Add(warning);
-            var randomRestLayers = NeutralRandomRest.Preserve(metadata.Controller, metadata, plan, excludedPath, fixedContext);
+            var randomRestLayers = NeutralRandomRest.Preserve(metadata.Controller, metadata, plan, excludedPath, fixedContext, warnings);
             var randomRestMorphs = new HashSet<EditorCurveBinding>(plan.TemporalMorphs);
             foreach (var roots in groups)
             {
@@ -159,7 +156,7 @@ namespace VRVlog.LilToonExporter
             return affected;
         }
 
-        private static HashSet<EditorCurveBinding> AutomaticChannels(GameObject avatar)
+        internal static HashSet<EditorCurveBinding> AutomaticChannels(GameObject avatar)
         {
             var result = new HashSet<EditorCurveBinding>();
             void Add(SkinnedMeshRenderer renderer, string shape)
@@ -173,7 +170,17 @@ namespace VRVlog.LilToonExporter
             {
                 if (renderer.sharedMesh == null) continue;
                 var names = Enumerable.Range(0, renderer.sharedMesh.blendShapeCount).Select(renderer.sharedMesh.GetBlendShapeName).ToArray();
-                foreach (var index in BlinkShapeNames.Resolve(names, allowPartial: true).Where(index => index >= 0)) Add(renderer, names[index]);
+                var blinkSeeds = BlinkShapeNames.AutomaticCandidates(names).ToArray();
+                foreach (var index in blinkSeeds) Add(renderer, names[index]);
+                // Some authors separate an automatic eyelid from the manual
+                // blink channel. Its exact semantic alias must additionally
+                // reproduce a known blink on this mesh at every authored frame.
+                // The two bounded candidates avoid probing unrelated morphs.
+                foreach (var alias in new[] { "Auto_Blink", "AutoBlink" })
+                {
+                    var index = BlinkShapeNames.Unique(names, alias);
+                    if (index >= 0 && blinkSeeds.Any(seed => EquivalentBlinkGeometry(renderer.sharedMesh, seed, index))) Add(renderer, names[index]);
+                }
                 foreach (var name in names.Where(name => name.StartsWith("vrc.v.", StringComparison.OrdinalIgnoreCase) ||
                     name.StartsWith("vrc.v_", StringComparison.OrdinalIgnoreCase))) Add(renderer, name);
             }
@@ -197,6 +204,37 @@ namespace VRVlog.LilToonExporter
                 }
             }
             return result;
+        }
+
+        private static bool EquivalentBlinkGeometry(Mesh mesh, int seed, int candidate)
+        {
+            if (!mesh.isReadable) return false;
+            var frames = mesh.GetBlendShapeFrameCount(seed);
+            if (frames == 0 || mesh.GetBlendShapeFrameCount(candidate) != frames) return false;
+            for (var frame = 0; frame < frames; frame++)
+            {
+                var weight = mesh.GetBlendShapeFrameWeight(seed, frame);
+                if (float.IsNaN(weight) || float.IsInfinity(weight) || weight != mesh.GetBlendShapeFrameWeight(candidate, frame)) return false;
+            }
+            var count = mesh.vertexCount;
+            var seedPositions = new Vector3[count]; var seedNormals = new Vector3[count]; var seedTangents = new Vector3[count];
+            var positions = new Vector3[count]; var normals = new Vector3[count]; var tangents = new Vector3[count];
+            var effective = false;
+            bool Equal(Vector3 first, Vector3 second) =>
+                !float.IsNaN(first.x) && !float.IsNaN(first.y) && !float.IsNaN(first.z) &&
+                !float.IsInfinity(first.x) && !float.IsInfinity(first.y) && !float.IsInfinity(first.z) && first.Equals(second);
+            for (var frame = 0; frame < frames; frame++)
+            {
+                mesh.GetBlendShapeFrameVertices(seed, frame, seedPositions, seedNormals, seedTangents);
+                mesh.GetBlendShapeFrameVertices(candidate, frame, positions, normals, tangents);
+                for (var vertex = 0; vertex < count; vertex++)
+                {
+                    if (!Equal(seedPositions[vertex], positions[vertex]) || !Equal(seedNormals[vertex], normals[vertex]) ||
+                        !Equal(seedTangents[vertex], tangents[vertex])) return false;
+                    effective |= !seedPositions[vertex].Equals(Vector3.zero) || !seedNormals[vertex].Equals(Vector3.zero) || !seedTangents[vertex].Equals(Vector3.zero);
+                }
+            }
+            return effective;
         }
     }
 }

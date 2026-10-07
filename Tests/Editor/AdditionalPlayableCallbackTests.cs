@@ -277,7 +277,7 @@ namespace VRVlog.LilToonExporter.Tests
             if (writer.EndsWith("Curve", StringComparison.Ordinal))
                 AnimationUtility.SetEditorCurve((AnimationClip)state.motion, EditorCurveBinding.FloatCurve("", typeof(Animator), "AFK"), AnimationCurve.Constant(0, 1, 1));
             else ParameterDriverExpressionTests.Driver(state, ParameterDriverExpressionTests.Op(writer.EndsWith("Random", StringComparison.Ordinal) ? "Random" : "Set", "AFK", 1));
-            AssertAdditionalRejected();
+            AssertAdditionalRejected(hardReason: writer.EndsWith("Curve", StringComparison.Ordinal) ? null : "Parameter Driver");
         }
 
         [TestCase(false)]
@@ -385,6 +385,79 @@ namespace VRVlog.LilToonExporter.Tests
             Assert.That(Assert.Throws<InvalidOperationException>(() => NeutralShapeSampler.Sample(avatar)).Message, Does.Contain("FX以外"));
             Assert.That(EditorJsonUtility.ToJson(skin), Is.EqualTo(before));
             Assert.That(skin.GetBlendShapeWeight(0), Is.EqualTo(35));
+        }
+
+        StateMachineBehaviour AdditionalRandomProgram(VrChatParameterDriver.Operation later = null)
+        {
+            AddControl(command); action.layers[0].stateMachine.defaultState = command;
+            action.AddParameter("Lottery", AnimatorControllerParameterType.Float);
+            Transition(command, waiting).AddCondition(AnimatorConditionMode.Greater, .5f, "Lottery");
+            var operations = new List<VrChatParameterDriver.Operation> { ParameterDriverExpressionTests.Op("Random", "Lottery") };
+            if (later != null) operations.Add(later);
+            var driver = ParameterDriverExpressionTests.Driver(command, operations.ToArray());
+            using (var data = new SerializedObject(driver))
+            {
+                foreach (var index in Enumerable.Range(0, operations.Count).Where(index => operations[index].Kind == "Random"))
+                {
+                    var item = data.FindProperty("parameters").GetArrayElementAtIndex(index);
+                    item.FindPropertyRelative("valueMin").floatValue = 0; item.FindPropertyRelative("valueMax").floatValue = 1;
+                    item.FindPropertyRelative("chance").floatValue = .5f;
+                }
+                data.ApplyModifiedPropertiesWithoutUndo();
+            }
+            SetDescriptorControllers(); return driver;
+        }
+
+        [Test]
+        public void ValidAdditionalRandomCanRetainPreparedRestForAKnownWeightCapability()
+        {
+            AdditionalRandomProgram(); var originals = new Object[] { fx, action, skin, mesh }; var before = originals.Select(value => EditorJsonUtility.ToJson(value)).ToArray();
+            var warnings = new List<string>(); Assert.That(NeutralShapeSampler.Sample(avatar, warnings: warnings), Is.Empty);
+            Assert.That(warnings.Any(value => value.Contains("VRCAnimatorLayerControl")), Is.True);
+            Assert.That(skin.GetBlendShapeWeight(0), Is.EqualTo(35));
+            for (var index = 0; index < originals.Length; index++) Assert.That(EditorJsonUtility.ToJson(originals[index]), Is.EqualTo(before[index]));
+        }
+
+        [TestCase("Random minimum")]
+        [TestCase("Random maximum")]
+        [TestCase("Random chance")]
+        [TestCase("Random reversed range")]
+        [TestCase("missing Copy source")]
+        [TestCase("Trigger Copy source")]
+        [TestCase("Bool Add")]
+        [TestCase("non-finite Set")]
+        public void AdditionalWeightCapabilityCannotHideALaterMalformedNeededDriver(string kind)
+        {
+            var boolean = kind == "Bool Add";
+            action.AddParameter("Needed", boolean ? AnimatorControllerParameterType.Bool : AnimatorControllerParameterType.Float);
+            Transition(command, waiting).AddCondition(boolean ? AnimatorConditionMode.If : AnimatorConditionMode.Greater, boolean ? 0 : .5f, "Needed");
+            VrChatParameterDriver.Operation invalid;
+            if (kind.StartsWith("Random", StringComparison.Ordinal)) invalid = ParameterDriverExpressionTests.Op("Random", "Needed");
+            else if (kind == "Bool Add") invalid = ParameterDriverExpressionTests.Op("Add", "Needed", 1);
+            else if (kind == "non-finite Set") invalid = ParameterDriverExpressionTests.Op("Set", "Needed", float.NaN);
+            else
+            {
+                var copySource = kind == "Trigger Copy source" ? "Trigger source" : "Missing source";
+                if (kind == "Trigger Copy source") action.AddParameter(copySource, AnimatorControllerParameterType.Trigger);
+                invalid = ParameterDriverExpressionTests.Op("Copy", "Needed", source: copySource);
+            }
+            var driver = AdditionalRandomProgram(invalid);
+            if (kind.StartsWith("Random", StringComparison.Ordinal))
+            {
+                using var data = new SerializedObject(driver); var item = data.FindProperty("parameters").GetArrayElementAtIndex(1);
+                if (kind == "Random minimum") item.FindPropertyRelative("valueMin").floatValue = float.NaN;
+                else if (kind == "Random maximum") item.FindPropertyRelative("valueMax").floatValue = float.PositiveInfinity;
+                else if (kind == "Random chance") item.FindPropertyRelative("chance").floatValue = 1.1f;
+                else { item.FindPropertyRelative("valueMin").floatValue = 2; item.FindPropertyRelative("valueMax").floatValue = 1; }
+                data.ApplyModifiedPropertiesWithoutUndo();
+            }
+            Assert.That(Assert.Throws<NeutralShapeSamplingException>(() => Analyze()).Message, Does.Contain("VRCAnimatorLayerControl"),
+                "The known weight capability is reached before neutral data preflight.");
+            var originals = new Object[] { fx, action, skin, mesh, driver }; var before = originals.Select(value => EditorJsonUtility.ToJson(value)).ToArray();
+            var error = Assert.Throws<InvalidOperationException>(() => NeutralShapeSampler.Sample(avatar));
+            Assert.That(error.Message, Does.Contain("Additional Playable").And.Contain(invalid.Kind));
+            Assert.That(skin.GetBlendShapeWeight(0), Is.EqualTo(35));
+            for (var index = 0; index < originals.Length; index++) Assert.That(EditorJsonUtility.ToJson(originals[index]), Is.EqualTo(before[index]));
         }
 
         [TestCase(AnimatorControllerParameterType.Trigger)]

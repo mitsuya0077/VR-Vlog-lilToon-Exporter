@@ -62,6 +62,32 @@ namespace VRVlog.LilToonExporter
             return plan;
         }
 
+        // A held expression can inherit facial channels from earlier native
+        // states. Their output is geometry-proven; an unrelated state elsewhere
+        // in the controller cannot make that observed face a wardrobe option.
+        // Preserve direct appearance configurations which actually participated
+        // in the native history, including contributions from support layers.
+        internal static NeutralShapePlan CreateObservedHistoryProjection(GameObject prepared,
+            IEnumerable<EditorCurveBinding> morphs, IEnumerable<AnimationClip> clips,
+            ISet<AnimationClip> unchangedClips, Func<string, bool> excludedPath = null)
+        {
+            var motions = clips.Where(clip => clip != null).Distinct().ToArray();
+            var plan = CreateProjection(prepared, morphs, motions, excludedPath);
+            foreach (var clip in motions)
+            {
+                var bindings = AnimationUtility.GetCurveBindings(clip).Concat(AnimationUtility.GetObjectReferenceCurveBindings(clip))
+                    .Where(binding => excludedPath?.Invoke(binding.path) != true).ToArray();
+                var changedAppearance = bindings.Any(binding => plan.IsAppearanceBinding(binding) &&
+                    !plan.unboundAppearanceBindings.Contains(binding) && !HarmlessActivation(prepared, clip, binding) &&
+                    !(unchangedClips?.Contains(clip) == true && SelectedExpressionAppearance.IsUnchanged(prepared, clip, binding)));
+                if (!changedAppearance) continue;
+                foreach (var morph in bindings.Where(binding => IsMorph(binding) && plan.CommittedMorphs.Contains(binding)))
+                    plan.PreservedMorphs.Add(morph);
+            }
+            plan.CommittedMorphs.ExceptWith(plan.PreservedMorphs);
+            return plan;
+        }
+
         internal static NeutralShapePlan Create(GameObject prepared, RuntimeAnimatorController runtime,
             IEnumerable<IEnumerable<EditorCurveBinding>> roots, Func<string, bool> excludedPath = null,
             IEnumerable<EditorCurveBinding> requiredMorphs = null, ICollection<string> warnings = null,
@@ -84,6 +110,21 @@ namespace VRVlog.LilToonExporter
             // reachable clip. The caller also supplies the neutral probe's
             // reachable clips through this same preflight entry point.
             plan.ValidateBindings(ownershipLayers.SelectMany(layer => layer.Clips), excludedPath);
+            // A wardrobe/default clip can explicitly reset facial channels in
+            // every alternative. Those invariant scalars remain native support,
+            // but do not make the face part of the changing wardrobe option.
+            // Reuse the native convex-Override proof: identical raw keys cannot
+            // prove an invariant contribution through additive or Direct trees.
+            var invariantClips = VrChatExpressionSampler.UnchangedAppearanceClips(runtime, Enumerable.Range(0, definitions.Length));
+            var globalWeightControl = ownershipLayers.Any(layer =>
+                layer.WeightControls.Values.Any(control => control.Playable == "FX" && !control.AnimatorLayer) ||
+                layer.FxCommands.Values.Any(command => command.FxWeight != 1));
+            var controlledLayers = new HashSet<int>(ownershipLayers.SelectMany(layer => layer.WeightControls.Values)
+                .Where(control => control.Playable == "FX" && control.AnimatorLayer).Select(control => control.LayerIndex));
+            var invariantMorphs = ownershipLayers.Select((layer, index) =>
+                globalWeightControl || controlledLayers.Contains(index) ? new HashSet<EditorCurveBinding>() : ExplicitInvariantMorphs(layer, invariantClips)).ToArray();
+            var clipOwners = ownershipLayers.SelectMany((layer, index) => layer.Clips.Select(clip => (Clip: clip, Layer: index)))
+                .GroupBy(item => item.Clip).ToDictionary(group => group.Key, group => group.Select(item => item.Layer).ToArray());
             var customInputs = new HashSet<string>(ExpressionDependencies.Controller(runtime).parameters.Where(parameter =>
                 parameter.type != AnimatorControllerParameterType.Trigger && !VrChatParameterDriver.BuiltIn.Contains(parameter.name) &&
                 source?.ExternalParameters.Contains(parameter.name) != true).Select(parameter => parameter.name), StringComparer.Ordinal);
@@ -130,6 +171,7 @@ namespace VRVlog.LilToonExporter
                 foreach (var morph in bindings.Where(IsMorph))
                 {
                     if (!plan.CommittedMorphs.Contains(morph)) continue;
+                    if (clipOwners[clip].All(index => invariantMorphs[index].Contains(morph))) continue;
                     plan.PreservedMorphs.Add(morph);
                     plan.reasons[morph] = Describe(clip, appearance[0]);
                 }
@@ -151,8 +193,9 @@ namespace VRVlog.LilToonExporter
                     }
                 }
                 var reason = visualClips[visualLayer.Clips.First(visualClips.ContainsKey)];
-                foreach (var morphLayer in ownershipLayers)
+                for (var morphLayerIndex = 0; morphLayerIndex < ownershipLayers.Length; morphLayerIndex++)
                 {
+                    var morphLayer = ownershipLayers[morphLayerIndex];
                     var shared = morphLayer.ControlReads.Where(linkedControls.ContainsKey).OrderBy(name => name, StringComparer.Ordinal).FirstOrDefault();
                     if (shared == null) continue;
                     // Direct control of the same appearance option proves
@@ -163,6 +206,7 @@ namespace VRVlog.LilToonExporter
                     var input = linkedControls[shared] == shared ? shared : linkedControls[shared] + " → " + shared + " (Parameter Driver Copy)";
                     foreach (var morph in morphLayer.Morphs.Where(plan.CommittedMorphs.Contains))
                     {
+                        if (invariantMorphs[morphLayerIndex].Contains(morph)) continue;
                         plan.PreservedMorphs.Add(morph);
                         if (!plan.reasons.ContainsKey(morph)) plan.reasons[morph] = "共有の入力 " + input + " / " + reason;
                     }
@@ -191,6 +235,35 @@ namespace VRVlog.LilToonExporter
                     string.Join(", ", descriptions.Take(8)) + (descriptions.Length > 8 ? " ほか" + (descriptions.Length - 8) + "件" : ""));
             }
             return plan;
+        }
+
+        private static HashSet<EditorCurveBinding> ExplicitInvariantMorphs(ExpressionDependencies.Layer layer,
+            ISet<AnimationClip> convexClips)
+        {
+            var result = new HashSet<EditorCurveBinding>();
+            // A missing/null motion or omitted binding is not an explicit
+            // reset. Write Defaults may supply another native value there;
+            // WD Off may retain a value from an earlier state instead.
+            // One static mixed configuration supplies no alternatives from
+            // which to distinguish a generic reset from its paired wardrobe
+            // shape. Preserve that established ownership contract.
+            if (layer.EmptyMotion || layer.Clips.Count < 2 || layer.Clips.Any(clip => !convexClips.Contains(clip) ||
+                AnimationUtility.GetAnimationEvents(clip).Length != 0)) return result;
+            foreach (var morph in layer.Morphs)
+            {
+                float? weight = null;
+                var invariant = true;
+                foreach (var clip in layer.Clips)
+                {
+                    var curve = AnimationUtility.GetEditorCurve(clip, morph);
+                    if (curve == null || curve.length == 0 || !VrChatExpressionSampler.IsConstant(curve) ||
+                        weight.HasValue && weight.Value != curve.keys[0].value)
+                    { invariant = false; break; }
+                    weight = curve.keys[0].value;
+                }
+                if (invariant) result.Add(morph);
+            }
+            return result;
         }
 
         private void ResolveCommittedMorphs()

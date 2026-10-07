@@ -390,10 +390,12 @@ namespace VRVlog.LilToonExporter.Tests
                 Assert.That(values.Single().Weight, Is.EqualTo(75).Within(.01));
                 Assert.That(warnings, Is.Empty);
             }
-            else if (scenario == "other writer")
+            else if (scenario == "driver writer" || scenario == "other writer")
             {
                 var error = Assert.Throws<InvalidOperationException>(() => NeutralShapeSampler.Sample(avatar, requiredMorphs: required, warnings: warnings));
-                Assert.That(error.Message, Does.Contain("Action").And.Contain("AFK").And.Contain("Playable Layer"));
+                Assert.That(error.Message, Does.Contain("AFK"));
+                if (scenario == "driver writer") Assert.That(error.Message, Does.Contain("Parameter Driver"));
+                else Assert.That(error.Message, Does.Contain("Action").And.Contain("Playable Layer"));
                 Assert.That(warnings, Is.Empty);
             }
             else
@@ -1897,15 +1899,43 @@ namespace VRVlog.LilToonExporter.Tests
             Assert.That(skin.GetBlendShapeWeight(0), Is.Zero);
         }
 
-        [Test]
-        public void RelevantRandomDriverCannotInventANeutralFace()
+        [TestCase("valid")]
+        [TestCase("reversed range")]
+        [TestCase("nonfinite")]
+        public void RelevantRandomDriverCannotInventANeutralFace(string kind)
         {
             controller.AddParameter("Face", AnimatorControllerParameterType.Int);
-            var open = Open(); ParameterDriverExpressionTests.Driver(open, ParameterDriverExpressionTests.Op("Random", "Face"));
+            var open = Open(); var driver = ParameterDriverExpressionTests.Driver(open, ParameterDriverExpressionTests.Op("Random", "Face"));
+            using (var data = new SerializedObject(driver))
+            {
+                var operation = data.FindProperty("parameters").GetArrayElementAtIndex(0);
+                operation.FindPropertyRelative("valueMin").floatValue = kind == "reversed range" ? 2 : kind == "nonfinite" ? float.NaN : 0;
+                operation.FindPropertyRelative("valueMax").floatValue = 1;
+                operation.FindPropertyRelative("chance").floatValue = .5f;
+                data.ApplyModifiedPropertiesWithoutUndo();
+            }
             var other = State(controller.layers[0].stateMachine, Clip("Open", AnimationCurve.Constant(0, 1, 0)));
             var transition = open.AddTransition(other); transition.hasExitTime = false; transition.duration = 0;
             transition.AddCondition(AnimatorConditionMode.Equals, 1, "Face");
-            Assert.That(Assert.Throws<InvalidOperationException>(() => NeutralShapeSampler.Sample(avatar)).Message, Does.Contain("Random"));
+            skin.SetBlendShapeWeight(0, 17);
+            var before = ExportSourceFingerprint.Compute(avatar); var warnings = new List<string>();
+            if (kind == "valid")
+            {
+                var values = NeutralShapeSampler.Sample(avatar, warnings: warnings,
+                    requiredMorphs: new[] { EditorCurveBinding.FloatCurve("Body", typeof(SkinnedMeshRenderer), "blendShape.Open") });
+                Assert.That(values, Is.Empty, "Neither random branch's authored zero/100 face may replace the prepared value17.");
+                Assert.That(warnings.Any(value => value.Contains("Random") && value.Contains("Face")), Is.True, string.Join("\n", warnings));
+                NeutralShapeSnapshot.Apply(avatar, values);
+            }
+            else
+            {
+                var error = Assert.Throws<InvalidOperationException>(() => NeutralShapeSampler.Sample(avatar, warnings: warnings));
+                Assert.That(error.Message, Does.Contain("Random"));
+                Assert.That(VrChatParameterDriver.IsRandomCapability(error), Is.False, "Invalid SDK data is never a recoverable Random capability.");
+                Assert.That(warnings, Is.Empty);
+            }
+            Assert.That(skin.GetBlendShapeWeight(0), Is.EqualTo(17)); Assert.That(skin.GetBlendShapeWeight(3), Is.EqualTo(35));
+            Assert.That(ExportSourceFingerprint.Compute(avatar), Is.EqualTo(before));
         }
 
         [Test]

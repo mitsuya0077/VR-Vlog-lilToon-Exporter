@@ -1045,7 +1045,6 @@ namespace VRVlog.LilToonExporter
                     {
                         if (motion is BlendTree tree)
                         {
-                            ReadParameter(tree.blendParameter); ReadParameter(tree.blendParameterY);
                             if (tree.blendType != BlendTreeType.Direct)
                             {
                                 ReadControl(tree.blendParameter);
@@ -1053,7 +1052,6 @@ namespace VRVlog.LilToonExporter
                             }
                             foreach (var child in tree.children)
                             {
-                                ReadParameter(child.directBlendParameter);
                                 if (tree.blendType == BlendTreeType.Direct) ReadControl(child.directBlendParameter);
                                 InspectMotion(child.motion);
                             }

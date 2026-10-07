@@ -216,6 +216,7 @@ namespace VRVlog.LilToonExporter.Tests
         [TestCase("TimedUpper")]
         [TestCase("AnimatorCurve")]
         [TestCase("RandomDriver")]
+        [TestCase("InvalidRandomDriver")]
         public void UnresolvedTemporalGraphKeepsPreparedRestButStillRejectsUnsupportedDrivers(string kind)
         {
             var clip = Clip("Temporal-only idle", ("Temporal", Varying("Delayed"))); var state = State(0, clip);
@@ -237,19 +238,37 @@ namespace VRVlog.LilToonExporter.Tests
                 var transition = state.AddTransition(alternate); transition.hasExitTime = false; transition.duration = 0;
                 transition.AddCondition(AnimatorConditionMode.Greater, 1, "Changing input");
                 if (kind == "AnimatorCurve") AnimationUtility.SetEditorCurve(clip, EditorCurveBinding.FloatCurve("", typeof(Animator), "Changing input"), Varying("Delayed"));
-                else ParameterDriverExpressionTests.Driver(state, ParameterDriverExpressionTests.Op("Random", "Changing input"));
+                else
+                {
+                    var driver = ParameterDriverExpressionTests.Driver(state, ParameterDriverExpressionTests.Op("Random", "Changing input"));
+                    using var data = new SerializedObject(driver);
+                    var operation = data.FindProperty("parameters").GetArrayElementAtIndex(0);
+                    operation.FindPropertyRelative("valueMin").floatValue = kind == "InvalidRandomDriver" ? 3 : 0;
+                    operation.FindPropertyRelative("valueMax").floatValue = 2;
+                    operation.FindPropertyRelative("chance").floatValue = .5f;
+                    data.ApplyModifiedPropertiesWithoutUndo();
+                }
             }
-            if (kind == "RandomDriver")
-                Assert.Catch<InvalidOperationException>(() => NeutralShapeSampler.Sample(avatar));
+            var before = ExportSourceFingerprint.Compute(avatar);
+            if (kind == "InvalidRandomDriver")
+            {
+                var warnings = new List<string>();
+                var error = Assert.Catch<InvalidOperationException>(() => NeutralShapeSampler.Sample(avatar, warnings: warnings));
+                Assert.That(error.Message, Does.Contain("Random"));
+                Assert.That(VrChatParameterDriver.IsRandomCapability(error), Is.False);
+                Assert.That(warnings, Is.Empty, "Malformed Random data must fail before a prepared-rest fallback can mask it.");
+            }
             else
             {
                 var warnings = new List<string>();
                 var values = NeutralShapeSampler.Sample(avatar, warnings: warnings);
                 Assert.That(values, Is.Empty, "An unresolved dynamic graph cannot provide a captured neutral phase.");
                 NeutralShapeSnapshot.Apply(avatar, values);
-                Assert.That(warnings.Any(value => value.Contains("Temporal")), Is.True);
+                Assert.That(warnings.Any(value => value.Contains(kind == "RandomDriver" ? "Random" : "Temporal")), Is.True);
             }
             Assert.That(skin.GetBlendShapeWeight(0), Is.EqualTo(17));
+            Assert.That(skin.GetBlendShapeWeight(1), Is.EqualTo(35)); Assert.That(skin.GetBlendShapeWeight(2), Is.EqualTo(27));
+            Assert.That(ExportSourceFingerprint.Compute(avatar), Is.EqualTo(before));
         }
 
         [Test]
