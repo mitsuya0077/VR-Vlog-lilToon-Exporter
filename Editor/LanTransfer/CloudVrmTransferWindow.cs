@@ -118,7 +118,7 @@ namespace VRVlog.LilToonExporter.LanTransfer
             using (var scrolling = new EditorGUILayout.ScrollViewScope(scroll))
             {
                 scroll = scrolling.scrollPosition;
-                EditorGUILayout.HelpBox("アバターをクラウドに一時保存し、スマホへ転送します。受取期限は15分です。完了・中止・期限切れで転送用コピーを削除します。", MessageType.Info);
+                EditorGUILayout.HelpBox("アバターをクラウドに一時保存し、スマホへ転送します。受取期限は転送作成時から3分です。アップロード中も期限が進みます。完了・中止・期限切れで転送用コピーを削除します。", MessageType.Info);
                 EditorGUILayout.LabelField(source?.Name ?? "Exporterの「スマホに送る」でVRMを書き出してください。", EditorStyles.wordWrappedLabel);
                 EditorGUILayout.HelpBox("PCとスマホにインターネット接続が必要です。同じWi-Fiは不要です。QRを持つ人はアバターを受け取れるため、共有・撮影しないでください。スマホではVR Vlog内のカメラで読み取ります。", MessageType.None);
                 if (!string.IsNullOrEmpty(error)) EditorGUILayout.HelpBox(error, MessageType.Error);
