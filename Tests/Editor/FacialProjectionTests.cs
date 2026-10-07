@@ -86,6 +86,269 @@ namespace VRVlog.LilToonExporter.Tests
         }
 
         private static EditorCurveBinding Binding(string shape) => EditorCurveBinding.FloatCurve("Body", typeof(SkinnedMeshRenderer), "blendShape." + shape);
+        [TestCase(false)]
+        [TestCase(true)]
+        public void ContactAuthoredFacesKeepTheirCompositionTimelineAndPreparedAppearance(bool moving)
+        {
+            controller.AddParameter("Sensor", AnimatorControllerParameterType.Bool);
+            var machine = controller.layers[0].stateMachine;
+            var rest = State(machine, "Rest", Clip("Rest", 0, false)); machine.defaultState = rest;
+            var motion = Clip("Contact composed face", 75, true, moving);
+            var selected = State(machine, "Contact face", motion);
+            var transition = rest.AddTransition(selected); transition.hasExitTime = false; transition.duration = 0;
+            transition.AddCondition(AnimatorConditionMode.If, 0, "Sensor");
+            var metadata = Metadata(); metadata.NeutralInputInventoryComplete = true; metadata.ExternalParameters.Add("Sensor");
+            var before = ExportSourceFingerprint.Compute(avatar);
+            VrChatAuthoredFaces.Add(avatar, metadata);
+            var entry = metadata.Entries.Single(item => item.Name.EndsWith(" / Contact composed face", StringComparison.Ordinal));
+            Assert.That(entry.Error, Is.Null, entry.Error);
+            Assert.That(entry.Values.Select(value => value.Shape), Is.EqualTo(new[] { Shapes[1] }));
+            Assert.That(entry.Values.Single().Weight, Is.EqualTo(75).Within(.01));
+            Assert.That(entry.Animation.Count, Is.EqualTo(moving ? 1 : 0));
+            if (moving) Assert.That(entry.Animation.Single().Curve.Evaluate(.5), Is.EqualTo(80).Within(.01));
+            Assert.That(ExportSourceFingerprint.Compute(avatar), Is.EqualTo(before));
+        }
+
+        [TestCase(false)]
+        [TestCase(true)]
+        public void HardwareFaceFallbackCannotPublishMutedOrOrphanStates(bool muted)
+        {
+            controller.AddParameter("Sensor", AnimatorControllerParameterType.Bool);
+            var machine = controller.layers[0].stateMachine;
+            var rest = State(machine, "Rest", Clip("Rest", 0, false)); machine.defaultState = rest;
+            var selected = State(machine, "Unreachable face", Clip("Unreachable face", 75, true));
+            if (muted)
+            {
+                var transition = rest.AddTransition(selected); transition.mute = true;
+                transition.AddCondition(AnimatorConditionMode.If, 0, "Sensor");
+            }
+            var metadata = Metadata(); metadata.NeutralInputInventoryComplete = true; metadata.ExternalParameters.Add("Sensor");
+            VrChatAuthoredFaces.Add(avatar, metadata);
+            Assert.That(metadata.Entries.Any(item => item.Name.Contains("Unreachable face")), Is.False);
+        }
+
+        [TestCase(false)]
+        [TestCase(true)]
+        public void AConstantHardwareFaceDoesNotNeedAnAutoplayClock(bool zeroDuration)
+        {
+            controller.AddParameter("Sensor", AnimatorControllerParameterType.Bool);
+            controller.AddParameter("Clock", AnimatorControllerParameterType.Float);
+            var machine = controller.layers[0].stateMachine;
+            var rest = State(machine, "Rest", Clip("Rest", 0, false)); machine.defaultState = rest;
+            var motion = Clip("Constant contact clock", 75, true);
+            if (zeroDuration)
+                foreach (var binding in AnimationUtility.GetCurveBindings(motion))
+                    AnimationUtility.SetEditorCurve(motion, binding, new AnimationCurve(new Keyframe(0, AnimationUtility.GetEditorCurve(motion, binding).Evaluate(0))));
+            var settings = AnimationUtility.GetAnimationClipSettings(motion); settings.loopTime = true;
+            AnimationUtility.SetAnimationClipSettings(motion, settings);
+            var selected = State(machine, "Contact face", motion); selected.timeParameterActive = true; selected.timeParameter = "Clock";
+            var transition = rest.AddTransition(selected); transition.hasExitTime = false; transition.duration = 0;
+            transition.AddCondition(AnimatorConditionMode.If, 0, "Sensor");
+            var metadata = Metadata(); metadata.NeutralInputInventoryComplete = true; metadata.ExternalParameters.Add("Sensor");
+            VrChatAuthoredFaces.Add(avatar, metadata);
+            var entry = metadata.Entries.Single(item => item.Name.EndsWith(" / Constant contact clock", StringComparison.Ordinal));
+            Assert.That(entry.Error, Is.Null, entry.Error); Assert.That(entry.Animation, Is.Empty);
+            Assert.That(entry.Duration, Is.EqualTo(0)); Assert.That(entry.Values.Single().Weight, Is.EqualTo(75).Within(.01));
+        }
+
+        [Test]
+        public void ARecoveryExclusionCannotBeReintroducedByHardwareFaceFallback()
+        {
+            controller.AddParameter("Sensor", AnimatorControllerParameterType.Bool);
+            var machine = controller.layers[0].stateMachine;
+            machine.defaultState = State(machine, "Face", Clip("Recovery face", 75, true));
+            var metadata = Metadata(); metadata.NeutralInputInventoryComplete = true; metadata.ExternalParameters.Add("Sensor");
+            VrChatAuthoredFaces.Add(avatar, metadata, policy: new VrChatMenuImportPolicy { SkipAll = true });
+            Assert.That(metadata.Entries, Is.Empty);
+        }
+
+        [TestCase("bool")]
+        [TestCase("trigger")]
+        [TestCase("int")]
+        [TestCase("fractional int")]
+        [TestCase("exhausted int")]
+        [TestCase("float")]
+        public void HardwareFaceFallbackCannotInventAContradictoryTypedRoute(string type)
+        {
+            controller.AddParameter("Sensor", AnimatorControllerParameterType.Bool);
+            var machine = controller.layers[0].stateMachine;
+            var rest = State(machine, "Rest", Clip("Rest", 0, false)); machine.defaultState = rest;
+            var face = State(machine, "Contradictory face", Clip("Contradictory face", 75, true));
+            var transition = rest.AddTransition(face); transition.hasExitTime = false; transition.duration = 0;
+            transition.AddCondition(AnimatorConditionMode.If, 0, "Sensor");
+            var parameterType = type == "bool" ? AnimatorControllerParameterType.Bool : type == "trigger" ? AnimatorControllerParameterType.Trigger :
+                type == "float" ? AnimatorControllerParameterType.Float : AnimatorControllerParameterType.Int;
+            controller.AddParameter("Gate", parameterType);
+            if (type == "bool" || type == "trigger")
+            {
+                transition.AddCondition(AnimatorConditionMode.If, 0, "Gate");
+                transition.AddCondition(AnimatorConditionMode.IfNot, 0, "Gate");
+            }
+            else if (type == "int")
+            {
+                transition.AddCondition(AnimatorConditionMode.Equals, 1, "Gate");
+                transition.AddCondition(AnimatorConditionMode.Equals, 2, "Gate");
+            }
+            else if (type == "fractional int") transition.AddCondition(AnimatorConditionMode.Equals, .5f, "Gate");
+            else if (type == "exhausted int")
+            {
+                transition.AddCondition(AnimatorConditionMode.Greater, -1, "Gate");
+                transition.AddCondition(AnimatorConditionMode.Less, 2, "Gate");
+                transition.AddCondition(AnimatorConditionMode.NotEqual, 0, "Gate");
+                transition.AddCondition(AnimatorConditionMode.NotEqual, 1, "Gate");
+            }
+            else
+            {
+                transition.AddCondition(AnimatorConditionMode.Greater, .6f, "Gate");
+                transition.AddCondition(AnimatorConditionMode.Less, .2f, "Gate");
+            }
+            var metadata = Metadata(); metadata.NeutralInputInventoryComplete = true; metadata.ExternalParameters.Add("Sensor");
+            VrChatAuthoredFaces.Add(avatar, metadata);
+            Assert.That(metadata.Entries.Any(entry => entry.Name.Contains("Contradictory face")), Is.False);
+            Assert.That(metadata.Messages, Is.Empty, "A proven impossible conjunction is omitted without treating valid authored data as malformed.");
+        }
+
+        [TestCase(false)]
+        [TestCase(true)]
+        public void HardwareFaceFallbackHonorsUnconditionalPriorityButKeepsUntimedAlternativesBeforeExitTime(bool timed)
+        {
+            controller.AddParameter("Sensor", AnimatorControllerParameterType.Bool);
+            var machine = controller.layers[0].stateMachine;
+            var rest = State(machine, "Rest", Clip("Rest", 0, false)); machine.defaultState = rest;
+            var blocker = State(machine, "First destination", Clip("First destination", 0, false));
+            var first = rest.AddTransition(blocker); first.hasExitTime = timed; first.exitTime = .5f; first.duration = 0;
+            var face = State(machine, "Later face", Clip("Later face", 75, true));
+            var later = rest.AddTransition(face); later.hasExitTime = false; later.duration = 0;
+            later.AddCondition(AnimatorConditionMode.If, 0, "Sensor");
+            var metadata = Metadata(); metadata.NeutralInputInventoryComplete = true; metadata.ExternalParameters.Add("Sensor");
+            VrChatAuthoredFaces.Add(avatar, metadata);
+            Assert.That(metadata.Entries.Any(entry => entry.Name.Contains("Later face") && entry.Error == null), Is.EqualTo(timed));
+        }
+
+        [TestCase(false)]
+        [TestCase(true)]
+        public void HardwareAnyStatePriorityPreservesAReachableSelfDisabledAlternative(bool allowSelf)
+        {
+            controller.AddParameter("Sensor", AnimatorControllerParameterType.Bool);
+            var machine = controller.layers[0].stateMachine;
+            machine.defaultState = State(machine, "Rest", Clip("Rest", 0, false));
+            var blocker = State(machine, "First destination", Clip("First destination", 0, false));
+            var first = machine.AddAnyStateTransition(blocker); first.hasExitTime = false; first.duration = 0; first.canTransitionToSelf = allowSelf;
+            var face = State(machine, "Later face", Clip("Later face", 75, true));
+            var later = machine.AddAnyStateTransition(face); later.hasExitTime = false; later.duration = 0; later.canTransitionToSelf = false;
+            later.AddCondition(AnimatorConditionMode.If, 0, "Sensor");
+            var metadata = Metadata(); metadata.NeutralInputInventoryComplete = true; metadata.ExternalParameters.Add("Sensor");
+            VrChatAuthoredFaces.Add(avatar, metadata);
+            Assert.That(metadata.Entries.Any(entry => entry.Name.Contains("Later face") && entry.Error == null), Is.EqualTo(!allowSelf));
+        }
+
+        [TestCase("duplicate path")]
+        [TestCase("missing input")]
+        [TestCase("incompatible mode")]
+        public void MalformedHardwareTopologyOrConditionsCannotPublishAPartialRecovery(string damage)
+        {
+            controller.AddParameter("Sensor", AnimatorControllerParameterType.Bool);
+            var machine = controller.layers[0].stateMachine;
+            var rest = State(machine, "Rest", Clip("Rest", 0, false)); machine.defaultState = rest;
+            var face = State(machine, "Valid face", Clip("Valid face", 75, true));
+            var transition = rest.AddTransition(face); transition.hasExitTime = false; transition.duration = 0;
+            transition.AddCondition(AnimatorConditionMode.If, 0, "Sensor");
+            if (damage == "duplicate path") State(machine, "Duplicate", Clip("Duplicate", 80, true)).name = rest.name;
+            else if (damage == "missing input") transition.AddCondition(AnimatorConditionMode.If, 0, "Missing input");
+            else
+            {
+                controller.AddParameter("Float input", AnimatorControllerParameterType.Float);
+                transition.AddCondition(AnimatorConditionMode.Equals, 1, "Float input");
+            }
+            var metadata = Metadata(); metadata.NeutralInputInventoryComplete = true; metadata.ExternalParameters.Add("Sensor");
+            var before = ExportSourceFingerprint.Compute(avatar);
+            Assert.DoesNotThrow(() => VrChatAuthoredFaces.Add(avatar, metadata));
+            Assert.That(metadata.Entries, Is.Empty); Assert.That(metadata.Messages.Count, Is.EqualTo(1));
+            Assert.That(ExportSourceFingerprint.Compute(avatar), Is.EqualTo(before));
+        }
+
+        [Test]
+        public void ExcludingOneMenuBranchAlsoPreventsUnprovenHardwareFaceRecovery()
+        {
+            controller.AddParameter("Sensor", AnimatorControllerParameterType.Bool);
+            var machine = controller.layers[0].stateMachine;
+            machine.defaultState = State(machine, "Face", Clip("Recovery face", 75, true));
+            var metadata = Metadata(); metadata.NeutralInputInventoryComplete = true; metadata.ExternalParameters.Add("Sensor");
+            var policy = new VrChatMenuImportPolicy(); policy.ExcludedBranches.Add("Original menu branch");
+            VrChatAuthoredFaces.Add(avatar, metadata, policy: policy);
+            Assert.That(metadata.Entries, Is.Empty);
+        }
+
+        private void AddDisconnectedSurface(float scale, bool extendsOutside, bool torsoInfluence)
+        {
+            // The opaque channel represents a separate eye/cheek insert. The
+            // original fixture still has a separate head accessory above it.
+            var replacement = new Mesh { name = "Disconnected facial insert" };
+            var extra = new[] { new Vector3(-.01f, 1.8f, .1f), new Vector3(.01f, 1.8f, .1f),
+                new Vector3(0, extendsOutside ? 2.1f : 1.82f, .102f) };
+            replacement.vertices = mesh.vertices.Concat(extra).Select(v => v * scale).ToArray();
+            replacement.triangles = mesh.triangles.Concat(new[] { 8, 9, 10 }).ToArray();
+            replacement.normals = Enumerable.Repeat(Vector3.forward, 11).ToArray(); replacement.uv = new Vector2[11];
+            replacement.boneWeights = mesh.boneWeights.Concat(Enumerable.Range(0, 3).Select(i => new BoneWeight
+                { boneIndex0 = torsoInfluence && i == 2 ? 1 : 0, weight0 = 1 })).ToArray();
+            replacement.bindposes = mesh.bindposes;
+            for (var shape = 0; shape < mesh.blendShapeCount; shape++)
+            {
+                var positions = new Vector3[8]; var normals = new Vector3[8]; var tangents = new Vector3[8];
+                mesh.GetBlendShapeFrameVertices(shape, 0, positions, normals, tangents);
+                replacement.AddBlendShapeFrame(mesh.GetBlendShapeName(shape), 100,
+                    positions.Select(v => v * scale).Concat(new Vector3[3]).ToArray(), null, null);
+            }
+            var delta = new Vector3[11]; delta[8] = Vector3.right * .03f * scale;
+            replacement.AddBlendShapeFrame("opaque-insert", 100, delta, null, null);
+            Object.DestroyImmediate(mesh); mesh = replacement; skin.sharedMesh = mesh;
+        }
+
+        [TestCase(.01f)]
+        [TestCase(1f)]
+        [TestCase(100f)]
+        public void EnclosedDisconnectedHeadSurfaceIsFacialAtEveryMeshScale(float scale)
+        {
+            AddDisconnectedSurface(scale, false, false);
+            var before = ExportSourceFingerprint.Compute(avatar);
+            var motion = Clip("Composed face and insert", 75, true);
+            AnimationUtility.SetEditorCurve(motion, Binding("opaque-insert"), AnimationCurve.Constant(0, 1, 80));
+            var entry = new VrChatExpressionMenu.Entry(); VrChatGestureExpressions.ReadClip(avatar, motion, entry);
+            Assert.That(entry.Values.Select(v => v.Shape), Is.EquivalentTo(new[] { Shapes[1], "opaque-insert" }));
+            Assert.That(FacialProjectionScope.Create(avatar).Morphs.Contains(Binding(Shapes[3])), Is.False,
+                "A disconnected head accessory outside the descriptor surface must remain excluded.");
+            Assert.That(ExportSourceFingerprint.Compute(avatar), Is.EqualTo(before));
+        }
+
+        [TestCase(true, false)]
+        [TestCase(false, true)]
+        public void OneEnclosedVertexCannotAuthorizeAnOutsideOrMixedSkinIsland(bool extendsOutside, bool torsoInfluence)
+        {
+            AddDisconnectedSurface(1, extendsOutside, torsoInfluence);
+            var scope = FacialProjectionScope.Create(avatar);
+            Assert.That(scope.Morphs.Contains(Binding("opaque-insert")), Is.False);
+        }
+
+        [TestCase(.92f, true, true)]
+        [TestCase(.5f, true, false)]
+        [TestCase(.1f, true, false)]
+        [TestCase(.92f, false, false)]
+        public void DescriptorFaceSeamsAcceptOnlyHeadDominantHumanoidNeckSkin(float headWeight, bool useNeck, bool accepted)
+        {
+            var neck = avatar.GetComponent<Animator>().GetBoneTransform(HumanBodyBones.Neck);
+            Assert.That(neck, Is.Not.Null);
+            skin.bones = skin.bones.Concat(new[] { neck }).ToArray();
+            mesh.bindposes = skin.bones.Select(b => b.worldToLocalMatrix).ToArray();
+            var weights = mesh.boneWeights;
+            for (var index = 0; index < 3; index++) weights[index] = new BoneWeight
+                { boneIndex0 = 0, weight0 = headWeight, boneIndex1 = useNeck ? 2 : 1, weight1 = 1 - headWeight };
+            mesh.boneWeights = weights;
+            var before = ExportSourceFingerprint.Compute(avatar);
+            var scope = FacialProjectionScope.Create(avatar);
+            Assert.That(scope?.Morphs.Contains(Binding(Shapes[1])) == true, Is.EqualTo(accepted));
+            Assert.That(ExportSourceFingerprint.Compute(avatar), Is.EqualTo(before));
+        }
+
         private static AnimatorState State(AnimatorStateMachine machine, string name, AnimationClip clip, bool wd = false)
         {
             var state = machine.AddState(name); state.motion = clip; state.writeDefaultValues = wd; return state;
@@ -96,6 +359,115 @@ namespace VRVlog.LilToonExporter.Tests
             transition.AddCondition(AnimatorConditionMode.Equals, 1, "FacialSet");
         }
         private VrChatExpressionMenu.Source Metadata() => new VrChatExpressionMenu.Source { Controller = controller };
+
+        private AnimatorState InheritedFaceTree(bool moving, bool appearance = false)
+        {
+            for (var index = 0; index < mesh.blendShapeCount; index++) skin.SetBlendShapeWeight(index, 0);
+            controller.AddParameter("GestureRight", AnimatorControllerParameterType.Int);
+            controller.AddParameter("NativeMix", AnimatorControllerParameterType.Float);
+            var prior = new AnimationClip { name = "Prior changing face and unrelated body" }; AssetDatabase.AddObjectToAsset(prior, controller);
+            AnimationUtility.SetEditorCurve(prior, Binding(Shapes[1]), AnimationCurve.Linear(0, 10, 1, 40));
+            AnimationUtility.SetEditorCurve(prior, Binding(Shapes[2]), AnimationCurve.Constant(0, 1, 60));
+            AnimationUtility.SetEditorCurve(prior, Binding(Shapes[3]), AnimationCurve.Constant(0, 1, 80));
+            if (appearance) AnimationUtility.SetEditorCurve(prior,
+                EditorCurveBinding.FloatCurve("Body", typeof(SkinnedMeshRenderer), "material._Color2nd.r"), AnimationCurve.Constant(0, 1, .9f));
+            var machine = controller.layers[0].stateMachine;
+            machine.defaultState = State(machine, "Prior changing face", prior);
+            var selected = State(machine, "Held native tree", null);
+            var tree = new BlendTree { name = "Only the explicit eye channel", blendType = BlendTreeType.Simple1D,
+                blendParameter = "NativeMix", useAutomaticThresholds = false };
+            AssetDatabase.AddObjectToAsset(tree, controller);
+            AnimationClip Leaf(string name, float start, float middle)
+            {
+                var clip = new AnimationClip { name = name }; AssetDatabase.AddObjectToAsset(clip, controller);
+                AnimationUtility.SetEditorCurve(clip, Binding(Shapes[0]), moving ?
+                    new AnimationCurve(new Keyframe(0, start), new Keyframe(1, middle), new Keyframe(2, start)) : AnimationCurve.Constant(0, 2, start));
+                var settings = AnimationUtility.GetAnimationClipSettings(clip); settings.loopTime = moving;
+                AnimationUtility.SetAnimationClipSettings(clip, settings); return clip;
+            }
+            tree.children = new[] {
+                new ChildMotion { motion = Leaf("Explicit first", 70, 20), threshold = 0, timeScale = 1 },
+                new ChildMotion { motion = Leaf("Explicit second", 90, 60), threshold = 1, timeScale = 1 }
+            }; selected.motion = tree;
+            var enter = machine.defaultState.AddTransition(selected); enter.hasExitTime = false; enter.duration = 0;
+            enter.AddCondition(AnimatorConditionMode.Equals, 1, "GestureRight"); return selected;
+        }
+
+        private Dictionary<string, float> OriginalInheritedFace(float phase, bool moving)
+        {
+            var copy = Object.Instantiate(avatar); var graph = PlayableGraph.Create("Independent inherited facial reference");
+            try
+            {
+                foreach (var behaviour in copy.GetComponentsInChildren<Behaviour>(true)) behaviour.enabled = false;
+                var animator = copy.GetComponent<Animator>(); animator.enabled = true; animator.runtimeAnimatorController = null;
+                animator.cullingMode = AnimatorCullingMode.AlwaysAnimate; animator.fireEvents = false;
+                graph.SetTimeUpdateMode(DirectorUpdateMode.Manual);
+                var playable = AnimatorControllerPlayable.Create(graph, controller);
+                AnimationPlayableOutput.Create(graph, "Original complete source FX", animator).SetSourcePlayable(playable);
+                playable.SetInteger("GestureRight", 0); playable.SetFloat("NativeMix", 0); graph.Play(); graph.Evaluate(0);
+                void Warm() { for (var frame = 0; frame < 120; frame++) graph.Evaluate(1f / 60); }
+                Warm(); playable.SetFloat("NativeMix", .5f); Warm(); playable.SetInteger("GestureRight", 1); Warm();
+                if (moving)
+                {
+                    var state = playable.GetCurrentAnimatorStateInfo(0);
+                    playable.Play(state.fullPathHash, 0, phase); graph.Evaluate(0); graph.Evaluate(0);
+                }
+                var renderer = copy.transform.Find("Body").GetComponent<SkinnedMeshRenderer>();
+                return Shapes.ToDictionary(shape => shape, shape => renderer.GetBlendShapeWeight(mesh.GetBlendShapeIndex(shape)));
+            }
+            finally { graph.Destroy(); Object.DestroyImmediate(copy); }
+        }
+
+        [TestCase(false)]
+        [TestCase(true)]
+        public void NativeHeldTreeKeepsThePreviousChangingFaceWithoutImportingBodyOrAccessoryHistory(bool moving)
+        {
+            var selected = InheritedFaceTree(moving); var scope = FacialProjectionScope.Create(avatar);
+            Assert.That(scope.Morphs.Contains(Binding(Shapes[1])), Is.True);
+            Assert.That(scope.Morphs.Contains(Binding(Shapes[2])), Is.False); Assert.That(scope.Morphs.Contains(Binding(Shapes[3])), Is.False);
+            var before = ExportSourceFingerprint.Compute(avatar); var metadata = Metadata(); metadata.NeutralInputInventoryComplete = true;
+            var entry = new VrChatExpressionMenu.Entry { Name = "Native inherited face" };
+            entry.Parameters.Add("GestureRight", 1); entry.Parameters.Add("NativeMix", .5f);
+            AnimatedGestureTree.Read(avatar, metadata, 0, selected, entry, null);
+            Assert.That(entry.Duration, Is.EqualTo(moving ? 2 : 0).Within(.0001)); Assert.That(entry.Loop, Is.EqualTo(moving));
+            Assert.That(entry.Values.Any(value => value.Shape == Shapes[2] || value.Shape == Shapes[3]), Is.False,
+                "Only proven facial history may leave its prepared appearance domain.");
+            foreach (var phase in new[] { 0f, .17f, .5f, .83f, .999f })
+            {
+                var native = OriginalInheritedFace(phase, moving); Assert.That(native[Shapes[1]], Is.EqualTo(40).Within(.01));
+                Assert.That(native[Shapes[2]], Is.EqualTo(60).Within(.01)); Assert.That(native[Shapes[3]], Is.EqualTo(80).Within(.01));
+                double Exported(string shape) => entry.Animation.SingleOrDefault(channel => channel.Shape == shape)?.Curve.Evaluate(phase * entry.Duration) ??
+                    entry.Values.Single(value => value.Shape == shape).Weight;
+                Assert.That(Exported(Shapes[0]), Is.EqualTo(native[Shapes[0]]).Within(.02));
+                Assert.That(Exported(Shapes[1]), Is.EqualTo(native[Shapes[1]]).Within(.02), "The final tree intentionally has no dimple binding.");
+            }
+            Assert.That(ExportSourceFingerprint.Compute(avatar), Is.EqualTo(before));
+        }
+
+        [Test]
+        public void ImplicitHeldFaceHistoryCannotImportAnAppearanceOwnedMorph()
+        {
+            var selected = InheritedFaceTree(false, appearance: true); var before = ExportSourceFingerprint.Compute(avatar);
+            var entry = new VrChatExpressionMenu.Entry { Name = "Prepared wardrobe ownership" };
+            entry.Parameters.Add("GestureRight", 1); entry.Parameters.Add("NativeMix", .5f);
+            var metadata = Metadata(); metadata.NeutralInputInventoryComplete = true;
+            AnimatedGestureTree.Read(avatar, metadata, 0, selected, entry, null);
+            Assert.That(entry.Values.Any(value => value.Shape == Shapes[1]), Is.False);
+            Assert.That(material.GetColor("_Color2nd").r, Is.EqualTo(.25f));
+            Assert.That(ExportSourceFingerprint.Compute(avatar), Is.EqualTo(before));
+        }
+
+        [Test]
+        public void InheritedHeldFaceCannotConcealACorruptPreviousMovingCurve()
+        {
+            var selected = InheritedFaceTree(false); var prior = (AnimationClip)controller.layers[0].stateMachine.defaultState.motion;
+            AnimationUtility.SetEditorCurve(prior, Binding(Shapes[1]), new AnimationCurve(new Keyframe(0, 10, 0, float.NaN), new Keyframe(1, 40, 0, 0)));
+            Assert.That(float.IsNaN(AnimationUtility.GetEditorCurve(prior, Binding(Shapes[1])).keys[0].outTangent), Is.True);
+            var entry = new VrChatExpressionMenu.Entry(); entry.Parameters.Add("GestureRight", 1); entry.Parameters.Add("NativeMix", .5f);
+            var metadata = Metadata(); metadata.NeutralInputInventoryComplete = true;
+            var error = Assert.Catch<InvalidOperationException>(() => AnimatedGestureTree.Read(avatar, metadata, 0, selected, entry, null));
+            Assert.That(error.Message, Does.Contain(Shapes[1]));
+        }
 
         // Independent native witness: the rejected effects must really execute;
         // asserting only the exporter would permit an empty/constant false pass.

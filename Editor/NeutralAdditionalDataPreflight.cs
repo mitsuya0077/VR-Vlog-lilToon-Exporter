@@ -2,6 +2,7 @@ using System;
 using System.Collections.Generic;
 using System.Linq;
 using UnityEditor;
+using UnityEditor.Animations;
 using UnityEngine;
 
 namespace VRVlog.LilToonExporter
@@ -28,25 +29,26 @@ namespace VRVlog.LilToonExporter
             var needed = new HashSet<string>(fx.SelectMany(layer => layer.Reads)
                 .Concat(others.SelectMany(other => other.Layers).SelectMany(layer => layer.Reads)), StringComparer.Ordinal);
 
-            void CheckPrograms(string context, IEnumerable<ExpressionDependencies.Layer> layers)
+            void CheckPrograms(string context, RuntimeAnimatorController current, IEnumerable<ExpressionDependencies.Layer> layers)
             {
+                var types = new Dictionary<string, AnimatorControllerParameterType>(StringComparer.Ordinal);
+                foreach (var parameter in ExpressionDependencies.Controller(current).parameters)
+                {
+                    if (parameter == null || string.IsNullOrEmpty(parameter.name) || types.ContainsKey(parameter.name) ||
+                        parameter.type != AnimatorControllerParameterType.Bool && parameter.type != AnimatorControllerParameterType.Int &&
+                        parameter.type != AnimatorControllerParameterType.Float && parameter.type != AnimatorControllerParameterType.Trigger)
+                        throw new InvalidOperationException(context + " / Invalid or duplicate Animator parameter declaration.");
+                    types.Add(parameter.name, parameter.type);
+                }
                 foreach (var program in layers.SelectMany(layer => layer.DriverPrograms).Distinct())
-                    for (var index = 0; index < program.Operations.Count; index++)
-                    {
-                        var operation = program.Operations[index];
-                        // Random is a capability limit, not corrupt numeric data.
-                        // Unknown callbacks and malformed command metadata retain
-                        // their separate hard dependency-analysis diagnostics.
-                        if (operation.Kind != "Random" && operation.Error != null && needed.Contains(operation.Destination))
-                            throw new InvalidOperationException(context + " / " + program.Location + " / Parameter Driver " + (index + 1) +
-                                " (" + operation.Kind + " → " + operation.Destination + "): " + operation.Error);
-                    }
+                    try { VrChatParameterDriver.ValidateTargets(program, types, needed); }
+                    catch (InvalidOperationException error) { throw new InvalidOperationException(context + " / " + error.Message, error); }
             }
-            CheckPrograms("FX / " + runtime.name, fx);
+            CheckPrograms("FX / " + runtime.name, runtime, fx);
             foreach (var other in others)
             {
                 var context = "Additional Playable / " + other.Runtime.name;
-                CheckPrograms(context, other.Layers);
+                CheckPrograms(context, other.Runtime, other.Layers);
                 foreach (var clip in other.Layers.SelectMany(layer => layer.Clips).Where(clip => clip != null).Distinct())
                 {
                     var clipContext = context + " / " + clip.name;

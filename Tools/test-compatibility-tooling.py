@@ -1,5 +1,6 @@
 import importlib.util
 import json
+import math
 import re
 from pathlib import Path
 import unittest
@@ -255,7 +256,7 @@ class UnityProfilePolicyTests(unittest.TestCase):
         # Additional-playable proof is an exporter behavior requirement in both
         # profiles; it cannot move behind an optional integration-only gate.
         for profile in ('exporter-behavior', 'exporter-integration'):
-            for suite, variants in (('AdditionalPlayableCallbackTests', 44), ('TemporalNeutralShapeTests', 22), ('NeutralLayerControlTests', 48), ('SelectedLayerControlTests', 40), ('SelectedExpressionAppearanceTests', 61)):
+            for suite, variants in (('AdditionalPlayableCallbackTests', 53), ('TemporalNeutralShapeTests', 23), ('NeutralLayerControlTests', 48), ('SelectedLayerControlTests', 40), ('SelectedExpressionAppearanceTests', 61)):
                 self.assertIn(unity_runner.NAMESPACE + suite,
                               unity_runner.profile_filters(True, profile))
                 self.assertEqual(sum(unity_runner.required_regressions(True, profile)[suite].values()), variants)
@@ -284,12 +285,26 @@ class UnityProfilePolicyTests(unittest.TestCase):
             # Line-bounded attributes avoid ambiguous nested whitespace repeats
             # when scanning a long class for a later method.
             declarations = dict((method, attributes) for attributes, method in re.findall(
-                r'((?:^[ \t]*\[(?:Test|UnityTest|TestCase\([^\r\n]*\))\][ \t]*(?:\r?\n)?)+)'
+                r'((?:^[ \t]*\[(?:Test|UnityTest|TestCase\([^\r\n]*\)|TestCaseSource\([^\r\n]*\))\][ \t]*(?:\r?\n)?)+)'
                 r'[ \t]*public[ \t]+(?:async[ \t]+)?(?:void|Task|IEnumerator)[ \t]+(\w+)\(', source, re.MULTILINE))
+            if suite not in unity_runner.INTEGRATION_CASES:
+                self.assertEqual(set(methods), set(declarations),
+                                 'Whole-class filters must pin every checked-in regression, not only a required minimum')
             for method, count in methods.items():
                 with self.subTest(suite=suite, method=method):
                     self.assertIn(method, declarations, 'Required regression must remain a real checked-in test')
-                    self.assertEqual(len(re.findall(r'\[(?:Test|UnityTest|TestCase\()', declarations[method])), count)
+                    sources = re.findall(r'\[TestCaseSource\(nameof\((\w+)\)\)\]', declarations[method])
+                    if sources:
+                        self.assertEqual(len(sources), 1, 'A source case must have one auditable generator')
+                        generator = re.search(r'private static IEnumerable<TestCaseData> ' + re.escape(sources[0]) +
+                                              r'\(\)\s*\{(.*?)^        \}', source, re.MULTILINE | re.DOTALL)
+                        self.assertIsNotNone(generator, 'The native matrix generator must remain checked in')
+                        dimensions = re.findall(r'foreach\s*\(var \w+ in new\[\]\s*\{([^}]*)\}\)', generator[1])
+                        self.assertTrue(dimensions, 'A changed generator requires a new explicit native count audit')
+                        self.assertEqual(len(re.findall(r'yield return new TestCaseData\(', generator[1])), 1)
+                        self.assertEqual(math.prod(len(dimension.split(',')) for dimension in dimensions), count)
+                    else:
+                        self.assertEqual(len(re.findall(r'\[(?:Test|UnityTest|TestCase\()', declarations[method])), count)
                     variants = unity_runner.INTEGRATION_VARIANTS.get(suite, {}).get(method)
                     if variants is not None:
                         arguments = re.findall(r'\[TestCase\(([^\r\n]*)\)\]', declarations[method])
