@@ -340,8 +340,63 @@ class RunnerSourceIdentityTests(unittest.TestCase):
                 self.assertEqual(identity['gitCommit'], commit)
                 self.assertEqual(identity['gitDirty'], dirty)
                 for call in run.call_args_list:
-                    self.assertEqual(call.args[0][:5], ['git', '-c', 'safe.directory=' + str(self.root), '-C', str(self.root)])
+                    self.assertEqual(call.args[0][:5], ['git', '-c', 'safe.directory=' + self.root.as_posix(), '-C', str(self.root)])
+                    self.assertNotIn('\\', call.args[0][2], 'Git safe.directory must survive a different Windows checkout owner')
                     self.assertNotIn('--global', call.args[0])
+
+    def test_checkout_cannot_report_success_without_verified_git_identity(self):
+        # A worktree has a .git file, while a regular checkout has a directory.
+        for marker in ('file', 'directory'):
+            with self.subTest(marker=marker):
+                git_marker = self.root / '.git'
+                if marker == 'file':
+                    git_marker.write_text('gitdir: private-test-worktree', encoding='utf-8')
+                else:
+                    git_marker.mkdir()
+                failures = [FileNotFoundError(), unity_runner.subprocess.TimeoutExpired('git', 10),
+                            mock.Mock(returncode=128, stdout='')]
+                for failure in failures:
+                    with self.subTest(failure=type(failure).__name__):
+                        option = {'side_effect': failure} if isinstance(failure, Exception) else {'return_value': failure}
+                        with mock.patch.object(unity_runner.subprocess, 'run', **option):
+                            with self.assertRaisesRegex(SystemExit, 'Cannot verify runner Git source identity'):
+                                unity_runner.source_identity(self.root)
+                if marker == 'file':
+                    git_marker.unlink()
+                else:
+                    git_marker.rmdir()
+
+    def test_checkout_rejects_wrong_root_invalid_commit_or_unavailable_status(self):
+        (self.root / '.git').mkdir()
+        for values in ([str(self.root.parent)], [str(self.root), 'not-a-commit'],
+                       [str(self.root), 'a' * 40, None]):
+            with self.subTest(values=values):
+                results = [mock.Mock(returncode=0 if value is not None else 128, stdout=value or '')
+                           for value in values]
+                with mock.patch.object(unity_runner.subprocess, 'run', side_effect=results):
+                    with self.assertRaisesRegex(SystemExit, 'Cannot verify runner Git source identity'):
+                        unity_runner.source_identity(self.root)
+
+    def test_real_checkout_identity_tracks_a_native_source_edit(self):
+        # Exercise the actual Git command and dirty-state parsing, rather than
+        # accepting a mocked commit/status response as native identity proof.
+        import shutil
+        if shutil.which('git') is None:
+            self.skipTest('Git is not installed on this host')
+        def git(*args):
+            return unity_runner.subprocess.run(
+                ['git', '-c', 'safe.directory=' + self.root.as_posix(), '-C', str(self.root), *args],
+                capture_output=True, text=True, check=True, timeout=10).stdout.strip()
+        git('init')
+        git('add', 'package.json')
+        git('-c', 'user.name=Runner Test', '-c', 'user.email=runner-test@example.invalid',
+            '-c', 'commit.gpgSign=false', 'commit', '-m', 'Native runner identity fixture')
+        commit = git('rev-parse', 'HEAD')
+        self.assertEqual(unity_runner.source_identity(self.root), {
+            'packageVersion': '0.11.11-dev.1', 'gitCommit': commit, 'gitDirty': False})
+        (self.root / 'package.json').write_text('{"version":"0.11.11-dev.2"}', encoding='utf-8')
+        self.assertEqual(unity_runner.source_identity(self.root), {
+            'packageVersion': '0.11.11-dev.2', 'gitCommit': commit, 'gitDirty': True})
 
 
 class UpstreamTests(unittest.TestCase):

@@ -62,6 +62,32 @@ namespace VRVlog.LilToonExporter
             return plan;
         }
 
+        // A held expression can inherit facial channels from earlier native
+        // states. Their output is geometry-proven; an unrelated state elsewhere
+        // in the controller cannot make that observed face a wardrobe option.
+        // Preserve direct appearance configurations which actually participated
+        // in the native history, including contributions from support layers.
+        internal static NeutralShapePlan CreateObservedHistoryProjection(GameObject prepared,
+            IEnumerable<EditorCurveBinding> morphs, IEnumerable<AnimationClip> clips,
+            ISet<AnimationClip> unchangedClips, Func<string, bool> excludedPath = null)
+        {
+            var motions = clips.Where(clip => clip != null).Distinct().ToArray();
+            var plan = CreateProjection(prepared, morphs, motions, excludedPath);
+            foreach (var clip in motions)
+            {
+                var bindings = AnimationUtility.GetCurveBindings(clip).Concat(AnimationUtility.GetObjectReferenceCurveBindings(clip))
+                    .Where(binding => excludedPath?.Invoke(binding.path) != true).ToArray();
+                var changedAppearance = bindings.Any(binding => plan.IsAppearanceBinding(binding) &&
+                    !plan.unboundAppearanceBindings.Contains(binding) && !HarmlessActivation(prepared, clip, binding) &&
+                    !(unchangedClips?.Contains(clip) == true && SelectedExpressionAppearance.IsUnchanged(prepared, clip, binding)));
+                if (!changedAppearance) continue;
+                foreach (var morph in bindings.Where(binding => IsMorph(binding) && plan.CommittedMorphs.Contains(binding)))
+                    plan.PreservedMorphs.Add(morph);
+            }
+            plan.CommittedMorphs.ExceptWith(plan.PreservedMorphs);
+            return plan;
+        }
+
         internal static NeutralShapePlan Create(GameObject prepared, RuntimeAnimatorController runtime,
             IEnumerable<IEnumerable<EditorCurveBinding>> roots, Func<string, bool> excludedPath = null,
             IEnumerable<EditorCurveBinding> requiredMorphs = null, ICollection<string> warnings = null,

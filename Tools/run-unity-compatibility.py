@@ -777,6 +777,8 @@ BEHAVIOR_CASES = {
     },
     'FacialProjectionTests': {
         'NativeHeldTreeKeepsThePreviousChangingFaceWithoutImportingBodyOrAccessoryHistory': 2,
+        'UnvisitedMixedActionCannotEraseTheObservedHeldFace': 2,
+        'OnlyContributingMixedSupportOwnsItsPairedInheritedFace': 2,
         'ImplicitHeldFaceHistoryCannotImportAnAppearanceOwnedMorph': 1,
         'InheritedHeldFaceCannotConcealACorruptPreviousMovingCurve': 1,
         'ContactAuthoredFacesKeepTheirCompositionTimelineAndPreparedAppearance': 2,
@@ -960,9 +962,16 @@ def source_identity(root):
         identity['packageVersion'] = json.loads((root / 'package.json').read_text(encoding='utf-8-sig'))['version']
     except (OSError, ValueError, KeyError):
         pass
+    # Git's ownership check expects forward slashes on Windows. A backslash
+    # safe.directory can work for the checkout owner yet fail for another user.
+    safe_root = root.as_posix()
+    requires_git = (root / '.git').exists()
+    def unverifiable(reason):
+        if requires_git:
+            raise SystemExit('Cannot verify runner Git source identity: ' + reason)
     # Do not identify a source archive using an unrelated ancestor repository.
     def git(*args):
-        result = subprocess.run(['git', '-c', 'safe.directory=' + str(root), '-C', str(root), *args],
+        result = subprocess.run(['git', '-c', 'safe.directory=' + safe_root, '-C', str(root), *args],
                                 capture_output=True, text=True, timeout=10)
         return result.stdout.strip() if result.returncode == 0 else None
     try:
@@ -974,8 +983,14 @@ def source_identity(root):
                 status = git('status', '--porcelain', '--untracked-files=normal')
                 if status is not None:
                     identity['gitDirty'] = bool(status)
+                else:
+                    unverifiable('Git checkout status is unavailable')
+            else:
+                unverifiable('Git commit is missing or invalid')
+        else:
+            unverifiable('Git could not identify the runner checkout')
     except (OSError, subprocess.SubprocessError):
-        pass
+        unverifiable('Git is unavailable or could not complete the identity check')
     return identity
 
 

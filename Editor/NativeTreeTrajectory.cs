@@ -154,15 +154,13 @@ namespace VRVlog.LilToonExporter
                 Bindings(original.GetStateEffectiveMotion(state, layer) ?? state.motion);
                 inheritedDomain.UnionWith(inspected[layer].Morphs.Where(binding => face.Morphs.Contains(binding) &&
                     dependencies.Morphs.Contains(binding) && !selectedBindings.Contains(binding) && !morphs.Contains(binding)));
-                if (inheritedDomain.Count > 0)
-                {
-                    var ownership = NeutralShapePlan.Create(avatar, source.Controller, new[] { inheritedDomain }, excludedPath,
-                        source: source, allowUnchangedAppearance: true);
-                    inheritedDomain.IntersectWith(ownership.CommittedMorphs);
-                }
             }
             var capturedMorphs = new HashSet<EditorCurveBinding>(morphs);
             var inheritedHistory = new HashSet<EditorCurveBinding>();
+            var observedClips = new HashSet<AnimationClip>(); var historyClips = new HashSet<AnimationClip>();
+            var observedLayers = dependencies.Layers.Concat(dependencies.NativeSupportLayers).Append(layer).Distinct().ToArray();
+            var unchangedAppearanceClips = VrChatExpressionSampler.UnchangedAppearanceClips(source.Controller,
+                Enumerable.Range(0, original.layers.Length));
             using var evaluation = new ExpressionEvaluationSession(source.Controller, dependencies, source.ExpressionParameters,
                 !defaults.TryGetValue("IsLocal", out var local) || local != 0, context);
             var controller = evaluation.Controller;
@@ -229,7 +227,11 @@ namespace VRVlog.LilToonExporter
                 {
                     foreach (var clip in playable.GetCurrentAnimatorClipInfo(layer).Concat(playable.GetNextAnimatorClipInfo(layer))
                         .Where(info => info.clip != null && info.weight > 0).Select(info => info.clip).Distinct())
-                        foreach (var binding in AnimationUtility.GetCurveBindings(clip).Where(inheritedDomain.Contains)) inheritedHistory.Add(binding);
+                        if ((layer == 0 || playable.GetLayerWeight(layer) > 0) && historyClips.Add(clip))
+                            foreach (var binding in AnimationUtility.GetCurveBindings(clip).Where(inheritedDomain.Contains)) inheritedHistory.Add(binding);
+                    foreach (var retained in observedLayers.Where(index => index == 0 || playable.GetLayerWeight(index) > 0))
+                        foreach (var clip in playable.GetCurrentAnimatorClipInfo(retained).Concat(playable.GetNextAnimatorClipInfo(retained))
+                            .Where(info => info.clip != null && info.weight > 0).Select(info => info.clip)) observedClips.Add(clip);
                 }
                 SetParameters(playable, controller, defaults); graph.Play(); graph.Evaluate(0); evaluation.Check(); RememberInherited();
                 void Advance(int frames)
@@ -271,6 +273,9 @@ namespace VRVlog.LilToonExporter
                     }
                 }
                 SelectedState();
+                if (inheritedHistory.Count > 0)
+                    inheritedHistory.IntersectWith(NeutralShapePlan.CreateObservedHistoryProjection(avatar,
+                        inheritedHistory, observedClips, unchangedAppearanceClips, excludedPath).CommittedMorphs);
                 var stableParameters = dependencies.Parameters.ToDictionary(name => name, name => Parameter(playable, types, name), StringComparer.Ordinal);
                 var stableWeights = evaluation.CaptureLayerWeights(playable);
                 var initialInfo = playable.GetCurrentAnimatorStateInfo(layer);

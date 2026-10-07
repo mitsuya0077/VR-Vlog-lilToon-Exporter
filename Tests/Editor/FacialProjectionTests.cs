@@ -394,6 +394,9 @@ namespace VRVlog.LilToonExporter.Tests
         }
 
         private Dictionary<string, float> OriginalInheritedFace(float phase, bool moving)
+            => OriginalInheritedFace(phase, moving, out _, out _);
+
+        private Dictionary<string, float> OriginalInheritedFace(float phase, bool moving, out float supportClipWeight, out float supportLayerWeight)
         {
             var copy = Object.Instantiate(avatar); var graph = PlayableGraph.Create("Independent inherited facial reference");
             try
@@ -412,6 +415,8 @@ namespace VRVlog.LilToonExporter.Tests
                     var state = playable.GetCurrentAnimatorStateInfo(0);
                     playable.Play(state.fullPathHash, 0, phase); graph.Evaluate(0); graph.Evaluate(0);
                 }
+                supportClipWeight = controller.layers.Length > 1 ? playable.GetCurrentAnimatorClipInfo(1).Sum(info => info.weight) : 0;
+                supportLayerWeight = controller.layers.Length > 1 ? playable.GetLayerWeight(1) : 0;
                 var renderer = copy.transform.Find("Body").GetComponent<SkinnedMeshRenderer>();
                 return Shapes.ToDictionary(shape => shape, shape => renderer.GetBlendShapeWeight(mesh.GetBlendShapeIndex(shape)));
             }
@@ -441,6 +446,62 @@ namespace VRVlog.LilToonExporter.Tests
                 Assert.That(Exported(Shapes[0]), Is.EqualTo(native[Shapes[0]]).Within(.02));
                 Assert.That(Exported(Shapes[1]), Is.EqualTo(native[Shapes[1]]).Within(.02), "The final tree intentionally has no dimple binding.");
             }
+            Assert.That(ExportSourceFingerprint.Compute(avatar), Is.EqualTo(before));
+        }
+
+        private void MixedActionLayer(bool active, float weight)
+        {
+            controller.AddParameter("AFK", AnimatorControllerParameterType.Bool);
+            controller.AddLayer("Other mixed appearance action");
+            var layers = controller.layers; var layer = layers[layers.Length - 1]; layer.defaultWeight = weight; controller.layers = layers;
+            var rest = new AnimationClip { name = "No unrelated appearance action" }; AssetDatabase.AddObjectToAsset(rest, controller);
+            var mixed = new AnimationClip { name = "Unrelated mixed face and material action" }; AssetDatabase.AddObjectToAsset(mixed, controller);
+            AnimationUtility.SetEditorCurve(mixed, Binding(Shapes[1]), AnimationCurve.Constant(0, 1, 90));
+            AnimationUtility.SetEditorCurve(mixed, EditorCurveBinding.FloatCurve("Body", typeof(SkinnedMeshRenderer), "material._Color2nd.r"),
+                AnimationCurve.Constant(0, 1, .9f));
+            var ordinary = State(layer.stateMachine, "Ordinary source", rest); var action = State(layer.stateMachine, "External mixed action", mixed);
+            layer.stateMachine.defaultState = active ? action : ordinary;
+            var enter = ordinary.AddTransition(action); enter.hasExitTime = false; enter.duration = 0;
+            enter.AddCondition(AnimatorConditionMode.If, 0, "AFK");
+        }
+
+        [TestCase(false)]
+        [TestCase(true)]
+        public void UnvisitedMixedActionCannotEraseTheObservedHeldFace(bool moving)
+        {
+            var selected = InheritedFaceTree(moving); MixedActionLayer(false, 1);
+            var metadata = Metadata(); metadata.NeutralInputInventoryComplete = true;
+            var raw = NeutralShapePlan.Create(avatar, controller, new[] { new[] { Binding(Shapes[1]) } },
+                source: metadata, allowUnchangedAppearance: true);
+            Assert.That(raw.PreservedMorphs.Contains(Binding(Shapes[1])), Is.True,
+                "The unrelated mixed action must reproduce the global rest-ownership veto.");
+            var before = ExportSourceFingerprint.Compute(avatar); var materialBefore = material.GetColor("_Color2nd");
+            var native = OriginalInheritedFace(.5f, moving); Assert.That(native[Shapes[1]], Is.EqualTo(40).Within(.01));
+            var entry = new VrChatExpressionMenu.Entry(); entry.Parameters.Add("GestureRight", 1); entry.Parameters.Add("NativeMix", .5f);
+            AnimatedGestureTree.Read(avatar, metadata, 0, selected, entry, null);
+            Assert.That(entry.Values.Single(value => value.Shape == Shapes[1]).Weight, Is.EqualTo(native[Shapes[1]]).Within(.02));
+            Assert.That(entry.UsesFacialProjection, Is.True); Assert.That(entry.Messages, Does.Contain(ExporterLocalization.T(FacialProjectionScope.Notice)));
+            Assert.That(entry.Values.Any(value => value.Shape == Shapes[2] || value.Shape == Shapes[3]), Is.False);
+            Assert.That(material.GetColor("_Color2nd"), Is.EqualTo(materialBefore));
+            Assert.That(ExportSourceFingerprint.Compute(avatar), Is.EqualTo(before));
+        }
+
+        [TestCase(0f)]
+        [TestCase(1f)]
+        public void OnlyContributingMixedSupportOwnsItsPairedInheritedFace(float weight)
+        {
+            var selected = InheritedFaceTree(false); MixedActionLayer(true, weight);
+            var before = ExportSourceFingerprint.Compute(avatar); var materialBefore = material.GetColor("_Color2nd");
+            var native = OriginalInheritedFace(0, false, out var clipWeight, out var layerWeight);
+            Assert.That(clipWeight, Is.GreaterThan(0), "Native ClipInfo alone cannot prove controller-layer contribution.");
+            Assert.That(layerWeight, Is.EqualTo(weight)); Assert.That(native[Shapes[1]], Is.EqualTo(weight == 0 ? 40 : 90).Within(.01));
+            var metadata = Metadata(); metadata.NeutralInputInventoryComplete = true;
+            var entry = new VrChatExpressionMenu.Entry(); entry.Parameters.Add("GestureRight", 1); entry.Parameters.Add("NativeMix", .5f);
+            AnimatedGestureTree.Read(avatar, metadata, 0, selected, entry, null);
+            if (weight == 0) Assert.That(entry.Values.Single(value => value.Shape == Shapes[1]).Weight, Is.EqualTo(native[Shapes[1]]).Within(.02));
+            else Assert.That(entry.Values.Any(value => value.Shape == Shapes[1]), Is.False,
+                "An actually contributing mixed appearance retains its prepared morph configuration.");
+            Assert.That(material.GetColor("_Color2nd"), Is.EqualTo(materialBefore));
             Assert.That(ExportSourceFingerprint.Compute(avatar), Is.EqualTo(before));
         }
 

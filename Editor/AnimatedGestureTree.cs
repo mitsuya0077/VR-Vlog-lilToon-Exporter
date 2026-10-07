@@ -90,6 +90,12 @@ namespace VRVlog.LilToonExporter
             foreach (var binding in native.InheritedMorphs)
                 if (native.Samples.Values.Any(sample => !sample.TryGetValue(binding, out var value) || Math.Abs(value - native.Initial[binding]) > .02f))
                     throw new InvalidOperationException("BlendTree inherited facial channel is not a constant held contribution: " + binding.path + " / " + binding.propertyName);
+            void MarkInheritedProjection()
+            {
+                if (native.InheritedMorphs.Count == 0) return;
+                entry.UsesFacialProjection = true;
+                FacialProjectionScope.Warn(entry.Messages);
+            }
             if (Math.Abs(native.Coefficients.Values.Sum() - 1) > .0001f)
                 throw new InvalidOperationException("BlendTreeの合成係数が凸結合ではありません。");
             var active = native.Coefficients.Where(pair => pair.Value > .000001f).ToArray();
@@ -131,6 +137,7 @@ namespace VRVlog.LilToonExporter
                         if (actual == null || Math.Abs(actual.Weight - value.Value) > .02)
                             throw new InvalidOperationException("BlendTreeの固定表情が元のUnity保持状態と一致しません: " + value.Key.path + " / " + shape);
                     }
+                    MarkInheritedProjection();
                     entry.Messages.Add("元のFXの到達経路と保持状態を確認したBlendTreeの固定表情を保存しました。");
                     return;
                 }
@@ -203,6 +210,7 @@ namespace VRVlog.LilToonExporter
                         if (Math.Abs(actual - value.Value) > .02)
                             throw new InvalidOperationException("BlendTreeの合成アニメーションが元のUnity動作と一致しません: " + value.Key.path + " / " + shape);
                     }
+                MarkInheritedProjection();
                 entry.Messages.Add("BlendTreeを元のUnityの合成係数・位相・常時FXで検証した表情アニメーションとして保存しました。");
             }
             finally { Object.DestroyImmediate(composed); }
