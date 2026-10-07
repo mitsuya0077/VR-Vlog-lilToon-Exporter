@@ -41,6 +41,10 @@ Rootは `schemaVersion: 1`, `space: "vrm1AvatarRestDelta"`, `animations: [...]` 
 hipsOffsetはレストからのroot空間位置差分で単位m。アバターrootのシーン配置・回転・スケールは収録しない。
 VRM1の右手系への変換は位置 `(-x,y,z)`、Quaternion `(x,-y,-z,w)`。
 
+手動クリップは元アバターの独立コピーで評価し、元の骨・マスクの対応と回転軸を保持する。
+書き出し前処理で骨名や親階層が変わっても、この差分を最終VRMのHumanoid骨へ対応付ける。
+明示的に動かす骨が最終コピーから失われた場合は、その項目を理由付きで除外する。
+
 通常の隣接frameではhipsOffsetを線形補間し、Quaternionは両端を正規化した最短経路slerpで補間する。
 Quaternionの内積が負なら片方の符号を反転する。`q` と `-q` は同じ姿勢を表す。
 アプリは時間列全体に同じレスト姿勢・サイズ基準を使い、各frameの差分を積み重ねない。
@@ -50,6 +54,7 @@ STEP不連続では隣接する二つのframeだけ同時刻を許す。左が�
 同時刻を三つ以上続けること、0秒の重複、時間の逆行は禁止。
 その時刻に正確に一致したら右側を採用し、直前の区間では左側へ補間する。
 durationに二つある場合も終端は右側を採用する。
+採取時刻はUnityの元カーブのfloat時刻に合わせ、STEP直前の評価が丸めによって右側へ飛び越えないようにする。
 
 共有クラスの `Locate(time, out from, out to, out amount)` はローカル時刻を0〜durationにclampする。
 binary searchでframe参照と補間率を返し、通常経路では配列・List・iteratorを割り当てない。

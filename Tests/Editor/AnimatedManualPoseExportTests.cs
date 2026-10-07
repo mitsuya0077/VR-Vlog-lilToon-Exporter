@@ -258,18 +258,50 @@ namespace VRVlog.LilToonExporter.Tests
             finally { Object.DestroyImmediate(clip); }
         }
 
-        [Test]
-        public void SteppedClipStoresBothLimitsAndSelectsTheRightValueAtTheExactKey()
+        [TestCase(.5f, 0f, false)]
+        [TestCase(.3f, 0f, false)]
+        [TestCase(.7f, .1f, false)]
+        [TestCase(.3f, .1f, false)]
+        [TestCase(.3f, 0f, true)]
+        [TestCase(.7f, .1f, true)]
+        public void SteppedClipStoresBothLimitsAndSelectsTheRightValueAtTheExactKey(float keyTime, float start, bool adjacentKey)
         {
             using var fixture = new AttachmentConnectionTests.Fixture();
-            var clip = Moving(fixture.Source, new AnimationCurve(new Keyframe(0, 0, 0, float.PositiveInfinity),
-                new Keyframe(.5f, 90, float.PositiveInfinity, 0), new Keyframe(1, 90, 0, 0)));
+            var bits = BitConverter.ToInt32(BitConverter.GetBytes(keyTime), 0);
+            var beforeKey = BitConverter.ToSingle(BitConverter.GetBytes(bits - 1), 0);
+            var afterKey = BitConverter.ToSingle(BitConverter.GetBytes(bits + 1), 0);
+            var curve = new AnimationCurve(new Keyframe(0, 0, 0, float.PositiveInfinity),
+                new Keyframe(keyTime, 90, float.PositiveInfinity, 0), new Keyframe(1, 90, 0, 0));
+            // A neighboring authored key also forces refinement probes into
+            // an interval narrower than the float rounding distance to STEP.
+            if (adjacentKey) curve.AddKey(new Keyframe(beforeKey, 0, 0, float.PositiveInfinity));
+            var clip = Moving(fixture.Source, curve);
             try
             {
-                var animation = PoseSampling.SampleAnimation(fixture.Source, Candidate(clip));
-                Assert.That(animation.Frames.Count(value => value.Time == .5), Is.EqualTo(2));
-                foreach (var time in new[] { .499f, .5f, .501f })
-                    Assert.That(Quaternion.Angle(At(animation, "leftUpperArm", time), Native(fixture.Source, clip, time, HumanBodyBones.LeftUpperArm)), Is.LessThan(.1f));
+                var animation = PoseSampling.SampleAnimation(fixture.Source, Candidate(clip, start));
+                var step = (double)keyTime - start;
+                Assert.That(animation.Frames.Count(value => value.Time == step), Is.EqualTo(2));
+                foreach (var time in new[] { keyTime - .001f, beforeKey, keyTime, afterKey, keyTime + .001f })
+                    Assert.That(Quaternion.Angle(At(animation, "leftUpperArm", (double)time - start),
+                        Native(fixture.Source, clip, time, HumanBodyBones.LeftUpperArm)), Is.LessThan(.1f), "Source time " + time.ToString("R"));
+                Assert.That(Quaternion.Angle(At(animation, "leftUpperArm", (double)beforeKey - start), At(animation, "leftUpperArm", step)),
+                    Is.EqualTo(90).Within(.1f), "The discontinuity must remain a jump, not a smoothed motion.");
+            }
+            finally { Object.DestroyImmediate(clip); }
+        }
+
+        [Test]
+        public void UnrepresentableContinuousTurnStillReportsPrecisionFailure()
+        {
+            using var fixture = new AttachmentConnectionTests.Fixture();
+            // Continuous keys less than a microsecond apart cannot be treated
+            // as STEP to hide a real interpolation/precision failure.
+            var clip = Moving(fixture.Source, new AnimationCurve(new Keyframe(0, 0, 0, 0),
+                new Keyframe(.3f, 0, 0, 0), new Keyframe(.3000005f, 1440, 0, 0), new Keyframe(1, 1440, 0, 0)));
+            try
+            {
+                var error = Assert.Throws<InvalidOperationException>(() => PoseSampling.SampleAnimation(fixture.Source, Candidate(clip)));
+                StringAssert.Contains("精度", error.Message);
             }
             finally { Object.DestroyImmediate(clip); }
         }
@@ -301,10 +333,104 @@ namespace VRVlog.LilToonExporter.Tests
             {
                 AnimationUtility.SetEditorCurve(clip, EditorCurveBinding.FloatCurve("", typeof(Animator), HumanTrait.MuscleName[muscle]), AnimationCurve.Linear(0, -.35f, 1, .7f));
                 var animation = PoseSampling.SampleAnimation(fixture.Source, Candidate(clip));
+                Assert.That(Quaternion.Angle(Native(fixture.Source, clip, .123f, HumanBodyBones.LeftUpperArm, true),
+                    Native(fixture.Source, clip, .839f, HumanBodyBones.LeftUpperArm, true)), Is.GreaterThan(10), "The native muscle oracle must actually move.");
+                Assert.That(Quaternion.Angle(At(animation, "leftUpperArm", .123), At(animation, "leftUpperArm", .839)), Is.GreaterThan(10));
                 foreach (var time in new[] { .123f, .457f, .839f })
                     Assert.That(Quaternion.Angle(At(animation, "leftUpperArm", time), Native(fixture.Source, clip, time, HumanBodyBones.LeftUpperArm, true)), Is.LessThan(.5f));
             }
             finally { Object.DestroyImmediate(clip); }
+        }
+
+        [TestCase(false, false)]
+        [TestCase(true, false)]
+        [TestCase(false, true)]
+        [TestCase(true, true)]
+        public void ManualTransformClipFollowsPreparedHumanoidPathWithoutChangingSource(bool staticPose, bool reparent)
+        {
+            using var fixture = new AttachmentConnectionTests.Fixture();
+            var clip = Moving(fixture.Source, staticPose ? AnimationCurve.Constant(0, 1, 70) : AnimationCurve.Linear(0, 0, 1, 100));
+            // A surviving constant curve used to make the partially discarded
+            // moving clip look like a successful but completely static export.
+            var animator = fixture.Copy.GetComponent<Animator>();
+            var hipsPath = AnimationUtility.CalculateTransformPath(fixture.Source.GetComponent<Animator>().GetBoneTransform(HumanBodyBones.Hips), fixture.Source.transform);
+            AnimationUtility.SetEditorCurve(clip, EditorCurveBinding.FloatCurve(hipsPath, typeof(Transform), "localEulerAnglesRaw.z"), AnimationCurve.Constant(0, 1, 0));
+            var sourceBindings = AnimationUtility.GetCurveBindings(clip); var sourceClip = EditorJsonUtility.ToJson(clip);
+            var options = new PoseExportOptions(); options.Manual.Add(new ManualPose { Clip = clip });
+            Avatar preparedAvatar = null;
+            try
+            {
+                using var session = new PoseExportSession(fixture.Source, options); var id = session.Entries.Single().Id;
+                fixture.Copy.transform.Find("Independent hair/Head").name = "HairJoint";
+                var arm = animator.GetBoneTransform(HumanBodyBones.LeftUpperArm); var originalName = arm.name; arm.name = "Prepared arm";
+                if (reparent)
+                {
+                    var parent = new GameObject("Prepared parent").transform; parent.SetParent(arm.parent, false);
+                    parent.localRotation = Quaternion.Euler(0, 35, 22); arm.SetParent(parent, true);
+                }
+                var description = animator.avatar.humanDescription;
+                description.human = description.human.Select(bone => { if (bone.boneName == originalName) bone.boneName = arm.name; return bone; }).ToArray();
+                description.skeleton = fixture.Copy.GetComponentsInChildren<Transform>().Select(transform => new SkeletonBone
+                    { name = transform.name, position = transform.localPosition, rotation = transform.localRotation, scale = transform.localScale }).ToArray();
+                preparedAvatar = AvatarBuilder.BuildHumanAvatar(fixture.Copy, description); animator.avatar = preparedAvatar; animator.Rebind();
+                Assert.That(preparedAvatar.isHuman && preparedAvatar.isValid, Is.True);
+                Assert.That(animator.GetBoneTransform(HumanBodyBones.LeftUpperArm).name, Is.EqualTo("Prepared arm"));
+                if (reparent)
+                    Assert.That(Quaternion.Angle(arm.parent.rotation,
+                        fixture.Source.GetComponent<Animator>().GetBoneTransform(HumanBodyBones.LeftUpperArm).parent.rotation), Is.GreaterThan(20),
+                        "The prepared parent frame must differ, so rebinding the same local rotation would change its avatar-space delta.");
+                session.CollectPrepared(fixture.Copy);
+                var row = session.Entries.Single(); Assert.That(row.Error, Is.Null); Assert.That(row.Id, Is.EqualTo(id));
+                if (staticPose)
+                    Assert.That(Quaternion.Angle(Rotation(row.Data.Bones.Single(bone => bone.Name == "leftUpperArm").Rotation),
+                        Native(fixture.Source, clip, 0, HumanBodyBones.LeftUpperArm)), Is.LessThan(.25f));
+                else
+                {
+                    Assert.That(Quaternion.Angle(At(row.Animation, "leftUpperArm", .1), At(row.Animation, "leftUpperArm", .8)), Is.GreaterThan(60));
+                    foreach (var time in new[] { .123f, .457f, .839f })
+                        Assert.That(Quaternion.Angle(At(row.Animation, "leftUpperArm", time), Native(fixture.Source, clip, time, HumanBodyBones.LeftUpperArm)), Is.LessThan(.25f));
+                }
+                Assert.That(AnimationUtility.GetCurveBindings(clip), Is.EqualTo(sourceBindings));
+                Assert.That(EditorJsonUtility.ToJson(clip), Is.EqualTo(sourceClip));
+                Assert.That(options.Manual.Single().Clip, Is.SameAs(clip));
+            }
+            finally { Object.DestroyImmediate(preparedAvatar); Object.DestroyImmediate(clip); }
+        }
+
+        [Test]
+        public void MissingPreparedHumanoidTargetCannotSilentlyFlattenManualMotion()
+        {
+            using var fixture = new AttachmentConnectionTests.Fixture(); var sourceAvatar = HumanoidPoseTests.AddFingers(fixture.Source);
+            var clip = Moving(fixture.Source, AnimationCurve.Linear(0, 0, 1, 70), HumanBodyBones.LeftIndexProximal);
+            try
+            {
+                var hipsPath = AnimationUtility.CalculateTransformPath(fixture.Source.GetComponent<Animator>().GetBoneTransform(HumanBodyBones.Hips), fixture.Source.transform);
+                AnimationUtility.SetEditorCurve(clip, EditorCurveBinding.FloatCurve(hipsPath, typeof(Transform), "localEulerAnglesRaw.z"), AnimationCurve.Constant(0, 1, 0));
+                var options = new PoseExportOptions(); options.Manual.Add(new ManualPose { Clip = clip });
+                using var session = new PoseExportSession(fixture.Source, options); session.CollectPrepared(fixture.Copy);
+                Assert.That(session.Entries.Single().Error, Is.Not.Null);
+                StringAssert.Contains("LeftIndexProximal", session.Entries.Single().Error);
+                Assert.That(session.SelectedAnimations(), Is.Empty); Assert.That(session.Selected(), Is.Empty);
+            }
+            finally { Object.DestroyImmediate(clip); Object.DestroyImmediate(sourceAvatar); }
+        }
+
+        [Test]
+        public void RemovedUnanimatedOptionalBonesDoNotBlockSourceSkeletonSampling()
+        {
+            using var fixture = new AttachmentConnectionTests.Fixture(); var sourceAvatar = HumanoidPoseTests.AddFingers(fixture.Source);
+            var clip = Moving(fixture.Source, AnimationCurve.Linear(0, 0, 1, 70));
+            try
+            {
+                var options = new PoseExportOptions(); options.Manual.Add(new ManualPose { Clip = clip });
+                using var session = new PoseExportSession(fixture.Source, options); session.CollectPrepared(fixture.Copy);
+                var row = session.Entries.Single(); Assert.That(row.Error, Is.Null);
+                Assert.That(row.Animation.Bones.Any(bone => bone.Name.Contains("Index")), Is.False);
+                Assert.That(row.Animation.Frames.All(frame => frame.Rotations.Length == row.Animation.Bones.Count), Is.True);
+                Assert.That(Quaternion.Angle(At(row.Animation, "leftUpperArm", .1), At(row.Animation, "leftUpperArm", .8)), Is.GreaterThan(45));
+                Assert.DoesNotThrow(() => HumanoidAnimationData.Write(session.SelectedAnimations()));
+            }
+            finally { Object.DestroyImmediate(clip); Object.DestroyImmediate(sourceAvatar); }
         }
 
         [TestCase(HumanBodyBones.Neck)]

@@ -18,12 +18,15 @@ namespace VRVlog.LilToonExporter
         readonly List<Object> owned = new List<Object>();
         readonly PoseExportOptions options;
         readonly VrChatMenuImportPolicy menuPolicy;
+        readonly GameObject source;
+        readonly HashSet<PoseCandidate> authoredEntries = new HashSet<PoseCandidate>();
         GameObject prepared;
 
         internal PoseExportSession(GameObject source, PoseExportOptions options, Func<Transform, bool> excluded = null, VrChatMenuImportPolicy menuPolicy = null)
         {
             this.options = options ?? new PoseExportOptions();
             this.menuPolicy = menuPolicy;
+            this.source = source;
             foreach (var component in source.GetComponentsInChildren<Component>(false))
             {
                 if (component == null || component.GetType().FullName != AplType || excluded?.Invoke(component.transform) == true) continue;
@@ -58,6 +61,7 @@ namespace VRVlog.LilToonExporter
                     ExporterLocalization.T(" 秒から末尾までの動きを保存します。") : "";
                 row.Id = PoseSampling.Identity(row); Entries.Add(row);
             }
+            authoredEntries.UnionWith(Entries);
         }
 
         static AvatarMask AplMask(object tracking, GameObject source)
@@ -111,13 +115,33 @@ namespace VRVlog.LilToonExporter
                 if (row.Error == null)
                     try
                     {
+                        // Manual/APL clips and masks belong to the original
+                        // skeleton. Preparation may rename or reparent its bones;
+                        // evaluate on an independent source copy and retain the
+                        // avatar-space rest deltas, then bind prepared nodes.
+                        // Rebinding local curves alone would change their axes.
+                        var original = authoredEntries.Contains(row);
+                        var sampleRoot = original ? source : copy;
+                        var omitted = original && !(row.IsAnimation && options.Excluded.Contains(row.Id))
+                            ? PreparedBoneOmissions(copy, row) : new HashSet<string>();
                         if (row.IsAnimation && !options.Excluded.Contains(row.Id))
                         {
-                            row.Animation = PoseSampling.SampleAnimation(copy, row, HumanoidAnimationData.MaximumTotalFrames - collectedFrames);
+                            row.Animation = PoseSampling.SampleAnimation(sampleRoot, row, HumanoidAnimationData.MaximumTotalFrames - collectedFrames);
+                            if (omitted.Count > 0)
+                            {
+                                var keep = row.Animation.Bones.Select((bone, index) => (bone, index)).Where(value => !omitted.Contains(value.bone.Name))
+                                    .Select(value => value.index).ToArray();
+                                foreach (var frame in row.Animation.Frames) frame.Rotations = keep.Select(index => frame.Rotations[index]).ToArray();
+                                row.Animation.Bones.RemoveAll(bone => omitted.Contains(bone.Name));
+                            }
                             collectedFrames += row.Animation.Frames.Count;
                         }
                         else if (row.IsAnimation) row.Animation = null;
-                        else row.Data = PoseSampling.Sample(copy, row);
+                        else
+                        {
+                            row.Data = PoseSampling.Sample(sampleRoot, row);
+                            row.Data.Bones.RemoveAll(bone => omitted.Contains(bone.Name));
+                        }
                     }
                     catch (Exception error) { row.Error = error.Message; }
                 if (row.Error != null) warnings?.Add("ポーズ未対応: " + row.Name + " — " + row.Error);
@@ -127,6 +151,23 @@ namespace VRVlog.LilToonExporter
             // Refresh merged provenance after deduplication.
             foreach (var row in Entries.Where(e => e.Data != null)) row.Data.Source = row.Source;
             foreach (var row in Entries.Where(e => e.Animation != null)) row.Animation.Source = row.Source;
+        }
+
+        HashSet<string> PreparedBoneOmissions(GameObject copy, PoseCandidate row)
+        {
+            var sourceAnimator = source.GetComponent<Animator>(); var targetAnimator = copy.GetComponent<Animator>();
+            if (sourceAnimator == null || !sourceAnimator.isHuman || targetAnimator == null || !targetAnimator.isHuman)
+                throw new InvalidOperationException("有効なHumanoid Animatorが必要です。");
+            var omitted = new HashSet<string>();
+            foreach (var name in row.IsAnimation ? HumanoidAnimationData.BoneNames : HumanoidPoseData.BoneNames)
+            {
+                var human = PoseSampling.HumanBone(name); var bone = sourceAnimator.GetBoneTransform(human);
+                if (bone == null || targetAnimator.GetBoneTransform(human) != null) continue;
+                if (row.Layers.Any(layer => layer.Clip != null && PoseSampling.WritesBone(layer, name, bone, source)))
+                    throw new InvalidOperationException(ExporterLocalization.T("書き出し用コピーからポーズのHumanoidボーンが失われました: ") + human);
+                omitted.Add(name);
+            }
+            return omitted;
         }
 
         internal void Bind(ModelExporter converter, VrmLib.Model model, ExportingGltfData storage)

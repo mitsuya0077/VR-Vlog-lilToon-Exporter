@@ -206,7 +206,10 @@ namespace VRVlog.LilToonExporter
                 var steps = new Dictionary<double, double>();
                 var uniformFrames = (int)Math.Ceiling(duration * 60);
                 CheckBudget(uniformFrames + 1);
-                for (var i = 1; i < uniformFrames; i++) times.Add(i / 60.0);
+                // Unity samples source curves at float timestamps. Match that
+                // grid before merging it with authored keys, so e.g. 0.3 and
+                // 0.3f do not become two samples on opposite sides of a STEP.
+                for (var i = 1; i < uniformFrames; i++) times.Add((double)(float)(start + i / 60.0) - start);
                 foreach (var binding in EffectiveBodyBindings(copy, layer, true))
                 {
                     var keys = AnimationUtility.GetEditorCurve(layer.Clip, binding).keys;
@@ -261,17 +264,21 @@ namespace VRVlog.LilToonExporter
                             Rotation(actual.Rotations[i])) > .15f) return false;
                     return true;
                 }
-                void Refine(HumanoidAnimationData.Frame left, HumanoidAnimationData.Frame right, int depth)
+                void Refine(HumanoidAnimationData.Frame left, HumanoidAnimationData.Frame right, int depth, double sampleLimit)
                 {
                     var middleTime = (left.Time + right.Time) * .5;
-                    var quarter = Capture(left.Time + (right.Time - left.Time) * .25, left.Time + (right.Time - left.Time) * .25);
-                    var middle = Capture(middleTime, middleTime);
-                    var threeQuarter = Capture(left.Time + (right.Time - left.Time) * .75, left.Time + (right.Time - left.Time) * .75);
+                    // Probes approaching a STEP key can round to the key's
+                    // right value. Its preceding interval must sample only
+                    // through the last representable source time on the left.
+                    HumanoidAnimationData.Frame Probe(double time) => Capture(time, Math.Min(time, sampleLimit));
+                    var quarter = Probe(left.Time + (right.Time - left.Time) * .25);
+                    var middle = Probe(middleTime);
+                    var threeQuarter = Probe(left.Time + (right.Time - left.Time) * .75);
                     // Quaternion samples can alias complete turns to identity.
                     // Keep the authored, unwrapped Euler channel changes below
                     // 90 degrees between probes even when all quaternions agree.
-                    var probeTimes = new[] { left.Time, quarter.Time, middle.Time, threeQuarter.Time,
-                        steps.TryGetValue(right.Time, out var beforeStep) ? beforeStep : right.Time };
+                    var probeTimes = new[] { left.Time, quarter.Time, middle.Time, threeQuarter.Time, right.Time }
+                        .Select(time => Math.Min(time, sampleLimit)).ToArray();
                     var largeEulerChange = eulerCurves.Any(curve =>
                     {
                         var previous = curve.Evaluate((float)(start + probeTimes[0]));
@@ -286,15 +293,16 @@ namespace VRVlog.LilToonExporter
                     if (!largeEulerChange && Matches(left, right, quarter, .25) && Matches(left, right, middle, .5) && Matches(left, right, threeQuarter, .75)) return;
                     if (depth >= 12 || right.Time - left.Time < 0.000001)
                         throw new InvalidOperationException("動くポーズのカーブを十分な精度で保存できません。カーブの変化を緩やかにしてください。");
-                    Refine(left, middle, depth + 1); Add(middle); Refine(middle, right, depth + 1);
+                    Refine(left, middle, depth + 1, sampleLimit); Add(middle); Refine(middle, right, depth + 1, sampleLimit);
                 }
                 var first = Capture(0, 0); Add(first);
                 foreach (var time in times.Where(time => time > 0))
                 {
                     var previous = data.Frames[data.Frames.Count - 1];
                     var right = Capture(time, time);
-                    var leftLimit = steps.TryGetValue(time, out var before) ? Capture(time, before) : right;
-                    Refine(previous, leftLimit, 0); Add(leftLimit);
+                    var stepped = steps.TryGetValue(time, out var before);
+                    var leftLimit = stepped ? Capture(time, before) : right;
+                    Refine(previous, leftLimit, 0, stepped ? before : time); Add(leftLimit);
                     if (!ReferenceEquals(leftLimit, right)) Add(right);
                 }
             });
@@ -640,7 +648,7 @@ namespace VRVlog.LilToonExporter
             for (var i = 0; i < mask.transformCount; i++) if (mask.GetTransformPath(i) == path) return mask.GetTransformActive(i);
             return false;
         }
-        static bool WritesBone(PoseLayer layer, string name, Transform bone, GameObject root)
+        internal static bool WritesBone(PoseLayer layer, string name, Transform bone, GameObject root)
         {
             if (layer.Weight == 0 || layer.GroupWeight == 0) return false;
             var path = AnimationUtility.CalculateTransformPath(bone, root.transform); var part = Part(name);

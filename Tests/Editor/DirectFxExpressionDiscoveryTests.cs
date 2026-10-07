@@ -587,6 +587,53 @@ namespace VRVlog.LilToonExporter.Tests
         }
 
         [Test]
+        public void RepeatedPriorityConditionsDoNotExhaustFaceDiscovery()
+        {
+            var faces = EntryFaces();
+            Parameter("FaceEnabled", AnimatorControllerParameterType.Bool, 1);
+            Parameter("FacialSet", AnimatorControllerParameterType.Int, 0);
+            // Common FX tools emit many alternatives sharing the same enable
+            // control. Their negations are two compact branches, not 2^20.
+            for (var index = 1; index <= 20; index++)
+            {
+                var entry = faces.Machine.AddEntryTransition(faces.Earlier);
+                entry.AddCondition(AnimatorConditionMode.If, 0, "FaceEnabled");
+                entry.AddCondition(AnimatorConditionMode.Equals, index, "FacialSet");
+            }
+            var source = Read();
+            Assert.That(source.Messages, Is.Empty);
+            Assert.That(source.Entries, Is.Not.Empty);
+            foreach (var entry in source.Entries)
+                AssertNativeFace(entry, "Priority faces." + (Weight(entry) > 50 ? faces.Default.name : faces.Earlier.name));
+            Assert.That(source.Entries.Any(entry => Mathf.Abs(Weight(entry) - 75) < .01f), Is.True);
+            Assert.That(source.Entries.Any(entry => Mathf.Abs(Weight(entry) - 20) < .01f), Is.True);
+        }
+
+        [Test]
+        public void UnrelatedGimmickPriorityGraphCannotExhaustFaceDiscovery()
+        {
+            controller.AddParameter("FaceChoice", AnimatorControllerParameterType.Int);
+            var face = State(controller.layers[0].stateMachine, "Selected face", Clip("Selected face", 85));
+            Transition(neutral, face, "FaceChoice", 1);
+            controller.AddLayer("Gimmick");
+            var layers = controller.layers; layers[1].defaultWeight = 1; controller.layers = layers;
+            var machine = layers[1].stateMachine;
+            var idle = State(machine, "Idle", null); machine.defaultState = idle;
+            for (var index = 0; index < 14; index++)
+            {
+                Parameter("A" + index, AnimatorControllerParameterType.Bool, 1);
+                Parameter("B" + index, AnimatorControllerParameterType.Bool, 1);
+                var entry = machine.AddEntryTransition(idle);
+                entry.AddCondition(AnimatorConditionMode.If, 0, "A" + index);
+                entry.AddCondition(AnimatorConditionMode.If, 0, "B" + index);
+            }
+            var source = Read();
+            Assert.That(source.Messages, Is.Empty);
+            AssertNativeFace(source.Entries.Single(), face.name);
+            Assert.That(Weight(source.Entries.Single()), Is.EqualTo(85).Within(.01));
+        }
+
+        [Test]
         public void EntryNegationExpansionReportsAnAtomicDiscoveryBudgetDiagnostic()
         {
             var faces = EntryFaces();
@@ -822,7 +869,7 @@ namespace VRVlog.LilToonExporter.Tests
                 data.ApplyModifiedPropertiesWithoutUndo();
             }
             var source = Read(); Assert.That(source.Entries.Where(entry => entry.Error == null), Is.Empty);
-            if (kind == "target") Assert.That(source.Messages.Single(), Does.Contain("レイヤー制御").And.Contain("99"));
+            if (kind == "target") Assert.That(source.Messages.Single(), Does.Contain(ExporterLocalization.T("FXのレイヤー制御に不正な設定があります: ")).And.Contain("99"));
             else Assert.That(source.Entries.Single().Error, Is.Not.Null.And.Not.Empty);
             Assert.That(source.Entries.SelectMany(entry => entry.Values), Is.Empty);
         }

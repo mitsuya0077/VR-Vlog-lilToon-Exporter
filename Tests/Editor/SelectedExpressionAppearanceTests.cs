@@ -25,6 +25,7 @@ namespace VRVlog.LilToonExporter.Tests
         private AnimationClip clip;
         private readonly List<Object> owned = new List<Object>();
         private static readonly Color PreparedColor = new Color(.25f, .5f, .75f, 1f);
+        private static readonly Vector4 PreparedVector = new Vector4(.125f, .5f, .75f, 1.25f);
 
         [SetUp]
         public void SetUp()
@@ -38,6 +39,7 @@ namespace VRVlog.LilToonExporter.Tests
             dummy = new GameObject("Dummy"); dummy.transform.SetParent(avatar.transform, false);
             skin = body.GetComponent<SkinnedMeshRenderer>(); mesh = BaseShapeFixture.Create(); skin.sharedMesh = mesh;
             material = new Material(shader); material.SetColor("_Color2nd", PreparedColor); material.SetFloat("_Cutoff", .5f);
+            material.SetVector("_MainTexHSVG", PreparedVector);
             skin.sharedMaterial = material;
             clip = new AnimationClip { name = "Mixed face" };
             Curve("Body", typeof(SkinnedMeshRenderer), "blendShape.Face size", AnimationCurve.Linear(0, 20, 1, 80));
@@ -64,6 +66,7 @@ namespace VRVlog.LilToonExporter.Tests
                 case "enabled": return Curve("Body", typeof(SkinnedMeshRenderer), "m_Enabled", AnimationCurve.Constant(0, 1, changed ?? 1));
                 case "color": return Curve("Body", typeof(SkinnedMeshRenderer), "material._Color2nd.r", AnimationCurve.Constant(0, 1, changed ?? PreparedColor.r));
                 case "scalar": return Curve("Body", typeof(SkinnedMeshRenderer), "material._Cutoff", AnimationCurve.Constant(0, 1, changed ?? .5f));
+                case "vector": return Curve("Body", typeof(SkinnedMeshRenderer), "material._MainTexHSVG.x", AnimationCurve.Constant(0, 1, changed ?? PreparedVector.x));
                 case "absent activation": return Curve("Absent", typeof(GameObject), "m_IsActive", AnimationCurve.Constant(0, 1, 1));
                 case "absent material": return Curve("Absent", typeof(SkinnedMeshRenderer), "material._Color2nd.r", AnimationCurve.Constant(0, 1, PreparedColor.r));
                 case "absent renderer": return Curve("Dummy", typeof(SkinnedMeshRenderer), "m_Enabled", AnimationCurve.Constant(0, 1, 1));
@@ -75,6 +78,7 @@ namespace VRVlog.LilToonExporter.Tests
         [TestCase("enabled")]
         [TestCase("color")]
         [TestCase("scalar")]
+        [TestCase("vector")]
         [TestCase("absent activation")]
         [TestCase("absent material")]
         [TestCase("absent renderer")]
@@ -96,6 +100,7 @@ namespace VRVlog.LilToonExporter.Tests
         [TestCase("enabled")]
         [TestCase("color")]
         [TestCase("scalar")]
+        [TestCase("vector")]
         public void ARealAppearanceChangeStillRejectsTheWholeSelectedClip(string kind)
         {
             var binding = Appearance(kind, 0);
@@ -106,6 +111,7 @@ namespace VRVlog.LilToonExporter.Tests
         [TestCase("color")]
         [TestCase("activation")]
         [TestCase("enabled")]
+        [TestCase("vector")]
         public void AChangingAppearanceCurveIsNotCertifiedFromItsFirstKey(string kind)
         {
             var binding = Appearance(kind);
@@ -115,11 +121,13 @@ namespace VRVlog.LilToonExporter.Tests
             Assert.Throws<InvalidOperationException>(() => VrChatGestureExpressions.ReadPose(avatar, clip));
         }
 
-        [TestCase(false)]
-        [TestCase(true)]
-        public void PropertyBlockPreventsMaterialNoOpProofEvenWhenStoredMaterialMatches(bool perSlot)
+        [TestCase(false, "color")]
+        [TestCase(true, "color")]
+        [TestCase(false, "vector")]
+        [TestCase(true, "vector")]
+        public void PropertyBlockPreventsMaterialNoOpProofEvenWhenStoredMaterialMatches(bool perSlot, string kind)
         {
-            var binding = Appearance("color"); var block = new MaterialPropertyBlock();
+            var binding = Appearance(kind); var block = new MaterialPropertyBlock();
             block.SetColor("_Color2nd", Color.red);
             if (perSlot) skin.SetPropertyBlock(block, 0); else skin.SetPropertyBlock(block);
             Assert.That(skin.HasPropertyBlock(), Is.True);
@@ -127,13 +135,17 @@ namespace VRVlog.LilToonExporter.Tests
             Assert.Throws<InvalidOperationException>(() => VrChatGestureExpressions.ReadPose(avatar, clip));
         }
 
-        [TestCase("equal")]
-        [TestCase("different")]
-        [TestCase("missing")]
-        public void EverySharedMaterialSlotMustHaveTheSameDeclaredValue(string mode)
+        [TestCase("equal", "color")]
+        [TestCase("different", "color")]
+        [TestCase("missing", "color")]
+        [TestCase("equal", "vector")]
+        [TestCase("different", "vector")]
+        [TestCase("missing", "vector")]
+        public void EverySharedMaterialSlotMustHaveTheSameDeclaredValue(string mode, string kind)
         {
-            var binding = Appearance("color"); var second = new Material(material); owned.Add(second);
+            var binding = Appearance(kind); var second = new Material(material); owned.Add(second);
             if (mode == "different") second.SetColor("_Color2nd", Color.black);
+            if (mode == "different") second.SetVector("_MainTexHSVG", Vector4.zero);
             skin.sharedMaterials = new[] { material, mode == "missing" ? null : second };
             Assert.That(SelectedExpressionAppearance.IsUnchanged(avatar, clip, binding), Is.EqualTo(mode == "equal"));
         }
@@ -174,7 +186,8 @@ namespace VRVlog.LilToonExporter.Tests
         [TestCase("transform")]
         [TestCase("collider")]
         [TestCase("missing shader property")]
-        [TestCase("vector")]
+        [TestCase("vector as color")]
+        [TestCase("color as vector")]
         [TestCase("texture")]
         public void ExistingUnknownPropertiesAreNotAuthorizedByCoincidentValues(string kind)
         {
@@ -182,8 +195,8 @@ namespace VRVlog.LilToonExporter.Tests
             if (kind == "transform") binding = Curve("Dummy", typeof(Transform), "m_LocalScale.x", AnimationCurve.Constant(0, 1, 1));
             else if (kind == "collider")
             { dummy.AddComponent<BoxCollider>(); binding = Curve("Dummy", typeof(BoxCollider), "m_Enabled", AnimationCurve.Constant(0, 1, 1)); }
-            else binding = Curve("Body", typeof(SkinnedMeshRenderer), "material." + (kind == "vector" ? "_MainTex_ScrollRotate.x" :
-                kind == "texture" ? "_MainTex" : "_NotDeclared"), AnimationCurve.Constant(0, 1, 0));
+            else binding = Curve("Body", typeof(SkinnedMeshRenderer), "material." + (kind == "vector as color" ? "_MainTex_ScrollRotate.r" :
+                kind == "color as vector" ? "_Color2nd.x" : kind == "texture" ? "_MainTex" : "_NotDeclared"), AnimationCurve.Constant(0, 1, 0));
             Assert.That(SelectedExpressionAppearance.IsUnchanged(avatar, clip, binding), Is.False);
             Assert.Throws<InvalidOperationException>(() => VrChatGestureExpressions.ReadPose(avatar, clip));
         }
@@ -195,6 +208,72 @@ namespace VRVlog.LilToonExporter.Tests
             keys[0].inTangent = float.NaN; keys[1].outTangent = float.NaN; curve.keys = keys;
             AnimationUtility.SetEditorCurve(clip, binding, curve);
             Assert.That(SelectedExpressionAppearance.IsUnchanged(avatar, clip, binding), Is.True);
+        }
+
+        [TestCase("_MainTexHSVG")]
+        [TestCase("_MainTex_ScrollRotate")]
+        public void MatchingVectorChannelsKeepTheirActualNativeValue(string property)
+        {
+            material.SetVector(property, PreparedVector);
+            Assert.That(material.shader.GetPropertyType(material.shader.FindPropertyIndex(property)),
+                Is.EqualTo(UnityEngine.Rendering.ShaderPropertyType.Vector));
+            foreach (var component in "xyzw")
+                Curve("Body", typeof(SkinnedMeshRenderer), "material." + property + "." + component,
+                    AnimationCurve.Constant(0, 1, PreparedVector["xyzw".IndexOf(component)]));
+            var native = Object.Instantiate(avatar); owned.Add(native);
+            var nativeSkin = native.transform.Find("Body").GetComponent<SkinnedMeshRenderer>();
+            var nativeMaterial = new Material(material); owned.Add(nativeMaterial); nativeSkin.sharedMaterial = nativeMaterial;
+            var before = EditorJsonUtility.ToJson(material);
+            clip.SampleAnimation(native, .5f);
+            var block = new MaterialPropertyBlock(); nativeSkin.GetPropertyBlock(block);
+            Assert.That(block.isEmpty, Is.False, "The native clip must actually apply its vector channels.");
+            Assert.That(block.GetVector(property), Is.EqualTo(PreparedVector));
+            Assert.That(nativeMaterial.GetVector(property), Is.EqualTo(PreparedVector));
+            foreach (var binding in AnimationUtility.GetCurveBindings(clip).Where(binding => binding.propertyName.StartsWith("material.", StringComparison.Ordinal)))
+                Assert.That(SelectedExpressionAppearance.IsUnchanged(avatar, clip, binding), Is.True, binding.propertyName);
+            Assert.That(EditorJsonUtility.ToJson(material), Is.EqualTo(before));
+        }
+
+        [TestCase(false)]
+        [TestCase(true)]
+        public void SharedFacialSetDoesNotClaimMouthMorphsForUnchangedEyeVectorResets(bool changesMaterial)
+        {
+            var fx = AnimatorController.CreateAnimatorControllerAtPath(folder + "/FacialSet.controller");
+            fx.AddParameter("FacialSet", AnimatorControllerParameterType.Int); fx.AddLayer("Mouth");
+            var layers = fx.layers; layers[1].defaultWeight = 1; fx.layers = layers;
+            AnimatorState State(int layer, string name, string shape, float weight, bool appearance)
+            {
+                var motion = new AnimationClip { name = name }; AssetDatabase.AddObjectToAsset(motion, fx);
+                AnimationUtility.SetEditorCurve(motion, EditorCurveBinding.FloatCurve("Body", typeof(SkinnedMeshRenderer), "blendShape." + shape),
+                    AnimationCurve.Constant(0, 1, weight));
+                if (appearance) AnimationUtility.SetEditorCurve(motion,
+                    EditorCurveBinding.FloatCurve("Body", typeof(SkinnedMeshRenderer), "material._MainTexHSVG.x"),
+                    AnimationCurve.Constant(0, 1, changesMaterial ? 0 : PreparedVector.x));
+                var state = layers[layer].stateMachine.AddState(name); state.motion = motion; state.writeDefaultValues = false; return state;
+            }
+            void Select(AnimatorState from, AnimatorState to)
+            {
+                var transition = from.AddTransition(to); transition.hasExitTime = false; transition.duration = 0;
+                transition.AddCondition(AnimatorConditionMode.Equals, 1, "FacialSet");
+            }
+            var eye = State(0, "Eye__default", "Face size", 20, true);
+            var otherEye = State(0, "Eye__selected", "Face size", 80, true); layers[0].stateMachine.defaultState = eye; Select(eye, otherEye);
+            var mouth = State(1, "Mouth__default", "Blink", 10, false);
+            var selected = State(1, "Mouth__selected", "Blink", 75, false); layers[1].stateMachine.defaultState = mouth; Select(mouth, selected);
+            var metadata = new VrChatExpressionMenu.Source { Controller = fx };
+            var entry = new VrChatExpressionMenu.Entry(); VrChatGestureExpressions.ReadClip(avatar, (AnimationClip)selected.motion, entry);
+            var before = EditorJsonUtility.ToJson(material);
+            if (changesMaterial)
+                Assert.Throws<InvalidOperationException>(() => VrChatExpressionSampler.ApplyPermanentOverrides(avatar, fx, entry, 1, false,
+                    metadata: metadata, sourceState: selected));
+            else
+            {
+                VrChatExpressionSampler.ApplyPermanentOverrides(avatar, fx, entry, 1, false, metadata: metadata, sourceState: selected);
+                Assert.That(entry.Values.Single(value => value.Shape == "Blink").Weight, Is.EqualTo(75).Within(.01));
+                Assert.That(entry.Messages.Any(value => value.Contains("共有の入力 FacialSet")), Is.False);
+            }
+            Assert.That(EditorJsonUtility.ToJson(material), Is.EqualTo(before));
+            Assert.That(skin.GetBlendShapeWeight(1), Is.Zero);
         }
 
         [TestCase("color")]
@@ -342,6 +421,7 @@ namespace VRVlog.LilToonExporter.Tests
         [TestCase("HDR alpha")]
         [TestCase("alpha")]
         [TestCase("scalar")]
+        [TestCase("vector")]
         public void ColorCanonicalizationDoesNotRelaxOtherPropertyDomains(string domain)
         {
             string property; float current;
@@ -356,6 +436,11 @@ namespace VRVlog.LilToonExporter.Tests
             {
                 material.SetColor("_Color2nd", new Color(.25f, .5f, .75f, .25f)); property = "_Color2nd.a";
                 current = material.GetColor("_Color2nd").a;
+            }
+            else if (domain == "vector")
+            {
+                material.SetVector("_MainTexHSVG", new Vector4(.25f, 1, 1, 1)); property = "_MainTexHSVG.x";
+                current = material.GetVector("_MainTexHSVG").x;
             }
             else
             {
@@ -386,6 +471,7 @@ namespace VRVlog.LilToonExporter.Tests
                 foreach (var renderer in fixture.Source.GetComponentsInChildren<SkinnedMeshRenderer>())
                 {
                     renderer.sharedMaterial.shader = Shader.Find("lilToon"); renderer.sharedMaterial.SetColor("_Color2nd", PreparedColor);
+                    renderer.sharedMaterial.SetVector("_MainTexHSVG", PreparedVector);
                     renderer.sharedMaterial.SetFloat("_UseMain2ndTex", 1); renderer.SetBlendShapeWeight(0, 17);
                 }
                 var preparedColor = fixture.Source.GetComponentsInChildren<SkinnedMeshRenderer>()[0].sharedMaterial.GetColor("_Color2nd");
@@ -424,6 +510,9 @@ namespace VRVlog.LilToonExporter.Tests
                         foreach (var channel in "rgba") AnimationUtility.SetEditorCurve(motion,
                             EditorCurveBinding.FloatCurve(path, typeof(SkinnedMeshRenderer), "material._Color2nd." + channel),
                             AnimationCurve.Constant(0, 1, PreparedColor["rgba".IndexOf(channel)]));
+                        foreach (var component in "xyzw") AnimationUtility.SetEditorCurve(motion,
+                            EditorCurveBinding.FloatCurve(path, typeof(SkinnedMeshRenderer), "material._MainTexHSVG." + component),
+                            AnimationCurve.Constant(0, 1, PreparedVector["xyzw".IndexOf(component)]));
                         AnimationUtility.SetEditorCurve(motion, EditorCurveBinding.FloatCurve(path, typeof(GameObject), "m_IsActive"), AnimationCurve.Constant(0, 1, 1));
                     }
                     AssetDatabase.AddObjectToAsset(motion, fx); var state = fx.layers[faceLayer].stateMachine.AddState(name);
@@ -458,6 +547,8 @@ namespace VRVlog.LilToonExporter.Tests
                     {
                         var color = F.List(item, "values").Select(F.Object).Single(value => F.Text(value, "name") == "_Color2nd");
                         Assert.That(F.Vector(F.Get(color, "value")), Is.EqualTo(new[] { preparedColor.r, preparedColor.g, preparedColor.b, preparedColor.a }));
+                        var vector = F.List(item, "values").Select(F.Object).Single(value => F.Text(value, "name") == "_MainTexHSVG");
+                        Assert.That(F.Vector(F.Get(vector, "value")), Is.EqualTo(new[] { PreparedVector.x, PreparedVector.y, PreparedVector.z, PreparedVector.w }));
                     }
                 }
                 imported = await Vrm10.LoadBytesAsync(bytes, canLoadVrm0X: false, awaitCaller: new ImmediateCaller());

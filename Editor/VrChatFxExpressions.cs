@@ -177,6 +177,14 @@ namespace VRVlog.LilToonExporter
             }
             for (var layer = 0; layer < layers.Length; layer++)
             {
+                // Wardrobe/gimmick graphs cannot supply a face unless they
+                // write a facial dependency or control one of its layer weights.
+                // Do not spend the route-expansion budget on unrelated graphs.
+                var dependency = dependencies[layer];
+                if (dependency.Morphs.Count == 0 && !dependency.Writes.Overlaps(faceInputs) &&
+                    !dependency.WeightControls.Values.Any(control => control.AnimatorLayer && control.Playable == "FX" &&
+                        (dependencies[control.LayerIndex].Morphs.Count > 0 || dependencies[control.LayerIndex].Writes.Overlaps(faceInputs))))
+                    continue;
                 var origin = layer;
                 var sync = new HashSet<int>();
                 while (layers[origin].syncedLayerIndex >= 0)
@@ -262,23 +270,49 @@ namespace VRVlog.LilToonExporter
                     conditions.Select(condition => new Constraint { Condition = condition })).ToArray();
                 IEnumerable<Constraint[]> Fallthrough(Constraint[] gate, IEnumerable<AnimatorTransitionBase> entries)
                 {
-                    var alternatives = new List<Constraint[]> { gate };
+                    // Simplify only simultaneous priority exclusions. The
+                    // incoming gate may describe an earlier warm-up state and
+                    // must remain intact for WarmPrefix/native reachability.
+                    var alternatives = new List<Constraint[]> { Array.Empty<Constraint>() };
                     foreach (var entry in entries)
                     {
                         // !(A && B) is !A || !B. Keep the original comparison
                         // plus its logical negation, including Float equality
                         // at the boundary of a negated Greater/Less condition.
                         if (entry.conditions.Length == 0) yield break;
-                        var next = new List<Constraint[]>();
+                        var next = new Dictionary<int, Dictionary<string, (Constraint[] Conditions, HashSet<string> Keys)>>();
                         foreach (var alternative in alternatives)
                             foreach (var condition in entry.conditions)
                             {
                                 Visit();
-                                next.Add(alternative.Concat(new[] { new Constraint { Condition = condition, Negated = true } }).ToArray());
+                                var combined = alternative.Concat(new[] { new Constraint { Condition = condition, Negated = true } })
+                                    .GroupBy(ConstraintKey).Select(group => group.First()).ToArray();
+                                // Keep malformed/unsupported conditions for
+                                // their normal diagnostics; prune only proven
+                                // contradictory parameter conjunctions.
+                                if (Solve(combined, new Dictionary<string, float>(), parameters, defaults, _ => true, out var error) == null && error == null)
+                                    continue;
+                                var keys = new HashSet<string>(combined.Select(ConstraintKey), StringComparer.Ordinal);
+                                var key = string.Concat(keys.OrderBy(value => value, StringComparer.Ordinal).Select(value => value.Length + ":" + value));
+                                if (!next.TryGetValue(keys.Count, out var sameSize))
+                                    next.Add(keys.Count, sameSize = new Dictionary<string, (Constraint[], HashSet<string>)>(StringComparer.Ordinal));
+                                if (sameSize.ContainsKey(key)) continue;
+                                bool Contains(HashSet<string> superset, HashSet<string> subset)
+                                { Visit(); return superset.IsSupersetOf(subset); }
+                                // Equal-sized alternatives use a hash lookup.
+                                // Bound the remaining subset comparisons too,
+                                // so independent conditions cannot create an
+                                // unaccounted quadratic expansion.
+                                if (next.Where(group => group.Key < keys.Count).SelectMany(group => group.Value.Values)
+                                    .Any(existing => Contains(keys, existing.Keys))) continue;
+                                foreach (var group in next.Where(group => group.Key > keys.Count))
+                                    foreach (var existing in group.Value.Where(value => Contains(value.Value.Keys, keys)).Select(value => value.Key).ToArray())
+                                        group.Value.Remove(existing);
+                                sameSize.Add(key, (combined, keys));
                             }
-                        alternatives = next;
+                        alternatives = next.Values.SelectMany(group => group.Values).Select(value => value.Conditions).ToList();
                     }
-                    foreach (var alternative in alternatives) yield return alternative;
+                    foreach (var alternative in alternatives) yield return gate.Concat(alternative).ToArray();
                 }
                 IEnumerable<Constraint[]> SourceGates(Edge edge, HashSet<UnityEngine.Object> stack)
                 {
@@ -586,6 +620,8 @@ namespace VRVlog.LilToonExporter
         static bool GeneratedParameter(string name) => name.StartsWith("__MA/", StringComparison.Ordinal) ||
             name.StartsWith("__ActiveSelf", StringComparison.Ordinal);
         static bool Finite(float value) => !float.IsNaN(value) && !float.IsInfinity(value);
+        static string ConstraintKey(Constraint value) => value.Condition.parameter + "\u001f" + (int)value.Condition.mode + "/" +
+            value.Condition.threshold.ToString("R", CultureInfo.InvariantCulture) + "/" + value.Negated;
         static bool ValidMode(AnimatorControllerParameterType type, AnimatorConditionMode mode) =>
             type == AnimatorControllerParameterType.Bool ? mode == AnimatorConditionMode.If || mode == AnimatorConditionMode.IfNot :
             type == AnimatorControllerParameterType.Int ? mode == AnimatorConditionMode.Equals || mode == AnimatorConditionMode.NotEqual ||
