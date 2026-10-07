@@ -57,14 +57,23 @@ namespace VRVlog.LilToonExporter
             // would dereference that wrapper before the conservative fallback.
             if (visemes != null && visemes.sharedMesh != null)
             {
-                if (VrChatExpressionMenu.Member(descriptor, "VisemeBlendShapes") is IEnumerable names)
+                // The SDK retains the other mode's serialized fields when a
+                // user switches modes. Only the currently active route proves
+                // a facial role; stale references may now identify clothing.
+                var lipSync = VrChatExpressionMenu.Member(descriptor, "lipSync")?.ToString();
+                if (lipSync == "VisemeBlendShape" && VrChatExpressionMenu.Member(descriptor, "VisemeBlendShapes") is IEnumerable names)
                     foreach (var name in names.OfType<string>()) Add(visemes, visemes.sharedMesh.GetBlendShapeIndex(name));
-                var mouth = VrChatExpressionMenu.Member(descriptor, "MouthOpenBlendShapeName") as string;
-                if (!string.IsNullOrEmpty(mouth)) Add(visemes, visemes.sharedMesh.GetBlendShapeIndex(mouth));
+                if (lipSync == "JawFlapBlendShape")
+                {
+                    var mouth = VrChatExpressionMenu.Member(descriptor, "MouthOpenBlendShapeName") as string;
+                    if (!string.IsNullOrEmpty(mouth)) Add(visemes, visemes.sharedMesh.GetBlendShapeIndex(mouth));
+                }
             }
             var eyes = VrChatExpressionMenu.Member(descriptor, "customEyeLookSettings");
             var eyelids = VrChatExpressionMenu.Member(eyes, "eyelidsSkinnedMesh") as SkinnedMeshRenderer;
-            if (VrChatExpressionMenu.Member(eyes, "eyelidsBlendshapes") is IEnumerable indices)
+            if (VrChatExpressionMenu.Member(descriptor, "enableEyeLook") is bool eyeLook && eyeLook &&
+                VrChatExpressionMenu.Member(eyes, "eyelidType")?.ToString() == "Blendshapes" &&
+                VrChatExpressionMenu.Member(eyes, "eyelidsBlendshapes") is IEnumerable indices)
                 foreach (var index in indices.OfType<int>()) Add(eyelids, index);
             // Even on a merged Body renderer, a shape named Blink can belong
             // to a disconnected accessory. Names never establish new seeds.

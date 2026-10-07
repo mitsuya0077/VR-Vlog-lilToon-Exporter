@@ -452,6 +452,8 @@ BEHAVIOR_CASES = {
         'MenuNativeSupportCanActivateShoesWithoutExportingTheirMorphs': 2,
         'FaceRendererDisappearanceRemainsUnsupported': 1,
         'MissingDescriptorRendererRetainsStrictFallbackWithoutDereferencingUnityFakeNull': 2,
+        'EyeSeedsRequireEnabledBlendshapeMode': 3,
+        'LipSyncModesIgnoreInactiveBlendshapeFields': 5,
         'ACanonicalBlinkNameOnAMergedHeadAccessoryIsNotFacialEvidence': 1,
         'LaterFramesAndNonPositionBodyDeformationsCannotEnterTheFaceProjection': 3,
         'AnIndependentWardrobeLayerDoesNotNarrowAnAlreadyValidPureMorphClip': 1,

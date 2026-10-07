@@ -118,7 +118,7 @@ namespace VRVlog.LilToonExporter
             // exist yet. Recheck these references after authoring preparation.
             internal readonly List<MorphValue> Unevaluated = new List<MorphValue>();
             internal readonly List<string> Messages = new List<string>();
-            internal bool UsesFacialProjection;
+            internal bool UsesFacialProjection = false;
         }
 
         internal sealed class AnimatedMorph

@@ -59,6 +59,8 @@ namespace VRVlog.LilToonExporter.Tests
             for (var i = 1; i < Shapes.Length; i++) skin.SetBlendShapeWeight(i, i * 7);
             shoes = new GameObject("Shoes_Sneakers"); shoes.transform.SetParent(avatar.transform, false); shoes.SetActive(false);
             var descriptor = avatar.AddComponent(descriptorType);
+            var lipSync = descriptorType.GetField("lipSync");
+            lipSync.SetValue(descriptor, Enum.Parse(lipSync.FieldType, "VisemeBlendShape"));
             descriptorType.GetField("VisemeSkinnedMesh").SetValue(descriptor, skin);
             descriptorType.GetField("VisemeBlendShapes").SetValue(descriptor, new[] { Shapes[0] });
             var name = "__FacialProjection_" + Guid.NewGuid().ToString("N"); AssetDatabase.CreateFolder("Assets", name); folder = "Assets/" + name;
@@ -182,6 +184,59 @@ namespace VRVlog.LilToonExporter.Tests
             var entry = new VrChatExpressionMenu.Entry(); VrChatGestureExpressions.ReadClip(avatar, motion, entry);
             Assert.That(entry.Values.Select(v => v.Shape), Is.EqualTo(new[] { Shapes[1] }));
             Assert.That(entry.Messages.Any(m => m.Contains("blendShape.Blink")), Is.True);
+        }
+
+        [TestCase(false, "Blendshapes", false)]
+        [TestCase(true, "Bones", false)]
+        [TestCase(true, "Blendshapes", true)]
+        public void EyeSeedsRequireEnabledBlendshapeMode(bool enabled, string mode, bool active)
+        {
+            var descriptor = avatar.GetComponents<Component>().Single(c => c != null && c.GetType().FullName == "VRC.SDK3.Avatars.Components.VRCAvatarDescriptor");
+            var type = descriptor.GetType(); type.GetField("enableEyeLook").SetValue(descriptor, enabled);
+            var settingsField = type.GetField("customEyeLookSettings"); var settings = settingsField.GetValue(descriptor);
+            var settingsType = settings.GetType(); var eyelidType = settingsType.GetField("eyelidType");
+            eyelidType.SetValue(settings, Enum.Parse(eyelidType.FieldType, mode));
+            settingsType.GetField("eyelidsSkinnedMesh").SetValue(settings, skin);
+            // This disconnected surface is facial evidence only while the
+            // descriptor actively identifies it as an eyelid. Disabled/bone
+            // modes retain these fields but must keep the accessory unchanged.
+            settingsType.GetField("eyelidsBlendshapes").SetValue(settings, new[] { 3, -1, -1 });
+            settingsField.SetValue(descriptor, settings);
+            Assert.That(BlinkExportSession.TryDescriptor(avatar, null, out _), Is.EqualTo(active));
+            var entry = new VrChatExpressionMenu.Entry(); VrChatGestureExpressions.ReadClip(avatar, Clip("Eye mode", 75, true), entry);
+            Assert.That(entry.Values.Select(value => value.Shape), Is.EquivalentTo(active ? new[] { Shapes[1], Shapes[3] } : new[] { Shapes[1] }));
+            Assert.That(skin.GetBlendShapeWeight(3), Is.EqualTo(21), "The prepared surface must never be modified by the probe.");
+        }
+
+        [TestCase("VisemeBlendShape")]
+        [TestCase("JawFlapBlendShape")]
+        [TestCase("Default")]
+        [TestCase("JawFlapBone")]
+        [TestCase("VisemeParameterOnly")]
+        public void LipSyncModesIgnoreInactiveBlendshapeFields(string mode)
+        {
+            var descriptor = avatar.GetComponents<Component>().Single(c => c != null && c.GetType().FullName == "VRC.SDK3.Avatars.Components.VRCAvatarDescriptor");
+            var type = descriptor.GetType(); var lipSync = type.GetField("lipSync");
+            lipSync.SetValue(descriptor, Enum.Parse(lipSync.FieldType, mode));
+            type.GetField("VisemeBlendShapes").SetValue(descriptor, new[] { mode == "VisemeBlendShape" ? Shapes[0] : Shapes[3] });
+            type.GetField("MouthOpenBlendShapeName").SetValue(descriptor, mode == "JawFlapBlendShape" ? Shapes[0] : Shapes[3]);
+            var motion = Clip("Lip-sync mode", 75, true);
+            var entry = new VrChatExpressionMenu.Entry();
+            if (mode == "VisemeBlendShape" || mode == "JawFlapBlendShape")
+            {
+                VrChatGestureExpressions.ReadClip(avatar, motion, entry);
+                Assert.That(entry.Values.Select(value => value.Shape), Is.EqualTo(new[] { Shapes[1] }),
+                    "Inactive blendshape fields must not authorize the disconnected accessory.");
+            }
+            else
+            {
+                Assert.That(FacialProjectionScope.Create(avatar), Is.Null, "Stale mouth/viseme fields are not a facial-identity proof.");
+                Assert.Throws<InvalidOperationException>(() => VrChatGestureExpressions.ReadClip(avatar, motion, entry));
+                var pure = new VrChatExpressionMenu.Entry();
+                VrChatGestureExpressions.ReadClip(avatar, Clip("Existing pure morph", 75, false), pure);
+                Assert.That(pure.Values.Select(value => value.Shape), Is.EquivalentTo(Shapes.Skip(1)),
+                    "An absent projection proof must preserve the pre-existing pure-morph route.");
+            }
         }
 
         [TestCase("normal")]
