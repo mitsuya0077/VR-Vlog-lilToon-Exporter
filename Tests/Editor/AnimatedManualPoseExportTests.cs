@@ -301,7 +301,105 @@ namespace VRVlog.LilToonExporter.Tests
             try
             {
                 var error = Assert.Throws<InvalidOperationException>(() => PoseSampling.SampleAnimation(fixture.Source, Candidate(clip)));
-                StringAssert.Contains("精度", error.Message);
+                StringAssert.StartsWith(ExporterLocalization.T("動くポーズのカーブを十分な精度で保存できません。カーブの変化を緩やかにしてください。"), error.Message);
+                Assert.That((double)error.Data["sourceTime"], Is.InRange((double).3f, (double).3000005f));
+                Assert.That((double)error.Data["error"], Is.GreaterThan((double)error.Data["limit"]));
+                Assert.That(error.Data["bone"], Is.Not.Null.And.Not.Empty);
+                StringAssert.Contains("bone=" + error.Data["bone"], error.Message);
+                StringAssert.Contains("sourceInterval=[", error.Message);
+                if ((string)error.Data["metric"] == "rotationError")
+                {
+                    var bone = PoseSampling.HumanBone((string)error.Data["bone"]);
+                    var left = Native(fixture.Source, clip, (float)(double)error.Data["sourceIntervalStart"], bone);
+                    var right = Native(fixture.Source, clip, (float)(double)error.Data["sourceIntervalEnd"], bone);
+                    var actual = Native(fixture.Source, clip, (float)(double)error.Data["sourceTime"], bone);
+                    var nativeError = Quaternion.Angle(Quaternion.Slerp(left, right, (float)(double)error.Data["blend"]), actual);
+                    Assert.That((double)error.Data["error"], Is.EqualTo(nativeError).Within(.1),
+                        "The diagnostic must identify the failed original-clip comparison.");
+                }
+            }
+            finally { Object.DestroyImmediate(clip); }
+        }
+
+        [TestCase(0f, .000000059604645f, 0f)]
+        [TestCase(.0001f, .00010006f, .00005f)]
+        [TestCase(.001f, .00100006f, 0f)]
+        public void FiniteTangentCurveWithNativeKeyJumpRetainsBothLimits(float start, float end, float sourceStart)
+        {
+            using var fixture = new AttachmentConnectionTests.Fixture();
+            // Unity's native evaluator creates a key-boundary jump for this
+            // finite-tangent interval, also found in real humanoid clips.
+            var curve = new AnimationCurve(new Keyframe(start, 0, 0, 0), new Keyframe(end, 80, 0, 0), new Keyframe(1, 80, 0, 0));
+            if (start > 0) curve.AddKey(new Keyframe(0, 0, 0, 0));
+            var clip = Moving(fixture.Source, curve);
+            try
+            {
+                var animation = PoseSampling.SampleAnimation(fixture.Source, Candidate(clip, sourceStart));
+                var step = (double)end - sourceStart;
+                Assert.That(animation.Frames.Count(frame => frame.Time == step), Is.EqualTo(2));
+                // Probe off the quarter grid used by the adaptive sampler.
+                for (var i = 1; i < 100; i++)
+                {
+                    var time = start + (end - start) * (i / 100f);
+                    Assert.That(Quaternion.Angle(At(animation, "leftUpperArm", (double)time - sourceStart),
+                        Native(fixture.Source, clip, time, HumanBodyBones.LeftUpperArm)), Is.LessThan(.15f));
+                }
+                Assert.That(Quaternion.Angle(At(animation, "leftUpperArm", step),
+                    Native(fixture.Source, clip, end, HumanBodyBones.LeftUpperArm)), Is.LessThan(.1f));
+                var before = BitConverter.ToSingle(BitConverter.GetBytes(BitConverter.ToInt32(BitConverter.GetBytes(end), 0) - 1), 0);
+                Assert.That(Quaternion.Angle(At(animation, "leftUpperArm", (double)before - sourceStart),
+                    Native(fixture.Source, clip, before, HumanBodyBones.LeftUpperArm)), Is.LessThan(.1f));
+                Assert.That(Quaternion.Angle(At(animation, "leftUpperArm", (double)before - sourceStart), At(animation, "leftUpperArm", step)), Is.GreaterThan(79));
+            }
+            finally { Object.DestroyImmediate(clip); }
+        }
+
+        [Test]
+        public void FiniteTangentMuscleKeyJumpMatchesTheOriginalNativeHumanoidClip()
+        {
+            using var fixture = new AttachmentConnectionTests.Fixture();
+            var clip = new AnimationClip { name = "Native humanoid key jump" };
+            const float end = .000000059604645f;
+            var before = BitConverter.ToSingle(BitConverter.GetBytes(BitConverter.ToInt32(BitConverter.GetBytes(end), 0) - 1), 0);
+            var muscle = Enumerable.Range(0, HumanTrait.MuscleCount).First(index => HumanTrait.BoneFromMuscle(index) == (int)HumanBodyBones.LeftUpperArm);
+            try
+            {
+                AnimationUtility.SetEditorCurve(clip, EditorCurveBinding.FloatCurve("", typeof(Animator), HumanTrait.MuscleName[muscle]),
+                    new AnimationCurve(new Keyframe(0, -.35f, 0, 0), new Keyframe(end, .7f, 0, 0), new Keyframe(1, .7f, 0, 0)));
+                var animation = PoseSampling.SampleAnimation(fixture.Source, Candidate(clip));
+                Assert.That(animation.Frames.Count(frame => frame.Time == end), Is.EqualTo(2));
+                foreach (var time in new[] { 0f, end * .37f, end * .73f, before, end, .001f, .537f, 1f })
+                    Assert.That(Quaternion.Angle(At(animation, "leftUpperArm", time),
+                        Native(fixture.Source, clip, time, HumanBodyBones.LeftUpperArm, true)), Is.LessThan(.5f));
+                Assert.That(Quaternion.Angle(At(animation, "leftUpperArm", before), At(animation, "leftUpperArm", end)), Is.GreaterThan(10));
+            }
+            finally { Object.DestroyImmediate(clip); }
+        }
+
+        [Test]
+        public void PrecisionFailureReportsTheNativeHipsErrorAndAbsoluteSourceTime()
+        {
+            using var fixture = new AttachmentConnectionTests.Fixture();
+            var clip = new AnimationClip { name = "Sharp hips curve" };
+            var hips = fixture.Source.GetComponent<Animator>().GetBoneTransform(HumanBodyBones.Hips);
+            var path = AnimationUtility.CalculateTransformPath(hips, fixture.Source.transform);
+            var y = hips.localPosition.y;
+            AnimationUtility.SetEditorCurve(clip, EditorCurveBinding.FloatCurve(path, typeof(Transform), "m_LocalPosition.y"),
+                new AnimationCurve(new Keyframe(0, y, 0, 0), new Keyframe(.3f, y, 0, 0),
+                    new Keyframe(.3000005f, y + 1, 0, 0), new Keyframe(1, y + 1, 0, 0)));
+            try
+            {
+                var error = Assert.Throws<InvalidOperationException>(() => PoseSampling.SampleAnimation(fixture.Source, Candidate(clip, .1f)));
+                Assert.That(error.Data["metric"], Is.EqualTo("hipsError"));
+                Assert.That(error.Data["bone"], Is.EqualTo("hips"));
+                Assert.That((double)error.Data["sourceTime"], Is.InRange((double).3f, (double).3000005f));
+                Assert.That((double)error.Data["error"], Is.GreaterThan((double)error.Data["limit"]));
+                var left = NativeSnapshot(fixture.Source, clip, (float)(double)error.Data["sourceIntervalStart"], HumanBodyBones.Hips).hipsOffset;
+                var right = NativeSnapshot(fixture.Source, clip, (float)(double)error.Data["sourceIntervalEnd"], HumanBodyBones.Hips).hipsOffset;
+                var actual = NativeSnapshot(fixture.Source, clip, (float)(double)error.Data["sourceTime"], HumanBodyBones.Hips).hipsOffset;
+                var nativeError = Vector3.Distance(Vector3.Lerp(left, right, (float)(double)error.Data["blend"]), actual);
+                Assert.That((double)error.Data["error"], Is.EqualTo(nativeError).Within(.00001));
+                StringAssert.Contains("hipsError=", error.Message);
             }
             finally { Object.DestroyImmediate(clip); }
         }

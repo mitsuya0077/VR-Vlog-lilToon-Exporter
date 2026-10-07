@@ -118,6 +118,7 @@ namespace VRVlog.LilToonExporter
             // exist yet. Recheck these references after authoring preparation.
             internal readonly List<MorphValue> Unevaluated = new List<MorphValue>();
             internal readonly List<string> Messages = new List<string>();
+            internal bool UsesFacialProjection = false;
         }
 
         internal sealed class AnimatedMorph
@@ -128,6 +129,11 @@ namespace VRVlog.LilToonExporter
 
         internal sealed class Source
         {
+#if !EXPORTER_BEHAVIOR_TESTS
+            // The host runner checks menu traversal/serialization without
+            // Unity geometry evaluation. This session belongs to native Unity.
+            internal FacialProjectionScope.Session FacialProjectionSession;
+#endif
             internal RuntimeAnimatorController Controller;
             internal readonly Dictionary<string, float> Defaults = new Dictionary<string, float>(StringComparer.Ordinal);
             internal readonly HashSet<string> ExpressionParameters = new HashSet<string>(StringComparer.Ordinal);

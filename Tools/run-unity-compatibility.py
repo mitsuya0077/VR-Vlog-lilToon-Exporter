@@ -359,6 +359,7 @@ BEHAVIOR_CASES = {
         'EntryFallthroughPropagatesAcrossNestedAndExitRoutes': 3,
         'EntryNegationExpansionReportsAnAtomicDiscoveryBudgetDiagnostic': 1,
         'RepeatedPriorityConditionsDoNotExhaustFaceDiscovery': 1,
+        'SharedPriorityPrefixesAreSolvedOnceWithoutLosingNativeFaces': 1,
         'LongPriorityExclusionsRespectTheConditionWorkBudget': 1,
         'UnrelatedGimmickPriorityGraphCannotExhaustFaceDiscovery': 1,
         'DefaultWarmupCanEstablishAnEarlierGateBeforeTheSelectedFace': 2,
@@ -446,6 +447,19 @@ BEHAVIOR_CASES = {
         'TwentyAnimDropRemainsUsable': 1,
         'UnsupportedDropIsRejectedAndClosingCancelsPendingWork': 1,
     },
+    'FacialProjectionTests': {
+        'SharedMaterialInputKeepsOnlyProvenFacialAnimation': 2,
+        'MenuNativeSupportCanActivateShoesWithoutExportingTheirMorphs': 2,
+        'FaceRendererDisappearanceRemainsUnsupported': 1,
+        'MissingDescriptorRendererRetainsStrictFallbackWithoutDereferencingUnityFakeNull': 2,
+        'EyeSeedsRequireEnabledBlendshapeMode': 3,
+        'LipSyncModesIgnoreInactiveBlendshapeFields': 5,
+        'ACanonicalBlinkNameOnAMergedHeadAccessoryIsNotFacialEvidence': 1,
+        'LaterFramesAndNonPositionBodyDeformationsCannotEnterTheFaceProjection': 3,
+        'AnIndependentWardrobeLayerDoesNotNarrowAnAlreadyValidPureMorphClip': 1,
+        'ANewAnalysisRechecksChangedGeometryAfterBothSuccessfulAndFailedFaceProofs': 2,
+        'ExportedProjectedFaceReimportsWithPreparedOutfitAndReturnsExactlyToRest': 1,
+    },
     'AnimatedManualPoseExportTests': {
         'ActualVrmExportAndReimportRetainsBoundAnimationFramesAndStaticCompatibility': 1,
         'ExistingPreviewButtonPathStartsMotionAndCleanupStopsItsEditorUpdates': 1,
@@ -465,6 +479,9 @@ BEHAVIOR_CASES = {
         'StaticAndAnimatedRowsShareThe128ItemSelectionLimit': 1,
         'SteppedClipStoresBothLimitsAndSelectsTheRightValueAtTheExactKey': 6,
         'UnrepresentableContinuousTurnStillReportsPrecisionFailure': 1,
+        'FiniteTangentCurveWithNativeKeyJumpRetainsBothLimits': 3,
+        'FiniteTangentMuscleKeyJumpMatchesTheOriginalNativeHumanoidClip': 1,
+        'PrecisionFailureReportsTheNativeHipsErrorAndAbsoluteSourceTime': 1,
     },
 }
 INTEGRATION_CASES = {

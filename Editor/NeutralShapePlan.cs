@@ -43,6 +43,25 @@ namespace VRVlog.LilToonExporter
                 .ToDictionary(group => group.Key, group => group.ToArray(), StringComparer.Ordinal);
         }
 
+        // Explicit face endpoints have a geometry-proven output domain. Their
+        // native support may animate appearance on the disposable probe; those
+        // values never replace prepared materials, outfit morphs or object state.
+        // This is deliberately separate from rest ownership in Create below.
+        internal static NeutralShapePlan CreateProjection(GameObject prepared, IEnumerable<EditorCurveBinding> morphs,
+            IEnumerable<AnimationClip> clips, Func<string, bool> excludedPath = null)
+        {
+            var plan = new NeutralShapePlan(prepared, morphs);
+            plan.AllowUnchangedAppearance = true;
+            plan.ResolveCommittedMorphs();
+            var motions = clips.Where(clip => clip != null).Distinct().ToArray();
+            plan.ValidateBindings(motions, excludedPath);
+            foreach (var clip in motions)
+                foreach (var binding in AnimationUtility.GetCurveBindings(clip).Concat(AnimationUtility.GetObjectReferenceCurveBindings(clip)))
+                    if (excludedPath?.Invoke(binding.path) != true && plan.IsAppearanceBinding(binding)) plan.appearanceBindings.Add(binding);
+            plan.ProtectCommittedHierarchy();
+            return plan;
+        }
+
         internal static NeutralShapePlan Create(GameObject prepared, RuntimeAnimatorController runtime,
             IEnumerable<IEnumerable<EditorCurveBinding>> roots, Func<string, bool> excludedPath = null,
             IEnumerable<EditorCurveBinding> requiredMorphs = null, ICollection<string> warnings = null,

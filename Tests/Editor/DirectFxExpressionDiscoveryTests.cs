@@ -631,6 +631,29 @@ namespace VRVlog.LilToonExporter.Tests
         }
 
         [Test]
+        public void SharedPriorityPrefixesAreSolvedOnceWithoutLosingNativeFaces()
+        {
+            var faces = EntryFaces();
+            Parameter("FaceEnabled", AnimatorControllerParameterType.Bool, 1);
+            Parameter("FacialSet", AnimatorControllerParameterType.Int, 0);
+            // Generated facial selectors share long priority prefixes. They
+            // have only two compact exclusion branches; repeatedly solving
+            // every prefix for every destination must not make them overflow.
+            for (var index = 1; index <= 48; index++)
+            {
+                var entry = faces.Machine.AddEntryTransition(faces.Earlier);
+                entry.AddCondition(AnimatorConditionMode.If, 0, "FaceEnabled");
+                entry.AddCondition(AnimatorConditionMode.Equals, index, "FacialSet");
+            }
+            var source = Read();
+            Assert.That(source.Messages, Is.Empty);
+            Assert.That(source.Entries.Any(entry => Mathf.Abs(Weight(entry) - 75) < .01f), Is.True);
+            Assert.That(source.Entries.Any(entry => Mathf.Abs(Weight(entry) - 20) < .01f), Is.True);
+            foreach (var entry in source.Entries)
+                AssertNativeFace(entry, "Priority faces." + (Weight(entry) > 50 ? faces.Default.name : faces.Earlier.name));
+        }
+
+        [Test]
         public void UnrelatedGimmickPriorityGraphCannotExhaustFaceDiscovery()
         {
             controller.AddParameter("FaceChoice", AnimatorControllerParameterType.Int);

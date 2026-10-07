@@ -49,7 +49,7 @@ namespace VRVlog.LilToonExporter
                     if (clip == null) throw new InvalidOperationException("ジェスチャーのBlendTreeは単体の固定表情アニメーションではないため省略しました。");
                     var bindings = AnimationUtility.GetCurveBindings(clip).Where(b => excludedPath?.Invoke(b.path) != true).ToArray();
                     if (!bindings.Any(IsMorph)) continue; // Hand/bone motions are not facial expressions.
-                    ReadClip(avatar, clip, entry, excludedPath);
+                    ReadClip(avatar, clip, entry, excludedPath, source);
                     VrChatExpressionSampler.ApplyPermanentOverrides(avatar, runtime, entry, target.Layer, target.State.writeDefaultValues,
                         excludedPath, metadata: source, sourceState: target.State);
                 }
@@ -201,11 +201,19 @@ namespace VRVlog.LilToonExporter
             return motion != null || parent < 0 ? motion : EffectiveMotion(controller, state, parent);
         }
 
-        internal static List<VrChatExpressionMenu.MorphValue> ReadPose(GameObject avatar, AnimationClip clip, Func<string, bool> excludedPath = null)
+        internal static List<VrChatExpressionMenu.MorphValue> ReadPose(GameObject avatar, AnimationClip clip, Func<string, bool> excludedPath = null,
+            VrChatExpressionMenu.Entry entry = null, VrChatExpressionMenu.Source metadata = null)
         {
             SelectedExpressionAppearance.ValidateClipData(clip, excludedPath);
-            if (AnimationUtility.GetObjectReferenceCurveBindings(clip).Any(b => excludedPath?.Invoke(b.path) != true))
+            var projection = FacialProjectionScope.NeedsProjection(avatar, new[] { clip }, excludedPath) ? FacialProjectionScope.For(avatar, metadata) : null;
+            var plan = projection == null ? null : NeutralShapePlan.CreateProjection(avatar, projection.Morphs, new[] { clip }, excludedPath);
+            if (AnimationUtility.GetObjectReferenceCurveBindings(clip).Any(b => excludedPath?.Invoke(b.path) != true && plan?.AllowsEvaluationBinding(clip, b) != true))
                 throw new InvalidOperationException("マテリアル・オブジェクトの差し替えを含む表情アニメーションは未対応です。");
+            if (projection != null)
+            {
+                projection.WarnOmitted(AnimationUtility.GetCurveBindings(clip).Where(IsMorph), entry?.Messages);
+                if (entry != null) entry.UsesFacialProjection = true;
+            }
             var result = new List<VrChatExpressionMenu.MorphValue>();
             foreach (var binding in AnimationUtility.GetCurveBindings(clip))
             {
@@ -213,8 +221,10 @@ namespace VRVlog.LilToonExporter
                 if (!IsMorph(binding))
                 {
                     if (SelectedExpressionAppearance.IsUnchanged(avatar, clip, binding)) continue;
+                    if (plan?.AllowsEvaluationBinding(clip, binding) == true) continue;
                     throw new InvalidOperationException("BlendShape以外の変化を含む表情アニメーションです: " + binding.propertyName);
                 }
+                if (projection != null && !projection.Morphs.Contains(binding)) continue;
                 var curve = AnimationUtility.GetEditorCurve(clip, binding);
                 if (curve == null) throw new InvalidOperationException("表情アニメーションの曲線を読み取れません: " + clip.name);
                 // The standard VRM expression is the first pose. The animated
@@ -235,13 +245,14 @@ namespace VRVlog.LilToonExporter
         // Both gesture and FaceEmo clips use this path. Values and animation
         // channels are later resolved/pruned together by PreparedExpressionBindings.
         internal static void ReadClip(GameObject avatar, AnimationClip clip, VrChatExpressionMenu.Entry entry,
-            Func<string, bool> excludedPath = null)
+            Func<string, bool> excludedPath = null, VrChatExpressionMenu.Source metadata = null)
         {
-            var values = ReadPose(avatar, clip, excludedPath);
+            var values = ReadPose(avatar, clip, excludedPath, entry, metadata);
             var animated = new List<VrChatExpressionMenu.AnimatedMorph>();
             foreach (var binding in AnimationUtility.GetCurveBindings(clip))
             {
                 if (excludedPath?.Invoke(binding.path) == true || !IsMorph(binding)) continue;
+                if (!values.Any(value => value.Path == binding.path && "blendShape." + value.Shape == binding.propertyName)) continue;
                 var curve = ReadCurve(AnimationUtility.GetEditorCurve(clip, binding));
                 curve.Range(out var minimum, out var maximum);
                 if (minimum == maximum) continue;
