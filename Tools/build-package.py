@@ -7,7 +7,8 @@ import zipfile
 from pathlib import Path, PurePosixPath
 
 ROOT = Path(__file__).resolve().parents[1]
-ROOT_FILES = {"package.json", "LICENSE", "CHANGELOG.md", "Documentation~/README.md", "Documentation~/LanTransfer.md"}
+ROOT_FILES = {"package.json", "LICENSE", "CHANGELOG.md", "Documentation~/README.md", "Documentation~/LanTransfer.md",
+              "Documentation~/HumanoidPoses.md", "Documentation~/HumanoidAnimations.md"}
 DEPENDENCY_PATCH_FILES = {
     "Tools/patch-aao-vertex-buffer.py", "Tools/patch-aao-vertex-buffer.py.meta",
     "Documentation~/DependencyPatches/README.md",

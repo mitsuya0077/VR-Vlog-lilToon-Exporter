@@ -42,7 +42,7 @@ namespace VRVlog.LilToonExporter
                         if (PoseMenuResolver.Member(pose, "beforeAnimationClip") is AnimationClip || PoseMenuResolver.Member(pose, "afterAnimationClip") is AnimationClip)
                             row.Error = "APLの開始／終了アニメーションを伴う登録は未対応です。";
                         else if (clip == null) row.Error = "APLの元クリップがありません。";
-                        else if (PoseSampling.Moving(source, row.Layers[0])) row.Error = "APLの体の動くクリップです。手動追加で採用時刻を指定できます。";
+                        else if (PoseSampling.Moving(source, row.Layers[0])) row.Error = "APLの体の動くクリップです。手動追加で動くポーズとして保存できます。";
                         else if (PoseMenuResolver.Member(data, "enableLocomotionAnimator") is bool active && !active)
                             row.Error = "APLのHumanoidポーズ出力が無効です。";
                         row.Id = PoseSampling.Identity(row); Entries.Add(row);
@@ -53,8 +53,9 @@ namespace VRVlog.LilToonExporter
                 var row = new PoseCandidate { Name = string.IsNullOrWhiteSpace(manual.Name) ? manual.Clip?.name ?? "未設定" : manual.Name,
                     Category = manual.Category ?? "", Source = "手動" };
                 row.Layers.Add(new PoseLayer { Clip = manual.Clip, Time = manual.Time });
-                row.SampledMotion = manual.Clip != null && PoseSampling.Moving(source, row.Layers[0]);
-                row.Note = row.SampledMotion ? "動くクリップの " + manual.Time + " 秒を静止姿勢として採用（再生しません）。" : "";
+                row.IsAnimation = manual.Clip != null && PoseSampling.Moving(source, row.Layers[0], includeHead: true);
+                row.Note = row.IsAnimation ? ExporterLocalization.T("動くクリップの ") + manual.Time +
+                    ExporterLocalization.T(" 秒から末尾までの動きを保存します。") : "";
                 row.Id = PoseSampling.Identity(row); Entries.Add(row);
             }
         }
@@ -100,6 +101,7 @@ namespace VRVlog.LilToonExporter
             prepared = copy;
             Entries.AddRange(PoseMenuResolver.Read(copy, preparedMenuPolicy ?? menuPolicy));
             var seen = new Dictionary<string, PoseCandidate>();
+            var collectedFrames = 0;
             foreach (var row in Entries.ToArray())
             {
                 if (row.Error == null && seen.TryGetValue(row.Id, out var existing) && existing.Error == null)
@@ -107,7 +109,16 @@ namespace VRVlog.LilToonExporter
                 if (row.Error == null) seen[row.Id] = row;
                 if (options.Names.TryGetValue(row.Id, out var name)) row.Name = name;
                 if (row.Error == null)
-                    try { row.Data = PoseSampling.Sample(copy, row); }
+                    try
+                    {
+                        if (row.IsAnimation && !options.Excluded.Contains(row.Id))
+                        {
+                            row.Animation = PoseSampling.SampleAnimation(copy, row, HumanoidAnimationData.MaximumTotalFrames - collectedFrames);
+                            collectedFrames += row.Animation.Frames.Count;
+                        }
+                        else if (row.IsAnimation) row.Animation = null;
+                        else row.Data = PoseSampling.Sample(copy, row);
+                    }
                     catch (Exception error) { row.Error = error.Message; }
                 if (row.Error != null) warnings?.Add("ポーズ未対応: " + row.Name + " — " + row.Error);
                 else if (!string.IsNullOrEmpty(row.Note)) warnings?.Add("ポーズ: " + row.Name + " — " + row.Note);
@@ -115,38 +126,67 @@ namespace VRVlog.LilToonExporter
             }
             // Refresh merged provenance after deduplication.
             foreach (var row in Entries.Where(e => e.Data != null)) row.Data.Source = row.Source;
+            foreach (var row in Entries.Where(e => e.Animation != null)) row.Animation.Source = row.Source;
         }
 
         internal void Bind(ModelExporter converter, VrmLib.Model model, ExportingGltfData storage)
         {
             var animator = prepared.GetComponent<Animator>();
+            int Node(string name)
+            {
+                var transform = animator.GetBoneTransform(PoseSampling.HumanBone(name));
+                if (transform == null || !converter.Nodes.TryGetValue(transform.gameObject, out var node))
+                    throw new InvalidOperationException("ポーズの骨が出力にありません: " + name);
+                return model.Nodes.IndexOf(node);
+            }
             foreach (var row in Selected())
                 foreach (var bone in row.Bones)
-                {
-                    var transform = animator.GetBoneTransform(PoseSampling.HumanBone(bone.Name));
-                    if (transform == null || !converter.Nodes.TryGetValue(transform.gameObject, out var node))
-                        throw new InvalidOperationException("ポーズの骨が出力にありません: " + bone.Name);
-                    bone.Node = model.Nodes.IndexOf(node);
-                }
+                    bone.Node = Node(bone.Name);
+            foreach (var row in SelectedAnimations())
+                foreach (var bone in row.Bones) bone.Node = Node(bone.Name);
         }
-        internal int SelectedCount => Entries.Count(e => e.Error == null && e.Data != null && !options.Excluded.Contains(e.Id));
+        internal int SelectedCount => Entries.Count(e => e.Error == null && (e.Data != null || e.Animation != null) && !options.Excluded.Contains(e.Id));
+        void CheckSelectedCount()
+        {
+            if (SelectedCount > HumanoidPoseData.MaximumPoses)
+                throw new InvalidOperationException("同梱ポーズは128件までです。「ポーズを確認・調整」で不要な項目を除外してください。");
+        }
         internal List<HumanoidPoseData> Selected()
         {
+            CheckSelectedCount();
             var selected = Entries.Where(e => e.Error == null && e.Data != null && !options.Excluded.Contains(e.Id)).Select(e => e.Data).ToList();
-            if (selected.Count > HumanoidPoseData.MaximumPoses)
-                throw new InvalidOperationException("同梱ポーズは128件までです。「ポーズを確認・調整」で不要な項目を除外してください。");
+            return selected;
+        }
+        internal List<HumanoidAnimationData> SelectedAnimations()
+        {
+            CheckSelectedCount();
+            var selected = Entries.Where(e => e.Error == null && e.Animation != null && !options.Excluded.Contains(e.Id)).Select(e => e.Animation).ToList();
+            if (selected.Sum(animation => animation.Frames.Count) > HumanoidAnimationData.MaximumTotalFrames)
+                throw new InvalidOperationException("動くポーズの合計フレーム数が32768を超えました。不要な項目を除外してください。");
             return selected;
         }
         internal byte[] Inject(byte[] bytes)
         {
-            var poses = Selected(); if (poses.Count == 0) return bytes;
+            var poses = Selected(); var animations = SelectedAnimations();
+            if (poses.Count == 0 && animations.Count == 0) return bytes;
             var document = GlbDocument.Read(bytes);
-            var extension = HumanoidPoseData.Write(poses);
-            if (Encoding.UTF8.GetByteCount(JsonDom.Serialize(extension)) > HumanoidPoseData.MaximumBytes) throw new InvalidOperationException("ポーズ拡張が2MiBを超えました。");
-            HumanoidPoseData.ValidateReferences(poses, document.Json);
-            var extensions = (Dictionary<string, object>)document.Json["extensions"]; extensions.Add(HumanoidPoseData.Extension, extension);
+            var extensions = (Dictionary<string, object>)document.Json["extensions"];
             if (!document.Json.TryGetValue("extensionsUsed", out var raw)) document.Json["extensionsUsed"] = raw = new List<object>();
-            ((List<object>)raw).Add(HumanoidPoseData.Extension);
+            if (poses.Count > 0)
+            {
+                var extension = HumanoidPoseData.Write(poses);
+                if (Encoding.UTF8.GetByteCount(JsonDom.Serialize(extension)) > HumanoidPoseData.MaximumBytes) throw new InvalidOperationException("ポーズ拡張が2MiBを超えました。");
+                HumanoidPoseData.ValidateReferences(poses, document.Json);
+                extensions.Add(HumanoidPoseData.Extension, extension); ((List<object>)raw).Add(HumanoidPoseData.Extension);
+            }
+            if (animations.Count > 0)
+            {
+                var extension = HumanoidAnimationData.Write(animations);
+                if (Encoding.UTF8.GetByteCount(JsonDom.Serialize(extension)) > HumanoidAnimationData.MaximumBytes)
+                    throw new InvalidOperationException("動くポーズの拡張が16MiBを超えました。不要な項目を除外してください。");
+                HumanoidAnimationData.ValidateReferences(animations, document.Json);
+                extensions.Add(HumanoidAnimationData.Extension, extension); ((List<object>)raw).Add(HumanoidAnimationData.Extension);
+            }
             return document.Write();
         }
         public void Dispose() { foreach (var value in owned) if (value != null) Object.DestroyImmediate(value); owned.Clear(); }

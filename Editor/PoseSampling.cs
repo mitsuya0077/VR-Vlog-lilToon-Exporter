@@ -31,8 +31,10 @@ namespace VRVlog.LilToonExporter
     {
         internal string Id, Name, Category = "", Source, Error, Note = "", Conditions = "";
         internal bool SampledMotion;
+        internal bool IsAnimation;
         internal readonly List<PoseLayer> Layers = new List<PoseLayer>();
         internal HumanoidPoseData Data;
+        internal HumanoidAnimationData Animation;
     }
     internal sealed class ManualPose
     {
@@ -55,6 +57,7 @@ namespace VRVlog.LilToonExporter
 
     internal static class PoseSampling
     {
+        static readonly string[] AnimationBoneNames = HumanoidPoseData.BoneNames.Concat(new[] { "neck", "head" }).ToArray();
         internal static HumanBodyBones HumanBone(string name)
         {
             // VRM 1.0 corrected thumb names; Unity retains the older names.
@@ -63,11 +66,11 @@ namespace VRVlog.LilToonExporter
         }
         internal static Quaternion Reflect(Quaternion q) => new Quaternion(q.x, -q.y, -q.z, q.w);
         internal static Vector3 Reflect(Vector3 v) => new Vector3(-v.x, v.y, v.z);
-        internal static HashSet<string> BodyPaths(GameObject root)
+        internal static HashSet<string> BodyPaths(GameObject root, bool includeHead = false)
         {
             var animator = root.GetComponent<Animator>();
             if (animator == null || !animator.isHuman) return new HashSet<string>();
-            return new HashSet<string>(HumanoidPoseData.BoneNames.Select(n => animator.GetBoneTransform(HumanBone(n)))
+            return new HashSet<string>((includeHead ? AnimationBoneNames : HumanoidPoseData.BoneNames).Select(n => animator.GetBoneTransform(HumanBone(n)))
                 .Where(t => t != null).Select(t => AnimationUtility.CalculateTransformPath(t, root.transform)));
         }
         internal static bool HasEffectiveBody(GameObject root, PoseLayer layer)
@@ -81,11 +84,11 @@ namespace VRVlog.LilToonExporter
                 return bone != null && WritesBone(layer, name, bone, root);
             }) || hips != null && WritesHipsPosition(layer, AnimationUtility.CalculateTransformPath(hips, root.transform));
         }
-        internal static IEnumerable<EditorCurveBinding> EffectiveBodyBindings(GameObject root, PoseLayer layer)
+        internal static IEnumerable<EditorCurveBinding> EffectiveBodyBindings(GameObject root, PoseLayer layer, bool includeHead = false)
         {
             var animator = root.GetComponent<Animator>();
             if (layer.Clip == null || animator == null || !animator.isHuman) yield break;
-            var bones = HumanoidPoseData.BoneNames.Select(n => (name: n, human: HumanBone(n), bone: animator.GetBoneTransform(HumanBone(n)))).Where(b => b.bone != null).ToArray();
+            var bones = (includeHead ? AnimationBoneNames : HumanoidPoseData.BoneNames).Select(n => (name: n, human: HumanBone(n), bone: animator.GetBoneTransform(HumanBone(n)))).Where(b => b.bone != null).ToArray();
             var paths = bones.ToDictionary(b => AnimationUtility.CalculateTransformPath(b.bone, root.transform), b => b.name);
             foreach (var binding in AnimationUtility.GetCurveBindings(layer.Clip))
             {
@@ -93,7 +96,7 @@ namespace VRVlog.LilToonExporter
                 AvatarMaskBodyPart part;
                 if (muscle)
                 {
-                    if (layer.SkipMuscles || binding.path != "" || !IsBodyMuscle(binding.propertyName)) continue;
+                    if (layer.SkipMuscles || binding.path != "" || !(includeHead ? AnimationMuscles : BodyMuscles).Contains(binding.propertyName)) continue;
                     if (binding.propertyName.StartsWith("RootT.") || binding.propertyName.StartsWith("RootQ.")) part = AvatarMaskBodyPart.Root;
                     else
                     {
@@ -115,10 +118,10 @@ namespace VRVlog.LilToonExporter
         internal static string Hash(string text)
         { using var sha = SHA256.Create(); return BitConverter.ToString(sha.ComputeHash(Encoding.UTF8.GetBytes(text))).Replace("-", "").ToLowerInvariant(); }
 
-        internal static bool Moving(GameObject root, PoseLayer layer)
+        internal static bool Moving(GameObject root, PoseLayer layer, bool includeHead = false)
         {
             if (layer.Weight == 0 || layer.GroupWeight == 0) return false;
-            foreach (var binding in EffectiveBodyBindings(root, layer))
+            foreach (var binding in EffectiveBodyBindings(root, layer, includeHead))
             {
                 var keys = AnimationUtility.GetEditorCurve(layer.Clip, binding).keys;
                 if (keys.Length < 2) continue;
@@ -133,6 +136,7 @@ namespace VRVlog.LilToonExporter
         internal static string Identity(PoseCandidate candidate)
         {
             var parts = new StringBuilder(candidate.Conditions);
+            if (candidate.IsAnimation) parts.Append("|animation:v1");
             foreach (var layer in candidate.Layers)
             {
                 if (layer.Clip == null) { parts.Append("missing"); continue; }
@@ -171,7 +175,138 @@ namespace VRVlog.LilToonExporter
             return "generated:" + Hash(JsonDom.Serialize(rows));
         }
 
-        internal static HumanoidPoseData Sample(GameObject avatar, PoseCandidate candidate)
+        internal static HumanoidPoseData Sample(GameObject avatar, PoseCandidate candidate) => SampleOwned(avatar, candidate, false, null);
+
+        internal static HumanoidAnimationData SampleAnimation(GameObject avatar, PoseCandidate candidate,
+            int maximumFrames = HumanoidAnimationData.MaximumFramesPerAnimation)
+        {
+            if (candidate.Layers.Count != 1 || candidate.Layers[0].Clip == null)
+                throw new InvalidOperationException("動くポーズは手動追加した一つのクリップを指定してください。");
+            var layer = candidate.Layers[0];
+            var start = (double)layer.Time; var duration = layer.Clip.length - start;
+            if (!Finite(layer.Time) || start < 0 || duration <= 0 || duration > 600 || start > 600)
+                throw new InvalidOperationException("動くポーズの開始秒はクリップ末尾より前、長さは0秒より長く600秒以下である必要があります。");
+            var data = new HumanoidAnimationData { Id = candidate.Id, Name = candidate.Name, Category = candidate.Category,
+                Source = candidate.Source, SourceStartTime = start, Duration = duration, Loop = layer.Clip.isLooping };
+            var deadline = System.Diagnostics.Stopwatch.StartNew();
+            maximumFrames = Math.Min(maximumFrames, HumanoidAnimationData.MaximumFramesPerAnimation);
+            void CheckBudget(int frames)
+            {
+                if (frames > maximumFrames)
+                    throw new InvalidOperationException(maximumFrames < HumanoidAnimationData.MaximumFramesPerAnimation
+                        ? "動くポーズの合計フレーム数が32768を超えました。不要な項目を除外してください。"
+                        : "動くポーズのフレーム数が8192を超えました。クリップの長さやカーブの密度を減らしてください。");
+                if (deadline.Elapsed.TotalSeconds > 30)
+                    throw new InvalidOperationException("動くポーズの解析が30秒を超えました。クリップの長さやカーブの密度を減らしてください。");
+            }
+            CheckBudget((int)Math.Ceiling(duration * 60) + 1);
+            SampleOwned(avatar, candidate, true, (sample, copy, activeLayers) =>
+            {
+                var times = new SortedSet<double> { 0, duration };
+                var steps = new Dictionary<double, double>();
+                var uniformFrames = (int)Math.Ceiling(duration * 60);
+                CheckBudget(uniformFrames + 1);
+                for (var i = 1; i < uniformFrames; i++) times.Add(i / 60.0);
+                foreach (var binding in EffectiveBodyBindings(copy, layer, true))
+                {
+                    var keys = AnimationUtility.GetEditorCurve(layer.Clip, binding).keys;
+                    for (var i = 0; i < keys.Length; i++)
+                    {
+                        var time = (double)keys[i].time - start;
+                        if (time < 0 || time > duration) continue;
+                        times.Add(time);
+                        if (time > 0 && i > 0 && keys[i].value != keys[i - 1].value &&
+                            (float.IsInfinity(keys[i - 1].outTangent) || float.IsInfinity(keys[i].inTangent)))
+                        {
+                            // The duplicated timestamp stores a left limit and
+                            // the exact-key right value. Never interpolate a jump.
+                            var bytes = BitConverter.GetBytes(keys[i].time);
+                            var before = BitConverter.ToSingle(BitConverter.GetBytes(BitConverter.ToInt32(bytes, 0) - 1), 0);
+                            steps[time] = Math.Max(0, (double)before - start);
+                        }
+                    }
+                }
+                CheckBudget(times.Count + steps.Count);
+                var eulerCurves = EffectiveBodyBindings(copy, layer, true)
+                    .Where(binding => binding.type == typeof(Transform) && binding.propertyName.StartsWith("localEulerAngles"))
+                    .Select(binding => AnimationUtility.GetEditorCurve(layer.Clip, binding)).ToArray();
+                HumanoidAnimationData.Frame Capture(double time, double sampleTime)
+                {
+                    CheckBudget(data.Frames.Count + 1);
+                    var pose = sample(sampleTime);
+                    if (data.Bones.Count == 0)
+                        foreach (var bone in pose.Bones) data.Bones.Add(new HumanoidAnimationData.Bone { Name = bone.Name, Node = bone.Node });
+                    return new HumanoidAnimationData.Frame { Time = time, HipsOffset = pose.HipsOffset,
+                        Rotations = pose.Bones.Select(bone => bone.Rotation).ToArray() };
+                }
+                void Add(HumanoidAnimationData.Frame frame)
+                {
+                    CheckBudget(data.Frames.Count + 1);
+                    if (data.Frames.Count > 0)
+                        for (var i = 0; i < frame.Rotations.Length; i++)
+                        {
+                            var previous = data.Frames[data.Frames.Count - 1].Rotations[i]; var next = frame.Rotations[i];
+                            if (previous.Select((value, axis) => value * next[axis]).Sum() < 0)
+                                for (var axis = 0; axis < 4; axis++) next[axis] = -next[axis];
+                        }
+                    data.Frames.Add(frame);
+                }
+                bool Matches(HumanoidAnimationData.Frame left, HumanoidAnimationData.Frame right,
+                    HumanoidAnimationData.Frame actual, double blend)
+                {
+                    var expectedHip = Vector3.Lerp(Vector(left.HipsOffset), Vector(right.HipsOffset), (float)blend);
+                    if (Vector3.Distance(expectedHip, Vector(actual.HipsOffset)) > .0005f) return false;
+                    for (var i = 0; i < actual.Rotations.Length; i++)
+                        if (Quaternion.Angle(Quaternion.Slerp(Rotation(left.Rotations[i]), Rotation(right.Rotations[i]), (float)blend),
+                            Rotation(actual.Rotations[i])) > .15f) return false;
+                    return true;
+                }
+                void Refine(HumanoidAnimationData.Frame left, HumanoidAnimationData.Frame right, int depth)
+                {
+                    var middleTime = (left.Time + right.Time) * .5;
+                    var quarter = Capture(left.Time + (right.Time - left.Time) * .25, left.Time + (right.Time - left.Time) * .25);
+                    var middle = Capture(middleTime, middleTime);
+                    var threeQuarter = Capture(left.Time + (right.Time - left.Time) * .75, left.Time + (right.Time - left.Time) * .75);
+                    // Quaternion samples can alias complete turns to identity.
+                    // Keep the authored, unwrapped Euler channel changes below
+                    // 90 degrees between probes even when all quaternions agree.
+                    var probeTimes = new[] { left.Time, quarter.Time, middle.Time, threeQuarter.Time,
+                        steps.TryGetValue(right.Time, out var beforeStep) ? beforeStep : right.Time };
+                    var largeEulerChange = eulerCurves.Any(curve =>
+                    {
+                        var previous = curve.Evaluate((float)(start + probeTimes[0]));
+                        for (var i = 1; i < probeTimes.Length; i++)
+                        {
+                            var value = curve.Evaluate((float)(start + probeTimes[i]));
+                            if (Math.Abs(value - previous) > 90) return true;
+                            previous = value;
+                        }
+                        return false;
+                    });
+                    if (!largeEulerChange && Matches(left, right, quarter, .25) && Matches(left, right, middle, .5) && Matches(left, right, threeQuarter, .75)) return;
+                    if (depth >= 12 || right.Time - left.Time < 0.000001)
+                        throw new InvalidOperationException("動くポーズのカーブを十分な精度で保存できません。カーブの変化を緩やかにしてください。");
+                    Refine(left, middle, depth + 1); Add(middle); Refine(middle, right, depth + 1);
+                }
+                var first = Capture(0, 0); Add(first);
+                foreach (var time in times.Where(time => time > 0))
+                {
+                    var previous = data.Frames[data.Frames.Count - 1];
+                    var right = Capture(time, time);
+                    var leftLimit = steps.TryGetValue(time, out var before) ? Capture(time, before) : right;
+                    Refine(previous, leftLimit, 0); Add(leftLimit);
+                    if (!ReferenceEquals(leftLimit, right)) Add(right);
+                }
+            });
+            HumanoidAnimationData.Write(new[] { data });
+            return data;
+        }
+
+        static Vector3 Vector(double[] value) => new Vector3((float)value[0], (float)value[1], (float)value[2]);
+        static Quaternion Rotation(double[] value) => new Quaternion((float)value[0], (float)value[1], (float)value[2], (float)value[3]);
+
+        static HumanoidPoseData SampleOwned(GameObject avatar, PoseCandidate candidate, bool includeHead,
+            Action<Func<double, HumanoidPoseData>, GameObject, List<PoseLayer>> sampleAnimation)
         {
             var scene = EditorSceneManager.NewPreviewScene();
             GameObject copy = null, staging = null; var graph = default(PlayableGraph);
@@ -188,16 +323,19 @@ namespace VRVlog.LilToonExporter
                 var animator = copy.GetComponent<Animator>();
                 if (animator == null || !animator.isHuman || animator.avatar == null || !animator.avatar.isValid)
                     throw new InvalidOperationException("有効なHumanoid Animatorが必要です。");
-                var bones = HumanoidPoseData.BoneNames.Select(name => (name, bone: animator.GetBoneTransform(HumanBone(name))))
+                var allBones = AnimationBoneNames.Select(name => (name, bone: animator.GetBoneTransform(HumanBone(name))))
                     .Where(b => b.bone != null).ToArray();
+                var bones = allBones.Where(b => HumanoidPoseData.BoneNames.Contains(b.name) || includeHead &&
+                    candidate.Layers.Any(layer => layer.Clip != null && WritesBone(layer, b.name, b.bone, copy))).ToArray();
                 var rotations = bones.ToDictionary(b => b.name, b => b.bone.rotation);
-                var locals = bones.ToDictionary(b => b.name, b => b.bone.localRotation);
+                var locals = allBones.ToDictionary(b => b.name, b => b.bone.localRotation);
+                var positions = allBones.ToDictionary(b => b.name, b => b.bone.localPosition);
                 var hips = animator.GetBoneTransform(HumanBodyBones.Hips);
                 var hipPosition = hips.position;
                 animator.runtimeAnimatorController = null; animator.enabled = true;
                 animator.fireEvents = false; animator.applyRootMotion = false; animator.cullingMode = AnimatorCullingMode.AlwaysAnimate;
                 copy.SetActive(true);
-                graph = PlayableGraph.Create("VR Vlog static pose"); graph.SetTimeUpdateMode(DirectorUpdateMode.Manual);
+                graph = PlayableGraph.Create("VR Vlog pose sampling"); graph.SetTimeUpdateMode(DirectorUpdateMode.Manual);
                 // Empty humanoid streams evaluate Unity's muscle defaults,
                 // which need not equal the avatar's authored rest (notably
                 // fingers). Supply its actual rest as the bottom layer.
@@ -207,9 +345,18 @@ namespace VRVlog.LilToonExporter
                     if (layer.Clip == null || !Finite(layer.Time) || layer.Time < 0 || layer.Time > 600 || layer.Time > layer.Clip.length)
                         throw new InvalidOperationException("クリップまたは採用時刻が不正です（0秒〜クリップ末尾、最大600秒）。");
                     if (layer.Weight == 0 || layer.GroupWeight == 0) continue;
-                    var effective = new HashSet<EditorCurveBinding>(EffectiveBodyBindings(copy, layer));
+                    var effective = new HashSet<EditorCurveBinding>(EffectiveBodyBindings(copy, layer, includeHead));
                     if (effective.Count == 0) continue;
-                    var clean = BodyClip(copy, animator, layer.Clip, layer.SkipMuscles, effective); clips.Add(clean);
+                    var clean = BodyClip(copy, animator, layer.Clip, layer.SkipMuscles, effective, includeHead); clips.Add(clean);
+                    if (includeHead)
+                    {
+                        var settings = AnimationUtility.GetAnimationClipSettings(clean);
+                        // Disabling looping also disables native Loop Pose
+                        // correction. Keep corrected loops intact; a regular
+                        // loop instead captures its authored end before wrap.
+                        if (!settings.loopBlend)
+                        { settings.loopTime = false; AnimationUtility.SetAnimationClipSettings(clean, settings); }
+                    }
                     if (AnimationUtility.GetCurveBindings(clean).Length != 0) bodyClips.Add(layer, clean);
                 }
                 var activeLayers = candidate.Layers.Where(bodyClips.ContainsKey).ToList();
@@ -224,7 +371,7 @@ namespace VRVlog.LilToonExporter
                 var output = AnimationPlayableOutput.Create(graph, "Pose", animator); output.SetSourcePlayable(mixer);
                 var restHumanPose = new HumanPose();
                 if (hasMuscles) using (var handler = new HumanPoseHandler(animator.avatar, copy.transform)) handler.GetHumanPose(ref restHumanPose);
-                var baseline = hasMuscles ? RestClip(animator, copy) : TransformRestClip(animator, copy);
+                var baseline = hasMuscles ? RestClip(animator, copy) : TransformRestClip(animator, copy, includeHead);
                 clips.Add(baseline);
                 AnimationClipPlayable Baseline()
                 {
@@ -236,6 +383,7 @@ namespace VRVlog.LilToonExporter
                 // Real layers sit above the rest input so even a single layer
                 // retains its authored fractional weight.
                 var any = false;
+                var playables = new Dictionary<PoseLayer, AnimationClipPlayable>();
                 for (var groupIndex = 0; groupIndex < groups.Length; groupIndex++)
                 {
                     var layers = groups[groupIndex].ToArray();
@@ -245,46 +393,66 @@ namespace VRVlog.LilToonExporter
                     if (layers[0].OuterMask != null) mixer.SetLayerMaskFromAvatarMask((uint)(groupIndex + 1), layers[0].OuterMask);
                     for (var i = 0; i < layers.Length; i++)
                     {
-                    var layer = layers[i];
-                    var clean = bodyClips[layer];
-                    any |= AnimationUtility.GetCurveBindings(clean).Length > 0 &&
-                        (bones.Any(b => WritesBone(layer, b.name, b.bone, copy)) ||
-                         WritesHipsPosition(layer, AnimationUtility.CalculateTransformPath(hips, copy.transform)));
-                    var playable = AnimationClipPlayable.Create(graph, clean);
-                    playable.SetApplyFootIK(false); playable.SetApplyPlayableIK(false); playable.SetSpeed(0); playable.SetTime(layer.Time);
-                    graph.Connect(playable, 0, inner, i + 1); inner.SetInputWeight(i + 1, layer.Weight);
-                    inner.SetLayerAdditive((uint)(i + 1), layer.Additive);
-                    if (layer.Mask != null) inner.SetLayerMaskFromAvatarMask((uint)(i + 1), layer.Mask);
+                        var layer = layers[i];
+                        var clean = bodyClips[layer];
+                        any |= AnimationUtility.GetCurveBindings(clean).Length > 0 &&
+                            (bones.Any(b => WritesBone(layer, b.name, b.bone, copy)) ||
+                             WritesHipsPosition(layer, AnimationUtility.CalculateTransformPath(hips, copy.transform)));
+                        var playable = AnimationClipPlayable.Create(graph, clean);
+                        playable.SetApplyFootIK(false); playable.SetApplyPlayableIK(false); playable.SetSpeed(0); playable.SetTime(layer.Time);
+                        playables.Add(layer, playable);
+                        graph.Connect(playable, 0, inner, i + 1); inner.SetInputWeight(i + 1, layer.Weight);
+                        inner.SetLayerAdditive((uint)(i + 1), layer.Additive);
+                        if (layer.Mask != null) inner.SetLayerMaskFromAvatarMask((uint)(i + 1), layer.Mask);
                     }
                 }
                 if (!any) throw new InvalidOperationException("有効なマスク・重みで書き出すHumanoidの体・手足・指のカーブがありません。");
-                if (hasTransforms) EvaluateTransforms(copy, animator, activeLayers);
-                else
+                var originalTimes = activeLayers.ToDictionary(layer => layer, layer => layer.Time);
+                var writtenBones = allBones.ToDictionary(b => b.name, b => activeLayers.Any(l => WritesBone(l, b.name, b.bone, copy)));
+                // Humanoid body rotation also moves hips around its body
+                // pivot. Preserve that native offset in an animation, even
+                // when the clip has RootQ without an explicit RootT channel.
+                var writesHips = activeLayers.Any(l => WritesHipsPosition(l, AnimationUtility.CalculateTransformPath(hips, copy.transform), includeHead));
+                graph.Play();
+                HumanoidPoseData CaptureAt(double elapsed)
                 {
-                    graph.Play(); graph.Evaluate(0);
-                    ApplyHumanoidRoot(animator, copy, restHumanPose, activeLayers);
+                    foreach (var b in allBones)
+                    { b.bone.localRotation = locals[b.name]; b.bone.localPosition = positions[b.name]; }
+                    foreach (var layer in activeLayers)
+                    {
+                        layer.Time = (float)(originalTimes[layer] + elapsed);
+                        var playable = playables[layer]; playable.SetTime(layer.Time); playable.SetDone(false);
+                    }
+                    try
+                    {
+                        if (hasTransforms) EvaluateTransforms(copy, animator, activeLayers, includeHead);
+                        else { graph.Evaluate(0); ApplyHumanoidRoot(animator, copy, restHumanPose, activeLayers, includeHead); }
+                        // A clip playable can populate unbound humanoid channels with
+                        // defaults. Retain the exact authored locals outside its body
+                        // parts, and outside every effective mask, before capturing.
+                        foreach (var b in allBones)
+                            if ((!includeHead && (b.name == "neck" || b.name == "head")) || !writtenBones[b.name]) b.bone.localRotation = locals[b.name];
+                        if (!writesHips) hips.position = hipPosition;
+                        var data = new HumanoidPoseData { Id = candidate.Id, Name = candidate.Name, Category = candidate.Category,
+                            Source = candidate.Source, SampleTime = candidate.Layers.Count == 1 ? candidate.Layers[0].Time : 0,
+                            SampledMotion = candidate.SampledMotion };
+                        // ModelExporter omits the avatar root node. Sample with the
+                        // same identity root TRS, independent of scene placement/scale.
+                        var offset = Reflect(hips.position - hipPosition);
+                        data.HipsOffset = new double[] { offset.x, offset.y, offset.z };
+                        foreach (var b in bones)
+                        {
+                            var delta = Reflect((b.bone.rotation * Quaternion.Inverse(rotations[b.name])).normalized);
+                            data.Bones.Add(new HumanoidPoseData.Bone { Name = b.name, Node = Array.IndexOf(includeHead ? AnimationBoneNames : HumanoidPoseData.BoneNames, b.name),
+                                Rotation = new double[] { delta.x, delta.y, delta.z, delta.w } });
+                        }
+                        if (!includeHead) HumanoidPoseData.Write(new[] { data });
+                        return data;
+                    }
+                    finally { foreach (var layer in activeLayers) layer.Time = originalTimes[layer]; }
                 }
-                // A clip playable can populate unbound humanoid channels with
-                // defaults. Retain the exact authored locals outside its body
-                // parts, and outside every effective mask, before capturing.
-                foreach (var b in bones)
-                    if (!activeLayers.Any(l => WritesBone(l, b.name, b.bone, copy))) b.bone.localRotation = locals[b.name];
-                if (!activeLayers.Any(l => WritesHipsPosition(l, AnimationUtility.CalculateTransformPath(hips, copy.transform)))) hips.position = hipPosition;
-                var data = new HumanoidPoseData { Id = candidate.Id, Name = candidate.Name, Category = candidate.Category,
-                    Source = candidate.Source, SampleTime = candidate.Layers.Count == 1 ? candidate.Layers[0].Time : 0,
-                    SampledMotion = candidate.SampledMotion };
-                // ModelExporter omits the avatar root node. Sample with the
-                // same identity root TRS, independent of scene placement/scale.
-                var offset = Reflect(hips.position - hipPosition);
-                data.HipsOffset = new double[] { offset.x, offset.y, offset.z };
-                foreach (var b in bones)
-                {
-                    var delta = Reflect((b.bone.rotation * Quaternion.Inverse(rotations[b.name])).normalized);
-                    data.Bones.Add(new HumanoidPoseData.Bone { Name = b.name, Node = Array.IndexOf(HumanoidPoseData.BoneNames, b.name),
-                        Rotation = new double[] { delta.x, delta.y, delta.z, delta.w } });
-                }
-                HumanoidPoseData.Write(new[] { data });
-                return data;
+                if (sampleAnimation != null) { sampleAnimation(CaptureAt, copy, activeLayers); return null; }
+                return CaptureAt(0);
             }
             finally
             {
@@ -296,18 +464,18 @@ namespace VRVlog.LilToonExporter
             }
         }
 
-        internal static AnimationClip BodyClip(GameObject root, Animator animator, AnimationClip source, bool skipMuscles = false, ISet<EditorCurveBinding> effective = null)
+        internal static AnimationClip BodyClip(GameObject root, Animator animator, AnimationClip source, bool skipMuscles = false, ISet<EditorCurveBinding> effective = null, bool includeHead = false)
         {
             var result = Object.Instantiate(source); result.name = source.name;
             // All events and non-pose curves are removed from this owned clip.
             AnimationUtility.SetAnimationEvents(result, Array.Empty<AnimationEvent>());
-            var paths = BodyPaths(root);
+            var paths = BodyPaths(root, includeHead);
             var hips = AnimationUtility.CalculateTransformPath(animator.GetBoneTransform(HumanBodyBones.Hips), root.transform);
             foreach (var binding in AnimationUtility.GetCurveBindings(result))
             {
                 var p = binding.propertyName;
                 var bodyBinding = binding.type == typeof(Transform) && paths.Contains(binding.path) ||
-                    binding.type == typeof(Animator) && binding.path == "" && IsBodyMuscle(p);
+                    binding.type == typeof(Animator) && binding.path == "" && (includeHead ? AnimationMuscles : BodyMuscles).Contains(p);
                 if (effective != null && bodyBinding && !effective.Contains(binding))
                 { AnimationUtility.SetEditorCurve(result, binding, null); continue; }
                 if (binding.type == typeof(Transform) && binding.path == "" || binding.type == typeof(Animator) && (p.StartsWith("MotionT.") || p.StartsWith("MotionQ.")))
@@ -322,7 +490,7 @@ namespace VRVlog.LilToonExporter
                     (p.StartsWith("m_LocalScale.") || binding.path != hips && p.StartsWith("m_LocalPosition.")))
                 { Object.DestroyImmediate(result); throw new InvalidOperationException("腰以外の位置や骨スケールを変更するポーズは未対応です。"); }
                 var allowed = !skipMuscles && binding.type == typeof(Animator) && binding.path == "" &&
-                    IsBodyMuscle(p);
+                    (includeHead ? AnimationMuscles : BodyMuscles).Contains(p);
                 allowed |= binding.type == typeof(Transform) && paths.Contains(binding.path) &&
                     (p.StartsWith("m_LocalRotation.") || p.StartsWith("localEulerAngles") || binding.path == hips && p.StartsWith("m_LocalPosition."));
                 if (!allowed) AnimationUtility.SetEditorCurve(result, binding, null);
@@ -334,7 +502,7 @@ namespace VRVlog.LilToonExporter
         }
         internal static bool Finite(float value) => !float.IsNaN(value) && !float.IsInfinity(value);
 
-        static void ApplyHumanoidRoot(Animator animator, GameObject root, HumanPose baseline, List<PoseLayer> layers)
+        static void ApplyHumanoidRoot(Animator animator, GameObject root, HumanPose baseline, List<PoseLayer> layers, bool preserveUnwrittenBodyChannels = false)
         {
             // RootQ/RootT are humanoid body coordinates. With root motion
             // disabled, a clip playable can extract them instead of moving the
@@ -360,8 +528,8 @@ namespace VRVlog.LilToonExporter
                 using var handler = new HumanPoseHandler(animator.avatar, root.transform);
                 var pose = new HumanPose(); handler.GetHumanPose(ref pose);
                 var weight = layer.Weight * layer.GroupWeight;
-                if (hasPosition) pose.bodyPosition = Vector3.Lerp(baseline.bodyPosition, position, weight);
-                if (hasRotation) pose.bodyRotation = Quaternion.Slerp(baseline.bodyRotation, rotation.normalized, weight);
+                if (hasPosition || preserveUnwrittenBodyChannels) pose.bodyPosition = Vector3.Lerp(baseline.bodyPosition, position, weight);
+                if (hasRotation || preserveUnwrittenBodyChannels) pose.bodyRotation = Quaternion.Slerp(baseline.bodyRotation, rotation.normalized, weight);
                 handler.SetHumanPose(ref pose);
             }
         }
@@ -370,9 +538,9 @@ namespace VRVlog.LilToonExporter
         // these through a humanoid playable retargets/clamps them a second time.
         // Evaluate Unity curves on the owned skeleton and compose override
         // layers in their authored order instead.
-        static void EvaluateTransforms(GameObject root, Animator animator, List<PoseLayer> layers)
+        static void EvaluateTransforms(GameObject root, Animator animator, List<PoseLayer> layers, bool includeHead = false)
         {
-            var bones = HumanoidPoseData.BoneNames.Select(n => (name: n, t: animator.GetBoneTransform(HumanBone(n)))).Where(b => b.t != null).ToArray();
+            var bones = (includeHead ? AnimationBoneNames : HumanoidPoseData.BoneNames).Select(n => (name: n, t: animator.GetBoneTransform(HumanBone(n)))).Where(b => b.t != null).ToArray();
             foreach (var group in layers.GroupBy(l => l.Group))
             {
                 var before = bones.ToDictionary(b => b.t, b => b.t.localRotation);
@@ -420,10 +588,10 @@ namespace VRVlog.LilToonExporter
             for (var i = 0; i < 4; i++) AnimationUtility.SetEditorCurve(clip, EditorCurveBinding.FloatCurve("", typeof(Animator), "RootQ." + "xyzw"[i]), AnimationCurve.Constant(0, 1, rotation[i]));
             return clip;
         }
-        static AnimationClip TransformRestClip(Animator animator, GameObject root)
+        static AnimationClip TransformRestClip(Animator animator, GameObject root, bool includeHead = false)
         {
             var clip = new AnimationClip();
-            foreach (var name in HumanoidPoseData.BoneNames)
+            foreach (var name in includeHead ? AnimationBoneNames : HumanoidPoseData.BoneNames)
             {
                 var bone = animator.GetBoneTransform(HumanBone(name)); if (bone == null) continue;
                 var path = AnimationUtility.CalculateTransformPath(bone, root.transform);
@@ -440,10 +608,11 @@ namespace VRVlog.LilToonExporter
                         return side + "Hand." + finger + "." + name.Substring((side + " " + finger + " ").Length);
             return name;
         }
-        static readonly HashSet<string> BodyMuscles = BuildBodyMuscles();
-        static HashSet<string> BuildBodyMuscles()
+        static readonly HashSet<string> BodyMuscles = BuildBodyMuscles(HumanoidPoseData.BoneNames);
+        static readonly HashSet<string> AnimationMuscles = BuildBodyMuscles(AnimationBoneNames);
+        static HashSet<string> BuildBodyMuscles(IEnumerable<string> names)
         {
-            var bones = new HashSet<HumanBodyBones>(HumanoidPoseData.BoneNames.Select(HumanBone));
+            var bones = new HashSet<HumanBodyBones>(names.Select(HumanBone));
             var result = new HashSet<string>(StringComparer.Ordinal);
             for (var i = 0; i < HumanTrait.MuscleCount; i++)
                 if (bones.Contains((HumanBodyBones)HumanTrait.BoneFromMuscle(i)))
@@ -455,6 +624,7 @@ namespace VRVlog.LilToonExporter
         internal static bool IsBodyMuscle(string property) => BodyMuscles.Contains(property);
         internal static AvatarMaskBodyPart Part(string bone)
         {
+            if (bone == "neck" || bone == "head") return AvatarMaskBodyPart.Head;
             var left = bone.StartsWith("left");
             if (bone.Contains("Thumb") || bone.Contains("Index") || bone.Contains("Middle") || bone.Contains("Ring") || bone.Contains("Little"))
                 return left ? AvatarMaskBodyPart.LeftFingers : AvatarMaskBodyPart.RightFingers;
@@ -479,7 +649,7 @@ namespace VRVlog.LilToonExporter
                 if (binding.type == typeof(Transform) && binding.path == path &&
                     (binding.propertyName.StartsWith("m_LocalRotation.") || binding.propertyName.StartsWith("localEulerAngles") || name == "hips" && binding.propertyName.StartsWith("m_LocalPosition.")) &&
                     MaskAllows(layer.Mask, part, path, false) && MaskAllows(layer.OuterMask, part, path, false)) return true;
-                if (layer.SkipMuscles || binding.type != typeof(Animator) || binding.path != "" || !IsBodyMuscle(binding.propertyName)) continue;
+                if (layer.SkipMuscles || binding.type != typeof(Animator) || binding.path != "" || !AnimationMuscles.Contains(binding.propertyName)) continue;
                 if (name == "hips" && binding.propertyName.StartsWith("RootQ."))
                 {
                     if (MaskAllows(layer.Mask, AvatarMaskBodyPart.Root, "", true) && MaskAllows(layer.OuterMask, AvatarMaskBodyPart.Root, "", true)) return true;
@@ -495,9 +665,10 @@ namespace VRVlog.LilToonExporter
             }
             return false;
         }
-        static bool WritesHipsPosition(PoseLayer layer, string hipsPath) => layer.Weight > 0 && layer.GroupWeight > 0 &&
+        static bool WritesHipsPosition(PoseLayer layer, string hipsPath, bool includeBodyRotation = false) => layer.Weight > 0 && layer.GroupWeight > 0 &&
             AnimationUtility.GetCurveBindings(layer.Clip).Any(b =>
-                b.type == typeof(Animator) && b.path == "" && !layer.SkipMuscles && IsBodyMuscle(b.propertyName) && b.propertyName.StartsWith("RootT.") &&
+                b.type == typeof(Animator) && b.path == "" && !layer.SkipMuscles && IsBodyMuscle(b.propertyName) &&
+                (b.propertyName.StartsWith("RootT.") || includeBodyRotation && b.propertyName.StartsWith("RootQ.")) &&
                 MaskAllows(layer.Mask, AvatarMaskBodyPart.Root, "", true) && MaskAllows(layer.OuterMask, AvatarMaskBodyPart.Root, "", true) ||
                 b.type == typeof(Transform) && b.path == hipsPath && b.propertyName.StartsWith("m_LocalPosition.") &&
                 MaskAllows(layer.Mask, AvatarMaskBodyPart.Body, hipsPath, false) && MaskAllows(layer.OuterMask, AvatarMaskBodyPart.Body, hipsPath, false));

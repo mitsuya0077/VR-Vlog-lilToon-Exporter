@@ -284,12 +284,12 @@ class UnityProfilePolicyTests(unittest.TestCase):
             # Line-bounded attributes avoid ambiguous nested whitespace repeats
             # when scanning a long class for a later method.
             declarations = dict((method, attributes) for attributes, method in re.findall(
-                r'((?:^[ \t]*\[(?:Test|TestCase\([^\r\n]*\))\][ \t]*(?:\r?\n)?)+)'
-                r'[ \t]*public[ \t]+(?:async[ \t]+)?(?:void|Task)[ \t]+(\w+)\(', source, re.MULTILINE))
+                r'((?:^[ \t]*\[(?:Test|UnityTest|TestCase\([^\r\n]*\))\][ \t]*(?:\r?\n)?)+)'
+                r'[ \t]*public[ \t]+(?:async[ \t]+)?(?:void|Task|IEnumerator)[ \t]+(\w+)\(', source, re.MULTILINE))
             for method, count in methods.items():
                 with self.subTest(suite=suite, method=method):
                     self.assertIn(method, declarations, 'Required regression must remain a real checked-in test')
-                    self.assertEqual(len(re.findall(r'\[(?:Test|TestCase\()', declarations[method])), count)
+                    self.assertEqual(len(re.findall(r'\[(?:Test|UnityTest|TestCase\()', declarations[method])), count)
                     variants = unity_runner.INTEGRATION_VARIANTS.get(suite, {}).get(method)
                     if variants is not None:
                         arguments = re.findall(r'\[TestCase\(([^\r\n]*)\)\]', declarations[method])

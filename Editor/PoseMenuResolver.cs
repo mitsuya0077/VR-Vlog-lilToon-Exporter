@@ -179,7 +179,7 @@ namespace VRVlog.LilToonExporter
                             throw new InvalidOperationException("加算レイヤーの姿勢は未対応です。");
                         if (item.state.mirror || item.state.mirrorParameterActive || item.state.timeParameterActive || item.state.speedParameterActive || item.state.cycleOffsetParameterActive || item.state.iKOnFeet)
                             throw new InvalidOperationException("ミラー・時刻パラメーター・IKに依存する状態は未対応です。");
-                        if (PoseSampling.Moving(avatar, poseLayer)) throw new InvalidOperationException("体の動くメニュークリップです。手動追加で採用時刻を指定できます。");
+                        if (PoseSampling.Moving(avatar, poseLayer)) throw new InvalidOperationException("体の動くメニュークリップです。手動追加で動くポーズとして保存できます。");
                         if (AnimationUtility.GetAnimationEvents(item.clip).Length != 0)
                             throw new InvalidOperationException("Animation Eventを伴うメニューです。");
                         poseLayer.ClipIdentity = PoseSampling.GeneratedClipIdentity(item.clip);
