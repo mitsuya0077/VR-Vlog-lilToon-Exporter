@@ -138,7 +138,8 @@ namespace VRVlog.LilToonExporter.Tests
             Assert.That(entry.Values.Single().Weight, Is.EqualTo(70).Within(.01));
             Assert.That(entry.Animation.Select(v => v.Shape), Is.EqualTo(new[] { Shapes[1] }));
             Assert.That(entry.Animation.Single().Curve.Evaluate(.5), Is.EqualTo(75).Within(.01));
-            Assert.That(entry.Messages.Any(m => m.Contains("材質")), Is.True, "Face-only conversion must disclose the prepared material boundary.");
+            Assert.That(entry.Messages, Does.Contain(ExporterLocalization.T(FacialProjectionScope.Notice)),
+                "Face-only conversion must disclose the prepared material boundary.");
             Assert.That(ExportSourceFingerprint.Compute(avatar), Is.EqualTo(before)); Assert.That(EditorJsonUtility.ToJson(material), Is.EqualTo(materialBefore));
         }
 
@@ -192,7 +193,10 @@ namespace VRVlog.LilToonExporter.Tests
             positions[2] = Vector3.right * .06f;
             if (kind == "normal") normals[3] = Vector3.right * .03f;
             else if (kind == "tangent") tangents[3] = Vector3.right * .03f;
-            else positions[3] = Vector3.right * .0000001f;
+            // Unity discards 1e-7 deltas when creating its sparse native shape
+            // buffer. Use a small retained displacement and verify it below;
+            // an absent native deformation cannot witness an exclusion rule.
+            else positions[3] = Vector3.right * .00002f;
             var original = Enumerable.Range(0, Shapes.Length).Select(index =>
             {
                 var delta = new Vector3[8]; mesh.GetBlendShapeFrameVertices(index, 0, delta, null, null); return delta;
@@ -203,6 +207,11 @@ namespace VRVlog.LilToonExporter.Tests
                 mesh.AddBlendShapeFrame(Shapes[index], 100, original[index], null, null);
                 if (index == 1) mesh.AddBlendShapeFrame(Shapes[index], 200, positions, normals, tangents);
             }
+            var storedPositions = new Vector3[8]; var storedNormals = new Vector3[8]; var storedTangents = new Vector3[8];
+            mesh.GetBlendShapeFrameVertices(1, 1, storedPositions, storedNormals, storedTangents);
+            var storedBodyDelta = kind == "normal" ? storedNormals[3] : kind == "tangent" ? storedTangents[3] : storedPositions[3];
+            Assert.That(storedBodyDelta.Equals(Vector3.zero), Is.False,
+                "The native mesh must actually retain the body deformation: " + kind + " / " + storedBodyDelta.ToString("R"));
             var motion = Clip("Face and body", 75, true);
             AnimationUtility.SetEditorCurve(motion, Binding(Shapes[0]), AnimationCurve.Constant(0, 1, 70));
             var entry = new VrChatExpressionMenu.Entry(); VrChatGestureExpressions.ReadClip(avatar, motion, entry);
@@ -224,7 +233,38 @@ namespace VRVlog.LilToonExporter.Tests
             VrChatExpressionSampler.ApplyPermanentOverrides(avatar, controller, entry, 0, false, metadata: Metadata(), sourceState: selected);
             Assert.That(entry.Values.Select(v => v.Shape), Is.EquivalentTo(Shapes.Skip(1)));
             Assert.That(entry.Animation.Select(v => v.Shape), Is.EquivalentTo(Shapes.Skip(1)));
-            Assert.That(entry.Messages.Any(m => m.Contains("顔の形状変化だけ")), Is.False);
+            Assert.That(entry.Messages, Does.Not.Contain(ExporterLocalization.T(FacialProjectionScope.Notice)));
+        }
+
+        [TestCase(false)]
+        [TestCase(true)]
+        public void MissingDescriptorRendererRetainsStrictFallbackWithoutDereferencingUnityFakeNull(bool destroyed)
+        {
+            var descriptor = avatar.GetComponents<Component>().Single(c => c != null && c.GetType().FullName == "VRC.SDK3.Avatars.Components.VRCAvatarDescriptor");
+            var field = descriptor.GetType().GetField("VisemeSkinnedMesh");
+            var clone = Object.Instantiate(avatar);
+            try
+            {
+                var cloneDescriptor = clone.GetComponent(descriptor.GetType());
+                if (destroyed)
+                {
+                    var dummy = new GameObject("Removed descriptor renderer").AddComponent<SkinnedMeshRenderer>();
+                    field.SetValue(cloneDescriptor, dummy); Object.DestroyImmediate(dummy.gameObject);
+                }
+                else
+                {
+                    using var serialized = new SerializedObject(cloneDescriptor);
+                    serialized.FindProperty("VisemeSkinnedMesh").objectReferenceValue = null;
+                    serialized.ApplyModifiedPropertiesWithoutUndo();
+                }
+                var missing = field.GetValue(cloneDescriptor) as SkinnedMeshRenderer;
+                Assert.That(missing == null, Is.True);
+                Assert.That(ReferenceEquals(missing, null), Is.False, "Exercise a Unity fake-null reference, not an ordinary CLR null.");
+                Assert.That(FacialProjectionScope.Create(clone), Is.Null);
+                var motion = Clip("No facial identity proof", 75, true);
+                Assert.Throws<InvalidOperationException>(() => VrChatGestureExpressions.ReadClip(clone, motion, new VrChatExpressionMenu.Entry()));
+            }
+            finally { Object.DestroyImmediate(clone); }
         }
 
         private void ConfigureDescriptorFx()
@@ -287,7 +327,7 @@ namespace VRVlog.LilToonExporter.Tests
                 var bytes = UniVrmOneClickExporter.Export(avatar, "Projected face", "Tests", warnings,
                     exporterVersion: "face-projection-regression", lilToonVersion: "2.3.4", blinkOptions: new BlinkExportOptions { Mode = BlinkExportMode.None });
                 Assert.That(VrmMenuExpressions.CountRegistered(bytes), Is.GreaterThan(0), string.Join("\n", warnings));
-                Assert.That(warnings.Any(message => message.Contains("顔の形状変化だけ")), Is.True, string.Join("\n", warnings));
+                Assert.That(warnings.Any(message => message.Contains(ExporterLocalization.T(FacialProjectionScope.Notice))), Is.True, string.Join("\n", warnings));
                 imported = await Vrm10.LoadBytesAsync(bytes, canLoadVrm0X: false, awaitCaller: new ImmediateCaller());
                 var expression = imported.Vrm.Expression.CustomClips.Single(item => item.name.StartsWith("VRChat / ", StringComparison.Ordinal) && item.name.EndsWith(" / Gesture", StringComparison.Ordinal));
                 var actual = imported.GetComponentsInChildren<SkinnedMeshRenderer>().Single(renderer => renderer.name == "Body");

@@ -129,7 +129,11 @@ namespace VRVlog.LilToonExporter
 
         internal sealed class Source
         {
+#if !EXPORTER_BEHAVIOR_TESTS
+            // The host runner checks menu traversal/serialization without
+            // Unity geometry evaluation. This session belongs to native Unity.
             internal FacialProjectionScope.Session FacialProjectionSession;
+#endif
             internal RuntimeAnimatorController Controller;
             internal readonly Dictionary<string, float> Defaults = new Dictionary<string, float>(StringComparer.Ordinal);
             internal readonly HashSet<string> ExpressionParameters = new HashSet<string>(StringComparer.Ordinal);

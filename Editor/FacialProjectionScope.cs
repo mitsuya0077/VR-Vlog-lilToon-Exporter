@@ -52,7 +52,10 @@ namespace VRVlog.LilToonExporter
                 shapes.Add(shape);
             }
             var visemes = VrChatExpressionMenu.Member(descriptor, "VisemeSkinnedMesh") as SkinnedMeshRenderer;
-            if (visemes?.sharedMesh != null)
+            // SDK deserialization can retain a managed Unity wrapper for an
+            // unassigned or destroyed renderer. ?. only checks CLR null and
+            // would dereference that wrapper before the conservative fallback.
+            if (visemes != null && visemes.sharedMesh != null)
             {
                 if (VrChatExpressionMenu.Member(descriptor, "VisemeBlendShapes") is IEnumerable names)
                     foreach (var name in names.OfType<string>()) Add(visemes, visemes.sharedMesh.GetBlendShapeIndex(name));
