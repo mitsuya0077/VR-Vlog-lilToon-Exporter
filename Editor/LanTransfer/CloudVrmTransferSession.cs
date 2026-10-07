@@ -156,8 +156,13 @@ namespace VRVlog.LilToonExporter.LanTransfer
                     var newId = fields.Text("id"); var token = fields.Text("token"); var owner = fields.Text("uploadToken"); var expiry = fields.Number("expiresAt");
                     var currentTime = now();
                     if (fields.Number("v") != 2 || !CloudTransferProtocol.IsHex(newId, 32) || !CloudTransferProtocol.IsToken(token) || !CloudTransferProtocol.IsToken(owner)
-                        || token == owner || fields.Number("partSize") != CloudTransferProtocol.PartSize || expiry <= currentTime || expiry > currentTime + (CloudTransferProtocol.LifetimeMinutes + 1) * 60) throw CloudTransferProtocol.Invalid();
-                    lock (gate) { id = newId; readToken = token; uploadToken = owner; expiresAt = expiry; if (!disposed && state != CloudTransferState.Canceled) state = CloudTransferState.Uploading; }
+                        || token == owner || fields.Number("partSize") != CloudTransferProtocol.PartSize) throw CloudTransferProtocol.Invalid();
+                    // A valid create response has already reserved server storage.
+                    // Retain authenticated cleanup credentials even when its
+                    // lifetime is rejected before any VRM bytes are uploaded.
+                    lock (gate) { id = newId; readToken = token; uploadToken = owner; }
+                    if (expiry <= currentTime || expiry > currentTime + (CloudTransferProtocol.LifetimeMinutes + 1) * 60) throw CloudTransferProtocol.Invalid();
+                    lock (gate) { expiresAt = expiry; if (!disposed && state != CloudTransferState.Canceled) state = CloudTransferState.Uploading; }
                     ct.ThrowIfCancellationRequested();
                     using (var reader = source.OpenRead())
                     using (var hash = SHA256.Create())

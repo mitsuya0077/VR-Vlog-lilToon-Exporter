@@ -160,6 +160,69 @@ namespace VRVlog.LilToonExporter.LanTransfer.Tests
             }
         }
 
+        [TestCase(180)][TestCase(120)]
+        public async Task UploadKeepsTheServerDeadlineWithoutRestartingItWhenQrAppears(int serverLifetimeSeconds)
+        {
+            var createdAt = DateTimeOffset.UtcNow.ToUnixTimeSeconds();
+            var currentTime = createdAt;
+            using (var fixture = new Fixture(23))
+            using (var session = new CloudVrmTransferSession(fixture.Source, fixture.Transport, () => currentTime))
+            {
+                fixture.Transport.Now = () => createdAt;
+                fixture.Transport.LifetimeSeconds = serverLifetimeSeconds;
+                fixture.Transport.BeforePart = () => currentTime += 60;
+                await session.UploadAsync();
+                var expectedDeadline = createdAt + serverLifetimeSeconds;
+                var fields = CloudTransferProtocol.Fields.Read(session.Qr.Substring(LanTransferProtocol.QrPrefix.Length));
+                Assert.That(session.ExpiresAt, Is.EqualTo(expectedDeadline));
+                Assert.That(fields.Number("expiresAt"), Is.EqualTo(expectedDeadline));
+                Assert.That(session.ExpiresAt - currentTime, Is.EqualTo((long)serverLifetimeSeconds - 60));
+                currentTime = expectedDeadline - 1;
+                Assert.That(session.ExpireIfDue(), Is.False);
+                currentTime = expectedDeadline;
+                Assert.That(session.ExpireIfDue(), Is.True);
+                Assert.That(session.Qr == null, Is.True);
+            }
+        }
+
+        [Test]
+        public async Task UploadPastTheThreeMinuteDeadlineStopsBeforeTheNextPartOrPublication()
+        {
+            var currentTime = DateTimeOffset.UtcNow.ToUnixTimeSeconds();
+            using (var fixture = new Fixture(CloudTransferProtocol.PartSize + 1))
+            using (var session = new CloudVrmTransferSession(fixture.Source, fixture.Transport, () => currentTime))
+            {
+                fixture.Transport.Now = () => currentTime;
+                fixture.Transport.BeforePart = () => currentTime = session.ExpiresAt;
+                try { await session.UploadAsync(); Assert.That(false, Is.True); } catch (InvalidOperationException) { }
+                Assert.That(session.State, Is.EqualTo(CloudTransferState.Expired));
+                Assert.That(fixture.Transport.Parts.Count, Is.EqualTo(1));
+                Assert.That(fixture.Transport.PublishCalls, Is.EqualTo(0));
+                Assert.That(fixture.Transport.CancelCalls, Is.EqualTo(1));
+                Assert.That(session.Qr == null, Is.True);
+                Assert.That(File.ReadAllBytes(fixture.Path), Is.EqualTo(fixture.Bytes));
+            }
+        }
+
+        [TestCase(900)][TestCase(0)]
+        public async Task RejectedCreateLifetimeCancelsTheReservedTransferWithoutUploading(int rejectedLifetimeSeconds)
+        {
+            var currentTime = DateTimeOffset.UtcNow.ToUnixTimeSeconds();
+            using (var fixture = new Fixture(29))
+            using (var session = new CloudVrmTransferSession(fixture.Source, fixture.Transport, () => currentTime))
+            {
+                fixture.Transport.Now = () => currentTime;
+                fixture.Transport.LifetimeSeconds = rejectedLifetimeSeconds;
+                try { await session.UploadAsync(); Assert.That(false, Is.True); } catch (InvalidOperationException) { }
+                Assert.That(session.State, Is.EqualTo(CloudTransferState.Failed));
+                Assert.That(fixture.Transport.Parts.Count, Is.EqualTo(0));
+                Assert.That(fixture.Transport.PublishCalls, Is.EqualTo(0));
+                Assert.That(fixture.Transport.CancelCalls, Is.EqualTo(1));
+                Assert.That(fixture.Transport.AuthenticatedCorrectly, Is.True);
+                Assert.That(session.Qr == null, Is.True);
+            }
+        }
+
         [Test]
         public async Task PublicationResponsePastDeadlineCannotExposeAnExpiredQr()
         {
@@ -257,9 +320,11 @@ namespace VRVlog.LilToonExporter.LanTransfer.Tests
             internal readonly string UploadToken = LanTransferProtocol.Base64Url(Enumerable.Repeat((byte)1, 32).ToArray());
             internal readonly List<byte[]> Parts = new List<byte[]>();
             internal string Failure, RemoteState = "ready";
-            internal int CancelCalls, Created;
+            internal int CancelCalls, Created, PublishCalls;
             internal bool AuthenticatedCorrectly = true;
-            internal Action BeforePublish;
+            internal Action BeforePublish, BeforePart;
+            internal Func<long> Now = () => DateTimeOffset.UtcNow.ToUnixTimeSeconds();
+            internal int LifetimeSeconds = 180;
             internal TaskCompletionSource<bool> CreateRelease;
             internal TaskCompletionSource<bool> StatusRelease;
             internal bool StatusCancellationObserved;
@@ -276,7 +341,7 @@ namespace VRVlog.LilToonExporter.LanTransfer.Tests
                     var displayName = request.Text("name");
                     Assert.That(displayName.Length >= 1 && displayName.Length <= 256 && !displayName.Contains("/") && !displayName.Contains("\\") && !displayName.Any(c => c < 32 || c == 127), Is.True);
                     Assert.That(request.Number("size"), Is.EqualTo(source.Size)); Assert.That(request.Text("sha256"), Is.EqualTo(source.FileHash));
-                    Created++; id = Created.ToString("x32"); expiry = DateTimeOffset.UtcNow.ToUnixTimeSeconds() + 900;
+                    Created++; id = Created.ToString("x32"); expiry = Now() + LifetimeSeconds;
                     if (CreateRelease != null) await CreateRelease.Task;
                     return new CloudTransferResponse(201, "{\"v\":2,\"id\":\"" + id + "\",\"token\":\"" + ReadToken + "\",\"uploadToken\":\"" + UploadToken + "\",\"expiresAt\":" + expiry + ",\"partSize\":8388608}");
                 }
@@ -287,10 +352,12 @@ namespace VRVlog.LilToonExporter.LanTransfer.Tests
                 {
                     Assert.That(method, Is.EqualTo("PUT")); Assert.That(path, Is.EqualTo("/v2/transfers/" + id + "/parts/" + (Parts.Count + 1)));
                     if (Failure == "part-failure") return new CloudTransferResponse(500, "private service failure");
+                    BeforePart?.Invoke();
                     Parts.Add((byte[])body.Clone()); return new CloudTransferResponse(200, "{}");
                 }
                 if (path.EndsWith("/publish", StringComparison.Ordinal))
                 {
+                    PublishCalls++;
                     BeforePublish?.Invoke();
                     var hash = Failure == "publish-mismatch" ? new string('f', 64) : source.FileHash;
                     return new CloudTransferResponse(200, CloudTransferProtocol.Qr(id, ReadToken, source.Name, source.Size, hash, expiry).Substring(LanTransferProtocol.QrPrefix.Length));
