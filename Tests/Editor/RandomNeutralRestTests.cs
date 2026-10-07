@@ -18,6 +18,7 @@ namespace VRVlog.LilToonExporter.Tests
         AnimatorController controller;
         AnimatorState randomState;
         AnimationClip randomClip;
+        StateMachineBehaviour randomDriver;
 
         static EditorCurveBinding Binding(string shape) =>
             EditorCurveBinding.FloatCurve("Body", typeof(SkinnedMeshRenderer), "blendShape." + shape);
@@ -58,7 +59,8 @@ namespace VRVlog.LilToonExporter.Tests
             var definitions = controller.layers; definitions[1].defaultWeight = 1; controller.layers = definitions;
             randomClip = Clip("Live idle phase", ("Transient", AnimationCurve.Linear(0, 1, 1, 80)));
             randomState = State(1, randomClip);
-            ParameterDriverExpressionTests.Driver(randomState, ParameterDriverExpressionTests.Op("Random", "Choice"));
+            randomDriver = ParameterDriverExpressionTests.Driver(randomState, ParameterDriverExpressionTests.Op("Random", "Choice"));
+            RandomField("valueMin", 0); RandomField("valueMax", 1); RandomField("chance", .5f);
             var other = State(1, Clip("Other idle phase", ("Transient", AnimationCurve.Linear(0, 80, 1, 1))));
             var enter = randomState.AddTransition(other); enter.hasExitTime = true; enter.exitTime = 1; enter.duration = 0;
             enter.AddCondition(AnimatorConditionMode.If, 0, "Choice");
@@ -87,6 +89,34 @@ namespace VRVlog.LilToonExporter.Tests
             return state;
         }
 
+        void RandomField(string name, float value)
+        {
+            using var data = new SerializedObject(randomDriver);
+            data.FindProperty("parameters").GetArrayElementAtIndex(0).FindPropertyRelative(name).floatValue = value;
+            data.ApplyModifiedPropertiesWithoutUndo();
+        }
+
+        void ReplaceOperations(params VrChatParameterDriver.Operation[] operations)
+        {
+            randomState.behaviours = Array.Empty<StateMachineBehaviour>();
+            randomDriver = ParameterDriverExpressionTests.Driver(randomState, operations);
+            RandomField("valueMin", 0); RandomField("valueMax", 1); RandomField("chance", .5f);
+        }
+
+        InvalidOperationException AssertFatal()
+        {
+            var before = ExportSourceFingerprint.Compute(avatar); var warnings = new List<string>();
+            var error = Assert.Catch<InvalidOperationException>(() => NeutralShapeSampler.Sample(avatar, warnings: warnings));
+            Assert.That(VrChatParameterDriver.IsRandomCapability(error), Is.False,
+                "Malformed data and unknown effects must never be mislabeled as a recoverable Random capability.");
+            Assert.That(warnings.Any(value => value.Contains("Random")), Is.False);
+            Assert.That(ExportSourceFingerprint.Compute(avatar), Is.EqualTo(before));
+            Assert.That(skin.GetBlendShapeWeight(0), Is.EqualTo(17));
+            Assert.That(skin.GetBlendShapeWeight(1), Is.EqualTo(35));
+            Assert.That(skin.GetBlendShapeWeight(2), Is.EqualTo(27));
+            return error;
+        }
+
         [Test]
         public void IsolatedRandomIdleKeepsPreparedChannelsAndIndependentFixedRest()
         {
@@ -102,6 +132,7 @@ namespace VRVlog.LilToonExporter.Tests
             Assert.That(warnings.Any(value => value.Contains("時間で変わる") && value.Contains("blendShape.Transient")), Is.True);
             Assert.That(EditorJsonUtility.ToJson(controller), Is.EqualTo(before));
             Assert.That(EditorJsonUtility.ToJson(randomClip), Is.EqualTo(clipBefore));
+            Assert.That(warnings.Any(value => value.Contains("Random")), Is.True, string.Join("\n", warnings));
         }
 
         [TestCase("WriteDefaults")]
@@ -109,11 +140,10 @@ namespace VRVlog.LilToonExporter.Tests
         [TestCase("Additive")]
         [TestCase("NonMorph")]
         [TestCase("AnimatorCurve")]
-        [TestCase("AnimationEvent")]
         [TestCase("EscapingRead")]
         [TestCase("EscapingCopy")]
         [TestCase("OtherPlayableRead")]
-        public void UnsafeRandomGraphsKeepTheirExistingFailure(string kind)
+        public void ValidRandomCapabilityKeepsTheCompletePreparedDependencyComponent(string kind)
         {
             if (kind == "WriteDefaults") randomState.writeDefaultValues = true;
             if (kind == "Fractional" || kind == "Additive")
@@ -127,7 +157,6 @@ namespace VRVlog.LilToonExporter.Tests
                 EditorCurveBinding.FloatCurve("Body", typeof(Transform), "m_LocalPosition.x"), AnimationCurve.Constant(0, 1, 1));
             if (kind == "AnimatorCurve") AnimationUtility.SetEditorCurve(randomClip,
                 EditorCurveBinding.FloatCurve("", typeof(Animator), "Choice"), AnimationCurve.Constant(0, 1, 1));
-            if (kind == "AnimationEvent") AnimationUtility.SetAnimationEvents(randomClip, new[] { new AnimationEvent { functionName = "UnsupportedEvent" } });
             if (kind == "EscapingRead" || kind == "OtherPlayableRead")
             {
                 var target = kind == "EscapingRead" ? controller : AnimatorController.CreateAnimatorControllerAtPath(folder + "/Other.controller");
@@ -155,9 +184,16 @@ namespace VRVlog.LilToonExporter.Tests
                 ParameterDriverExpressionTests.Driver(controller.layers[0].stateMachine.defaultState,
                     ParameterDriverExpressionTests.Op("Copy", "Alias", source: "Choice"));
             }
-            Assert.Catch<InvalidOperationException>(() => NeutralShapeSampler.Sample(avatar));
+            var before = ExportSourceFingerprint.Compute(avatar);
+            var warnings = new List<string>();
+            var values = NeutralShapeSampler.Sample(avatar, warnings: warnings);
+            Assert.That(values, Is.Empty, "A valid unresolved Random cannot authorize a sampled phase or a partial value from this dependent component.");
+            Assert.That(warnings.Any(value => value.Contains("Random")), Is.True, string.Join("\n", warnings));
+            NeutralShapeSnapshot.Apply(avatar, values);
             Assert.That(skin.GetBlendShapeWeight(0), Is.EqualTo(17));
             Assert.That(skin.GetBlendShapeWeight(1), Is.EqualTo(35));
+            Assert.That(skin.GetBlendShapeWeight(2), Is.EqualTo(27));
+            Assert.That(ExportSourceFingerprint.Compute(avatar), Is.EqualTo(before));
         }
 
         [TestCase("Full")]
@@ -182,7 +218,7 @@ namespace VRVlog.LilToonExporter.Tests
         }
 
         [Test]
-        public void AnOverlappingUpperGraphRetainsItsOwnNeutralSafetyChecks()
+        public void AnOverlappingUpperGraphRetainsPreparedRestWhenItsNativeDependencyIsRandom()
         {
             controller.AddParameter("Upper selection", AnimatorControllerParameterType.Bool);
             controller.AddLayer("Upper selection graph");
@@ -191,8 +227,13 @@ namespace VRVlog.LilToonExporter.Tests
             var alternate = State(2, Clip("Alternate upper constant", ("Transient", AnimationCurve.Constant(0, 1, 70))));
             var transition = state.AddTransition(alternate); transition.hasExitTime = false; transition.duration = 0;
             transition.AddCondition(AnimatorConditionMode.If, 0, "Upper selection");
-            Assert.Catch<InvalidOperationException>(() => NeutralShapeSampler.Sample(avatar));
+            var warnings = new List<string>();
+            var values = NeutralShapeSampler.Sample(avatar, warnings: warnings);
+            Assert.That(values, Is.Empty);
+            Assert.That(warnings.Any(value => value.Contains("Random")), Is.True, string.Join("\n", warnings));
+            NeutralShapeSnapshot.Apply(avatar, values);
             Assert.That(skin.GetBlendShapeWeight(0), Is.EqualTo(17));
+            Assert.That(skin.GetBlendShapeWeight(1), Is.EqualTo(35));
         }
 
         [Test]
@@ -220,6 +261,121 @@ namespace VRVlog.LilToonExporter.Tests
                 null, metadata, fixedContext: context, preserveCommittedMorphs: true);
             Assert.Catch<InvalidOperationException>(() => VrChatExpressionSampler.SampleNeutral(avatar, controller,
                 dependencies, metadata, null, context));
+        }
+
+        [Test]
+        public void ASeparateDeterministicComponentStillReconstructsWhenTheRandomComponentFallsBack()
+        {
+            var machine = controller.layers[0].stateMachine;
+            var next = machine.AddState("Consumer of unresolved choice"); next.motion = machine.defaultState.motion; next.writeDefaultValues = false;
+            var transition = machine.defaultState.AddTransition(next); transition.hasExitTime = false; transition.duration = 0;
+            transition.AddCondition(AnimatorConditionMode.If, 0, "Choice");
+            controller.AddLayer("Independent fixed component");
+            var layers = controller.layers; layers[2].defaultWeight = 1; controller.layers = layers;
+            State(2, Clip("Independent authored fixed value", ("Unwritten", AnimationCurve.Constant(0, 1, 88))));
+            var warnings = new List<string>(); var values = NeutralShapeSampler.Sample(avatar, warnings: warnings);
+            Assert.That(values.Select(value => value.Shape), Is.EqualTo(new[] { "Unwritten" }));
+            Assert.That(values.Single().Weight, Is.EqualTo(88).Within(.001));
+            Assert.That(warnings.Any(value => value.Contains("Random") && value.Contains("Transient")), Is.True);
+            NeutralShapeSnapshot.Apply(avatar, values);
+            Assert.That(skin.GetBlendShapeWeight(0), Is.EqualTo(17));
+            Assert.That(skin.GetBlendShapeWeight(1), Is.EqualTo(35));
+            Assert.That(skin.GetBlendShapeWeight(2), Is.EqualTo(88).Within(.001));
+        }
+
+        [TestCase("non-finite minimum")]
+        [TestCase("non-finite maximum")]
+        [TestCase("non-finite chance")]
+        [TestCase("reversed range")]
+        [TestCase("negative chance")]
+        [TestCase("chance above one")]
+        public void MalformedRandomNumbersCannotUsePreparedRestFallback(string kind)
+        {
+            if (kind == "non-finite minimum") RandomField("valueMin", float.NaN);
+            else if (kind == "non-finite maximum") RandomField("valueMax", float.PositiveInfinity);
+            else if (kind == "non-finite chance") RandomField("chance", float.NaN);
+            else if (kind == "reversed range") RandomField("valueMin", 2);
+            else if (kind == "negative chance") RandomField("chance", -.1f);
+            else RandomField("chance", 1.1f);
+            var operation = VrChatParameterDriver.Read(randomDriver, "Invalid Random data").Operations.Single();
+            Assert.That(operation.UnresolvedRandom, Is.False); Assert.That(operation.Error, Is.Not.Null);
+            Assert.That(AssertFatal().Message, Does.Contain("Random"));
+        }
+
+        [TestCase("empty")]
+        [TestCase("missing")]
+        [TestCase("Trigger")]
+        [TestCase("built-in")]
+        public void InvalidRandomDestinationsRemainFatal(string kind)
+        {
+            if (kind == "empty")
+            {
+                using var data = new SerializedObject(randomDriver);
+                data.FindProperty("parameters").GetArrayElementAtIndex(0).FindPropertyRelative("name").stringValue = "";
+                data.ApplyModifiedPropertiesWithoutUndo();
+            }
+            else if (kind == "missing") controller.parameters = controller.parameters.Where(value => value.name != "Choice").ToArray();
+            else if (kind == "Trigger") controller.parameters = new[] {
+                new AnimatorControllerParameter { name = "Choice", type = AnimatorControllerParameterType.Trigger }
+            };
+            else
+            {
+                controller.AddParameter("Voice", AnimatorControllerParameterType.Float);
+                using var data = new SerializedObject(randomDriver);
+                data.FindProperty("parameters").GetArrayElementAtIndex(0).FindPropertyRelative("name").stringValue = "Voice";
+                data.ApplyModifiedPropertiesWithoutUndo();
+                foreach (var transition in randomState.transitions)
+                    transition.conditions = transition.conditions.Select(condition => new AnimatorCondition {
+                        parameter = condition.parameter == "Choice" ? "Voice" : condition.parameter,
+                        mode = condition.parameter == "Choice" ? AnimatorConditionMode.Greater : condition.mode,
+                        threshold = condition.parameter == "Choice" ? .5f : condition.threshold
+                    }).ToArray();
+            }
+            AssertFatal();
+        }
+
+        [TestCase("non-finite Set")]
+        [TestCase("empty Copy source")]
+        [TestCase("zero Copy range")]
+        [TestCase("missing Copy source")]
+        [TestCase("Trigger Copy source")]
+        [TestCase("Bool Add")]
+        public void AValidRandomOperationCannotConcealALaterMalformedNeededOperation(string kind)
+        {
+            VrChatParameterDriver.Operation invalid;
+            if (kind == "non-finite Set") invalid = ParameterDriverExpressionTests.Op("Set", "Choice", float.NaN);
+            else if (kind == "Bool Add") invalid = ParameterDriverExpressionTests.Op("Add", "Choice", 1);
+            else
+            {
+                var source = kind == "empty Copy source" ? "" : kind == "missing Copy source" ? "Missing source" :
+                    kind == "Trigger Copy source" ? "Trigger source" : "Choice";
+                if (kind == "Trigger Copy source") controller.AddParameter(source, AnimatorControllerParameterType.Trigger);
+                invalid = ParameterDriverExpressionTests.Op("Copy", "Choice", source: source);
+                if (kind == "zero Copy range") { invalid.ConvertRange = true; invalid.SourceMin = 1; invalid.SourceMax = 1; }
+            }
+            ReplaceOperations(ParameterDriverExpressionTests.Op("Random", "Choice"), invalid);
+            var error = AssertFatal();
+            Assert.That(error.Message, Does.Contain(kind == "Bool Add" ? "Add" : kind == "non-finite Set" ? "Set" : "Copy"));
+        }
+
+        [TestCase("AnimationEvent")]
+        [TestCase("unknown behaviour")]
+        [TestCase("corrupt curve")]
+        public void PreparedRandomRestDoesNotHideCorruptDataOrUnknownEffects(string kind)
+        {
+            if (kind == "AnimationEvent") AnimationUtility.SetAnimationEvents(randomClip,
+                new[] { new AnimationEvent { functionName = "UnsupportedEvent" } });
+            else if (kind == "unknown behaviour")
+            {
+                var unknown = randomState.AddStateMachineBehaviour<UnknownStateCallbackProbe>();
+                Assert.That(unknown, Is.Not.Null);
+                unknown.Parameter = "Choice";
+                Assert.That(randomState.behaviours.Contains(unknown), Is.True,
+                    "The unknown behavior must be attached before testing the fallback guard.");
+            }
+            else AnimationUtility.SetEditorCurve(randomClip, Binding("Transient"), new AnimationCurve(new Keyframe(0, float.NaN)));
+            var error = AssertFatal();
+            if (kind == "unknown behaviour") Assert.That(error.Message, Does.Contain(nameof(UnknownStateCallbackProbe)));
         }
     }
 }

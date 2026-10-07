@@ -15,7 +15,7 @@ namespace VRVlog.LilToonExporter
     internal static class NeutralRandomRest
     {
         internal static HashSet<int> Preserve(RuntimeAnimatorController runtime, VrChatExpressionMenu.Source metadata,
-            NeutralShapePlan plan, Func<string, bool> excludedPath, FixedExpressionContext fixedContext)
+            NeutralShapePlan plan, Func<string, bool> excludedPath, FixedExpressionContext fixedContext, ICollection<string> warnings = null)
         {
             var result = new HashSet<int>();
             var unknown = new List<string>();
@@ -92,9 +92,17 @@ namespace VRVlog.LilToonExporter
                     }
                 }
                 if (!safe || !changing) continue;
-                foreach (var binding in active.Morphs.Where(plan.CommittedMorphs.Contains))
-                    if (!Dominated(index, binding))
-                        plan.PreserveTemporalRest(layer.Clips.First(clip => AnimationUtility.GetCurveBindings(clip).Contains(binding)), binding);
+                var preserved = active.Morphs.Where(binding => plan.CommittedMorphs.Contains(binding) && !Dominated(index, binding))
+                    .OrderBy(binding => binding.path, StringComparer.Ordinal).ThenBy(binding => binding.propertyName, StringComparer.Ordinal).ToArray();
+                foreach (var binding in preserved)
+                    plan.PreserveTemporalRest(layer.Clips.First(clip => AnimationUtility.GetCurveBindings(clip).Contains(binding)), binding);
+                if (preserved.Length > 0)
+                {
+                    var warning = ExporterLocalization.T("Randomを使うFXの待機表情は固定できないため、書き出し用コピーの現在のBlendShapeを保持しました: ") +
+                        definition.name + " / " + string.Join(", ", preserved.Take(8).Select(binding => binding.path + " / " + binding.propertyName)) +
+                        (preserved.Length > 8 ? " (" + preserved.Length + ")" : "");
+                    if (warnings != null && !warnings.Contains(warning)) warnings.Add(warning);
+                }
                 result.Add(index);
             }
             return result;

@@ -46,7 +46,15 @@ namespace VRVlog.LilToonExporter
                 };
                 try
                 {
-                    if (clip == null) throw new InvalidOperationException("ジェスチャーのBlendTreeは単体の固定表情アニメーションではないため省略しました。");
+                    if (motion is BlendTree || clip != null && target.State.timeParameterActive && HasChangingMorph(clip, excludedPath))
+                    {
+                        var composed = VrChatFxExpressions.ReadGestureState(avatar, source, target.Layer, target.State,
+                            entry.Name, excludedPath);
+                        if (source.Entries.Count + composed.Count > 512) throw new InvalidOperationException("表情候補が512個を超えています。FXの表情登録を整理してください。");
+                        source.Entries.AddRange(composed);
+                        continue;
+                    }
+                    if (clip == null) throw new InvalidOperationException("未対応のAnimator Motionです。");
                     var bindings = AnimationUtility.GetCurveBindings(clip).Where(b => excludedPath?.Invoke(b.path) != true).ToArray();
                     if (!bindings.Any(IsMorph)) continue; // Hand/bone motions are not facial expressions.
                     ReadClip(avatar, clip, entry, excludedPath, source);
@@ -69,6 +77,10 @@ namespace VRVlog.LilToonExporter
                 if (source.Entries.Count > 512) throw new InvalidOperationException("表情候補が512件を超えています。FXの表情登録を整理してください。");
             }
         }
+
+        internal static bool HasChangingMorph(AnimationClip clip, Func<string, bool> excludedPath) =>
+            AnimationUtility.GetCurveBindings(clip).Where(binding => IsMorph(binding) && excludedPath?.Invoke(binding.path) != true)
+                .Any(binding => !VrChatExpressionSampler.IsConstant(AnimationUtility.GetEditorCurve(clip, binding)));
 
         private static bool SameOutcome(VrChatExpressionMenu.Entry first, VrChatExpressionMenu.Entry second)
         {

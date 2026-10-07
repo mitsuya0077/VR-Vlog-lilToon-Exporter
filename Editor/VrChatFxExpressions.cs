@@ -23,7 +23,7 @@ namespace VRVlog.LilToonExporter
             internal int Layer;
             internal AnimatorState State;
             internal string Path, Error;
-            internal Dictionary<string, float> Values, DefaultValues;
+            internal Dictionary<string, float> Values, DefaultValues, ArrivalValues;
             internal bool SpeculativeWarmStart;
         }
 
@@ -133,8 +133,68 @@ namespace VRVlog.LilToonExporter
             }
         }
 
+        // Hand trees and motion-time clips expose native input knots. Select
+        // those inputs in the whole controller; do not detach mixed children
+        // or turn a hand-controlled clock into an autoplaying animation.
+        internal static List<VrChatExpressionMenu.Entry> ReadGestureState(GameObject avatar,
+            VrChatExpressionMenu.Source source, int layer, AnimatorState state, string label,
+            Func<string, bool> excludedPath = null)
+        {
+            var handInputs = new HashSet<string>(new[] { "GestureLeft", "GestureRight", "GestureLeftWeight", "GestureRightWeight" }, StringComparer.Ordinal);
+            var context = FixedExpressionContext.Create(source.Controller, source.Defaults, source);
+            // Buffer discovery before native evaluation. A malformed tree or
+            // exhausted graph budget cannot publish an arbitrary partial set.
+            var candidates = Discover(source, context, excludedPath, handInputs,
+                (candidateLayer, candidateState) => candidateState == state, layer).ToArray();
+            var result = new List<VrChatExpressionMenu.Entry>();
+            foreach (var candidate in candidates)
+            {
+                var entry = new VrChatExpressionMenu.Entry {
+                    Id = "gesture-state/" + layer + "/" + candidate.Path + "/" + Assignment(candidate.Values),
+                    Name = label, Error = candidate.Error
+                };
+                foreach (var pair in candidate.Values)
+                    entry.Parameters.Add(pair.Key, pair.Key == "GestureLeftWeight" || pair.Key == "GestureRightWeight" ? Mathf.Clamp01(pair.Value) : pair.Value);
+                foreach (var hand in new[] { "Left", "Right" })
+                    if (entry.Parameters.TryGetValue("Gesture" + hand, out var gesture) && gesture > 0 &&
+                        !entry.Parameters.ContainsKey("Gesture" + hand + "Weight") &&
+                        ExpressionDependencies.Controller(source.Controller).parameters.Any(parameter => parameter.name == "Gesture" + hand + "Weight"))
+                        entry.Parameters.Add("Gesture" + hand + "Weight", 1);
+                entry.Name += " (" + Assignment(entry.Parameters) + ")";
+                // Some hand trees place knots slightly outside the hand's
+                // documented [0,1] domain to shape their native interpolation.
+                // Sample the reachable boundary with the original mixing.
+                foreach (var pair in entry.Parameters.Where(pair => handInputs.Contains(pair.Key)))
+                    if (pair.Key.EndsWith("Weight", StringComparison.Ordinal) ? pair.Value < 0 || pair.Value > 1 :
+                        pair.Value < 0 || pair.Value > 7 || pair.Value != Mathf.RoundToInt(pair.Value))
+                        entry.Error = "FXのBlendTreeの設定値が不正です。";
+                if (entry.Error == null)
+                    try
+                    {
+                        entry.Values.AddRange(VrChatExpressionSampler.SampleFixed(avatar, source.Controller, source.Defaults,
+                            entry.Parameters, excludedPath, source, entry.Unevaluated, context, candidate.Layer, candidate.Path));
+                    }
+                    catch (InvalidOperationException error)
+                    {
+                        if (candidate.SpeculativeWarmStart && candidate.ArrivalValues == null) continue;
+                        entry.Values.Clear(); entry.Unevaluated.Clear(); entry.Animation.Clear();
+                        if (ExpressionDependencies.Controller(source.Controller).GetStateEffectiveMotion(candidate.State, candidate.Layer) is BlendTree)
+                        {
+                            try { AnimatedGestureTree.Read(avatar, source, candidate.Layer, candidate.State, entry, excludedPath, candidate.ArrivalValues); }
+                            catch (InvalidOperationException composedError)
+                            { entry.Error = composedError.Message; entry.Values.Clear(); entry.Unevaluated.Clear(); entry.Animation.Clear(); }
+                        }
+                        else entry.Error = error.Message;
+                    }
+                if (entry.Error == null && source.Entries.Concat(result).Any(previous => SamePose(previous, entry))) continue;
+                result.Add(entry);
+            }
+            return result;
+        }
+
         static IEnumerable<Candidate> Discover(VrChatExpressionMenu.Source source, FixedExpressionContext context,
-            Func<string, bool> excludedPath)
+            Func<string, bool> excludedPath, ISet<string> selectableBuiltIns = null,
+            Func<int, AnimatorState, bool> stateFilter = null, int? onlyLayer = null)
         {
             var controller = ExpressionDependencies.Controller(source.Controller);
             var parameters = controller.parameters.ToDictionary(value => value.name, StringComparer.Ordinal);
@@ -148,7 +208,8 @@ namespace VRVlog.LilToonExporter
             // explicitly declared as user expression/menu inputs, but do not
             // manufacture a facial state by overriding an internal signal.
             var drivers = new Dictionary<StateMachineBehaviour, VrChatParameterDriver.Program>();
-            var dependencies = ExpressionDependencies.Inspect(source.Controller, excludedPath, drivers, new List<string>());
+            var unknown = new List<string>();
+            var dependencies = ExpressionDependencies.Inspect(source.Controller, excludedPath, drivers, unknown);
             var weightControls = dependencies.SelectMany(value => value.WeightControls)
                 .GroupBy(pair => pair.Key).ToDictionary(group => group.Key, group => group.First().Value);
             var writtenInputs = new HashSet<string>(dependencies.SelectMany(value => value.CurveWrites.Concat(value.DriverWrites)), StringComparer.Ordinal);
@@ -169,9 +230,34 @@ namespace VRVlog.LilToonExporter
                     foreach (var input in dependency.Reads) changed |= faceInputs.Add(input);
             } while (changed);
             bool UserInput(string name) => source.ExpressionParameters.Contains(name) || source.MenuInputs.Contains(name);
-            bool Selectable(string name) => !string.IsNullOrEmpty(name) && !VrChatParameterDriver.BuiltIn.Contains(name) &&
+            bool Selectable(string name) => !string.IsNullOrEmpty(name) &&
+                (!VrChatParameterDriver.BuiltIn.Contains(name) || selectableBuiltIns?.Contains(name) == true) &&
                 !source.ExternalParameters.Contains(name) && !TrackingParameter(name) &&
                 (UserInput(name) || !writtenInputs.Contains(name) && !GeneratedParameter(name));
+            // Normal inputs can eliminate dormant hand/voice/contact branches
+            // before priority negations expand. A default is an invariant only
+            // when no playable writes it through an Animator curve or any
+            // driver operation. Unknown callbacks invalidate this proof.
+            var allWritten = new HashSet<string>(dependencies.SelectMany(value => value.Writes), StringComparer.Ordinal);
+            var declarations = new Dictionary<string, HashSet<AnimatorControllerParameterType>>(StringComparer.Ordinal);
+            foreach (var runtime in new[] { source.Controller }.Concat(source.OtherControllers.Where(value => value != null)))
+            {
+                foreach (var parameter in ExpressionDependencies.Controller(runtime).parameters)
+                {
+                    if (!declarations.TryGetValue(parameter.name, out var types))
+                        declarations.Add(parameter.name, types = new HashSet<AnimatorControllerParameterType>());
+                    types.Add(parameter.type);
+                }
+                if (runtime != source.Controller)
+                    allWritten.UnionWith(ExpressionDependencies.Inspect(runtime, null,
+                        new Dictionary<StateMachineBehaviour, VrChatParameterDriver.Program>(), unknown,
+                        typedConditions: true, fxLayerCount: controller.layers.Length).SelectMany(value => value.Writes));
+            }
+            var invariant = unknown.Count == 0 ? context.Values.Where(pair => !Selectable(pair.Key) &&
+                !allWritten.Contains(pair.Key) && declarations.TryGetValue(pair.Key, out var types) && types.Count == 1)
+                .ToDictionary(pair => pair.Key, pair => pair.Value, StringComparer.Ordinal) :
+                new Dictionary<string, float>(StringComparer.Ordinal);
+            var impossible = new Dictionary<AnimatorTransitionBase, bool>();
             var replacements = ExpressionDependencies.Overrides(source.Controller);
             var layers = controller.layers;
             var nodes = 0;
@@ -192,8 +278,26 @@ namespace VRVlog.LilToonExporter
                 if (++conditionChecks > MaximumConditionChecks)
                     throw new InvalidOperationException("FXの表情条件の探索が上限を超えています。Controllerの構成を確認してください。");
             }
+            bool Impossible(AnimatorTransitionBase transition)
+            {
+                if (impossible.TryGetValue(transition, out var cached)) return cached;
+                var disproved = false;
+                foreach (var condition in transition.conditions)
+                {
+                    CheckCondition();
+                    // Malformed conditions retain their existing diagnostics.
+                    // Fractional Int thresholds are not a portable proof.
+                    if (string.IsNullOrEmpty(condition.parameter) || !parameters.TryGetValue(condition.parameter, out var parameter) ||
+                        !ValidMode(parameter.type, condition.mode) || !Finite(condition.threshold) ||
+                        parameter.type == AnimatorControllerParameterType.Int && condition.threshold != Math.Truncate(condition.threshold))
+                    { impossible.Add(transition, false); return false; }
+                    if (invariant.TryGetValue(condition.parameter, out var value) && !Matches(condition, value)) disproved = true;
+                }
+                impossible.Add(transition, disproved); return disproved;
+            }
             for (var layer = 0; layer < layers.Length; layer++)
             {
+                if (onlyLayer.HasValue && layer != onlyLayer.Value) continue;
                 // Wardrobe/gimmick graphs cannot supply a face unless they
                 // write a facial dependency or control one of its layer weights.
                 // Do not spend the route-expansion budget on unrelated graphs.
@@ -277,6 +381,14 @@ namespace VRVlog.LilToonExporter
                     }
                 }
                 Index(layers[origin].stateMachine, layers[layer].name, null, 0);
+                var wantedStates = stateFilter == null ? null : new HashSet<AnimatorState>(paths.Keys.Where(state => stateFilter(layer, state)));
+                var wantedMachines = new HashSet<AnimatorStateMachine>();
+                if (wantedStates != null)
+                    foreach (var state in wantedStates)
+                        for (var machine = owners[state]; machine != null; machine = parents[machine]) wantedMachines.Add(machine);
+                bool RelevantDestination(AnimatorTransitionBase transition) => wantedStates == null ||
+                    transition.destinationState != null && wantedStates.Contains(transition.destinationState) ||
+                    transition.destinationStateMachine != null && wantedMachines.Contains(transition.destinationStateMachine);
                 var incoming = edges.Where(edge => edge.Transition.destinationStateMachine != null)
                     .GroupBy(edge => edge.Transition.destinationStateMachine).ToDictionary(group => group.Key, group => group.ToArray());
                 var incomingStates = edges.Where(edge => edge.Transition.destinationState != null)
@@ -286,7 +398,7 @@ namespace VRVlog.LilToonExporter
                 Constraint[] Append(Constraint[] gate, IEnumerable<AnimatorCondition> conditions) => gate.Concat(
                     conditions.Select(condition => new Constraint { Condition = condition })).ToArray();
                 var priorityRoot = new PriorityPrefix { Alternatives = new[] { Array.Empty<Constraint>() } };
-                IEnumerable<Constraint[]> Fallthrough(Constraint[] gate, IEnumerable<AnimatorTransitionBase> entries)
+                IEnumerable<Constraint[]> Fallthrough(Constraint[] gate, IEnumerable<AnimatorTransitionBase> entries, Constraint[] simultaneous = null)
                 {
                     // Simplify only simultaneous priority exclusions. The
                     // incoming gate may describe an earlier warm-up state and
@@ -298,6 +410,16 @@ namespace VRVlog.LilToonExporter
                     var prefix = priorityRoot;
                     foreach (var entry in entries)
                     {
+                        // An immutable false AND branch cannot block a later
+                        // transition and needs no disjunctive priority prefix.
+                        if (Impossible(entry)) continue;
+                        // The destination's own conditions and its earlier
+                        // priority alternatives are tested at the same native
+                        // decision. A proven contradictory AND cannot block
+                        // this targeted route. Historical source gates remain
+                        // separate and are never treated as simultaneous.
+                        if (simultaneous != null && Solve(Append(simultaneous, entry.conditions), new Dictionary<string, float>(),
+                            parameters, defaults, _ => true, CheckCondition, out var contradiction) == null && contradiction == null) continue;
                         CheckCondition(); // Bound cache traversal as well as misses.
                         if (prefix.Children.TryGetValue(entry, out var cached))
                         { prefix = cached; if (prefix.Alternatives.Length == 0) yield break; continue; }
@@ -347,11 +469,13 @@ namespace VRVlog.LilToonExporter
                 }
                 IEnumerable<Constraint[]> SourceGates(Edge edge, HashSet<UnityEngine.Object> stack)
                 {
+                    if (Impossible(edge.Transition)) yield break;
                     var gates = edge.Source != null ? StateGates(edge.Source, stack) : edge.SourceMachine != null ? ExitGates(edge.SourceMachine, stack) :
                         Gates(edge.Owner, stack);
                     foreach (var gate in gates)
                         if (edge.PreviousEntries == null) yield return gate;
-                        else foreach (var prior in Fallthrough(gate, edge.PreviousEntries)) yield return prior;
+                        else foreach (var prior in Fallthrough(gate, edge.PreviousEntries,
+                            stateFilter == null ? null : Append(Array.Empty<Constraint>(), edge.Transition.conditions))) yield return prior;
                 }
                 IEnumerable<Constraint[]> DefaultGates(AnimatorStateMachine machine, HashSet<UnityEngine.Object> stack)
                 {
@@ -420,6 +544,7 @@ namespace VRVlog.LilToonExporter
                 var routes = new List<(AnimatorState State, Constraint[] Conditions, int WarmPrefix)>();
                 void Destination(AnimatorTransitionBase transition, Constraint[] conditions, HashSet<AnimatorStateMachine> stack, int warmPrefix)
                 {
+                    if (Impossible(transition) || !RelevantDestination(transition)) return;
                     Visit();
                     if (transition.destinationState != null && paths.ContainsKey(transition.destinationState))
                         routes.Add((transition.destinationState, conditions, warmPrefix));
@@ -430,26 +555,32 @@ namespace VRVlog.LilToonExporter
                         var previousEntries = new List<AnimatorTransitionBase>();
                         foreach (var entry in Enabled(machine.entryTransitions))
                         {
-                            foreach (var prior in Fallthrough(conditions, previousEntries))
-                                Destination(entry, Append(prior, entry.conditions), stack, warmPrefix);
+                            if (RelevantDestination(entry))
+                                foreach (var prior in Fallthrough(conditions, previousEntries,
+                                    stateFilter == null ? null : Append(Array.Empty<Constraint>(), entry.conditions)))
+                                    Destination(entry, Append(prior, entry.conditions), stack, warmPrefix);
                             if (entry.conditions.Length == 0) return;
                             previousEntries.Add(entry);
                         }
-                        if (machine.defaultState != null)
+                        if (machine.defaultState != null && (wantedStates == null || wantedStates.Contains(machine.defaultState)))
                             foreach (var fallback in Fallthrough(conditions, previousEntries)) routes.Add((machine.defaultState, fallback, warmPrefix));
                     }
                     finally { stack.Remove(machine); }
                 }
                 foreach (var edge in edges)
-                    foreach (var gate in SourceGates(edge, new HashSet<UnityEngine.Object>()))
-                        Destination(edge.Transition, Append(gate, edge.Transition.conditions), new HashSet<AnimatorStateMachine>(), WarmPrefix(gate));
-                // A default BlendTree may expose a face slider without any
-                // transition at all. Include its authored control points too.
+                    if (RelevantDestination(edge.Transition))
+                        foreach (var gate in SourceGates(edge, new HashSet<UnityEngine.Object>()))
+                            Destination(edge.Transition, Append(gate, edge.Transition.conditions), new HashSet<AnimatorStateMachine>(), WarmPrefix(gate));
+                // A default BlendTree or motion-time clip may expose a face
+                // slider without any transition. Include its input knots too.
                 foreach (var state in paths.Keys)
-                    if (EffectiveMotion(controller, state, layer) is BlendTree)
+                    if ((wantedStates == null || wantedStates.Contains(state)) && (EffectiveMotion(controller, state, layer) is BlendTree || state.timeParameterActive &&
+                        EffectiveMotion(controller, state, layer) is AnimationClip timedDefault &&
+                        VrChatGestureExpressions.HasChangingMorph(replacements.TryGetValue(timedDefault, out var effectiveDefault) ? effectiveDefault : timedDefault, excludedPath)))
                         foreach (var gate in StateGates(state, new HashSet<UnityEngine.Object>())) routes.Add((state, gate, WarmPrefix(gate)));
                 foreach (var route in routes)
                 {
+                    if (stateFilter?.Invoke(layer, route.State) == false) continue;
                     var motion = EffectiveMotion(controller, route.State, layer);
                     var behaviours = controller.GetStateEffectiveBehaviours(route.State, layer) ?? Array.Empty<StateMachineBehaviour>();
                     var driverMorph = behaviours
@@ -471,6 +602,12 @@ namespace VRVlog.LilToonExporter
                         if (!controlPoints.TryGetValue(tree, out points))
                         { points = Points(tree, parameters, Selectable, new HashSet<BlendTree>(), Visit).ToArray(); controlPoints.Add(tree, points); }
                     }
+                    else if (motion is AnimationClip timedClip && route.State.timeParameterActive &&
+                        VrChatGestureExpressions.HasChangingMorph(replacements.TryGetValue(timedClip, out var effectiveTimed) ? effectiveTimed : timedClip, excludedPath))
+                    {
+                        if (replacements.TryGetValue(timedClip, out var replacement)) timedClip = replacement;
+                        points = MotionTimePoints(route.State, timedClip, parameters, Selectable, excludedPath, Visit).ToArray();
+                    }
                     else points = new[] { new Point() };
                     if (points.Length == 0) continue;
                     foreach (var point in points)
@@ -478,6 +615,7 @@ namespace VRVlog.LilToonExporter
                         if (!route.Conditions.Any(constraint => Selectable(constraint.Condition.parameter)) && !point.Values.Keys.Any(Selectable)) continue;
                         var values = Solve(route.Conditions, point.Values, parameters, defaults, Selectable, CheckCondition, out var error);
                         var speculativeWarmStart = false;
+                        Dictionary<string, float> arrivalValues = null;
                         // A gate established during the sampler's native default
                         // initialization need not remain true after selection.
                         // Only try this when that past gate matches every default
@@ -488,12 +626,42 @@ namespace VRVlog.LilToonExporter
                             values = Solve(route.Conditions.Skip(route.WarmPrefix), point.Values, parameters, defaults, Selectable, CheckCondition, out error);
                             speculativeWarmStart = true;
                         }
+                        if (values == null && error == null && stateFilter != null && motion is BlendTree && selectableBuiltIns != null)
+                        {
+                            // An authored tree knot can remain held after the
+                            // hand that entered the state changes. Preserve
+                            // the original arrival route separately, using
+                            // only normal or final hand values so the complete
+                            // normal/final dependency audit covers every stage.
+                            var conditions = route.Conditions.Skip(speculativeWarmStart ? route.WarmPrefix : 0).ToArray();
+                            var controls = point.Values.Where(pair => !selectableBuiltIns.Contains(pair.Key))
+                                .ToDictionary(pair => pair.Key, pair => pair.Value, StringComparer.Ordinal);
+                            var arrival = Solve(conditions, controls, parameters, defaults, Selectable, CheckCondition, out var arrivalError);
+                            if (arrival != null && arrivalError == null)
+                            {
+                                var final = new Dictionary<string, float>(arrival, StringComparer.Ordinal);
+                                foreach (var pair in point.Values) final[pair.Key] = selectableBuiltIns.Contains(pair.Key) &&
+                                    pair.Key.EndsWith("Weight", StringComparison.Ordinal) ? Mathf.Clamp01(pair.Value) : pair.Value;
+                                var possible = true;
+                                foreach (var name in final.Keys.Where(selectableBuiltIns.Contains).ToArray())
+                                {
+                                    var group = conditions.Where(constraint => constraint.Condition.parameter == name).ToArray();
+                                    var options = new[] { final[name], defaults.TryGetValue(name, out var normal) ? normal : 0 };
+                                    var found = options.Where(option => group.All(constraint =>
+                                        Matches(constraint.Condition, option) != constraint.Negated)).ToArray();
+                                    if (found.Length == 0) { possible = false; break; }
+                                    arrival[name] = found[0];
+                                }
+                                if (possible && arrival.Any(pair => final.TryGetValue(pair.Key, out var value) && pair.Value != value))
+                                { values = final; arrivalValues = arrival; }
+                            }
+                        }
                         if (values == null || error == null && values.All(pair => defaults.TryGetValue(pair.Key, out var value) && value == pair.Value)) continue;
                         if (!emitted.Add(layer + "/" + paths[route.State] + "/" + Assignment(values) + "/" + error)) continue;
                         if (++candidates > MaximumCandidates)
                             throw new InvalidOperationException("FXの自動表情候補が256件を超えています。表情の登録を整理してください。");
                         yield return new Candidate { Layer = layer, State = route.State, Path = paths[route.State], Values = values,
-                            SpeculativeWarmStart = speculativeWarmStart,
+                            SpeculativeWarmStart = speculativeWarmStart, ArrivalValues = arrivalValues,
                             DefaultValues = point.PreservesInputs || weightMorph ? values.Keys.ToDictionary(name => name,
                                 name => defaults.TryGetValue(name, out var value) ? value : 0, StringComparer.Ordinal) : null,
                             Error = paths.Values.Count(path => path == paths[route.State]) != 1 ? "FXの表情状態のパスが重複しています。状態名を確認してください。" : error };
@@ -623,6 +791,39 @@ namespace VRVlog.LilToonExporter
             finally { stack.Remove(tree); }
         }
 
+        static IEnumerable<Point> MotionTimePoints(AnimatorState state, AnimationClip clip,
+            IDictionary<string, AnimatorControllerParameter> parameters, Func<string, bool> selectable,
+            Func<string, bool> excludedPath, Action visit)
+        {
+            var name = state.timeParameter;
+            if (string.IsNullOrEmpty(name) || !parameters.TryGetValue(name, out var parameter) || parameter.type != AnimatorControllerParameterType.Float)
+                throw new InvalidOperationException("FXのMotion TimeにはControllerで宣言されたFloat入力が必要です: " + state.name + " / " + name);
+            if (!Finite(clip.length) || clip.length <= 0 || clip.isLooping)
+                throw new InvalidOperationException("FXのMotion Timeは有限の長さを持つ非ループのClipが必要です: " + state.name + " / " + clip.name);
+            var knots = new SortedSet<float> { 0, 1 };
+            foreach (var binding in AnimationUtility.GetCurveBindings(clip).Where(binding => excludedPath?.Invoke(binding.path) != true &&
+                binding.type == typeof(SkinnedMeshRenderer) && binding.propertyName.StartsWith("blendShape.", StringComparison.Ordinal)))
+            {
+                var curve = AnimationUtility.GetEditorCurve(clip, binding);
+                if (curve == null || curve.length == 0)
+                    throw new InvalidOperationException("FXのMotion TimeのBlendShape曲線を読み取れません: " + clip.name + " / " + binding.propertyName);
+                VrChatExpressionSampler.ValidateNativeParameterCurve(curve, clip.name + " / " + binding.propertyName);
+                foreach (var key in curve.keys)
+                {
+                    visit();
+                    if (key.time < 0 || key.time > clip.length)
+                        throw new InvalidOperationException("FXのMotion Timeのキー時刻がClipの範囲外です: " + clip.name);
+                    knots.Add(key.time / clip.length);
+                }
+            }
+            if (!selectable(name)) { yield return new Point { PreservesInputs = true }; yield break; }
+            foreach (var value in knots)
+            {
+                visit();
+                var point = new Point(); point.Values.Add(name, value); yield return point;
+            }
+        }
+
         static bool HasFaceOutput(Motion motion, IDictionary<AnimationClip, AnimationClip> replacements, Func<string, bool> excludedPath,
             ISet<string> faceInputs,
             HashSet<Motion> stack, Action visit)
@@ -689,11 +890,14 @@ namespace VRVlog.LilToonExporter
             first.All(pair => second.TryGetValue(pair.Key, out var value) && value.Equals(pair.Value));
         static bool SamePose(VrChatExpressionMenu.Entry first, VrChatExpressionMenu.Entry second)
         {
-            if (first.Error != null || first.Animation.Count != 0 || first.Values.Count != second.Values.Count ||
-                first.Unevaluated.Count != second.Unevaluated.Count) return false;
+            if (first.Error != null || second.Error != null || first.Animation.Count != second.Animation.Count ||
+                first.Values.Count != second.Values.Count || first.Unevaluated.Count != second.Unevaluated.Count ||
+                first.Loop != second.Loop || Math.Abs(first.Duration - second.Duration) > .0001f) return false;
             bool Same(IList<VrChatExpressionMenu.MorphValue> a, IList<VrChatExpressionMenu.MorphValue> b) => a.All(value =>
                 b.Any(other => value.Path == other.Path && value.Shape == other.Shape && Mathf.Abs(value.Weight - other.Weight) < .001f));
-            return Same(first.Values, second.Values) && Same(first.Unevaluated, second.Unevaluated);
+            return Same(first.Values, second.Values) && Same(first.Unevaluated, second.Unevaluated) && first.Animation.All(channel =>
+                second.Animation.Any(other => channel.Path == other.Path && channel.Shape == other.Shape &&
+                    VrChatExpressionBaker.SameCurve(channel.Curve, other.Curve)));
         }
     }
 }

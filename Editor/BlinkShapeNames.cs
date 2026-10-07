@@ -27,6 +27,27 @@ namespace VRVlog.LilToonExporter
         internal static bool CompatiblePartials(string left, string right) =>
             PartialFamily(left, true) >= 0 && PartialFamily(left, true) == PartialFamily(right, false);
 
+        // Automatic ownership includes coexisting exact semantic families.
+        // Resolve still chooses one family with its established preset priority.
+        internal static IEnumerable<int> AutomaticCandidates(IReadOnlyList<string> names)
+        {
+            var seen = new HashSet<int>();
+            foreach (var name in Both)
+            {
+                var index = Unique(names, name);
+                if (index >= 0 && seen.Add(index)) yield return index;
+            }
+            foreach (var pair in Pairs)
+                foreach (var name in new[] { pair.Left, pair.Right })
+                {
+                    var index = Unique(names, name);
+                    if (index >= 0 && seen.Add(index)) yield return index;
+                }
+            var unified = UnifiedCandidates(names, null);
+            foreach (var canonical in new[] { "EyeClosed", "EyeClosedLeft", "EyeClosedRight" })
+                if (unified.TryGetValue(canonical, out var index) && seen.Add(index)) yield return index;
+        }
+
         internal static int Unique(IReadOnlyList<string> names, string name, StringComparison comparison = StringComparison.OrdinalIgnoreCase)
         {
             var result = -1;
