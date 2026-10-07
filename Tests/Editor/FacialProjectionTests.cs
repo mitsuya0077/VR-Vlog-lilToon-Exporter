@@ -448,12 +448,13 @@ namespace VRVlog.LilToonExporter.Tests
         public void ImplicitHeldFaceHistoryCannotImportAnAppearanceOwnedMorph()
         {
             var selected = InheritedFaceTree(false, appearance: true); var before = ExportSourceFingerprint.Compute(avatar);
+            var materialBefore = material.GetColor("_Color2nd");
             var entry = new VrChatExpressionMenu.Entry { Name = "Prepared wardrobe ownership" };
             entry.Parameters.Add("GestureRight", 1); entry.Parameters.Add("NativeMix", .5f);
             var metadata = Metadata(); metadata.NeutralInputInventoryComplete = true;
             AnimatedGestureTree.Read(avatar, metadata, 0, selected, entry, null);
             Assert.That(entry.Values.Any(value => value.Shape == Shapes[1]), Is.False);
-            Assert.That(material.GetColor("_Color2nd").r, Is.EqualTo(.25f));
+            Assert.That(material.GetColor("_Color2nd"), Is.EqualTo(materialBefore));
             Assert.That(ExportSourceFingerprint.Compute(avatar), Is.EqualTo(before));
         }
 
@@ -463,10 +464,14 @@ namespace VRVlog.LilToonExporter.Tests
             var selected = InheritedFaceTree(false); var prior = (AnimationClip)controller.layers[0].stateMachine.defaultState.motion;
             AnimationUtility.SetEditorCurve(prior, Binding(Shapes[1]), new AnimationCurve(new Keyframe(0, 10, 0, float.NaN), new Keyframe(1, 40, 0, 0)));
             Assert.That(float.IsNaN(AnimationUtility.GetEditorCurve(prior, Binding(Shapes[1])).keys[0].outTangent), Is.True);
+            var before = ExportSourceFingerprint.Compute(avatar);
             var entry = new VrChatExpressionMenu.Entry(); entry.Parameters.Add("GestureRight", 1); entry.Parameters.Add("NativeMix", .5f);
             var metadata = Metadata(); metadata.NeutralInputInventoryComplete = true;
             var error = Assert.Catch<InvalidOperationException>(() => AnimatedGestureTree.Read(avatar, metadata, 0, selected, entry, null));
-            Assert.That(error.Message, Does.Contain(Shapes[1]));
+            Assert.That(error.Message, Does.Contain("Expression animation data is invalid"));
+            Assert.That(entry.Values, Is.Empty); Assert.That(entry.Animation, Is.Empty);
+            Assert.That(float.IsNaN(AnimationUtility.GetEditorCurve(prior, Binding(Shapes[1])).keys[0].outTangent), Is.True);
+            Assert.That(ExportSourceFingerprint.Compute(avatar), Is.EqualTo(before));
         }
 
         // Independent native witness: the rejected effects must really execute;
