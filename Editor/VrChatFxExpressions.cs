@@ -16,6 +16,7 @@ namespace VRVlog.LilToonExporter
     internal static class VrChatFxExpressions
     {
         const int MaximumNodes = 8192, MaximumDepth = 16, MaximumCandidates = 256;
+        const int MaximumConditionChecks = MaximumNodes * 32;
 
         sealed class Candidate
         {
@@ -168,6 +169,7 @@ namespace VRVlog.LilToonExporter
             var replacements = ExpressionDependencies.Overrides(source.Controller);
             var layers = controller.layers;
             var nodes = 0;
+            var conditionChecks = 0;
             var candidates = 0;
             var emitted = new HashSet<string>(StringComparer.Ordinal);
             void Visit()
@@ -175,8 +177,23 @@ namespace VRVlog.LilToonExporter
                 if (++nodes > MaximumNodes)
                     throw new InvalidOperationException("FXの表情探索が上限を超えています。Controllerの構成を確認してください。");
             }
+            void CheckCondition()
+            {
+                // A single priority branch can contain many exclusions. Its
+                // solver work grows independently of the number of graph nodes.
+                if (++conditionChecks > MaximumConditionChecks)
+                    throw new InvalidOperationException("FXの表情条件の探索が上限を超えています。Controllerの構成を確認してください。");
+            }
             for (var layer = 0; layer < layers.Length; layer++)
             {
+                // Wardrobe/gimmick graphs cannot supply a face unless they
+                // write a facial dependency or control one of its layer weights.
+                // Do not spend the route-expansion budget on unrelated graphs.
+                var dependency = dependencies[layer];
+                if (dependency.Morphs.Count == 0 && !dependency.Writes.Overlaps(faceInputs) &&
+                    !dependency.WeightControls.Values.Any(control => control.AnimatorLayer && control.Playable == "FX" &&
+                        (dependencies[control.LayerIndex].Morphs.Count > 0 || dependencies[control.LayerIndex].Writes.Overlaps(faceInputs))))
+                    continue;
                 var origin = layer;
                 var sync = new HashSet<int>();
                 while (layers[origin].syncedLayerIndex >= 0)
@@ -262,23 +279,49 @@ namespace VRVlog.LilToonExporter
                     conditions.Select(condition => new Constraint { Condition = condition })).ToArray();
                 IEnumerable<Constraint[]> Fallthrough(Constraint[] gate, IEnumerable<AnimatorTransitionBase> entries)
                 {
-                    var alternatives = new List<Constraint[]> { gate };
+                    // Simplify only simultaneous priority exclusions. The
+                    // incoming gate may describe an earlier warm-up state and
+                    // must remain intact for WarmPrefix/native reachability.
+                    var alternatives = new List<Constraint[]> { Array.Empty<Constraint>() };
                     foreach (var entry in entries)
                     {
                         // !(A && B) is !A || !B. Keep the original comparison
                         // plus its logical negation, including Float equality
                         // at the boundary of a negated Greater/Less condition.
                         if (entry.conditions.Length == 0) yield break;
-                        var next = new List<Constraint[]>();
+                        var next = new Dictionary<int, Dictionary<string, (Constraint[] Conditions, HashSet<string> Keys)>>();
                         foreach (var alternative in alternatives)
                             foreach (var condition in entry.conditions)
                             {
                                 Visit();
-                                next.Add(alternative.Concat(new[] { new Constraint { Condition = condition, Negated = true } }).ToArray());
+                                var combined = alternative.Concat(new[] { new Constraint { Condition = condition, Negated = true } })
+                                    .GroupBy(ConstraintKey).Select(group => group.First()).ToArray();
+                                // Keep malformed/unsupported conditions for
+                                // their normal diagnostics; prune only proven
+                                // contradictory parameter conjunctions.
+                                if (Solve(combined, new Dictionary<string, float>(), parameters, defaults, _ => true, CheckCondition, out var error) == null && error == null)
+                                    continue;
+                                var keys = new HashSet<string>(combined.Select(ConstraintKey), StringComparer.Ordinal);
+                                var key = string.Concat(keys.OrderBy(value => value, StringComparer.Ordinal).Select(value => value.Length + ":" + value));
+                                if (!next.TryGetValue(keys.Count, out var sameSize))
+                                    next.Add(keys.Count, sameSize = new Dictionary<string, (Constraint[], HashSet<string>)>(StringComparer.Ordinal));
+                                if (sameSize.ContainsKey(key)) continue;
+                                bool Contains(HashSet<string> superset, HashSet<string> subset)
+                                { Visit(); return superset.IsSupersetOf(subset); }
+                                // Equal-sized alternatives use a hash lookup.
+                                // Bound the remaining subset comparisons too,
+                                // so independent conditions cannot create an
+                                // unaccounted quadratic expansion.
+                                if (next.Where(group => group.Key < keys.Count).SelectMany(group => group.Value.Values)
+                                    .Any(existing => Contains(keys, existing.Keys))) continue;
+                                foreach (var group in next.Where(group => group.Key > keys.Count))
+                                    foreach (var existing in group.Value.Where(value => Contains(value.Value.Keys, keys)).Select(value => value.Key).ToArray())
+                                        group.Value.Remove(existing);
+                                sameSize.Add(key, (combined, keys));
                             }
-                        alternatives = next;
+                        alternatives = next.Values.SelectMany(group => group.Values).Select(value => value.Conditions).ToList();
                     }
-                    foreach (var alternative in alternatives) yield return alternative;
+                    foreach (var alternative in alternatives) yield return gate.Concat(alternative).ToArray();
                 }
                 IEnumerable<Constraint[]> SourceGates(Edge edge, HashSet<UnityEngine.Object> stack)
                 {
@@ -400,7 +443,7 @@ namespace VRVlog.LilToonExporter
                     foreach (var point in points)
                     {
                         if (!route.Conditions.Any(constraint => Selectable(constraint.Condition.parameter)) && !point.Values.Keys.Any(Selectable)) continue;
-                        var values = Solve(route.Conditions, point.Values, parameters, defaults, Selectable, out var error);
+                        var values = Solve(route.Conditions, point.Values, parameters, defaults, Selectable, CheckCondition, out var error);
                         var speculativeWarmStart = false;
                         // A gate established during the sampler's native default
                         // initialization need not remain true after selection.
@@ -409,7 +452,7 @@ namespace VRVlog.LilToonExporter
                         // Full native reachability/stability must still succeed.
                         if (values == null && route.WarmPrefix > 0)
                         {
-                            values = Solve(route.Conditions.Skip(route.WarmPrefix), point.Values, parameters, defaults, Selectable, out error);
+                            values = Solve(route.Conditions.Skip(route.WarmPrefix), point.Values, parameters, defaults, Selectable, CheckCondition, out error);
                             speculativeWarmStart = true;
                         }
                         if (values == null || error == null && values.All(pair => defaults.TryGetValue(pair.Key, out var value) && value == pair.Value)) continue;
@@ -428,11 +471,11 @@ namespace VRVlog.LilToonExporter
 
         static Dictionary<string, float> Solve(IEnumerable<Constraint> conditions, IDictionary<string, float> point,
             IDictionary<string, AnimatorControllerParameter> parameters, IDictionary<string, float> defaults,
-            Func<string, bool> selectable, out string error)
+            Func<string, bool> selectable, Action checkCondition, out string error)
         {
             error = null;
             var result = new Dictionary<string, float>(point, StringComparer.Ordinal);
-            foreach (var group in conditions.GroupBy(constraint => constraint.Condition.parameter))
+            foreach (var group in conditions.GroupBy(constraint => { checkCondition(); return constraint.Condition.parameter; }))
             {
                 if (string.IsNullOrEmpty(group.Key) || !parameters.TryGetValue(group.Key, out var parameter))
                 { error = "FXの条件のパラメーターがありません: " + group.Key; return result; }
@@ -444,7 +487,8 @@ namespace VRVlog.LilToonExporter
                 { error = "FXの条件の値が不正です: " + group.Key; return result; }
                 if (constraints.Any(constraint => !ValidMode(parameter.type, constraint.Condition.mode)))
                 { error = "FXの条件の型と比較方法を再現できません: " + group.Key; return result; }
-                bool Accept(float value) => constraints.All(constraint => Matches(constraint.Condition, value) != constraint.Negated);
+                bool Accept(float value) => constraints.All(constraint =>
+                { checkCondition(); return Matches(constraint.Condition, value) != constraint.Negated; });
                 if (!selectable(group.Key) || result.ContainsKey(group.Key))
                 { if (!Accept(current)) return null; }
                 else
@@ -586,6 +630,8 @@ namespace VRVlog.LilToonExporter
         static bool GeneratedParameter(string name) => name.StartsWith("__MA/", StringComparison.Ordinal) ||
             name.StartsWith("__ActiveSelf", StringComparison.Ordinal);
         static bool Finite(float value) => !float.IsNaN(value) && !float.IsInfinity(value);
+        static string ConstraintKey(Constraint value) => value.Condition.parameter + "\u001f" + (int)value.Condition.mode + "/" +
+            value.Condition.threshold.ToString("R", CultureInfo.InvariantCulture) + "/" + value.Negated;
         static bool ValidMode(AnimatorControllerParameterType type, AnimatorConditionMode mode) =>
             type == AnimatorControllerParameterType.Bool ? mode == AnimatorConditionMode.If || mode == AnimatorConditionMode.IfNot :
             type == AnimatorControllerParameterType.Int ? mode == AnimatorConditionMode.Equals || mode == AnimatorConditionMode.NotEqual ||

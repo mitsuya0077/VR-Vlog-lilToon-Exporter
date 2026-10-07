@@ -103,11 +103,22 @@ namespace VRVlog.LilToonExporter
                 return Finite(current) && current == value;
             }
             if (property.Length < 3 || property[property.Length - 2] != '.') return false;
-            var channel = "rgba".IndexOf(property[property.Length - 1]);
-            if (channel < 0) return false;
             var name = property.Substring(0, property.Length - 2);
             index = shader.FindPropertyIndex(name);
-            if (index < 0 || shader.GetPropertyType(index) != ShaderPropertyType.Color) return false;
+            if (index < 0) return false;
+            if (shader.GetPropertyType(index) == ShaderPropertyType.Vector)
+            {
+                // lilToon's HSVG and UV reset curves are Vector channels, not
+                // colors. Unity applies their xyzw values without a color-space
+                // conversion. Prove the exact prepared value just as for a
+                // scalar; a real tint/UV change must still reject the face.
+                var component = "xyzw".IndexOf(property[property.Length - 1]);
+                if (component < 0) return false;
+                var current = material.GetVector(name)[component];
+                return Finite(current) && current == value;
+            }
+            var channel = "rgba".IndexOf(property[property.Length - 1]);
+            if (channel < 0 || shader.GetPropertyType(index) != ShaderPropertyType.Color) return false;
             if ((shader.GetPropertyFlags(index) & ShaderPropertyFlags.HDR) != 0)
             {
                 // Animator color curves use gamma-authored RGB even for HDR

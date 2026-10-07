@@ -3,6 +3,7 @@
   "rootNamespace": "VRVlog.LilToonExporter.Tests",
   "references": [
     "VRVlog.LilToonExporter.Editor",
+    "VRVlog.LilToonExporter.Compatibility",
     "VRVlog.LilToonExporter.Runtime",
     "VRVlog.LilToonExporter.TestFixtures",
     "VRVlog.LanTransfer.Editor.Tests",
