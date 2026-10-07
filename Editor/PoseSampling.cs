@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Globalization;
 using System.Linq;
 using System.Security.Cryptography;
 using System.Text;
@@ -212,27 +213,32 @@ namespace VRVlog.LilToonExporter
                 for (var i = 1; i < uniformFrames; i++) times.Add((double)(float)(start + i / 60.0) - start);
                 foreach (var binding in EffectiveBodyBindings(copy, layer, true))
                 {
-                    var keys = AnimationUtility.GetEditorCurve(layer.Clip, binding).keys;
+                    var curve = AnimationUtility.GetEditorCurve(layer.Clip, binding);
+                    var keys = curve.keys;
                     for (var i = 0; i < keys.Length; i++)
                     {
                         var time = (double)keys[i].time - start;
                         if (time < 0 || time > duration) continue;
                         times.Add(time);
-                        if (time > 0 && i > 0 && keys[i].value != keys[i - 1].value &&
-                            (float.IsInfinity(keys[i - 1].outTangent) || float.IsInfinity(keys[i].inTangent)))
+                        if (time > 0 && i > 0 && keys[i].value != keys[i - 1].value)
                         {
-                            // The duplicated timestamp stores a left limit and
-                            // the exact-key right value. Never interpolate a jump.
                             var bytes = BitConverter.GetBytes(keys[i].time);
                             var before = BitConverter.ToSingle(BitConverter.GetBytes(BitConverter.ToInt32(bytes, 0) - 1), 0);
-                            steps[time] = Math.Max(0, (double)before - start);
+                            if (float.IsInfinity(keys[i - 1].outTangent) || float.IsInfinity(keys[i].inTangent) ||
+                                NativeKeyDiscontinuity(curve, keys[i - 1], keys[i], before))
+                            {
+                                // Both explicit STEP tangents and a verified
+                                // native evaluator discontinuity need the left
+                                // limit and exact-key value at the same time.
+                                steps[time] = Math.Max(0, (double)before - start);
+                            }
                         }
                     }
                 }
                 CheckBudget(times.Count + steps.Count);
                 var eulerCurves = EffectiveBodyBindings(copy, layer, true)
                     .Where(binding => binding.type == typeof(Transform) && binding.propertyName.StartsWith("localEulerAngles"))
-                    .Select(binding => AnimationUtility.GetEditorCurve(layer.Clip, binding)).ToArray();
+                    .Select(binding => (binding, curve: AnimationUtility.GetEditorCurve(layer.Clip, binding))).ToArray();
                 HumanoidAnimationData.Frame Capture(double time, double sampleTime)
                 {
                     CheckBudget(data.Frames.Count + 1);
@@ -279,20 +285,81 @@ namespace VRVlog.LilToonExporter
                     // 90 degrees between probes even when all quaternions agree.
                     var probeTimes = new[] { left.Time, quarter.Time, middle.Time, threeQuarter.Time, right.Time }
                         .Select(time => Math.Min(time, sampleLimit)).ToArray();
-                    var largeEulerChange = eulerCurves.Any(curve =>
+                    var largeEulerChange = eulerCurves.Any(channel =>
                     {
-                        var previous = curve.Evaluate((float)(start + probeTimes[0]));
+                        var previous = channel.curve.Evaluate((float)(start + probeTimes[0]));
                         for (var i = 1; i < probeTimes.Length; i++)
                         {
-                            var value = curve.Evaluate((float)(start + probeTimes[i]));
+                            var value = channel.curve.Evaluate((float)(start + probeTimes[i]));
                             if (Math.Abs(value - previous) > 90) return true;
                             previous = value;
                         }
                         return false;
                     });
                     if (!largeEulerChange && Matches(left, right, quarter, .25) && Matches(left, right, middle, .5) && Matches(left, right, threeQuarter, .75)) return;
-                    if (depth >= 12 || right.Time - left.Time < 0.000001)
-                        throw new InvalidOperationException("動くポーズのカーブを十分な精度で保存できません。カーブの変化を緩やかにしてください。");
+                    // Time is relative to the clip, but Unity evaluates curves
+                    // on the source float grid. A short interval near zero can
+                    // still contain millions of distinct timestamps (authored
+                    // humanoid clips commonly have an initial key at 2^-24).
+                    // Stop only when the native evaluator cannot subdivide it,
+                    // rather than rejecting all intervals shorter than 1 us.
+                    var sourceLeft = (float)(start + Math.Min(left.Time, sampleLimit));
+                    var sourceMiddle = (float)(start + Math.Min(middleTime, sampleLimit));
+                    var sourceRight = (float)(start + Math.Min(right.Time, sampleLimit));
+                    if (depth >= 12 || sourceMiddle <= sourceLeft || sourceMiddle >= sourceRight)
+                    {
+                        // Report the actual failed oracle comparison, not just
+                        // a generic suggestion to edit an otherwise valid clip.
+                        // Keep this extra scan on the failure path only.
+                        var score = 0.0; var metric = ""; var bone = ""; var binding = ""; var unit = "";
+                        var errorValue = 0.0; var limit = 0.0; var sampleTime = 0.0; var blend = 0.0;
+                        void Record(string kind, string name, string curveBinding, double value, double tolerance,
+                            string suffix, double time, double amount)
+                        {
+                            if (value / tolerance <= score) return;
+                            score = value / tolerance; metric = kind; bone = name; binding = curveBinding;
+                            errorValue = value; limit = tolerance; unit = suffix;
+                            sampleTime = (float)(start + Math.Min(time, sampleLimit)); blend = amount;
+                        }
+                        foreach (var probe in new[] { quarter, middle, threeQuarter })
+                        {
+                            var amount = (probe.Time - left.Time) / (right.Time - left.Time);
+                            Record("hipsError", "hips", "", Vector3.Distance(
+                                Vector3.Lerp(Vector(left.HipsOffset), Vector(right.HipsOffset), (float)amount),
+                                Vector(probe.HipsOffset)), .0005, "m", probe.Time, amount);
+                            for (var i = 0; i < probe.Rotations.Length; i++)
+                                Record("rotationError", data.Bones[i].Name, "", Quaternion.Angle(
+                                    Quaternion.Slerp(Rotation(left.Rotations[i]), Rotation(right.Rotations[i]), (float)amount),
+                                    Rotation(probe.Rotations[i])), .15, "deg", probe.Time, amount);
+                        }
+                        foreach (var channel in eulerCurves)
+                        {
+                            var animator = copy.GetComponent<Animator>();
+                            var name = data.Bones.First(b => AnimationUtility.CalculateTransformPath(
+                                animator.GetBoneTransform(HumanBone(b.Name)), copy.transform) == channel.binding.path).Name;
+                            var previous = channel.curve.Evaluate((float)(start + probeTimes[0]));
+                            for (var i = 1; i < probeTimes.Length; i++)
+                            {
+                                var value = channel.curve.Evaluate((float)(start + probeTimes[i]));
+                                Record("eulerChange", name, channel.binding.path + "/" + channel.binding.propertyName,
+                                    Math.Abs(value - previous), 90, "deg", probeTimes[i],
+                                    (probeTimes[i] - left.Time) / (right.Time - left.Time));
+                                previous = value;
+                            }
+                        }
+                        string Number(double value) => value.ToString("R", CultureInfo.InvariantCulture);
+                        var error = new InvalidOperationException(ExporterLocalization.T(
+                            "動くポーズのカーブを十分な精度で保存できません。カーブの変化を緩やかにしてください。") +
+                            " [bone=" + bone + "; sourceTime=" + Number(sampleTime) + "s; sourceInterval=[" +
+                            Number(start + left.Time) + ", " + Number(start + right.Time) + "]s; " + metric + "=" +
+                            Number(errorValue) + unit + "; limit=" + Number(limit) + unit +
+                            (binding.Length == 0 ? "" : "; binding=" + binding) + "]");
+                        error.Data["bone"] = bone; error.Data["metric"] = metric; error.Data["binding"] = binding;
+                        error.Data["sourceTime"] = sampleTime; error.Data["sourceIntervalStart"] = start + left.Time;
+                        error.Data["sourceIntervalEnd"] = start + right.Time; error.Data["sampleLimit"] = start + sampleLimit;
+                        error.Data["error"] = errorValue; error.Data["limit"] = limit; error.Data["blend"] = blend;
+                        throw error;
+                    }
                     Refine(left, middle, depth + 1, sampleLimit); Add(middle); Refine(middle, right, depth + 1, sampleLimit);
                 }
                 var first = Capture(0, 0); Add(first);
@@ -312,6 +379,29 @@ namespace VRVlog.LilToonExporter
 
         static Vector3 Vector(double[] value) => new Vector3((float)value[0], (float)value[1], (float)value[2]);
         static Quaternion Rotation(double[] value) => new Quaternion((float)value[0], (float)value[1], (float)value[2], (float)value[3]);
+
+        static bool NativeKeyDiscontinuity(AnimationCurve curve, Keyframe left, Keyframe right, float before)
+        {
+            // Unity can collapse a very short finite-tangent Hermite interval
+            // toward its left value, then jump at the exact right key. Authored
+            // humanoid clips contain such intervals at 0 -> 2^-24 seconds.
+            // Distinguish that native jump from a steep continuous curve using
+            // an upper bound on its derivative, rather than a time threshold.
+            if (!Finite(left.outTangent) || !Finite(right.inTangent) ||
+                (left.weightedMode & WeightedMode.Out) != 0 || (right.weightedMode & WeightedMode.In) != 0 || before <= left.time) return false;
+            var span = (double)right.time - left.time;
+            var derivative = 1.5 * Math.Abs((double)right.value - left.value) / span + Math.Abs((double)left.outTangent) + Math.Abs((double)right.inTangent);
+            var beforeBits = BitConverter.ToInt32(BitConverter.GetBytes(before), 0);
+            var earlier = BitConverter.ToSingle(BitConverter.GetBytes(beforeBits - 1), 0);
+            if (earlier < left.time) return false;
+            var a = (double)curve.Evaluate(earlier); var b = (double)curve.Evaluate(before); var c = (double)curve.Evaluate(right.time);
+            // The conservative margin also leaves poorly resolved fast curves
+            // to the normal precision check. Never invent a jump to make those
+            // pass. The preceding segment must remain within the same bound.
+            var rounding = Math.Max(Math.Max(Math.Abs(a), Math.Abs(b)), Math.Abs(c)) * 0.000001;
+            return Math.Abs(c - b) > 64 * derivative * ((double)right.time - before) + rounding &&
+                Math.Abs(b - a) <= 64 * derivative * ((double)before - earlier) + rounding;
+        }
 
         static HumanoidPoseData SampleOwned(GameObject avatar, PoseCandidate candidate, bool includeHead,
             Action<Func<double, HumanoidPoseData>, GameObject, List<PoseLayer>> sampleAnimation)

@@ -409,7 +409,7 @@ namespace VRVlog.LilToonExporter
             }
 
             internal PlayerSelection ReadClip(GameObject avatar, AnimationClip original, VrChatExpressionMenu.Entry entry,
-                RuntimeAnimatorController runtime = null)
+                RuntimeAnimatorController runtime = null, VrChatExpressionMenu.Source metadata = null)
             {
                 if (avatar != clone) throw new InvalidOperationException("FaceEmoの表情参照は書き出し用コピーと一致していません。");
                 if (!targets.TryGetValue(original, out var paths))
@@ -470,7 +470,7 @@ namespace VRVlog.LilToonExporter
                     // its additional synchronized channels are part of the
                     // prepared expression, not optional matching evidence.
                     var read = selected.ReadPreparedMotion ? selected.Motion : clip;
-                    VrChatGestureExpressions.ReadClip(avatar, read, entry, PreparedExcludedPath);
+                    VrChatGestureExpressions.ReadClip(avatar, read, entry, PreparedExcludedPath, metadata);
                     if (entry.Animation.Count > 0)
                     {
                         if (read.length <= 0 || read.length > 600)
@@ -660,10 +660,10 @@ namespace VRVlog.LilToonExporter
                 PlayerSelection selected;
                 if (bindings == null)
                 {
-                    VrChatGestureExpressions.ReadClip(avatar, clip, entry, excludedPath);
+                    VrChatGestureExpressions.ReadClip(avatar, clip, entry, excludedPath, source);
                     selected = ResolvePlayer(source.Controller, clip, clip);
                 }
-                else selected = bindings.ReadClip(avatar, clip, entry, source.Controller);
+                else selected = bindings.ReadClip(avatar, clip, entry, source.Controller, source);
                 if (bindings?.DeferPermanentOverrides == true) bindings.Defer(entry, selected);
                 else VrChatExpressionSampler.ApplyPermanentOverrides(avatar, source.Controller, entry, selected.Layer, selected.WriteDefaults,
                     excludedPath: bindings == null ? excludedPath : bindings.PreparedExcludedPath, metadata: source, sourceState: selected.State);

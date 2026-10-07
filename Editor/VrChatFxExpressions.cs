@@ -47,6 +47,12 @@ namespace VRVlog.LilToonExporter
             internal IEnumerable<AnimatorTransitionBase> PreviousEntries;
         }
 
+        sealed class PriorityPrefix
+        {
+            internal readonly Dictionary<AnimatorTransitionBase, PriorityPrefix> Children = new Dictionary<AnimatorTransitionBase, PriorityPrefix>();
+            internal Constraint[][] Alternatives;
+        }
+
         internal static void Add(GameObject avatar, VrChatExpressionMenu.Source source,
             Func<string, bool> excludedPath = null, VrChatMenuImportPolicy policy = null)
         {
@@ -172,6 +178,8 @@ namespace VRVlog.LilToonExporter
             var conditionChecks = 0;
             var candidates = 0;
             var emitted = new HashSet<string>(StringComparer.Ordinal);
+            var faceOutputs = new Dictionary<Motion, bool>();
+            var controlPoints = new Dictionary<BlendTree, Point[]>();
             void Visit()
             {
                 if (++nodes > MaximumNodes)
@@ -277,20 +285,32 @@ namespace VRVlog.LilToonExporter
                     .GroupBy(edge => edge.Owner).ToDictionary(group => group.Key, group => group.ToArray());
                 Constraint[] Append(Constraint[] gate, IEnumerable<AnimatorCondition> conditions) => gate.Concat(
                     conditions.Select(condition => new Constraint { Condition = condition })).ToArray();
+                var priorityRoot = new PriorityPrefix { Alternatives = new[] { Array.Empty<Constraint>() } };
                 IEnumerable<Constraint[]> Fallthrough(Constraint[] gate, IEnumerable<AnimatorTransitionBase> entries)
                 {
                     // Simplify only simultaneous priority exclusions. The
                     // incoming gate may describe an earlier warm-up state and
                     // must remain intact for WarmPrefix/native reachability.
-                    var alternatives = new List<Constraint[]> { Array.Empty<Constraint>() };
+                    // Many generated selectors request the same growing
+                    // sequence of priority exclusions for every destination.
+                    // Solve each immutable prefix once. Cache only simultaneous
+                    // exclusions, never the caller's possibly historical gate.
+                    var prefix = priorityRoot;
                     foreach (var entry in entries)
                     {
+                        CheckCondition(); // Bound cache traversal as well as misses.
+                        if (prefix.Children.TryGetValue(entry, out var cached))
+                        { prefix = cached; if (prefix.Alternatives.Length == 0) yield break; continue; }
                         // !(A && B) is !A || !B. Keep the original comparison
                         // plus its logical negation, including Float equality
                         // at the boundary of a negated Greater/Less condition.
-                        if (entry.conditions.Length == 0) yield break;
+                        if (entry.conditions.Length == 0)
+                        {
+                            prefix.Children.Add(entry, new PriorityPrefix { Alternatives = Array.Empty<Constraint[]>() });
+                            yield break;
+                        }
                         var next = new Dictionary<int, Dictionary<string, (Constraint[] Conditions, HashSet<string> Keys)>>();
-                        foreach (var alternative in alternatives)
+                        foreach (var alternative in prefix.Alternatives)
                             foreach (var condition in entry.conditions)
                             {
                                 Visit();
@@ -319,9 +339,11 @@ namespace VRVlog.LilToonExporter
                                         group.Value.Remove(existing);
                                 sameSize.Add(key, (combined, keys));
                             }
-                        alternatives = next.Values.SelectMany(group => group.Values).Select(value => value.Conditions).ToList();
+                        var child = new PriorityPrefix { Alternatives = next.Values.SelectMany(group => group.Values).Select(value => value.Conditions).ToArray() };
+                        prefix.Children.Add(entry, child); prefix = child;
+                        if (prefix.Alternatives.Length == 0) yield break;
                     }
-                    foreach (var alternative in alternatives) yield return gate.Concat(alternative).ToArray();
+                    foreach (var alternative in prefix.Alternatives) yield return gate.Concat(alternative).ToArray();
                 }
                 IEnumerable<Constraint[]> SourceGates(Edge edge, HashSet<UnityEngine.Object> stack)
                 {
@@ -436,9 +458,20 @@ namespace VRVlog.LilToonExporter
                     var weightMorph = behaviours.Any(behaviour => behaviour != null && weightControls.TryGetValue(behaviour, out var control) &&
                         control.AnimatorLayer && control.Playable == "FX" && (dependencies[control.LayerIndex].Morphs.Count > 0 ||
                             dependencies[control.LayerIndex].Writes.Overlaps(faceInputs)));
-                    if (!driverMorph && !weightMorph && !HasFaceOutput(motion, replacements, excludedPath, faceInputs, new HashSet<Motion>(), Visit)) continue;
-                    var points = motion is BlendTree tree ? Points(tree, parameters, Selectable, new HashSet<BlendTree>(), Visit).ToArray() :
-                        new[] { new Point() };
+                    if (!driverMorph && !weightMorph)
+                    {
+                        if (motion == null) continue;
+                        if (!faceOutputs.TryGetValue(motion, out var hasFace))
+                        { hasFace = HasFaceOutput(motion, replacements, excludedPath, faceInputs, new HashSet<Motion>(), Visit); faceOutputs.Add(motion, hasFace); }
+                        if (!hasFace) continue;
+                    }
+                    Point[] points;
+                    if (motion is BlendTree tree)
+                    {
+                        if (!controlPoints.TryGetValue(tree, out points))
+                        { points = Points(tree, parameters, Selectable, new HashSet<BlendTree>(), Visit).ToArray(); controlPoints.Add(tree, points); }
+                    }
+                    else points = new[] { new Point() };
                     if (points.Length == 0) continue;
                     foreach (var point in points)
                     {

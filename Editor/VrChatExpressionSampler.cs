@@ -29,6 +29,7 @@ namespace VRVlog.LilToonExporter
             GameObject authoringSource = null, FaceEmoExpressions.BindingSnapshot faceEmoBindings = null)
         {
             var source = VrChatExpressionMenu.Read(avatar, menuPolicy);
+            source.FacialProjectionSession = new FacialProjectionScope.Session(avatar);
             try
             {
                 for (var index = 0; index < source.Entries.Count; index++)
@@ -52,7 +53,7 @@ namespace VRVlog.LilToonExporter
                 VrChatFxExpressions.Add(avatar, source, excludedPath, menuPolicy);
                 FaceEmoExpressions.Add(avatar, source, excludedPath, authoringSource, faceEmoBindings);
             }
-            finally { EditorUtility.ClearProgressBar(); }
+            finally { source.FacialProjectionSession = null; EditorUtility.ClearProgressBar(); }
             return source;
         }
 
@@ -250,12 +251,29 @@ namespace VRVlog.LilToonExporter
             var explicitMorphs = new HashSet<EditorCurveBinding>(entry.Values.Select(value =>
                 EditorCurveBinding.FloatCurve(value.Path, typeof(SkinnedMeshRenderer), "blendShape." + value.Shape)));
             var intendedMorphs = new HashSet<EditorCurveBinding>(stationaryBindings); intendedMorphs.UnionWith(explicitMorphs);
+            var ownershipMessages = new List<string>();
+            var scalarPlan = NeutralShapePlan.Create(avatar, runtime, new[] { intendedMorphs }, excludedPath,
+                requiredMorphs: explicitMorphs, warnings: ownershipMessages, source: metadata, fixedContext: context, allowUnchangedAppearance: true);
+            var projectionClips = ExpressionDependencies.NormalInputLayers(runtime, metadata, context, excludedPath).SelectMany(layer => layer.Clips).Distinct().ToArray();
+            // A disjoint wardrobe layer must not narrow an already valid pure
+            // morph clip. Rescue only ownership that actually blocked this
+            // endpoint, or a clip already projected while reading appearance.
+            var projection = (explicitMorphs.Overlaps(scalarPlan.PreservedMorphs) || entry.UsesFacialProjection) ? FacialProjectionScope.For(avatar, metadata) : null;
+            if (projection != null)
+            {
+                projection.WarnOmitted(intendedMorphs, entry.Messages);
+                explicitMorphs.IntersectWith(projection.Morphs); intendedMorphs.IntersectWith(projection.Morphs);
+                entry.Values.RemoveAll(value => !projection.Morphs.Contains(EditorCurveBinding.FloatCurve(value.Path, typeof(SkinnedMeshRenderer), "blendShape." + value.Shape)));
+                entry.Animation.RemoveAll(value => !projection.Morphs.Contains(EditorCurveBinding.FloatCurve(value.Path, typeof(SkinnedMeshRenderer), "blendShape." + value.Shape)));
+                if (entry.Values.Count == 0) throw new InvalidOperationException("有効な顔のBlendShapeアニメーションがありません。");
+                if (entry.Animation.Count == 0) { entry.Duration = 0; entry.Loop = false; }
+                scalarPlan = NeutralShapePlan.CreateProjection(avatar, intendedMorphs, projectionClips, excludedPath);
+            }
+            else entry.Messages.AddRange(ownershipMessages);
             // This is a scalar response on a private native probe. Prepared
             // clothing, materials and bones remain authoritative, together
             // with their coupled morphs; they cannot become endpoint channels
             // merely through WD/additive dependency closure.
-            var scalarPlan = NeutralShapePlan.Create(avatar, runtime, new[] { intendedMorphs }, excludedPath,
-                requiredMorphs: explicitMorphs, warnings: entry.Messages, source: metadata, fixedContext: context, allowUnchangedAppearance: true);
             foreach (var binding in explicitMorphs.Except(scalarPlan.CommittedMorphs))
                 if (FindRenderer(avatar, binding.path).sharedMesh.GetBlendShapeIndex(binding.propertyName.Substring("blendShape.".Length)) >= 0)
                     throw new InvalidOperationException("表情クリップのBlendShapeが現在の書き出し対象に結び付いていません。");
@@ -517,6 +535,22 @@ namespace VRVlog.LilToonExporter
             }
             var originalController = ExpressionDependencies.Controller(runtime);
             var dependencies = ExpressionDependencies.Analyze(runtime, selected.Keys, excludedPath, metadata, defaults, selected, initialMorphs, preserveNativeBasePose, fixedContext);
+            NeutralShapePlan projectionPlan = null;
+            if (!preserveNativeBasePose)
+            {
+                var projectionLayers = ExpressionDependencies.NormalInputLayers(runtime, metadata, fixedContext, excludedPath);
+                var clips = dependencies.Layers.Concat(dependencies.NativeSupportLayers).Distinct().SelectMany(index => projectionLayers[index].Clips).Distinct().ToArray();
+                var projection = FacialProjectionScope.NeedsProjection(avatar, clips, excludedPath) ? FacialProjectionScope.For(avatar, metadata) : null;
+                if (projection != null)
+                {
+                    projection.WarnOmitted(dependencies.Morphs, metadata?.Messages);
+                    dependencies.Morphs.IntersectWith(projection.Morphs);
+                    if (dependencies.Morphs.Count == 0) throw new InvalidOperationException("有効な顔のBlendShapeアニメーションがありません。");
+                    foreach (var index in dependencies.Layers)
+                        if (!projectionLayers[index].Morphs.Overlaps(dependencies.Morphs)) dependencies.NativeSupportLayers.Add(index);
+                    projectionPlan = NeutralShapePlan.CreateProjection(avatar, dependencies.Morphs, clips, excludedPath);
+                }
+            }
             if (omittedDriverWrites?.Overlaps(dependencies.Parameters) == true)
                 throw new InvalidOperationException("選択したFXレイヤーのParameter Driverが他の表情レイヤーに影響するため、直接クリップとの合成を確定できません: " +
                     string.Join(", ", omittedDriverWrites.Intersect(dependencies.Parameters).OrderBy(name => name, StringComparer.Ordinal)));
@@ -534,7 +568,8 @@ namespace VRVlog.LilToonExporter
                 .Where(layer => HasEquivalentConstantStates(controller, layer)));
             var unchangedAppearance = UnchangedAppearanceClips(controller, affected.Concat(dependencies.NativeSupportLayers));
             unevaluated = unevaluated ?? new List<MorphValue>();
-            ValidateNativeSupportMotions(controller, dependencies.NativeSupportLayers, excludedPath, avatar,
+            ValidateNativeSupportMotions(controller, projectionPlan == null ? dependencies.NativeSupportLayers : dependencies.Layers,
+                excludedPath, avatar, projectionPlan,
                 unchangedAppearanceClips: unchangedAppearance);
 
             var scene = EditorSceneManager.NewPreviewScene();
@@ -570,10 +605,12 @@ namespace VRVlog.LilToonExporter
                 {
                     evaluation.Check();
                     RememberBindings(playable, affected, history, visitedClips, excludedPath, neutralAvatar: avatar,
+                        neutralPlan: projectionPlan, capturedMorphs: projectionPlan?.CommittedMorphs,
                         unchangedAppearanceClips: unchangedAppearance);
                     // Support clips retain history safety checks without
                     // making their unrelated morphs export targets.
                     RememberBindings(playable, supportLayers, history, visitedSupportClips, excludedPath, dependencies.Morphs, avatar,
+                        neutralPlan: projectionPlan,
                         unchangedAppearanceClips: unchangedAppearance);
                 };
                 // Initialize before a short-lived WD-Off state exits; its writes
@@ -594,9 +631,11 @@ namespace VRVlog.LilToonExporter
                 }
                 CheckSelectedState();
                 ValidateFixedPose(avatar, playable, controller, excludedPath, excludedLayers, equivalentStates,
-                    dependencies.NativeSupportLayers, dependencies.Morphs, dependencies: dependencies);
+                    dependencies.NativeSupportLayers, dependencies.Morphs, dependencies: dependencies,
+                    restrictCapturedMorphs: projectionPlan != null, neutralPlan: projectionPlan);
                 var stableWeights = evaluation.CaptureLayerWeights(playable);
                 var bindings = ActiveBindings(playable, affected, excludedPath, equivalentStates, neutralAvatar: avatar,
+                    neutralPlan: projectionPlan, capturedMorphs: projectionPlan?.CommittedMorphs,
                     unchangedAppearanceClips: unchangedAppearance);
                 var values = Capture(avatar, clone, history, excludedPath, dependencies.Morphs, unevaluated);
                 // A state transition, a changing curve or changing active clip
@@ -607,6 +646,7 @@ namespace VRVlog.LilToonExporter
                     evaluation.CheckLayerWeights(playable, stableWeights);
                     CheckSelectedState();
                     var nextBindings = ActiveBindings(playable, affected, excludedPath, equivalentStates, neutralAvatar: avatar,
+                        neutralPlan: projectionPlan, capturedMorphs: projectionPlan?.CommittedMorphs,
                         unchangedAppearanceClips: unchangedAppearance);
                     if (!bindings.SetEquals(nextBindings)) throw new InvalidOperationException("表情が時間で切り替わるため、固定表情に変換できません。");
                     var next = Capture(avatar, clone, history, excludedPath, dependencies.Morphs, unevaluated);
