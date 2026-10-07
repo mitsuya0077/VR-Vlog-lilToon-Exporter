@@ -170,6 +170,20 @@ class PackageTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "Required package files.*LanTransfer"):
             package.build(self.root, self.root / "missing-lan-guide.zip")
 
+    def test_cloud_transfer_guide_is_packaged_and_required(self):
+        guide = "Documentation~/CloudTransfer.md"
+        self.write(guide, "Public cloud lifetime, compatibility and retry instructions\n")
+        expected = (self.root / guide).read_bytes()
+        self.git("add", guide)
+        archive = self.root / "with-cloud-guide.zip"
+        names = package.build(self.root, archive)
+        self.assertIn(guide, names)
+        with zipfile.ZipFile(archive) as built:
+            self.assertEqual(built.read(guide), expected)
+        self.git("rm", "--cached", guide)
+        with self.assertRaisesRegex(ValueError, "Required package files.*CloudTransfer"):
+            package.build(self.root, self.root / "missing-cloud-guide.zip")
+
     def test_only_pinned_dlls_are_allowed(self):
         for name in package.PINNED_DLLS:
             self.assertTrue(package.included(name))

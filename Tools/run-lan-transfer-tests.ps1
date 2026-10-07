@@ -24,10 +24,15 @@ $references = @((Get-ChildItem -LiteralPath $referenceRoot -Filter '*.dll').Full
 $sources = @(
     (Join-Path $repoRoot 'Editor/LanTransfer/LanTransferProtocol.cs'),
     (Join-Path $repoRoot 'Editor/LanTransfer/LanVrmTransferServer.cs'),
+    (Join-Path $repoRoot 'Editor/LanTransfer/CloudTransferProtocol.cs'),
+    (Join-Path $repoRoot 'Editor/LanTransfer/CloudVrmTransferSession.cs'),
     (Join-Path $repoRoot 'Tests/LanTransfer/LanTransferTests.cs'),
+    (Join-Path $repoRoot 'Tests/LanTransfer/CloudTransferTests.cs'),
     (Join-Path $PSScriptRoot 'LanTransferTestHarness.cs')
 )
 Add-Type -Path $sources -ReferencedAssemblies $references -CompilerOptions '/define:VRVLOG_LAN_TRANSFER_CLI'
 if (-not $IsWindows) { Write-Host 'Windows snapshot sharing exclusion is covered by Windows validation; this host runs the managed TLS checks.' }
 $failures = [VRVlog.LilToonExporter.LanTransfer.Tests.LanTransferCliRunner]::Run()
 if ($failures -ne 0) { throw 'LAN transfer tests failed. Console intentionally withholds request and QR values.' }
+$cloudFailures = [VRVlog.LilToonExporter.LanTransfer.Tests.CloudTransferCliRunner]::Run()
+if ($cloudFailures -ne 0) { throw 'Cloud transfer tests failed. Private request and QR values are withheld.' }
