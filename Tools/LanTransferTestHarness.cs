@@ -67,6 +67,30 @@ namespace NUnit.Framework
 
 namespace VRVlog.LilToonExporter.LanTransfer.Tests
 {
+    public static class CloudTransferCliRunner
+    {
+        public static int Run()
+        {
+            int passed = 0, failed = 0;
+            var fixture = new CloudTransferTests();
+            foreach (var method in fixture.GetType().GetMethods())
+            {
+                var cases = method.GetCustomAttributes(typeof(NUnit.Framework.TestCaseAttribute), true);
+                if (cases.Length == 0 && method.GetCustomAttributes(typeof(NUnit.Framework.TestAttribute), true).Length == 0) continue;
+                foreach (var test in cases.Length == 0 ? new object[] { null } : cases)
+                    try
+                    {
+                        var result = method.Invoke(fixture, test == null ? null : ((NUnit.Framework.TestCaseAttribute)test).Arguments);
+                        if (result is System.Threading.Tasks.Task task) task.GetAwaiter().GetResult();
+                        Console.WriteLine("PASS " + method.Name); passed++;
+                    }
+                    catch { Console.WriteLine("FAIL " + method.Name + " (failure details withheld)"); failed++; }
+            }
+            Console.WriteLine("Cloud transfer tests: passed=" + passed + ", failed=" + failed);
+            return failed;
+        }
+    }
+
     public static class LanTransferCliRunner
     {
         public static int Run()

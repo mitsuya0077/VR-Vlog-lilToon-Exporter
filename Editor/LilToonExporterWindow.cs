@@ -163,6 +163,9 @@ namespace VRVlog.LilToonExporter
             using (new EditorGUI.DisabledScope(!canExport))
                 if (GUILayout.Button(ExporterLocalization.T("保存先を選んでVRMを書き出す"), GUILayout.Height(40f))) ExportOneClick();
 
+            using (new EditorGUI.DisabledScope(!canExport))
+                if (GUILayout.Button("スマホに送る", GUILayout.Height(32f))) ExportOneClick(true);
+
             EditorGUILayout.Space(6f);
             EditorGUILayout.LabelField(canExport ? "" : ExporterLocalization.T("アバターと作者名を入力してください"), centeredHintStyle);
 
@@ -393,7 +396,7 @@ namespace VRVlog.LilToonExporter
             }
         }
 
-        private void ExportOneClick()
+        private void ExportOneClick(bool sendToPhone = false)
         {
             try { using var resolved = ResolveBlink(); }
             catch (Exception)
@@ -404,7 +407,8 @@ namespace VRVlog.LilToonExporter
                 Repaint();
                 return;
             }
-            outputPath = EditorUtility.SaveFilePanel(ExporterLocalization.T("VRMの保存先"), "", DefaultFileName(), "vrm");
+            outputPath = sendToPhone ? LanTransfer.CloudVrmTransferWindow.CreateSnapshotPath()
+                : EditorUtility.SaveFilePanel(ExporterLocalization.T("VRMの保存先"), "", DefaultFileName(), "vrm");
             if (string.IsNullOrEmpty(outputPath)) return;
             lastSavedPath = null;
             lastSavedSummary = null;
@@ -426,7 +430,8 @@ namespace VRVlog.LilToonExporter
             ExportRecoverySession session = null;
             void ExportCompleted(byte[] bytes, IEnumerable<string> warnings)
             {
-                ShowExportCompletion(bytes, warnings, targetOutput);
+                if (sendToPhone) LanTransfer.CloudVrmTransferWindow.Show(targetOutput, targetName + ".vrm");
+                else ShowExportCompletion(bytes, warnings, targetOutput);
             }
             void Completed() => ExportCompleted(session.LastSuccess.Bytes, session.LastSuccess.Warnings);
             try
@@ -499,7 +504,7 @@ namespace VRVlog.LilToonExporter
         private static string PackageVersion()
         {
             var info = PackageManagerPackageInfo.FindForAssembly(typeof(LilToonExporterWindow).Assembly);
-            return info != null && !string.IsNullOrWhiteSpace(info.version) ? info.version : "0.11.11-beta.14";
+            return info != null && !string.IsNullOrWhiteSpace(info.version) ? info.version : "0.11.11-beta.15";
         }
 
         private static string InstalledLilToonStatus()
