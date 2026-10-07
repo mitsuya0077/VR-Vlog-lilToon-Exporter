@@ -2,6 +2,7 @@ using System;
 using System.Collections.Generic;
 using System.IO;
 using System.Linq;
+using System.Security.Cryptography;
 using System.Text;
 using System.Threading;
 using System.Threading.Tasks;
@@ -33,6 +34,35 @@ namespace VRVlog.LilToonExporter.LanTransfer.Tests
                 Assert.That(session.Qr.Contains("host") || session.Qr.Contains("https://"), Is.False);
                 Assert.That(fixture.Transport.AuthenticatedCorrectly, Is.True);
             }
+        }
+
+        [Test]
+        public async Task CloudNameSanitizationKeepsTheCompletedVrmBytesAndHash()
+        {
+            using (var fixture = new Fixture(47, "衣装/夜\\昼\u0000\u202e.vrm"))
+            using (var session = new CloudVrmTransferSession(fixture.Source, fixture.Transport))
+            {
+                Assert.That(fixture.Source.Name, Is.EqualTo("衣装-夜-昼.vrm"));
+                using (var hash = SHA256.Create())
+                    Assert.That(fixture.Source.FileHash, Is.EqualTo(LanTransferProtocol.Hex(hash.ComputeHash(fixture.Bytes))));
+                await session.UploadAsync();
+                Assert.That(fixture.Transport.Parts.SelectMany(part => part).ToArray(), Is.EqualTo(fixture.Bytes));
+                Assert.That(File.ReadAllBytes(fixture.Path), Is.EqualTo(fixture.Bytes));
+                var fields = CloudTransferProtocol.Fields.Read(session.Qr.Substring(LanTransferProtocol.QrPrefix.Length));
+                Assert.That(fields.Text("name"), Is.EqualTo("衣装-夜-昼.vrm"));
+                Assert.That(fields.Text("sha256"), Is.EqualTo(fixture.Source.FileHash));
+            }
+        }
+
+        [Test]
+        public void MaximumUnicodeCloudNameMatchesTheWorkerUtf16LengthBound()
+        {
+            var name = string.Concat(Enumerable.Repeat("\ud83d\ude00", 128)) + "/\\suffix";
+            var display = CloudTransferProtocol.DisplayName(name);
+            Assert.That(display.Length, Is.EqualTo(256));
+            Assert.That(display, Is.EqualTo(name.Substring(0, 256)));
+            var qr = CloudTransferProtocol.Qr(new string('0', 32), new string('A', 43), display, CloudTransferProtocol.MaximumSize, new string('0', 64), 2147483647);
+            Assert.That(Encoding.UTF8.GetByteCount(qr), Is.LessThanOrEqualTo(4096));
         }
 
         [TestCase("part-failure")][TestCase("publish-mismatch")][TestCase("redirect")][TestCase("quota")]
@@ -157,11 +187,11 @@ namespace VRVlog.LilToonExporter.LanTransfer.Tests
             internal readonly byte[] Bytes;
             internal readonly CloudVrmTransferSource Source;
             internal readonly FakeTransport Transport;
-            internal Fixture(int length)
+            internal Fixture(int length, string name = "テストアバター.vrm")
             {
                 Bytes = new byte[length]; for (var i = 0; i < length; i++) Bytes[i] = (byte)(i % 251);
                 File.WriteAllBytes(Path, Bytes);
-                Source = new CloudVrmTransferSource(Path, "テストアバター.vrm"); Transport = new FakeTransport(Source);
+                Source = new CloudVrmTransferSource(Path, name); Transport = new FakeTransport(Source);
             }
             public void Dispose() => Source.Dispose();
         }
@@ -187,6 +217,8 @@ namespace VRVlog.LilToonExporter.LanTransfer.Tests
                     if (Failure == "quota") return new CloudTransferResponse(429, "{}");
                     if (Failure == "redirect") return new CloudTransferResponse(302, "{}");
                     var request = CloudTransferProtocol.Fields.Read(Encoding.UTF8.GetString(body));
+                    var displayName = request.Text("name");
+                    Assert.That(displayName.Length >= 1 && displayName.Length <= 256 && !displayName.Contains("/") && !displayName.Contains("\\") && !displayName.Any(c => c < 32 || c == 127), Is.True);
                     Assert.That(request.Number("size"), Is.EqualTo(source.Size)); Assert.That(request.Text("sha256"), Is.EqualTo(source.FileHash));
                     Created++; id = Created.ToString("x32"); expiry = DateTimeOffset.UtcNow.ToUnixTimeSeconds() + 900;
                     if (CreateRelease != null) await CreateRelease.Task;

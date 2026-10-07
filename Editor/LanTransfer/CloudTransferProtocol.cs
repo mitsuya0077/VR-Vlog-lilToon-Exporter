@@ -13,6 +13,10 @@ namespace VRVlog.LilToonExporter.LanTransfer
         internal const int PartSize = 8 * 1024 * 1024;
         internal const int LifetimeMinutes = 15;
 
+        // Cloud names are display metadata only. Keep the service's 256 UTF-16
+        // unit bound while removing path separators without changing VRM bytes.
+        internal static string DisplayName(string name) => LanTransferProtocol.DisplayName(name).Replace('/', '-').Replace('\\', '-');
+
         internal static bool IsHex(string value, int length)
         {
             if (value == null || value.Length != length) return false;

@@ -25,7 +25,7 @@ namespace VRVlog.LilToonExporter.LanTransfer
 
     internal sealed class CloudTransferTransport : ICloudTransferTransport
     {
-        private static readonly HttpClient Client = new HttpClient(new HttpClientHandler { AllowAutoRedirect = false }) { Timeout = TimeSpan.FromSeconds(45) };
+        private static readonly HttpClient Client = new HttpClient(new HttpClientHandler { AllowAutoRedirect = false }) { Timeout = TimeSpan.FromSeconds(90) };
         public async Task<CloudTransferResponse> SendAsync(string method, string path, string token, byte[] body, string contentType, CancellationToken cancellation)
         {
             // Every production request goes to the fixed service using the OS
@@ -35,7 +35,7 @@ namespace VRVlog.LilToonExporter.LanTransfer
             {
                 // ResponseHeadersRead does not extend HttpClient.Timeout to
                 // body reads. Bound the entire exchange, including the body.
-                deadline.CancelAfter(TimeSpan.FromSeconds(45));
+                deadline.CancelAfter(TimeSpan.FromSeconds(90));
                 if (token != null) request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", token);
                 if (body != null)
                 {
@@ -74,7 +74,7 @@ namespace VRVlog.LilToonExporter.LanTransfer
         internal CloudVrmTransferSource(string ownedSnapshotPath, string name)
         {
             path = ownedSnapshotPath;
-            Name = LanTransferProtocol.DisplayName(name);
+            Name = CloudTransferProtocol.DisplayName(name);
             try
             {
                 master = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.Read);
@@ -151,7 +151,7 @@ namespace VRVlog.LilToonExporter.LanTransfer
                     var newId = fields.Text("id"); var token = fields.Text("token"); var owner = fields.Text("uploadToken"); var expiry = fields.Number("expiresAt");
                     var now = DateTimeOffset.UtcNow.ToUnixTimeSeconds();
                     if (fields.Number("v") != 2 || !CloudTransferProtocol.IsHex(newId, 32) || !CloudTransferProtocol.IsToken(token) || !CloudTransferProtocol.IsToken(owner)
-                        || token == owner || fields.Number("partSize") != CloudTransferProtocol.PartSize || expiry <= now || expiry > now + 16 * 60) throw CloudTransferProtocol.Invalid();
+                        || token == owner || fields.Number("partSize") != CloudTransferProtocol.PartSize || expiry <= now || expiry > now + (CloudTransferProtocol.LifetimeMinutes + 1) * 60) throw CloudTransferProtocol.Invalid();
                     lock (gate) { id = newId; readToken = token; uploadToken = owner; expiresAt = expiry; if (!disposed && state != CloudTransferState.Canceled) state = CloudTransferState.Uploading; }
                     ct.ThrowIfCancellationRequested();
                     using (var reader = source.OpenRead())
