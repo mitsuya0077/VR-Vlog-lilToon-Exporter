@@ -359,6 +359,7 @@ BEHAVIOR_CASES = {
         'EntryFallthroughPropagatesAcrossNestedAndExitRoutes': 3,
         'EntryNegationExpansionReportsAnAtomicDiscoveryBudgetDiagnostic': 1,
         'RepeatedPriorityConditionsDoNotExhaustFaceDiscovery': 1,
+        'LongPriorityExclusionsRespectTheConditionWorkBudget': 1,
         'UnrelatedGimmickPriorityGraphCannotExhaustFaceDiscovery': 1,
         'DefaultWarmupCanEstablishAnEarlierGateBeforeTheSelectedFace': 2,
         'StableAnyStatePriorityCanSelectTheLaterNativeFace': 1,

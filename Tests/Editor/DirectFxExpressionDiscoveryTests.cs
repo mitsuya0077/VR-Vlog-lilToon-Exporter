@@ -610,6 +610,27 @@ namespace VRVlog.LilToonExporter.Tests
         }
 
         [Test]
+        public void LongPriorityExclusionsRespectTheConditionWorkBudget()
+        {
+            var faces = EntryFaces();
+            Parameter("Mode", AnimatorControllerParameterType.Int, 0);
+            // There is only one surviving negation branch. Excluding values
+            // around the default makes each candidate assignment scan many
+            // constraints, so counting graph nodes alone cannot bound work.
+            for (var index = 0; index < 64; index++)
+            {
+                var value = index % 2 == 0 ? -index / 2 : (index + 1) / 2;
+                faces.Machine.AddEntryTransition(faces.Earlier).AddCondition(AnimatorConditionMode.Equals, value, "Mode");
+            }
+            var source = new VrChatExpressionMenu.Source { Controller = controller };
+            var authored = new VrChatExpressionMenu.Entry { Id = "menu", Name = "Authored face" }; source.Entries.Add(authored);
+            Assert.DoesNotThrow(() => VrChatFxExpressions.Add(avatar, source));
+            Assert.That(source.Entries, Has.Count.EqualTo(1));
+            Assert.That(source.Entries.Single(), Is.SameAs(authored));
+            Assert.That(source.Messages.Single(), Does.Contain("条件の探索").And.Contain("上限"));
+        }
+
+        [Test]
         public void UnrelatedGimmickPriorityGraphCannotExhaustFaceDiscovery()
         {
             controller.AddParameter("FaceChoice", AnimatorControllerParameterType.Int);
