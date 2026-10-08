@@ -126,7 +126,7 @@ jobs:
           base = "http://127.0.0.1:8765/listing-fixture/release"
           releases = []
           empty = {"name": data["name"], "id": data["id"], "url": data["url"], "packages": {}}
-          variants = [(package["name"], "0.11.10"), (package["name"], "0.11.11-beta.1")]
+          variants = [(package["name"], "0.11.10"), (package["name"], package["version"])]
           variants += [(name, compatibility["uniVrm"]["releaseVersion"]) for name in sorted(package["vpmDependencies"])]
           for name, version in variants:
               manifest = copy.deepcopy(package) if name == package["name"] else {"name": name, "displayName": name, "unity": "2022.3"}
@@ -161,7 +161,7 @@ jobs:
           test -s "$fixture/output/index.json"
           python3 Tools/check-listing.py \
             --listing "$fixture/output/index.json" \
-            --expected-version 0.11.11-beta.1 \
+            --expected-version "$(python3 -c 'import json; print(json.load(open("package.json"))["version"])')" \
             --fixture-base-url "http://127.0.0.1:8765/listing-fixture/release"
 
   listing-validation:
