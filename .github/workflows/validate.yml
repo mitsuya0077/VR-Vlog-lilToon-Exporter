@@ -39,7 +39,11 @@ jobs:
         run: ./Tools/run-behavior-tests.ps1
       - name: Run pinned TLS sender checks
         shell: pwsh
-        run: ./Tools/run-lan-transfer-tests.ps1
+        run: |
+          foreach ($mode in @('Default', 'EditorOnly', 'DevelopmentOnly', 'DevelopmentEditor')) {
+            & pwsh -NoLogo -NoProfile -File ./Tools/run-lan-transfer-tests.ps1 -CloudAvailabilityMode $mode
+            if ($LASTEXITCODE -ne 0) { throw "Sender checks failed: $mode" }
+          }
       - name: Validate optional humanoid pose contract
         shell: pwsh
         run: ./Tools/run-pose-contract-tests.ps1

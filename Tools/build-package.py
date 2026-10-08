@@ -30,7 +30,7 @@ TRANSFER_DLLS = {"bouncycastle.cryptography.dll", "zxing.dll"}
 # Source and host tests retain the unreleased implementation. Distribution must
 # also fail if a caller or copied implementation is added outside that subtree.
 TRANSFER_REFERENCE = re.compile(
-    r"\b(?:LanTransfer\w*|CloudTransfer\w*|(?:Cloud|Lan)VrmTransfer\w*|CloudEncryptedSnapshot|ZXing|BouncyCastle)\b"
+    r"\b(?:LanTransfer\w*|CloudTransfer\w*|CloudDevelopment\w*|(?:Cloud|Lan)VrmTransfer\w*|CloudEncryptedSnapshot|ZXing|BouncyCastle)\b"
     r"|\b(?:GUID:)?b15e228f27f843bdbdd4c2335be4354b\b", re.IGNORECASE)
 
 

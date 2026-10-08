@@ -22,9 +22,38 @@ namespace VRVlog.LilToonExporter.LanTransfer
         private double nextPoll;
         private Vector2 scroll;
 
+#if UNITY_EDITOR && VRVLOG_CLOUD_TRANSFER_DEVELOPMENT
+        [MenuItem("VR Vlog/開発/QR転送を検証...")]
+        private static void OpenDevelopmentTransfer()
+        {
+            var selected = EditorUtility.OpenFilePanel("書き出し済みVRMを選択", "", "vrm");
+            try { OpenSavedVrmForDevelopment(selected); }
+            catch
+            {
+                // File/provider exceptions can include private paths or values.
+                EditorUtility.DisplayDialog("QR転送の検証", "転送用のコピーを準備できませんでした。256 MiB以下の書き出し済みVRMを選択してください。", "閉じる");
+            }
+        }
+#endif
+        internal static void OpenSavedVrmForDevelopment(string savedVrmPath)
+        {
+            CloudTransferAvailability.RequireEnabled();
+            if (string.IsNullOrEmpty(savedVrmPath)) return;
+            using (var snapshot = CloudDevelopmentSnapshot.CopySavedVrm(savedVrmPath))
+            {
+                OwnedSnapshots.Add(snapshot.SnapshotPath);
+                try
+                {
+                    Show(snapshot.SnapshotPath, snapshot.Name);
+                    snapshot.ReleaseOwnership();
+                }
+                finally { OwnedSnapshots.Remove(snapshot.SnapshotPath); }
+            }
+        }
+
         public static string CreateSnapshotPath()
         {
-            LanTransferAvailability.RequireEnabled();
+            CloudTransferAvailability.RequireEnabled();
             var path = Path.Combine(Path.GetTempPath(), "VRVlogCloudTransfers", Guid.NewGuid().ToString("N") + ".vrm");
             OwnedSnapshots.Add(path);
             return path;
@@ -32,31 +61,41 @@ namespace VRVlog.LilToonExporter.LanTransfer
 
         public static void Show(string ownedSnapshotPath, string name)
         {
-            if (!LanTransferAvailability.Enabled)
+            if (!CloudTransferAvailability.Enabled)
             {
                 // A caller may still own a snapshot issued by an earlier
                 // version. Ordinary saved VRMs are never in this registry.
                 if (OwnedSnapshots.Remove(ownedSnapshotPath)) LanVrmTransferServer.TryDelete(ownedSnapshotPath);
-                LanTransferAvailability.RequireEnabled();
+                CloudTransferAvailability.RequireEnabled();
             }
             // Only the explicitly generated output path can be adopted. An
             // ordinary saved VRM passed to this public entry is never deleted.
             if (!OwnedSnapshots.Remove(ownedSnapshotPath)) throw new InvalidOperationException("Exporterで転送用のVRMを書き出してください。");
-            var window = GetWindow<CloudVrmTransferWindow>(false, "スマホに送る");
-            window.StopAndClean();
-            try { window.source = new CloudVrmTransferSource(ownedSnapshotPath, name); }
+            CloudVrmTransferSource prepared = null;
+            CloudVrmTransferWindow window = null;
+            try
+            {
+                // Validate the new owned copy before replacing an existing
+                // window/session. A failed selection leaves that session live.
+                prepared = new CloudVrmTransferSource(ownedSnapshotPath, name);
+                window = GetWindow<CloudVrmTransferWindow>(false, "QR転送の検証");
+                window.StopAndClean();
+                window.source = prepared;
+                window.minSize = new Vector2(430, 650);
+                window.Show();
+            }
             catch
             {
+                if (window != null && ReferenceEquals(window.source, prepared)) window.StopAndClean();
+                else prepared?.Dispose();
                 LanVrmTransferServer.TryDelete(ownedSnapshotPath);
-                window.error = "転送用のVRMを開けませんでした。256 MiB以下のVRMを書き出してください。";
+                throw new InvalidOperationException("転送用のVRMを開けませんでした。256 MiB以下の書き出し済みVRMを選択してください。");
             }
-            window.minSize = new Vector2(430, 650);
-            window.Show();
         }
 
         private void OnEnable()
         {
-            if (!LanTransferAvailability.Enabled)
+            if (!CloudTransferAvailability.Enabled)
             {
                 StopAndClean();
                 return;
@@ -74,10 +113,10 @@ namespace VRVlog.LilToonExporter.LanTransfer
         }
         private void Begin()
         {
-            if (!LanTransferAvailability.Enabled)
+            if (!CloudTransferAvailability.Enabled)
             {
                 StopAndClean();
-                error = LanTransferAvailability.DisabledMessage;
+                error = CloudTransferAvailability.DisabledMessage;
                 return;
             }
             if (source == null || uploading != null || session != null && !session.Terminal) return;
@@ -90,7 +129,7 @@ namespace VRVlog.LilToonExporter.LanTransfer
         }
         private void Poll()
         {
-            if (!LanTransferAvailability.Enabled)
+            if (!CloudTransferAvailability.Enabled)
             {
                 StopAndClean();
                 return;
@@ -139,17 +178,17 @@ namespace VRVlog.LilToonExporter.LanTransfer
         }
         private void OnGUI()
         {
-            if (!LanTransferAvailability.Enabled)
+            if (!CloudTransferAvailability.Enabled)
             {
                 StopAndClean();
-                EditorGUILayout.HelpBox(LanTransferAvailability.DisabledMessage, MessageType.Info);
+                EditorGUILayout.HelpBox(CloudTransferAvailability.DisabledMessage, MessageType.Info);
                 return;
             }
             using (var scrolling = new EditorGUILayout.ScrollViewScope(scroll))
             {
                 scroll = scrolling.scrollPosition;
                 EditorGUILayout.HelpBox("アバターをPCで暗号化してからクラウドに一時保存し、スマホで復号します。復号鍵はQRにだけ含まれ、転送サービスには送りません。受取期限は転送作成時から3分です。アップロード中も期限が進みます。完了・中止・期限切れで暗号化コピーを削除します。", MessageType.Info);
-                EditorGUILayout.LabelField(source?.Name ?? "Exporterの「スマホに送る」でVRMを書き出してください。", EditorStyles.wordWrappedLabel);
+                EditorGUILayout.LabelField(source?.Name ?? "開発メニューで書き出し済みVRMを選択してください。", EditorStyles.wordWrappedLabel);
                 EditorGUILayout.HelpBox("PCとスマホにインターネット接続が必要です。同じWi-Fiは不要です。QRを持つ人はアバターを受け取れるため、共有・撮影しないでください。スマホではVR Vlog内のカメラで読み取ります。", MessageType.None);
                 if (!string.IsNullOrEmpty(error)) EditorGUILayout.HelpBox(error, MessageType.Error);
                 using (new EditorGUI.DisabledScope(source == null || uploading != null || session != null && !session.Terminal))
