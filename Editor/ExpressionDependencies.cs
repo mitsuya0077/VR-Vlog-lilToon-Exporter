@@ -289,6 +289,7 @@ namespace VRVlog.LilToonExporter
             // object. No name/path-based independence claim is safe for them.
             if (unknown.Count > 0) throw new InvalidOperationException("FXの影響範囲を確定できないState Behaviourがあります: " + string.Join(", ", unknown));
             var otherControllers = InspectOtherControllers(runtime, source, fixedContext, defaults, selection);
+            var preservedParameterWrites = AdditionalParameterConstants.Prove(runtime, source, fixedContext, defaults, selection);
             if (neutralMorphs != null)
             {
                 var trackingValues = FixedNeutralValues(runtime, source, info, excludedPath);
@@ -313,6 +314,7 @@ namespace VRVlog.LilToonExporter
                 // command dormant throughout both startup and menu selection.
                 var written = new HashSet<string>(info.Concat(otherControllers.SelectMany(other => other.Layers))
                     .SelectMany(layer => layer.Writes), StringComparer.Ordinal);
+                written.ExceptWith(preservedParameterWrites.Keys);
                 var invariant = new Dictionary<string, float>(StringComparer.Ordinal);
                 foreach (var parameter in controller.parameters)
                 {
@@ -344,6 +346,7 @@ namespace VRVlog.LilToonExporter
                     // An arbitrary callback could invalidate any constant.
                     if (other.Unknown.Count > 0) writers.UnionWith(controller.parameters.Select(p => p.name));
                 }
+                if (otherControllers.All(other => other.Unknown.Count == 0)) writers.ExceptWith(preservedParameterWrites.Keys);
                 var fixedValues = new Dictionary<string, float>(StringComparer.Ordinal);
                 if (defaults != null && selection != null)
                     foreach (var parameter in controller.parameters)
@@ -486,7 +489,8 @@ namespace VRVlog.LilToonExporter
                 throw new InvalidOperationException("外部入力に依存する表情の値を確定できません: " + string.Join(", ", external));
             foreach (var other in otherControllers)
             {
-                var writes = other.Layers.SelectMany(l => l.Writes).Where(result.Parameters.Contains).Distinct().ToArray();
+                var writes = other.Layers.SelectMany(l => l.Writes).Where(name => result.Parameters.Contains(name) &&
+                    !preservedParameterWrites.ContainsKey(name)).Distinct().ToArray();
                 var otherMorphs = neutralMorphs == null && fixedContext == null ? Array.Empty<string>() : other.Layers.SelectMany(layer => layer.Morphs)
                     .Where(result.Morphs.Contains).Select(binding => binding.path + "/" + binding.propertyName).Distinct().ToArray();
                 if (writes.Length > 0 || other.Unknown.Count > 0 || otherMorphs.Length > 0)
@@ -629,12 +633,14 @@ namespace VRVlog.LilToonExporter
         {
             var controller = Controller(runtime);
             var written = new HashSet<string>(layers.SelectMany(layer => layer.Writes), StringComparer.Ordinal);
+            var preservedWrites = AdditionalParameterConstants.Prove(runtime, source, fixedContext);
             var otherWritten = new HashSet<string>(StringComparer.Ordinal);
             foreach (var other in InspectOtherControllers(runtime, source, fixedContext))
             {
                 otherWritten.UnionWith(other.Layers.SelectMany(layer => layer.Writes));
                 if (other.Unknown.Count > 0) otherWritten.UnionWith(controller.parameters.Select(parameter => parameter.name));
             }
+            otherWritten.ExceptWith(preservedWrites.Keys);
             var result = new Dictionary<string, float>(StringComparer.Ordinal);
             var initial = new Dictionary<string, float>(StringComparer.Ordinal);
             foreach (var parameter in controller.parameters)
@@ -654,7 +660,7 @@ namespace VRVlog.LilToonExporter
                 value = parameter.type == AnimatorControllerParameterType.Bool ? (value == 0 ? 0 : 1) :
                     parameter.type == AnimatorControllerParameterType.Int ? Mathf.RoundToInt(value) : value;
                 initial.Add(parameter.name, value);
-                if (!written.Contains(parameter.name)) result.Add(parameter.name, value);
+                if (!written.Contains(parameter.name) || preservedWrites.ContainsKey(parameter.name)) result.Add(parameter.name, value);
             }
             // Reachability can prove that a generated driver's only possible
             // writes preserve the initial value. Propagate those constants,
@@ -728,6 +734,7 @@ namespace VRVlog.LilToonExporter
                 .SelectMany(value => Controller(value).parameters).GroupBy(parameter => parameter.name, StringComparer.Ordinal);
             var incompatible = new HashSet<string>(declarations.Where(group => group.Select(parameter => parameter.type).Distinct().Count() != 1)
                 .Select(group => group.Key), StringComparer.Ordinal);
+            var preservedWrites = AdditionalParameterConstants.Prove(runtime, source, fixedContext, defaults, selection);
             foreach (var item in result)
             {
                 var controller = Controller(item.Runtime);
@@ -746,6 +753,8 @@ namespace VRVlog.LilToonExporter
                         Normalize(initial) != Normalize(final)) continue;
                     invariant.Add(parameter.name, Normalize(initial));
                 }
+                foreach (var pair in preservedWrites.Where(pair => controller.parameters.Any(parameter => parameter.name == pair.Key)))
+                    invariant[pair.Key] = pair.Value;
                 // Known SDK weight commands cannot mutate an Animator input,
                 // so they do not invalidate this typed reachability proof.
                 // Keep each reachable effect separate from arbitrary callbacks,

@@ -132,6 +132,16 @@ BEHAVIOR_CASES = {
         'AdditionalWeightCapabilityCannotHideALaterMalformedNeededDriver': 8,
         'UnprovedTypedGateInputsDoNotHideCommands': 2,
     },
+    'AdditionalParameterConstantTests': {
+        'IdempotentAdditionalResetsKeepTheOriginalNativeNeutralAndSelection': 4,
+        'AResetCannotCertifyAChangingOrAmbiguousProducer': 20,
+        'SelectedDifferentInputCannotBeErasedByAnAdditionalReset': 1,
+        'AnIdempotentResetCannotConcealAnAdditionalFaceWriter': 1,
+        'SuppliedInitialValuesAlsoRequireAnUnchangedReset': 4,
+        'AnIdempotentResetDoesNotAuthorizeALaterMalformedNeededOperation': 3,
+        'OnlyAnIndependentUnchangedInputCanPruneAConflictingProducer': 2,
+        'IdempotenceUsesTheValidatedSdkTypedAndExpressionParameterValue': 3,
+    },
     'TemporalNeutralShapeTests': {
         'TemporalRestKeepsPreparedWeightAndReconstructsTheIndependentConstant': 3,
         'MixedIdleKeepsAllSeventeenTemporalAndSamplesAllOneHundredFifteenStaticChannels': 1,
