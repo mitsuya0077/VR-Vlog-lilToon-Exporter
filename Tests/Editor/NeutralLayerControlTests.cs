@@ -191,7 +191,7 @@ namespace VRVlog.LilToonExporter.Tests
 
         private float NativeSdkRelay(string signal, AnimatorController reference = null, GameObject referenceAvatar = null,
             string referencePath = "Body", float finalWeight = 1, float[] expectedCommands = null, string expectedState = null,
-            bool expectUnitGlobalFx = false)
+            bool expectUnitGlobalFx = false, float? expectedLoopMidpoint = null)
         {
             reference = reference ?? controller;
             var clone = Object.Instantiate(referenceAvatar ?? avatar); var graph = PlayableGraph.Create("Original native relay with SDK primitive bridge");
@@ -289,7 +289,13 @@ namespace VRVlog.LilToonExporter.Tests
                     Assert.That(mixer.GetInputWeight(0), Is.EqualTo(1)); Assert.That(playable.GetBool("InStation"), Is.False);
                 }
                 var expected = clone.transform.Find(referencePath).GetComponent<SkinnedMeshRenderer>().GetBlendShapeWeight(0);
-                for (var frame = 0; frame < 120; frame++) { graph.Evaluate(1f / 60); ObserveNativeEntries(); }
+                for (var frame = 0; frame < 120; frame++)
+                {
+                    graph.Evaluate(1f / 60); ObserveNativeEntries();
+                    if (frame == 29 && expectedLoopMidpoint.HasValue)
+                        Assert.That(clone.transform.Find(referencePath).GetComponent<SkinnedMeshRenderer>().GetBlendShapeWeight(0),
+                            Is.EqualTo(expectedLoopMidpoint.Value).Within(.01), "The original native loop must reach its independently authored half-second pose.");
+                }
                 Assert.That(playable.GetLayerWeight(BodyLayer), Is.EqualTo(finalWeight).Within(.00001));
                 Assert.That(clone.transform.Find(referencePath).GetComponent<SkinnedMeshRenderer>().GetBlendShapeWeight(0), Is.EqualTo(expected).Within(.01));
                 if (expectUnitGlobalFx)
@@ -307,6 +313,19 @@ namespace VRVlog.LilToonExporter.Tests
                 if (graph.IsValid()) graph.Destroy();
                 Object.DestroyImmediate(clone);
             }
+        }
+
+        private VrChatExpressionMenu.Entry AssertPermanentRelayMatchesNative(float expected)
+        {
+            var metadata = VrChatExpressionMenu.Read(avatar, new VrChatMenuImportPolicy { SkipAll = true });
+            var entry = new VrChatExpressionMenu.Entry();
+            VrChatGestureExpressions.ReadClip(avatar, (AnimationClip)bodyState.motion, entry, metadata: metadata);
+            VrChatExpressionSampler.ApplyPermanentOverrides(avatar, controller, entry, BodyLayer,
+                metadata: metadata, sourceState: bodyState);
+            Assert.That(entry.Error, Is.Null);
+            Assert.That(entry.Values.Single(value => value.Shape == "Body size").Weight, Is.EqualTo(expected).Within(.01));
+            Assert.That(entry.Values.Single(value => value.Shape == "Open").Weight, Is.EqualTo(100).Within(.01));
+            return entry;
         }
 
         [TestCase(false)]
@@ -327,7 +346,8 @@ namespace VRVlog.LilToonExporter.Tests
             var body = values.SingleOrDefault(value => value.Shape == "Body size");
             Assert.That(body?.Weight ?? skin.GetBlendShapeWeight(0), Is.EqualTo(expected).Within(.01));
             Assert.That(values.Single(value => value.Shape == "Open").Weight, Is.EqualTo(100).Within(.01));
-            Assert.That(warnings, Is.Empty); AssertSourceUnchanged(before);
+            Assert.That(warnings, Is.Empty);
+            AssertPermanentRelayMatchesNative(expected); AssertSourceUnchanged(before);
         }
 
         [TestCase(false)]
@@ -351,7 +371,40 @@ namespace VRVlog.LilToonExporter.Tests
             var warnings = new List<string>(); var values = NeutralShapeSampler.Sample(avatar, warnings: warnings);
             Assert.That(values.Single(value => value.Shape == "Body size").Weight, Is.EqualTo(expected).Within(.01));
             Assert.That(values.Single(value => value.Shape == "Open").Weight, Is.EqualTo(100).Within(.01));
-            Assert.That(warnings, Is.Empty); AssertSourceUnchanged(before);
+            Assert.That(warnings, Is.Empty);
+            AssertPermanentRelayMatchesNative(expected); AssertSourceUnchanged(before);
+        }
+
+        [TestCase(false)]
+        [TestCase(true)]
+        public void FiniteTimedRelayKeepsItsOriginalNativeAuthoredLoopDuringPermanentComposition(bool remainsInitial)
+        {
+            MmdRelay(controller, false); UnitFxWithDormantStation(controller);
+            var machine = controller.layers[ControlLayer].stateMachine;
+            foreach (var child in machine.states)
+                foreach (var transition in child.state.transitions)
+                    if (remainsInitial || child.state != machine.defaultState) FiniteTiming(transition, true);
+            var goal = remainsInitial ? 1 : .5f;
+            var command = machine.states[1].state.behaviours.Single(behaviour => SdkType("VRCAnimatorLayerControl").IsInstanceOfType(behaviour));
+            using (var data = new SerializedObject(command))
+            { data.FindProperty("goalWeight").floatValue = goal; data.ApplyModifiedPropertiesWithoutUndo(); }
+            AnimationUtility.SetEditorCurve((AnimationClip)controller.layers[0].stateMachine.defaultState.motion,
+                EditorCurveBinding.FloatCurve("Body", typeof(SkinnedMeshRenderer), "blendShape.Body size"), AnimationCurve.Constant(0, 1, 17));
+            var loop = (AnimationClip)bodyState.motion;
+            AnimationUtility.SetEditorCurve(loop, EditorCurveBinding.FloatCurve("Body", typeof(SkinnedMeshRenderer), "blendShape.Body size"),
+                new AnimationCurve(new Keyframe(0, 63), new Keyframe(.5f, 87), new Keyframe(1, 63)));
+            var settings = AnimationUtility.GetAnimationClipSettings(loop); settings.loopTime = true;
+            AnimationUtility.SetAnimationClipSettings(loop, settings); Assert.That(loop.isLooping, Is.True);
+            var before = CaptureAssets();
+            var expected = NativeSdkRelay("Generic layer relay", finalWeight: goal,
+                expectedCommands: remainsInitial ? Array.Empty<float>() : null,
+                expectedState: remainsInitial ? machine.defaultState.name : null, expectUnitGlobalFx: true,
+                expectedLoopMidpoint: remainsInitial ? 87 : 52);
+            var entry = AssertPermanentRelayMatchesNative(expected);
+            Assert.That(entry.Loop, Is.True); Assert.That(entry.Duration, Is.EqualTo(1));
+            Assert.That(entry.Animation.Single(value => value.Shape == "Body size").Curve.Evaluate(.5),
+                Is.EqualTo(remainsInitial ? 87 : 52).Within(.01));
+            AssertSourceUnchanged(before);
         }
 
         [TestCase(false)]

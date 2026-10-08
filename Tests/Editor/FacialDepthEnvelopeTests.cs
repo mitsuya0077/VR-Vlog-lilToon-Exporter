@@ -50,10 +50,16 @@ namespace VRVlog.LilToonExporter.Tests
             var points = new[] {
                 new Vector3(-.07f, height - .04f, .07f), new Vector3(.07f, height - .04f, .07f),
                 new Vector3(-.07f, height + .09f, .07f), new Vector3(.07f, height + .09f, .07f),
-                new Vector3(-.015f, height + .02f, -.012f), new Vector3(.015f, height + .02f, -.012f),
-                new Vector3(0, height + .04f, -.012f), new Vector3(0, height + .02f, -.012f)
+                new Vector3(-.015f, height + .02f, .012f), new Vector3(.015f, height + .02f, .012f),
+                new Vector3(0, height + .04f, .012f), new Vector3(0, height + .02f, .012f)
             };
             if (damage == "rear") for (var i = 4; i < 7; i++) points[i].z = -.2f;
+            if (damage == "posterior inside mirrored bounds") for (var i = 4; i < 7; i++) points[i].z = -.012f;
+            if (damage == "posterior inside original margin")
+            {
+                for (var i = 0; i < 4; i++) points[i].z = .005f;
+                for (var i = 4; i < 7; i++) points[i].z = -.001f;
+            }
             if (damage == "side") for (var i = 4; i < 7; i++) points[i].x += .2f;
             if (damage == "above") for (var i = 4; i < 7; i++) points[i].y += .3f;
             if (damage == "one outside vertex") points[6].y += .3f;
@@ -61,7 +67,7 @@ namespace VRVlog.LilToonExporter.Tests
             {
                 points[2].z = -.03f;
                 // This lies beyond the original surface bounds, but inside
-                // the mirrored front depth if its one-side guard were lost.
+                // an unproven depth extension if its one-side guard were lost.
                 for (var i = 4; i < 7; i++) points[i].z = -.06f;
             }
             mesh = new Mesh { name = "Disconnected original facial topology" };
@@ -99,6 +105,8 @@ namespace VRVlog.LilToonExporter.Tests
         }
 
         [TestCase("rear")]
+        [TestCase("posterior inside mirrored bounds")]
+        [TestCase("posterior inside original margin")]
         [TestCase("side")]
         [TestCase("above")]
         [TestCase("one outside vertex")]
@@ -122,6 +130,80 @@ namespace VRVlog.LilToonExporter.Tests
             var before = ExportSourceFingerprint.Compute(avatar);
             Assert.That(FacialProjectionScope.Create(avatar).Morphs.Contains(Insert), Is.True);
             Assert.That(ExportSourceFingerprint.Compute(avatar), Is.EqualTo(before));
+        }
+
+        private void SeamGeometry(float rotation, float scale, string damage = "")
+        {
+            skin.transform.localRotation = Quaternion.Euler(rotation, 0, 0);
+            skin.transform.localScale = Vector3.one * scale;
+            var height = skin.bones[0].position.y;
+            var points = new[] {
+                new Vector3(-.07f, height - .04f, .07f), new Vector3(.07f, height - .04f, .07f),
+                new Vector3(-.07f, height + .09f, .07f), new Vector3(.07f, height + .09f, .07f),
+                new Vector3(.07f, height - .04f, .07f), new Vector3(-.07f, height - .04f, .07f),
+                new Vector3(0, height + .02f, -.012f), new Vector3(0, height + .04f, -.012f),
+                new Vector3(-.015f, height + .02f, -.012f), new Vector3(.015f, height + .02f, -.012f),
+                new Vector3(0, height + .04f, -.012f)
+            };
+            if (damage == "point only") points[4].x -= .001f;
+            if (damage == "near edge") { points[4].z += .0000001f; points[5].z += .0000001f; }
+            if (damage == "degenerate edge") points[4] = points[5];
+            var triangles = new[] { 0, 1, 2, 1, 3, 2, 4, 5, 6 };
+            if (damage == "nonhead boundary") triangles = triangles.Concat(new[] { 5, 6, 7 }).ToArray();
+            if (damage == "another detached posterior") triangles = triangles.Concat(new[] { 8, 9, 10 }).ToArray();
+            mesh = new Mesh { name = "Exact duplicated triangle-edge seam" };
+            mesh.vertices = points.Select(p => skin.transform.InverseTransformPoint(p)).ToArray();
+            mesh.triangles = triangles;
+            mesh.boneWeights = Enumerable.Range(0, points.Length).Select(i => new BoneWeight {
+                boneIndex0 = i == 7 ? 1 : 0, weight0 = 1 }).ToArray();
+            mesh.bindposes = skin.bones.Select(b => b.worldToLocalMatrix * skin.transform.localToWorldMatrix).ToArray();
+            var seed = new Vector3[points.Length]; seed[0] = Vector3.right * .01f / scale;
+            mesh.AddBlendShapeFrame("descriptor-channel", 100, seed, null, null);
+            var delta = new Vector3[points.Length]; delta[6] = Vector3.up * .01f / scale;
+            mesh.AddBlendShapeFrame("opaque-island", 100, delta, null, null);
+            var detached = new Vector3[points.Length]; detached[8] = Vector3.up * .01f / scale;
+            mesh.AddBlendShapeFrame("unrelated-posterior", 100, detached, null, null);
+            skin.sharedMesh = mesh;
+        }
+
+        [TestCase(0f, .01f)]
+        [TestCase(90f, .01f)]
+        [TestCase(0f, 1f)]
+        [TestCase(90f, 1f)]
+        [TestCase(0f, 100f)]
+        [TestCase(90f, 100f)]
+        public void ExactFacialEdgesConnectDuplicatedMaterialSeams(float rotation, float scale)
+        {
+            SeamGeometry(rotation, scale);
+            var before = ExportSourceFingerprint.Compute(avatar);
+            Assert.That(FacialProjectionScope.Create(avatar).Morphs.Contains(Insert), Is.True);
+            Assert.That(ExportSourceFingerprint.Compute(avatar), Is.EqualTo(before));
+        }
+
+        [TestCase("point only")]
+        [TestCase("near edge")]
+        [TestCase("degenerate edge")]
+        public void CoincidentPointsAndNearbyEdgesCannotConnectDetachedPosteriorGeometry(string damage)
+        {
+            SeamGeometry(90, 1, damage);
+            Assert.That(FacialProjectionScope.Create(avatar).Morphs.Contains(Insert), Is.False);
+        }
+
+        [Test]
+        public void ASeamCannotEnlargeTheEnclosureForOtherDetachedPosteriorGeometry()
+        {
+            SeamGeometry(90, 1, "another detached posterior");
+            var scope = FacialProjectionScope.Create(avatar);
+            Assert.That(scope.Morphs.Contains(Insert), Is.True);
+            var detached = EditorCurveBinding.FloatCurve("Merged geometry", typeof(SkinnedMeshRenderer), "blendShape.unrelated-posterior");
+            Assert.That(scope.Morphs.Contains(detached), Is.False);
+        }
+
+        [Test]
+        public void ASeamTouchingNonHeadGeometryCannotAuthorizeTheRemainingSurface()
+        {
+            SeamGeometry(90, 1, "nonhead boundary");
+            Assert.That(FacialProjectionScope.Create(avatar).Morphs.Contains(Insert), Is.False);
         }
     }
 }

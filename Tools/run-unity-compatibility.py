@@ -253,6 +253,7 @@ BEHAVIOR_CASES = {
         'ConstantRelayReproducesASteadySdkWeightDifferentFromItsAuthoredDefault': 2,
         'FiniteTimedRelayCanRemainInItsNativeConditionalInitialState': 2,
         'FiniteTimedRelayUsesItsNativeStartupAndSettledCommands': 2,
+        'FiniteTimedRelayKeepsItsOriginalNativeAuthoredLoopDuringPermanentComposition': 2,
     },
     'SelectedLayerControlTests': {
         'InstantIndividualFxControlMatchesNativeSelectedWeight': 9,
@@ -874,7 +875,11 @@ BEHAVIOR_CASES = {
     },
     'FacialDepthEnvelopeTests': {
         'HeadBoundedDisconnectedDepthWorksWithRotatedRenderersAndMeshScales': 6,
-        'DepthCannotAuthorizeUnboundedOrUnprovenTopology': 10,
+        'DepthCannotAuthorizeUnboundedOrUnprovenTopology': 12,
+        'ExactFacialEdgesConnectDuplicatedMaterialSeams': 6,
+        'CoincidentPointsAndNearbyEdgesCannotConnectDetachedPosteriorGeometry': 3,
+        'ASeamCannotEnlargeTheEnclosureForOtherDetachedPosteriorGeometry': 1,
+        'ASeamTouchingNonHeadGeometryCannotAuthorizeTheRemainingSurface': 1,
         'CurrentHeadAnimationDoesNotMoveTheOriginalMeshEnvelope': 1,
     },
 }

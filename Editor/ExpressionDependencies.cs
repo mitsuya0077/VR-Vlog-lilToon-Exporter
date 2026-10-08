@@ -313,7 +313,7 @@ namespace VRVlog.LilToonExporter
                 // animate a different constant. Preserve both state entries
                 // and execute their SDK commands; never substitute its final
                 // parameter value into startup reachability.
-                if (!evaluateLayerWeights && CanEvaluateNeutralRelay(runtime, source, rawInfo, info,
+                if (CanEvaluateNeutralRelay(runtime, source, rawInfo, info,
                     result.NeutralFixedValues, otherControllers, fixedContext, out var relaySignals))
                 {
                     evaluateLayerWeights = true;

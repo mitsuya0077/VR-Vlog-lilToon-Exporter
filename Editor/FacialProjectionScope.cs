@@ -127,6 +127,53 @@ namespace VRVlog.LilToonExporter
                             else if (allowed[b]) nonHeadBoundary[b] = true;
                         }
                 }
+                var vertices = mesh.vertices;
+                var components = new List<List<int>>();
+                var componentAt = Enumerable.Repeat(-1, mesh.vertexCount).ToArray();
+                var boundaryComponents = new HashSet<int>();
+                for (var vertex = 0; vertex < vertices.Length; vertex++)
+                {
+                    if (!allowed[vertex] || componentAt[vertex] >= 0) continue;
+                    var index = components.Count; var members = new List<int>(); components.Add(members);
+                    var queue = new Queue<int>(); queue.Enqueue(vertex); componentAt[vertex] = index;
+                    while (queue.Count > 0)
+                    {
+                        var current = queue.Dequeue(); members.Add(current);
+                        if (nonHeadBoundary[current]) boundaryComponents.Add(index);
+                        foreach (var neighbour in adjacency[current])
+                            if (componentAt[neighbour] < 0) { componentAt[neighbour] = index; queue.Enqueue(neighbour); }
+                    }
+                }
+                // UV/material seams duplicate vertices without sharing their
+                // indices. Reconstruct only exact coincident triangle edges;
+                // a touching point or a nearby detached accessory is no seam.
+                // New components must remain wholly head-skinned, including
+                // their boundary. Never use deformation names or a distance
+                // tolerance to turn an accessory into connected facial mesh.
+                var seams = components.Select(_ => new HashSet<int>()).ToArray();
+                var edgeOwners = new Dictionary<(Vector3, Vector3), List<int>>();
+                bool FinitePoint(Vector3 point) => NeutralShapeSnapshot.Finite(point.x) &&
+                    NeutralShapeSnapshot.Finite(point.y) && NeutralShapeSnapshot.Finite(point.z);
+                int Compare(Vector3 a, Vector3 b)
+                {
+                    var comparison = a.x.CompareTo(b.x); if (comparison != 0) return comparison;
+                    comparison = a.y.CompareTo(b.y); return comparison != 0 ? comparison : a.z.CompareTo(b.z);
+                }
+                for (var vertex = 0; vertex < vertices.Length; vertex++)
+                    foreach (var neighbour in adjacency[vertex])
+                    {
+                        if (vertex >= neighbour || nonHeadBoundary[vertex] || nonHeadBoundary[neighbour]) continue;
+                        var first = vertices[vertex]; var second = vertices[neighbour];
+                        if (!FinitePoint(first) || !FinitePoint(second) || first.Equals(second)) continue;
+                        if (Compare(first, second) > 0) (first, second) = (second, first);
+                        var key = (first, second); var index = componentAt[vertex];
+                        if (!edgeOwners.TryGetValue(key, out var owners)) edgeOwners.Add(key, new List<int> { index });
+                        else if (!owners.Contains(index))
+                        {
+                            foreach (var owner in owners) { seams[owner].Add(index); seams[index].Add(owner); }
+                            owners.Add(index);
+                        }
+                    }
                 var positions = new Vector3[mesh.vertexCount]; var normals = new Vector3[mesh.vertexCount]; var tangents = new Vector3[mesh.vertexCount];
                 HashSet<int> Changed(int shape)
                 {
@@ -145,9 +192,19 @@ namespace VRVlog.LilToonExporter
                     var changed = Changed(seed);
                     if (changed.Count > 0 && changed.All(vertex => allowed[vertex])) domain.UnionWith(changed);
                 }
-                var pending = new Queue<int>(domain);
+                var seededComponents = new HashSet<int>(domain.Select(vertex => componentAt[vertex]));
+                foreach (var component in seededComponents) domain.UnionWith(components[component]);
+                // Preserve the original index-connected descriptor surface
+                // for enclosure bounds. A welded seam proves its own surface,
+                // never a larger box authorizing other detached components.
+                var enclosureSurface = new HashSet<int>(domain);
+                var pending = new Queue<int>(seededComponents);
                 while (pending.Count > 0)
-                    foreach (var neighbour in adjacency[pending.Dequeue()]) if (domain.Add(neighbour)) pending.Enqueue(neighbour);
+                {
+                    var current = pending.Dequeue(); domain.UnionWith(components[current]);
+                    foreach (var neighbour in seams[current])
+                        if (!boundaryComponents.Contains(neighbour) && seededComponents.Add(neighbour)) pending.Enqueue(neighbour);
+                }
                 if (domain.Count == 0) continue;
                 // Eye inserts, cheek overlays and tear surfaces commonly have
                 // separate topology inside the descriptor's facial surface.
@@ -156,22 +213,21 @@ namespace VRVlog.LilToonExporter
                 // accessory is insufficient; the entire island must fit. Keep
                 // this proof within the descriptor renderer, not every object
                 // parented to Head or a shape with a suggestive name.
-                var vertices = mesh.vertices;
-                var facialBounds = new Bounds(vertices[domain.First()], Vector3.zero);
-                foreach (var vertex in domain) facialBounds.Encapsulate(vertices[vertex]);
+                var facialBounds = new Bounds(vertices[enclosureSurface.First()], Vector3.zero);
+                foreach (var vertex in enclosureSurface) facialBounds.Encapsulate(vertices[vertex]);
                 var extent = facialBounds.size.magnitude;
                 if (NeutralShapeSnapshot.Finite(extent) && extent > 0)
                 {
                     facialBounds.Expand(extent * .1f);
                     // A viseme-connected surface can be only the front of a
                     // face. Separate tears/lids/cheek surfaces behind it are
-                    // still bounded facial topology. Prove that depth using
+                    // still bounded facial topology. Prove anterior depth using
                     // the humanoid Head's bind anchor, in avatar-root axes;
                     // mesh axes can be rotated and current bone poses can move.
                     // This never widens the descriptor's lateral/vertical
                     // extent or admits an island touching non-head geometry.
                     var meshToAvatar = avatar.transform.worldToLocalMatrix * renderer.transform.localToWorldMatrix;
-                    var hasDepthEnvelope = TryDepthEnvelope(vertices, domain, meshToAvatar, mesh.bindposes,
+                    var hasDepthEnvelope = TryDepthEnvelope(vertices, enclosureSurface, meshToAvatar, mesh.bindposes,
                         Array.IndexOf(bones, head), out var depthEnvelope);
                     var visited = new HashSet<int>(domain);
                     for (var vertex = 0; vertex < vertices.Length; vertex++)
@@ -184,8 +240,8 @@ namespace VRVlog.LilToonExporter
                                 if (visited.Add(neighbour)) { island.Add(neighbour); queue.Enqueue(neighbour); }
                         if (island.All(index => !nonHeadBoundary[index] && NeutralShapeSnapshot.Finite(vertices[index].x) &&
                             NeutralShapeSnapshot.Finite(vertices[index].y) && NeutralShapeSnapshot.Finite(vertices[index].z)) &&
-                            (island.All(index => facialBounds.Contains(vertices[index])) || hasDepthEnvelope &&
-                                island.All(index => depthEnvelope.Contains(meshToAvatar.MultiplyPoint3x4(vertices[index]))))) domain.UnionWith(island);
+                            (hasDepthEnvelope ? island.All(index => depthEnvelope.Contains(meshToAvatar.MultiplyPoint3x4(vertices[index]))) :
+                                island.All(index => facialBounds.Contains(vertices[index])))) domain.UnionWith(island);
                     }
                 }
                 var path = AnimationUtility.CalculateTransformPath(renderer.transform, avatar.transform);
@@ -230,15 +286,22 @@ namespace VRVlog.LilToonExporter
             var minimum = envelope.min; var maximum = envelope.max;
             var extent = envelope.size.magnitude;
             // An anchor outside the connected face's projection, or a surface
-            // spanning both sides of it, cannot prove a new posterior region.
+            // spanning both sides of it, cannot prove a new depth region.
             if (!NeutralShapeSnapshot.Finite(extent) || extent <= 0 ||
                 anchor.x < minimum.x || anchor.x > maximum.x || anchor.y < minimum.y || anchor.y > maximum.y ||
                 !(minimum.z >= anchor.z || maximum.z <= anchor.z)) return false;
-            minimum.z = Mathf.Min(minimum.z, 2 * anchor.z - maximum.z);
-            maximum.z = Mathf.Max(maximum.z, 2 * anchor.z - envelope.min.z);
+            var front = minimum.z >= anchor.z;
+            minimum.z = Mathf.Min(minimum.z, anchor.z);
+            maximum.z = Mathf.Max(maximum.z, anchor.z);
             if (!NeutralShapeSnapshot.Finite(minimum.z) || !NeutralShapeSnapshot.Finite(maximum.z)) return false;
             envelope.SetMinMax(minimum, maximum);
             envelope.Expand(extent * .1f);
+            // The lateral/vertical overlay margin cannot authorize a detached
+            // island behind the anatomical anchor on the opposite side from
+            // the descriptor surface.
+            minimum = envelope.min; maximum = envelope.max;
+            if (front) minimum.z = anchor.z; else maximum.z = anchor.z;
+            envelope.SetMinMax(minimum, maximum);
             return true;
         }
 
