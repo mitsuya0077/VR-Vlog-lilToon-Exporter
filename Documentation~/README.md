@@ -1,8 +1,8 @@
 # VR Vlog lilToon VRM Exporter
 
-プレリリース（ベータ版） **0.11.11-beta.16** は、ライセンス設定を追加した **VRM書き出し専用版** です。QR転送の実装と転送ガイドは配布パッケージに含めません。QR転送対応版の配布バージョンは未定です。
+正式版 **0.11.11** は、0.11.11-beta.16と同じ機能を安定版として公開した **VRM書き出し専用版** です。QR転送の実装と転送ガイドは配布パッケージに含めません。QR転送対応版の配布バージョンは未定です。
 
-安定版は引き続き **0.11.10** です。ベータ版を選ぶには、ALCOMの設定で **Show pre-release packages** を有効にしてください。書き出したVRMは端末の「ファイル」に保存して、VR Vlogから読み込みます。
+VCC／ALCOMのパッケージ一覧から **0.11.11** を選択してください。ALCOMの **Show pre-release packages** 設定を有効にする必要はありません。書き出したVRMは端末の「ファイル」に保存して、VR Vlogから読み込みます。
 
 0.11.10以降では、標準VRM表示・lilToon専用表示の画像を縦横比を保って最大1024×1024へ縮小します。小さい画像は拡大しません。元アバターや画像の設定は変更せず、縮小した画像を結果に表示します。高解像度画像によるメモリ負荷を減らすには、更新後に元アバターからVRMを書き出し直してください。
 
@@ -75,4 +75,4 @@ Aim・Rotation Constraintが有効かつロックされ、回転の全軸を完�
 
 アバター・衣装・テクスチャには各権利者の利用条件が適用されます。
 
-0.11.11-beta.11 は MA の参照解決・生成された表情と、FaceEmo を使わず直接編集した FX の固定表情候補を扱います。ALCOM の **Show pre-release packages** を有効にして選択し、元アバターから再出力してください。対応範囲と省略理由は [互換性の説明](https://github.com/mitsuya0077/VR-Vlog-lilToon-Exporter/blob/main/Compatibility/AvatarPreservation.md#modular-avatar-と直接編集した-fx-の表情) を確認してください。
+0.11.11 は MA の参照解決・生成された表情と、FaceEmo を使わず直接編集した FX の固定表情候補を扱います。更新後に元アバターから再出力してください。対応範囲と省略理由は [互換性の説明](https://github.com/mitsuya0077/VR-Vlog-lilToon-Exporter/blob/main/Compatibility/AvatarPreservation.md#modular-avatar-と直接編集した-fx-の表情) を確認してください。
