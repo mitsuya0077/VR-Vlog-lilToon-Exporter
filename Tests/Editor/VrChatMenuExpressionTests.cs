@@ -5,6 +5,7 @@ using NUnit.Framework;
 using UnityEditor;
 using UnityEditor.Animations;
 using UnityEngine;
+using VRVlog.Expressions;
 
 namespace VRVlog.LilToonExporter.Tests
 {
@@ -402,6 +403,204 @@ namespace VRVlog.LilToonExporter.Tests
         public void GlbRegistrationKeepsComposedExpressions()
         {
             MenuExpressionFixture.Run((condition, description) => Assert.That(condition, Is.True, description));
+        }
+
+        private void BasisMesh(int count, params (string Name, Vector3 Position, Vector3 Normal, Vector3 Tangent)[] shapes)
+        {
+            UnityEngine.Object.DestroyImmediate(mesh);
+            mesh = new Mesh { name = "Exact basis fixture", indexFormat = UnityEngine.Rendering.IndexFormat.UInt32 };
+            var positions = new Vector3[count]; positions[1] = Vector3.right; positions[2] = Vector3.up;
+            mesh.vertices = positions; mesh.normals = Enumerable.Repeat(Vector3.up, count).ToArray();
+            mesh.tangents = Enumerable.Repeat(new Vector4(1, 0, 0, 1), count).ToArray(); mesh.triangles = new[] { 0, 1, 2 };
+            foreach (var shape in shapes)
+                mesh.AddBlendShapeFrame(shape.Name, 100, Enumerable.Repeat(shape.Position, count).ToArray(),
+                    Enumerable.Repeat(shape.Normal, count).ToArray(), Enumerable.Repeat(shape.Tangent, count).ToArray());
+            var skin = avatar.GetComponentInChildren<SkinnedMeshRenderer>(); skin.sharedMesh = mesh;
+            for (var shape = 0; shape < mesh.blendShapeCount; shape++) skin.SetBlendShapeWeight(shape, 0);
+        }
+
+        private static VrChatExpressionMenu.Entry BasisEntry(string name, string shape, double duration = 1, bool animation = true, string path = "Face", double maximum = 100)
+        {
+            var entry = new VrChatExpressionMenu.Entry { Id = name, Name = name, Duration = duration, Loop = duration == 1 };
+            entry.Values.Add(new VrChatExpressionMenu.MorphValue { Path = path, Shape = shape, Weight = animation ? 0 : 100 });
+            if (animation)
+            {
+                var curve = new ExpressionAnimationData.Curve();
+                curve.Keys.Add(new ExpressionAnimationData.Key { Time = 0, Value = 0, InTangent = maximum / duration, OutTangent = maximum / duration });
+                curve.Keys.Add(new ExpressionAnimationData.Key { Time = duration, Value = maximum, InTangent = maximum / duration, OutTangent = maximum / duration });
+                entry.Animation.Add(new VrChatExpressionMenu.AnimatedMorph { Path = path, Shape = shape, Curve = curve });
+            }
+            return entry;
+        }
+
+        private static string BasisTarget(VrmMenuExpressions.Expression expression) =>
+            expression.Animation.Channels.SelectMany(channel => channel.Points).First(point => point.Target != null).Target;
+
+        private static void ApplyBasis(SkinnedMeshRenderer skin, VrmMenuExpressions.Expression expression, double time)
+        {
+            for (var shape = 0; shape < skin.sharedMesh.blendShapeCount; shape++) skin.SetBlendShapeWeight(shape, 0);
+            foreach (var name in expression.Targets) skin.SetBlendShapeWeight(skin.sharedMesh.GetBlendShapeIndex(name), 100);
+            foreach (var channel in expression.Animation.Channels)
+            {
+                channel.Weights(time, out var left, out var right, out var blend);
+                if (channel.Points[left].Target != null) skin.SetBlendShapeWeight(skin.sharedMesh.GetBlendShapeIndex(channel.Points[left].Target), 100 * (1 - blend));
+                if (channel.Points[right].Target != null) skin.SetBlendShapeWeight(skin.sharedMesh.GetBlendShapeIndex(channel.Points[right].Target), 100 * blend);
+            }
+        }
+
+        [TestCase("alias")]
+        [TestCase("position")]
+        [TestCase("normal")]
+        [TestCase("tangent")]
+        [TestCase("near position")]
+        public void MutuallyExclusiveAnimationsReuseOnlyExactStoredPnt(string kind)
+        {
+            var position = Vector3.right * .01f; var normal = Vector3.up * .02f; var tangent = Vector3.forward * .03f;
+            BasisMesh(3, ("First", position, normal, tangent), ("Other", position + (kind == "position" ? Vector3.up * .01f :
+                kind == "near position" ? Vector3.right * .000001f : Vector3.zero),
+                normal + (kind == "normal" ? Vector3.right * .01f : Vector3.zero), tangent + (kind == "tangent" ? Vector3.up * .01f : Vector3.zero)));
+            if (kind == "alias")
+            {
+                mesh.ClearBlendShapes();
+                foreach (var name in new[] { "First", "Other" })
+                    foreach (var weight in new[] { -100f, 50f, 100f })
+                        mesh.AddBlendShapeFrame(name, weight, Enumerable.Repeat(position * (weight / 100), 3).ToArray(),
+                            Enumerable.Repeat(normal * (weight / 100), 3).ToArray(), Enumerable.Repeat(tangent * (weight / 100), 3).ToArray());
+            }
+            var menu = new VrChatExpressionMenu.Source(); menu.Entries.Add(BasisEntry("First face", "First")); menu.Entries.Add(BasisEntry("Other face", "Other", 2));
+            if (kind == "alias")
+                foreach (var entry in menu.Entries)
+                {
+                    var curve = entry.Animation.Single().Curve;
+                    curve.Keys.ForEach(key => { key.InTangent = 0; key.OutTangent = 0; });
+                    curve.Keys.Insert(1, new ExpressionAnimationData.Key { Time = entry.Duration / 2, Value = -100, InTangent = 0, OutTangent = 0 });
+                }
+            var before = ExportSourceFingerprint.Compute(avatar); var clone = UnityEngine.Object.Instantiate(avatar); var owned = new List<Mesh>();
+            var native = new Mesh(); var baked = new Mesh();
+            var clamp = PlayerSettings.legacyClampBlendShapeWeights;
+            try
+            {
+                PlayerSettings.legacyClampBlendShapeWeights = false;
+                var expressions = VrChatExpressionBaker.Bake(avatar, clone, menu, owned, null);
+                Assert.That(expressions.Count, Is.EqualTo(2));
+                Assert.That(BasisTarget(expressions[0]) == BasisTarget(expressions[1]), Is.EqualTo(kind == "alias"));
+                var original = avatar.GetComponentInChildren<SkinnedMeshRenderer>(); var copy = clone.GetComponentInChildren<SkinnedMeshRenderer>();
+                for (var row = 0; row < 2; row++)
+                {
+                    Assert.That(expressions[row].Animation.Duration, Is.EqualTo(menu.Entries[row].Duration));
+                    Assert.That(expressions[row].Animation.Loop, Is.EqualTo(menu.Entries[row].Loop));
+                    Assert.That(expressions[row].Animation.Channels.Single().Curve, Is.SameAs(menu.Entries[row].Animation.Single().Curve));
+                    if (kind == "alias") Assert.That(expressions[row].Animation.Channels.Single().Points.Select(point => point.Value), Is.EqualTo(new[] { -100d, 0, 50, 100 }));
+                    foreach (var time in new[] { 0d, menu.Entries[row].Duration * .25, menu.Entries[row].Duration })
+                    {
+                        original.SetBlendShapeWeight(0, 0); original.SetBlendShapeWeight(1, 0);
+                        original.SetBlendShapeWeight(row, (float)menu.Entries[row].Animation.Single().Curve.Evaluate(time)); original.BakeMesh(native);
+                        if (kind == "alias" && time == menu.Entries[row].Duration * .25)
+                            Assert.That(native.vertices[0].x, Is.LessThan(-.001f), "The original signed source frame actually moves below neutral; zero-clamping is not a signed oracle.");
+                        ApplyBasis(copy, expressions[row], time); copy.BakeMesh(baked);
+                        for (var vertex = 0; vertex < native.vertexCount; vertex++)
+                        {
+                            Assert.That(Vector3.Distance(native.vertices[vertex], baked.vertices[vertex]), Is.LessThan(.000001f));
+                            Assert.That(Vector3.Distance(native.normals[vertex], baked.normals[vertex]), Is.LessThan(.000001f));
+                            Assert.That(Vector4.Distance(native.tangents[vertex], baked.tangents[vertex]), Is.LessThan(.000001f));
+                        }
+                    }
+                    expressions[row].Animation.Expression = expressions[row].Name;
+                }
+                Assert.That(ExpressionAnimationData.Read(ExpressionAnimationData.Write(expressions.Select(value => value.Animation).ToArray())).Count, Is.EqualTo(2));
+                original.SetBlendShapeWeight(0, 0); original.SetBlendShapeWeight(1, 0);
+                Assert.That(ExportSourceFingerprint.Compute(avatar), Is.EqualTo(before)); Assert.That(mesh.blendShapeCount, Is.EqualTo(2));
+            }
+            finally { PlayerSettings.legacyClampBlendShapeWeights = clamp; UnityEngine.Object.DestroyImmediate(native); UnityEngine.Object.DestroyImmediate(baked); UnityEngine.Object.DestroyImmediate(clone); foreach (var item in owned) UnityEngine.Object.DestroyImmediate(item); }
+        }
+
+        [TestCase("channels")]
+        [TestCase("knots")]
+        public void AnimationProgramsKeepUniqueBasisNamesWithinEachFace(string kind)
+        {
+            BasisMesh(3, ("First", Vector3.right * .01f, Vector3.up * .02f, Vector3.forward * .03f),
+                ("Alias", Vector3.right * .01f, Vector3.up * .02f, Vector3.forward * .03f));
+            var menu = new VrChatExpressionMenu.Source(); var entry = BasisEntry("Combined face", "First", maximum: kind == "knots" ? 200 : 100);
+            if (kind == "channels") entry.Animation.Add(BasisEntry("Alias", "Alias").Animation.Single()); menu.Entries.Add(entry);
+            var clone = UnityEngine.Object.Instantiate(avatar); var owned = new List<Mesh>(); var clamp = PlayerSettings.legacyClampBlendShapeWeights;
+            try
+            {
+                PlayerSettings.legacyClampBlendShapeWeights = true;
+                var expression = VrChatExpressionBaker.Bake(avatar, clone, menu, owned, null).Single();
+                var targets = expression.Animation.Channels.SelectMany(channel => channel.Points).Where(point => point.Target != null).Select(point => point.Target).ToArray();
+                Assert.That(targets.Length, Is.EqualTo(2)); Assert.That(targets.Distinct().Count(), Is.EqualTo(2));
+                expression.Animation.Expression = expression.Name;
+                Assert.That(ExpressionAnimationData.Read(ExpressionAnimationData.Write(new[] { expression.Animation })).Count, Is.EqualTo(1));
+                var target = clone.GetComponentInChildren<SkinnedMeshRenderer>().sharedMesh;
+                var first = new Vector3[3]; var second = new Vector3[3]; var n = new Vector3[3]; var t = new Vector3[3];
+                target.GetBlendShapeFrameVertices(target.GetBlendShapeIndex(targets[0]), 0, first, n, t);
+                target.GetBlendShapeFrameVertices(target.GetBlendShapeIndex(targets[1]), 0, second, n, t);
+                Assert.That(first, Is.EqualTo(second), "Even identical stored basis deltas must retain separate identities inside one face.");
+            }
+            finally { PlayerSettings.legacyClampBlendShapeWeights = clamp; UnityEngine.Object.DestroyImmediate(clone); foreach (var item in owned) UnityEngine.Object.DestroyImmediate(item); }
+        }
+
+        [Test]
+        public void EqualScalarPosesRetainIndependentSimultaneousTargets()
+        {
+            BasisMesh(3, ("First", Vector3.right * .01f, Vector3.zero, Vector3.zero));
+            var menu = new VrChatExpressionMenu.Source(); menu.Entries.Add(BasisEntry("First row", "First", animation: false)); menu.Entries.Add(BasisEntry("Second row", "First", animation: false));
+            var clone = UnityEngine.Object.Instantiate(avatar); var owned = new List<Mesh>(); var native = new Mesh();
+            try
+            {
+                var expressions = VrChatExpressionBaker.Bake(avatar, clone, menu, owned, null);
+                Assert.That(expressions.SelectMany(expression => expression.Targets).Distinct().Count(), Is.EqualTo(2));
+                var skin = clone.GetComponentInChildren<SkinnedMeshRenderer>();
+                foreach (var target in expressions.SelectMany(expression => expression.Targets)) skin.SetBlendShapeWeight(skin.sharedMesh.GetBlendShapeIndex(target), 100);
+                skin.BakeMesh(native); Assert.That(native.vertices[0].x, Is.EqualTo(.02f).Within(.000001f));
+                Assert.That(expressions.All(expression => expression.Animation == null), Is.True);
+            }
+            finally { UnityEngine.Object.DestroyImmediate(native); UnityEngine.Object.DestroyImmediate(clone); foreach (var item in owned) UnityEngine.Object.DestroyImmediate(item); }
+        }
+
+        [Test]
+        public void AnimationGeometryCannotShareTargetsAcrossRenderers()
+        {
+            BasisMesh(3, ("First", Vector3.right * .01f, Vector3.zero, Vector3.zero));
+            var second = new GameObject("Second", typeof(SkinnedMeshRenderer)); second.transform.SetParent(avatar.transform, false); second.GetComponent<SkinnedMeshRenderer>().sharedMesh = mesh;
+            var menu = new VrChatExpressionMenu.Source(); menu.Entries.Add(BasisEntry("First row", "First")); menu.Entries.Add(BasisEntry("Second row", "First", path: "Second"));
+            var clone = UnityEngine.Object.Instantiate(avatar); var owned = new List<Mesh>();
+            try
+            {
+                var expressions = VrChatExpressionBaker.Bake(avatar, clone, menu, owned, null);
+                Assert.That(BasisTarget(expressions[0]), Is.Not.EqualTo(BasisTarget(expressions[1])));
+                foreach (var target in expressions.Select(BasisTarget))
+                    Assert.That(clone.GetComponentsInChildren<SkinnedMeshRenderer>().Count(skin => skin.sharedMesh.GetBlendShapeIndex(target) >= 0), Is.EqualTo(1));
+            }
+            finally { UnityEngine.Object.DestroyImmediate(clone); foreach (var item in owned) UnityEngine.Object.DestroyImmediate(item); }
+        }
+
+        [TestCase(true)]
+        [TestCase(false)]
+        public void ExactAnimationBasisReuseRespectsTheOriginalMemoryBudget(bool duplicate)
+        {
+            const int vertices = 65536, rows = 32;
+            BasisMesh(vertices, Enumerable.Range(0, rows).Select(index => ("Basis" + index,
+                Vector3.right * .01f * (duplicate ? 1 : index + 1), Vector3.up * .02f, Vector3.forward * .03f)).ToArray());
+            var menu = new VrChatExpressionMenu.Source(); for (var row = 0; row < rows; row++) menu.Entries.Add(BasisEntry("Row" + row, "Basis" + row));
+            var before = ExportSourceFingerprint.Compute(avatar); var clone = UnityEngine.Object.Instantiate(avatar); var owned = new List<Mesh>();
+            try
+            {
+                Assert.That(rows * 2L * vertices * 36, Is.GreaterThan(128L * 1024 * 1024), "Unpooled scalar and animation frames exceed the unchanged cap.");
+                if (!duplicate)
+                    Assert.That(Assert.Throws<InvalidOperationException>(() => VrChatExpressionBaker.Bake(avatar, clone, menu, owned, null)).Message, Does.Contain("128 MiB"));
+                else
+                {
+                    var expressions = VrChatExpressionBaker.Bake(avatar, clone, menu, owned, null);
+                    Assert.That(expressions.Count, Is.EqualTo(rows));
+                    Assert.That(expressions.SelectMany(expression => expression.Targets).Distinct().Count(), Is.EqualTo(rows));
+                    Assert.That(expressions.Select(BasisTarget).Distinct().Count(), Is.EqualTo(1));
+                    var generated = clone.GetComponentInChildren<SkinnedMeshRenderer>().sharedMesh.blendShapeCount - mesh.blendShapeCount;
+                    Assert.That(generated, Is.EqualTo(rows + 1)); Assert.That(generated * (long)vertices * 36, Is.LessThan(128L * 1024 * 1024));
+                }
+                Assert.That(ExportSourceFingerprint.Compute(avatar), Is.EqualTo(before)); Assert.That(mesh.blendShapeCount, Is.EqualTo(rows));
+            }
+            finally { UnityEngine.Object.DestroyImmediate(clone); foreach (var item in owned) UnityEngine.Object.DestroyImmediate(item); }
         }
 
         private void DiscreteController()

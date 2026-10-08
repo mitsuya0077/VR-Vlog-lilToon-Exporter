@@ -154,6 +154,46 @@ namespace VRVlog.LilToonExporter
             var clampToSourceRange = UnityEditor.PlayerSettings.legacyClampBlendShapeWeights;
             long generatedBytes = 0;
             var basis = new Dictionary<(Mesh mesh, int shape, double initial, double value), string>();
+            // Animation programs are mutually exclusive. Reuse exact basis
+            // geometry across those programs only; scalar menu identities and
+            // all distinct targets inside one animation remain independent.
+            var geometry = new Dictionary<(Mesh mesh, ulong hash), List<string>>();
+            Vector3[] compareVertices = null, compareNormals = null, compareTangents = null;
+            ulong Hash(AvatarBaseShape.Deltas delta)
+            {
+                ulong hash = 14695981039346656037UL;
+                unchecked
+                {
+                    foreach (var values in new[] { delta.Vertices, delta.Normals, delta.Tangents })
+                        foreach (var value in values)
+                        {
+                            hash = (hash ^ (uint)value.x.GetHashCode()) * 1099511628211UL;
+                            hash = (hash ^ (uint)value.y.GetHashCode()) * 1099511628211UL;
+                            hash = (hash ^ (uint)value.z.GetHashCode()) * 1099511628211UL;
+                        }
+                }
+                return hash;
+            }
+            string EquivalentTarget(Mesh mesh, AvatarBaseShape.Deltas delta, ISet<string> used, ulong hash)
+            {
+                if (!geometry.TryGetValue((mesh, hash), out var names)) return null;
+                if (compareVertices == null || compareVertices.Length != mesh.vertexCount)
+                {
+                    compareVertices = new Vector3[mesh.vertexCount];
+                    compareNormals = new Vector3[mesh.vertexCount];
+                    compareTangents = new Vector3[mesh.vertexCount];
+                }
+                foreach (var name in names)
+                {
+                    if (used.Contains(name)) continue;
+                    mesh.GetBlendShapeFrameVertices(mesh.GetBlendShapeIndex(name), 0, compareVertices, compareNormals, compareTangents);
+                    // Hashes only choose candidates. Exact P/N/T equality,
+                    // never a distance tolerance, establishes reuse.
+                    if (delta.Vertices.SequenceEqual(compareVertices) && delta.Normals.SequenceEqual(compareNormals) &&
+                        delta.Tangents.SequenceEqual(compareTangents)) return name;
+                }
+                return null;
+            }
             void Reserve(Mesh mesh)
             {
                 generatedBytes += mesh.vertexCount * 36L;
@@ -189,6 +229,7 @@ namespace VRVlog.LilToonExporter
                 if (plan.Animation.Count > 0)
                 {
                     expression.Animation = new ExpressionAnimationData { Duration = entry.Duration, Loop = entry.Loop };
+                    var usedTargets = new HashSet<string>(StringComparer.Ordinal);
                     foreach (var animated in plan.Animation)
                     {
                         var original = animated.Mesh;
@@ -209,13 +250,22 @@ namespace VRVlog.LilToonExporter
                         foreach (var weight in knots)
                         {
                             string target = null;
-                            if (weight != initial && !basis.TryGetValue((copy, shape, initial, weight), out target))
+                            if (weight != initial && (!basis.TryGetValue((copy, shape, initial, weight), out target) || usedTargets.Contains(target)))
                             {
-                                Reserve(original);
-                                target = ExpressionAnimationData.TargetPrefix + prefix + serial++;
-                                AvatarBaseShape.AppendAnimatedShape(original, copy, target, shape, initial, weight, clampToSourceRange);
-                                basis.Add((copy, shape, initial, weight), target);
+                                var delta = AvatarBaseShape.AnimatedDeltas(original, shape, initial, weight, clampToSourceRange);
+                                var hash = Hash(delta);
+                                target = EquivalentTarget(copy, delta, usedTargets, hash);
+                                if (target == null)
+                                {
+                                    Reserve(original);
+                                    target = ExpressionAnimationData.TargetPrefix + prefix + serial++;
+                                    copy.AddBlendShapeFrame(target, 100f, delta.Vertices, delta.Normals, delta.Tangents);
+                                    if (!geometry.TryGetValue((copy, hash), out var names)) geometry.Add((copy, hash), names = new List<string>());
+                                    names.Add(target);
+                                }
+                                basis[(copy, shape, initial, weight)] = target;
                             }
+                            if (target != null) usedTargets.Add(target);
                             channel.Points.Add(new ExpressionAnimationData.Point { Value = weight, Target = target });
                         }
                         expression.Animation.Channels.Add(channel);

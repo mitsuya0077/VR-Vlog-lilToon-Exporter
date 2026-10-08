@@ -294,6 +294,11 @@ BEHAVIOR_CASES = {
         'ColorCanonicalizationDoesNotRelaxOtherPropertyDomains': 4,
     },
     'VrChatMenuExpressionTests': {
+        'MutuallyExclusiveAnimationsReuseOnlyExactStoredPnt': 5,
+        'AnimationProgramsKeepUniqueBasisNamesWithinEachFace': 2,
+        'EqualScalarPosesRetainIndependentSimultaneousTargets': 1,
+        'AnimationGeometryCannotShareTargetsAcrossRenderers': 1,
+        'ExactAnimationBasisReuseRespectsTheOriginalMemoryBudget': 2,
         'UnsupportedVisibilityIsReportedInsteadOfDroppingHalfAnExpression': 1,
         'GestureClipKeepsChangingCurvesButRejectsPartialMaterialFaces': 1,
         'AnimatedExpressionDataContracts': 1,
