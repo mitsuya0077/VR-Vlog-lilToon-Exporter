@@ -345,6 +345,17 @@ namespace VRVlog.LilToonExporter
                 }
                 weightScope = Inspect(runtime, excludedPath, new Dictionary<StateMachineBehaviour, VrChatParameterDriver.Program>(), new List<string>(), true, invariant);
                 RemapWeights(weightScope);
+                // Selected probes need the same post-startup relay proof as
+                // neutral capture. The input seeds above exclude every raw
+                // writer and every normal-to-selected change; the original
+                // graph and SDK callbacks still establish the native order.
+                if (CanEvaluateNeutralRelay(runtime, source, rawInfo, weightScope,
+                    invariant, otherControllers, fixedContext, out var relaySignals,
+                    new HashSet<string>(selection?.Keys ?? Enumerable.Empty<string>(), StringComparer.Ordinal)))
+                {
+                    result.RequireSettledWeightControls = true;
+                    result.NeutralRelaySignals.UnionWith(relaySignals);
+                }
             }
             var weightCommands = weightScope.SelectMany((layer, index) => layer.WeightControls.Select(pair =>
                 (SourceLayer: index, Behaviour: pair.Key, Control: pair.Value))).Where(item => item.Control.Playable == "FX").ToArray();
@@ -582,7 +593,7 @@ namespace VRVlog.LilToonExporter
         private static bool CanEvaluateNeutralRelay(RuntimeAnimatorController runtime, VrChatExpressionMenu.Source source,
             Layer[] raw, Layer[] reachable, IDictionary<string, float> fixedValues,
             IEnumerable<OtherControllerInspection> otherControllers, FixedExpressionContext fixedContext,
-            out HashSet<string> provenSignals)
+            out HashSet<string> provenSignals, ISet<string> selectedInputs = null)
         {
             provenSignals = null;
             var controller = Controller(runtime);
@@ -604,7 +615,7 @@ namespace VRVlog.LilToonExporter
                         unknown, allowFxControls: true, typedConditions: true, fxLayerCount: layers.Length));
                 if (unknown.Count != 0 || rawOthers.Any(layer => layer.FxControl ||
                     layer.WeightControls.Values.Any(control => control.Playable == "FX")) ||
-                    !HeldAutomaticExpressionLayers.HasOnlyUnchangedUnitFxCommands(runtime, source, raw, rawOthers, fixedContext)) return false;
+                    !HeldAutomaticExpressionLayers.HasOnlyUnchangedUnitFxCommands(runtime, source, raw, rawOthers, fixedContext, selectedInputs)) return false;
             }
             var owners = new HashSet<int>(commands.Select(item => item.Owner));
             var targets = new HashSet<int>(commands.Select(item => item.Control.LayerIndex));

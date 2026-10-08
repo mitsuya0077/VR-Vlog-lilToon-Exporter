@@ -146,7 +146,10 @@ namespace VRVlog.LilToonExporter.Tests
                 new Vector3(0, height + .04f, -.012f)
             };
             if (damage == "point only") points[4].x -= .001f;
-            if (damage == "near edge") { points[4].z += .0000001f; points[5].z += .0000001f; }
+            // Native Mesh float storage loses a 0.1 micrometer gap after the
+            // renderer rotation. Retain an independently asserted 2 micrometer
+            // gap; the production seam relation remains exact, with no epsilon.
+            if (damage == "near edge") { points[4].z += .000002f; points[5].z += .000002f; }
             if (damage == "degenerate edge") points[4] = points[5];
             var triangles = new[] { 0, 1, 2, 1, 3, 2, 4, 5, 6 };
             if (damage == "nonhead boundary") triangles = triangles.Concat(new[] { 5, 6, 7 }).ToArray();
@@ -186,6 +189,14 @@ namespace VRVlog.LilToonExporter.Tests
         public void CoincidentPointsAndNearbyEdgesCannotConnectDetachedPosteriorGeometry(string damage)
         {
             SeamGeometry(90, 1, damage);
+            if (damage == "near edge")
+            {
+                var actual = mesh.vertices;
+                Assert.That(actual[4].x != actual[1].x || actual[4].y != actual[1].y || actual[4].z != actual[1].z, Is.True,
+                    "The native mesh must retain the intended gap at the first endpoint before testing seam isolation.");
+                Assert.That(actual[5].x != actual[0].x || actual[5].y != actual[0].y || actual[5].z != actual[0].z, Is.True,
+                    "The native mesh must retain the intended gap at the second endpoint before testing seam isolation.");
+            }
             Assert.That(FacialProjectionScope.Create(avatar).Morphs.Contains(Insert), Is.False);
         }
 

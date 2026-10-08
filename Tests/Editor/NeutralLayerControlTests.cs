@@ -191,7 +191,8 @@ namespace VRVlog.LilToonExporter.Tests
 
         private float NativeSdkRelay(string signal, AnimatorController reference = null, GameObject referenceAvatar = null,
             string referencePath = "Body", float finalWeight = 1, float[] expectedCommands = null, string expectedState = null,
-            bool expectUnitGlobalFx = false, float? expectedLoopMidpoint = null)
+            bool expectUnitGlobalFx = false, float? expectedLoopMidpoint = null,
+            IDictionary<string, float> selection = null, float? selectedSignal = null)
         {
             reference = reference ?? controller;
             var clone = Object.Instantiate(referenceAvatar ?? avatar); var graph = PlayableGraph.Create("Original native relay with SDK primitive bridge");
@@ -288,6 +289,23 @@ namespace VRVlog.LilToonExporter.Tests
                     Assert.That(globalCommands, Is.EqualTo(new[] { 1f }), "The normal original graph must never enter the dormant station FX-zero callback.");
                     Assert.That(mixer.GetInputWeight(0), Is.EqualTo(1)); Assert.That(playable.GetBool("InStation"), Is.False);
                 }
+                if (selection != null)
+                {
+                    foreach (var pair in selection)
+                    {
+                        var type = reference.parameters.Single(parameter => parameter.name == pair.Key).type;
+                        if (type == AnimatorControllerParameterType.Bool) playable.SetBool(pair.Key, pair.Value != 0);
+                        else if (type == AnimatorControllerParameterType.Int) playable.SetInteger(pair.Key, (int)pair.Value);
+                        else if (type == AnimatorControllerParameterType.Float) playable.SetFloat(pair.Key, pair.Value);
+                        else Assert.Fail("The native selected reference does not accept Trigger inputs.");
+                    }
+                    for (var frame = 0; frame < 120; frame++) { graph.Evaluate(1f / 60); ObserveNativeEntries(); }
+                    Assert.That(playable.GetFloat(signal), Is.EqualTo(selectedSignal ?? 1).Within(.00001));
+                    Assert.That(commands, Is.EqualTo(expectedCommands ?? new[] { 0f, finalWeight }));
+                    Assert.That(playable.IsInTransition(ControlLayer), Is.False);
+                    Assert.That(playable.GetCurrentAnimatorStateInfo(ControlLayer).shortNameHash,
+                        Is.EqualTo(Animator.StringToHash(expectedState ?? machine.states[1].state.name)));
+                }
                 var expected = clone.transform.Find(referencePath).GetComponent<SkinnedMeshRenderer>().GetBlendShapeWeight(0);
                 for (var frame = 0; frame < 120; frame++)
                 {
@@ -348,6 +366,75 @@ namespace VRVlog.LilToonExporter.Tests
             Assert.That(values.Single(value => value.Shape == "Open").Weight, Is.EqualTo(100).Within(.01));
             Assert.That(warnings, Is.Empty);
             AssertPermanentRelayMatchesNative(expected); AssertSourceUnchanged(before);
+        }
+
+        private Dictionary<string, float> SelectedRelayGraph(bool fixedDuration)
+        {
+            MmdRelay(controller, false); UnitFxWithDormantStation(controller);
+            foreach (var child in controller.layers[ControlLayer].stateMachine.states)
+            {
+                child.state.writeDefaultValues = true;
+                foreach (var transition in child.state.transitions) FiniteTiming(transition, fixedDuration);
+            }
+            controller.AddParameter("Chosen shape", AnimatorControllerParameterType.Bool);
+            var machine = controller.layers[BodyLayer].stateMachine;
+            var selected = State(machine, "Chosen authored pose", Clip(controller, "Chosen authored pose", new[] { "Body" }, "Body size", 85));
+            Transition(machine.defaultState, selected, "Chosen shape", AnimatorConditionMode.If, 0);
+            return new Dictionary<string, float> { ["Chosen shape"] = 1 };
+        }
+
+        [TestCase(false)]
+        [TestCase(true)]
+        public void SelectedExpressionsRetainTheOriginalNativeConditionalRelay(bool fixedDuration)
+        {
+            var selected = SelectedRelayGraph(fixedDuration); var before = CaptureAssets();
+            var machine = controller.layers[ControlLayer].stateMachine;
+            var expected = NativeSdkRelay("Generic layer relay", expectedCommands: Array.Empty<float>(),
+                expectedState: machine.defaultState.name, expectUnitGlobalFx: true, selection: selected);
+            Assert.That(expected, Is.EqualTo(85).Within(.01), "The original selected body state contributes at its native default unit weight; no control state entered.");
+            var source = VrChatExpressionMenu.Read(avatar);
+            var values = VrChatExpressionSampler.SampleFixed(avatar, controller, source.Defaults, selected, metadata: source);
+            Assert.That(values.Single(value => value.Shape == "Body size").Weight, Is.EqualTo(expected).Within(.01));
+            Assert.That(values.Single(value => value.Shape == "Open").Weight, Is.EqualTo(100).Within(.01));
+            AssertSourceUnchanged(before);
+        }
+
+        [TestCase("late changing signal")]
+        [TestCase("selected blend-tree input")]
+        [TestCase("unconditional timed control exit")]
+        public void SelectedExpressionsCannotCertifyUnprovenFutureRelayControls(string kind)
+        {
+            var selected = SelectedRelayGraph(true); var machine = controller.layers[ControlLayer].stateMachine;
+            var clip = (AnimationClip)machine.defaultState.motion; float? selectedSignal = null;
+            if (kind == "late changing signal")
+                AnimationUtility.SetEditorCurve(clip, EditorCurveBinding.FloatCurve("", typeof(Animator), "Generic layer relay"),
+                    new AnimationCurve(new Keyframe(0, 1, float.PositiveInfinity, float.PositiveInfinity),
+                        new Keyframe(10, 1, float.PositiveInfinity, float.PositiveInfinity),
+                        new Keyframe(11, 0, float.PositiveInfinity, float.PositiveInfinity)));
+            else if (kind == "selected blend-tree input")
+            {
+                controller.AddParameter("Relay blend", AnimatorControllerParameterType.Float); selected["Relay blend"] = 1;
+                var alternative = Clip(controller, "Other relay value");
+                AnimationUtility.SetEditorCurve(alternative, EditorCurveBinding.FloatCurve("", typeof(Animator), "Generic layer relay"), AnimationCurve.Constant(0, 1, .75f));
+                var tree = new BlendTree { name = "Selected relay tree", blendType = BlendTreeType.Simple1D,
+                    blendParameter = "Relay blend", useAutomaticThresholds = false,
+                    children = new[] { new ChildMotion { motion = clip, threshold = 0, timeScale = 1 },
+                        new ChildMotion { motion = alternative, threshold = 1, timeScale = 1 } } };
+                AssetDatabase.AddObjectToAsset(tree, controller);
+                foreach (var child in machine.states) child.state.motion = tree;
+                selectedSignal = .75f;
+            }
+            else
+            {
+                var transition = machine.defaultState.transitions.Single(); transition.conditions = Array.Empty<AnimatorCondition>(); transition.exitTime = 10;
+            }
+            var before = CaptureAssets();
+            var expected = NativeSdkRelay("Generic layer relay", expectedCommands: Array.Empty<float>(),
+                expectedState: machine.defaultState.name, expectUnitGlobalFx: true, selection: selected, selectedSignal: selectedSignal);
+            Assert.That(expected, Is.EqualTo(85).Within(.01), "The original native sampled pose is still stable; that alone cannot certify the future relay.");
+            var source = VrChatExpressionMenu.Read(avatar);
+            Assert.Catch<InvalidOperationException>(() => VrChatExpressionSampler.SampleFixed(avatar, controller, source.Defaults, selected, metadata: source));
+            AssertSourceUnchanged(before);
         }
 
         [TestCase(false)]

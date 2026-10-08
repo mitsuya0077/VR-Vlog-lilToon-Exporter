@@ -231,6 +231,8 @@ BEHAVIOR_CASES = {
         'WriteDefaultsOffInitializerRetainsItsStartupPoseAfterLeavingTheClip': 1,
     },
     'NeutralLayerControlTests': {
+        'SelectedExpressionsRetainTheOriginalNativeConditionalRelay': 2,
+        'SelectedExpressionsCannotCertifyUnprovenFutureRelayControls': 3,
         'IndividualLayerControlKeepsPreparedRestWithoutAssumingItsGoalIsAlreadyApplied': 4,
         'FxBaseLayerIndexZeroIsValidMetadataWithoutInventingItsRuntimeEffect': 1,
         'AControlOfTheTopLayerOrWholeFxCannotCertifyIndependentNeutral': 2,
@@ -313,6 +315,12 @@ BEHAVIOR_CASES = {
         'WriteDefaultsOffRetainsTheWholeEvaluatedFace': 1,
     },
     'ParameterDriverExpressionTests': {
+        'FixedSelectorsRetainNativeSdkWritersAndEffectiveOverridesWithIndependentRandomRest': 6,
+        'ADirectSelectedRandomGateUsesTheCompleteImmediateRestProof': 1,
+        'AnInactiveFaceAlternativeCannotOwnTheNativeSelectedRandomRest': 1,
+        'MixedEmptyWriteDefaultsOffSelectorsUseActualNativeOwnership': 2,
+        'MixedEmptySelectorsCannotHideLatchedOrFutureNativeOwnership': 3,
+        'FixedSelectorsCannotOmitUnprovenRandomEffects': 7,
         'FixedMenuPrunesDormantAfkActionButRejectsExplicitlySelectedAfk': 2,
         'FixedContactInputUsesAuthoredDefaultAndAllowsExplicitSelectionOverride': 1,
         'AnotherPlayableWriterInvalidatesFalseAndGuardProof': 1,
@@ -793,6 +801,7 @@ BEHAVIOR_CASES = {
         'SparseWriteDefaultsOffRestCannotLatchASelectedUnownedFace': 1,
         'UnownedRandomRestRetainsNativeUnitFxCallbacksBehindAnUnchangedNormalGate': 1,
         'UnownedRandomRestCannotHideAnUnprovenGlobalFxCommand': 10,
+        'SelectedGateCannotHideAResetBeyondTheNativeCaptureHorizon': 5,
     },
     'InvariantMorphOwnershipTests': {
         'ExplicitIdenticalFaceResetsDoNotOwnTheChangingWardrobeOption': 1,

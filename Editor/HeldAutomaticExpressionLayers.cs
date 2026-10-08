@@ -20,7 +20,8 @@ namespace VRVlog.LilToonExporter
         // expression, and every incoming/escaping effect is still inspected.
         internal static HashSet<int> FindUnownedRandomRest(GameObject avatar, RuntimeAnimatorController runtime,
             VrChatExpressionMenu.Source source, ISet<EditorCurveBinding> selectedMorphs,
-            FixedExpressionContext context, out HashSet<EditorCurveBinding> preservedMorphs)
+            FixedExpressionContext context, out HashSet<EditorCurveBinding> preservedMorphs,
+            ISet<string> selectedInputs = null)
         {
             preservedMorphs = new HashSet<EditorCurveBinding>();
             var result = new HashSet<int>();
@@ -35,14 +36,15 @@ namespace VRVlog.LilToonExporter
             if (unknown.Count != 0) return result;
             var types = ExpressionDependencies.Controller(runtime).parameters.GroupBy(parameter => parameter.name, StringComparer.Ordinal)
                 .Where(group => group.Count() == 1).ToDictionary(group => group.Key, group => group.Single().type, StringComparer.Ordinal);
-            var unitFxCommands = HasOnlyUnchangedUnitFxCommands(runtime, source, layers, others, context);
+            var unitFxCommands = HasOnlyUnchangedUnitFxCommands(runtime, source, layers, others, context, selectedInputs);
             // An empty output plan asks only whether the existing strict rest
             // proof permits omission. It cannot alter the actual scalar plan.
             var proof = NeutralShapePlan.CreateProjection(avatar, Array.Empty<EditorCurveBinding>(), Array.Empty<AnimationClip>());
             foreach (var index in NeutralRandomRest.Preserve(runtime, source, proof, null, context))
             {
                 var layer = layers[index];
-                if (layer.Morphs.Overlaps(selectedMorphs) || layer.WeightControls.Count != 0) continue;
+                if (layer.Morphs.Overlaps(selectedMorphs) || layer.WeightControls.Count != 0 ||
+                    selectedInputs?.Overlaps(layer.Writes) == true) continue;
                 var needed = new HashSet<string>(layer.Reads, StringComparer.Ordinal); needed.UnionWith(layer.Writes);
                 // An incoming write to a Random-owned destination joins its
                 // autonomous program. Additional playables remain unresolved
@@ -60,18 +62,21 @@ namespace VRVlog.LilToonExporter
                 if (producers.Any(item => item.CurveWrites.Overlaps(gates) || item.DriverPrograms.SelectMany(program => program.Operations)
                     .Any(operation => gates.Contains(operation.Destination) &&
                         (operation.UnresolvedRandom || operation.Kind != "Set" && operation.Kind != "Add" && operation.Kind != "Copy")))) continue;
-                // A producer may enable the autonomous cycle, but it may also
-                // select a separate authored face in this same layer. Retain
-                // that layer unless every non-rest state has a gate-independent
-                // finite native route back to a prepared-value/reset state.
-                if (producers.Length != 0 && !GateRoutesReturnToPreparedRest(avatar, runtime, index, types)) continue;
+                // A finite eventual reset does not establish the pose at the
+                // sampler's first capture. A changed input must immediately
+                // enter complete rest and keep it there, with no timed face or
+                // uninterruptible blend between the input and the reset.
+                var selectedGate = selectedInputs?.Overlaps(gates) == true;
+                if ((producers.Length != 0 || selectedGate) && !GateRoutesReturnToPreparedRest(avatar, runtime, index, types,
+                    source, context, gates, producers, layer.DriverPrograms, selectedGate)) continue;
                 result.Add(index); preservedMorphs.UnionWith(layer.Morphs);
             }
             return result;
         }
 
         internal static bool HasOnlyUnchangedUnitFxCommands(RuntimeAnimatorController runtime, VrChatExpressionMenu.Source source,
-            ExpressionDependencies.Layer[] layers, IList<ExpressionDependencies.Layer> others, FixedExpressionContext context)
+            ExpressionDependencies.Layer[] layers, IList<ExpressionDependencies.Layer> others, FixedExpressionContext context,
+            ISet<string> selectedInputs = null)
         {
             // Another playable's global command participates in the component.
             // Keep that unresolved cross-playable effect in ordinary evaluation.
@@ -86,7 +91,8 @@ namespace VRVlog.LilToonExporter
             // values that are unchanged in this probe and have no raw writer.
             foreach (var name in fixedValues.Keys.ToArray())
                 if (context == null || !context.Values.TryGetValue(name, out var selected) ||
-                    !normal.Values.TryGetValue(name, out var initial) || initial != selected || written.Contains(name))
+                    !normal.Values.TryGetValue(name, out var initial) || initial != selected || written.Contains(name) ||
+                    selectedInputs?.Contains(name) == true)
                     fixedValues.Remove(name);
             foreach (var other in source.OtherControllers.Where(value => value != null))
             {
@@ -112,7 +118,9 @@ namespace VRVlog.LilToonExporter
         }
 
         private static bool GateRoutesReturnToPreparedRest(GameObject avatar, RuntimeAnimatorController runtime, int layerIndex,
-            IDictionary<string, AnimatorControllerParameterType> types)
+            IDictionary<string, AnimatorControllerParameterType> types, VrChatExpressionMenu.Source source,
+            FixedExpressionContext context, ISet<string> gates, IEnumerable<ExpressionDependencies.Layer> producers,
+            IEnumerable<VrChatParameterDriver.Program> ownPrograms, bool selectedGate)
         {
             var machine = ExpressionDependencies.Controller(runtime).layers[layerIndex].stateMachine;
             var overrides = ExpressionDependencies.Overrides(runtime);
@@ -275,7 +283,8 @@ namespace VRVlog.LilToonExporter
                     if (!Destinations(value, child, destinations, new HashSet<AnimatorStateMachine>(visited), allowRestart, ref restart)) return false;
                 return true;
             }
-            var proven = new HashSet<AnimatorState>(owners.Keys.Where(Rest));
+            var restStates = new HashSet<AnimatorState>(owners.Keys.Where(Rest));
+            var proven = new HashSet<AnimatorState>(restStates);
             bool changed;
             do
             {
@@ -302,7 +311,147 @@ namespace VRVlog.LilToonExporter
                     proven.Add(state); changed = true;
                 }
             } while (changed);
-            return proven.Count == owners.Count;
+            if (proven.Count != owners.Count) return false;
+            var initial = new Dictionary<string, float>(StringComparer.Ordinal);
+            foreach (var name in gates)
+            {
+                var declarations = ExpressionDependencies.Controller(runtime).parameters.Where(parameter => parameter.name == name).ToArray();
+                if (declarations.Length != 1 || !types.TryGetValue(name, out var type)) return false;
+                var parameter = declarations[0];
+                var value = type == AnimatorControllerParameterType.Bool ? (parameter.defaultBool ? 1f : 0f) :
+                    type == AnimatorControllerParameterType.Int ? parameter.defaultInt : parameter.defaultFloat;
+                if (source.Defaults.TryGetValue(name, out var supplied)) value = supplied;
+                if (context?.Values.TryGetValue(name, out supplied) == true) value = supplied;
+                if (!NeutralShapeSnapshot.Finite(value) || type == AnimatorControllerParameterType.Bool && value != 0 && value != 1 ||
+                    type == AnimatorControllerParameterType.Int && (value != Math.Truncate(value) || value < int.MinValue || (double)value > int.MaxValue)) return false;
+                initial.Add(name, value);
+            }
+            bool UnchangedSet(VrChatParameterDriver.Operation operation)
+            {
+                if (!gates.Contains(operation.Destination)) return true;
+                if (operation.Kind != "Set" || !types.TryGetValue(operation.Destination, out var type)) return false;
+                var value = operation.Value;
+                if (type == AnimatorControllerParameterType.Bool) value = value == 0 ? 0 : 1;
+                if (type == AnimatorControllerParameterType.Int) value = (float)Math.Truncate(value);
+                if (source.ExpressionParameters.Contains(operation.Destination))
+                {
+                    if (type == AnimatorControllerParameterType.Int) value = Mathf.Clamp(value, 0, 255);
+                    if (type == AnimatorControllerParameterType.Float) value = Mathf.Clamp(value, -1, 1);
+                }
+                return value.Equals(initial[operation.Destination]);
+            }
+            if (!selectedGate && producers.SelectMany(layer => layer.DriverPrograms).SelectMany(program => program.Operations).All(UnchangedSet)) return true;
+
+            // Check all input cells rather than assigning producer outputs or
+            // simulating Random. At the supplied initial gates the original
+            // independent idle is held by the existing policy. Every different
+            // input must instead close the layer at explicit prepared rest.
+            // Own Copy reads could transform a gate into another routing input;
+            // they are not covered by a transition-only partition proof.
+            if (ownPrograms.SelectMany(program => program.Operations).Any(operation => gates.Contains(operation.Source))) return false;
+            var allTransitions = owners.Keys.SelectMany(state => Enabled(state.transitions)).Concat(parents.Keys.SelectMany(current => Enabled(current.anyStateTransitions))).ToArray();
+            if (allTransitions.Any(transition => transition == null || transition.duration != 0 || transition.offset != 0)) return false;
+            var conditionTransitions = allTransitions.Cast<AnimatorTransitionBase>().Concat(parents.Keys.SelectMany(current =>
+                current.entryTransitions.Cast<AnimatorTransitionBase>().Concat(current.stateMachines.SelectMany(child =>
+                    current.GetStateMachineTransitions(child.stateMachine))))).ToArray();
+            var conditions = conditionTransitions.SelectMany(transition => transition.conditions).GroupBy(condition => condition.parameter, StringComparer.Ordinal).ToDictionary(group => group.Key, group => group.ToArray(), StringComparer.Ordinal);
+            var cells = new List<(string Name, float[] Values)>(); long cellCount = 1;
+            foreach (var name in conditions.Keys.Concat(gates).Distinct(StringComparer.Ordinal))
+            {
+                if (!types.TryGetValue(name, out var type)) return false;
+                conditions.TryGetValue(name, out var values); values = values ?? Array.Empty<AnimatorCondition>();
+                if (values.Any(condition => !NeutralShapeSnapshot.Finite(condition.threshold))) return false;
+                var samples = new HashSet<float>();
+                if (type == AnimatorControllerParameterType.Bool)
+                {
+                    if (values.Any(condition => condition.mode != AnimatorConditionMode.If && condition.mode != AnimatorConditionMode.IfNot)) return false;
+                    samples.UnionWith(new[] { 0f, 1f });
+                }
+                else
+                {
+                    if (type != AnimatorControllerParameterType.Int && type != AnimatorControllerParameterType.Float || values.Any(condition =>
+                        Math.Abs(condition.threshold) > 1000000 || type == AnimatorControllerParameterType.Int && condition.threshold != Math.Truncate(condition.threshold) ||
+                        condition.mode != AnimatorConditionMode.Greater && condition.mode != AnimatorConditionMode.Less &&
+                        (type != AnimatorControllerParameterType.Int || condition.mode != AnimatorConditionMode.Equals && condition.mode != AnimatorConditionMode.NotEqual))) return false;
+                    var thresholds = values.Select(condition => condition.threshold).Distinct().OrderBy(value => value).ToArray();
+                    foreach (var value in thresholds) samples.UnionWith(new[] { value - 1, value, value + 1 });
+                    for (var index = 1; index < thresholds.Length; index++)
+                    {
+                        var middle = (float)(((double)thresholds[index - 1] + thresholds[index]) * .5);
+                        if (type == AnimatorControllerParameterType.Float || middle == Math.Truncate(middle)) samples.Add(middle);
+                    }
+                    if (samples.Count == 0) samples.UnionWith(new[] { -1f, 0f, 1f });
+                }
+                if (initial.TryGetValue(name, out var normal)) samples.Add(normal);
+                cellCount *= samples.Count; if (cellCount > 256) return false;
+                cells.Add((name, samples.ToArray()));
+            }
+            var assignment = new Dictionary<string, float>(StringComparer.Ordinal); var checks = 0;
+            bool Matches(AnimatorTransitionBase transition)
+            {
+                if (++checks > 65536 || transition == null) return false;
+                foreach (var condition in transition.conditions)
+                {
+                    var value = assignment[condition.parameter];
+                    var match = condition.mode == AnimatorConditionMode.If ? value != 0 : condition.mode == AnimatorConditionMode.IfNot ? value == 0 :
+                        condition.mode == AnimatorConditionMode.Equals ? value == condition.threshold : condition.mode == AnimatorConditionMode.NotEqual ? value != condition.threshold :
+                        condition.mode == AnimatorConditionMode.Greater ? value > condition.threshold : condition.mode == AnimatorConditionMode.Less && value < condition.threshold;
+                    if (!match) return false;
+                }
+                return true;
+            }
+            IEnumerable<AnimatorTransition> Active(IEnumerable<AnimatorTransition> transitions)
+            {
+                var values = transitions.ToArray(); var solo = values.Any(transition => transition != null && transition.solo);
+                return values.Where(transition => transition != null && !transition.mute && (!solo || transition.solo));
+            }
+            bool ToRest(AnimatorTransitionBase transition, AnimatorStateMachine owner, HashSet<AnimatorStateMachine> visited)
+            {
+                if (transition.isExit)
+                {
+                    if (!visited.Add(owner) || parents[owner] == null) return false;
+                    var parent = parents[owner];
+                    var next = Active(parent.GetStateMachineTransitions(owner)).FirstOrDefault(Matches);
+                    return next != null && ToRest(next, parent, visited);
+                }
+                if (transition.destinationState != null) return restStates.Contains(transition.destinationState);
+                var child = transition.destinationStateMachine;
+                if (child == null || !visited.Add(child)) return false;
+                var entry = Active(child.entryTransitions).FirstOrDefault(Matches);
+                return entry != null ? ToRest(entry, child, visited) : restStates.Contains(child.defaultState);
+            }
+            bool ClosedRestCell()
+            {
+                if (gates.All(name => assignment[name].Equals(initial[name]))) return true;
+                foreach (var state in owners.Keys)
+                {
+                    var reset = restStates.Contains(state);
+                    for (var owner = owners[state]; owner != null; owner = parents[owner])
+                        foreach (var transition in Enabled(owner.anyStateTransitions).Where(Matches))
+                        {
+                            if (!ToRest(transition, owner, new HashSet<AnimatorStateMachine>())) return false;
+                            reset |= !transition.hasExitTime;
+                        }
+                    foreach (var transition in Enabled(state.transitions).Where(Matches))
+                    {
+                        if (!ToRest(transition, owners[state], new HashSet<AnimatorStateMachine>())) return false;
+                        if (!transition.hasExitTime) { reset = true; break; }
+                    }
+                    if (!reset) return false;
+                }
+                return checks <= 65536;
+            }
+            bool EveryChangedCell(int index)
+            {
+                if (index == cells.Count) return ClosedRestCell();
+                foreach (var value in cells[index].Values)
+                {
+                    assignment[cells[index].Name] = value;
+                    if (!EveryChangedCell(index + 1)) return false;
+                }
+                return true;
+            }
+            return EveryChangedCell(0) && checks <= 65536;
         }
 
         internal static HashSet<int> Find(RuntimeAnimatorController runtime, VrChatExpressionMenu.Source source,

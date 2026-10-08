@@ -285,16 +285,17 @@ namespace VRVlog.LilToonExporter.Tests
         public void ReadOnlyRandomGateProducersKeepTheirNativeSelectedCallbacks(string operation)
         {
             UnownedRandomFixture(); IncomingRandomGate();
-            var parameters = controller.parameters; parameters.Single(parameter => parameter.name == "Enable").defaultBool = false; controller.parameters = parameters;
             controller.AddParameter("Requested", AnimatorControllerParameterType.Bool);
-            parameters = controller.parameters; parameters.Single(parameter => parameter.name == "Requested").defaultBool = true; controller.parameters = parameters;
             selected.behaviours = Array.Empty<StateMachineBehaviour>();
-            ParameterDriverExpressionTests.Driver(selected, ParameterDriverExpressionTests.Op(operation, "Enable", 1, "Requested"));
+            ParameterDriverExpressionTests.Driver(selected, ParameterDriverExpressionTests.Op(operation, "Enable", 0, "Requested"));
+            var rest = controller.layers[2].stateMachine.states.Single(child => child.state.name == "Open").state;
+            var disable = closed.AddTransition(rest); disable.hasExitTime = false; disable.duration = 0;
+            disable.AddCondition(AnimatorConditionMode.IfNot, 0, "Enable");
             var underlay = controller.layers[0].stateMachine.defaultState;
             AnimationUtility.SetEditorCurve((AnimationClip)underlay.motion, Binding("Authored"), AnimationCurve.Constant(0, 1, 20));
             var enabled = State(0, "Selected gate underlay", Clip("Gate changes the lower face", ("Authored", 40)));
             var transition = underlay.AddTransition(enabled); transition.hasExitTime = false; transition.duration = 0;
-            transition.AddCondition(AnimatorConditionMode.If, 0, "Enable");
+            transition.AddCondition(AnimatorConditionMode.IfNot, 0, "Enable");
             var definitions = controller.layers; definitions[1].defaultWeight = .5f; controller.layers = definitions;
             var before = ExportSourceFingerprint.Compute(avatar); var serialized = EditorJsonUtility.ToJson(controller);
             Assert.That(UnownedRest(out var preserved), Is.EquivalentTo(new[] { 2 }));
@@ -319,7 +320,7 @@ namespace VRVlog.LilToonExporter.Tests
                 var playable = AnimatorControllerPlayable.Create(graph, evaluation.Controller);
                 AnimationPlayableOutput.Create(graph, "Native", animator).SetSourcePlayable(playable); graph.Play(); graph.Evaluate(0); evaluation.Check();
                 for (var frame = 0; frame < 120; frame++) { graph.Evaluate(1f / 60f); evaluation.Check(); }
-                Assert.That(playable.GetBool("Enable"), Is.True, "The source callback changes its authored false default.");
+                Assert.That(playable.GetBool("Enable"), Is.False, "The source callback changes its authored true default.");
                 expected = clone.transform.Find("Body").GetComponent<SkinnedMeshRenderer>().GetBlendShapeWeight(0);
                 Assert.That(expected, Is.EqualTo(57.5f).Within(.01), "The selected callback retains the native lower face at the fractional slot.");
             }
@@ -327,7 +328,7 @@ namespace VRVlog.LilToonExporter.Tests
             var entry = Hold();
             Assert.That(entry.Values.Single(value => value.Shape == "Authored").Weight, Is.EqualTo(expected).Within(.01));
             Assert.That(entry.Values.Any(value => value.Shape == "Blink" || value.Shape == "Recovery channel"), Is.False);
-            Assert.That(controller.parameters.Single(parameter => parameter.name == "Enable").defaultBool, Is.False);
+            Assert.That(controller.parameters.Single(parameter => parameter.name == "Enable").defaultBool, Is.True);
             Assert.That(ExportSourceFingerprint.Compute(avatar), Is.EqualTo(before)); Assert.That(EditorJsonUtility.ToJson(controller), Is.EqualTo(serialized));
         }
 
@@ -494,6 +495,11 @@ namespace VRVlog.LilToonExporter.Tests
         public void SparseWriteDefaultsOffRestCannotLatchASelectedUnownedFace()
         {
             UnownedRandomFixture(); IncomingRandomGate();
+            // A lower-layer explicit zero masks a sparse upper-layer value.
+            // Remove that support so this oracle tests the actual WD Off
+            // predecessor history rather than a lower-layer reset.
+            AnimationUtility.SetEditorCurve((AnimationClip)controller.layers[0].stateMachine.defaultState.motion,
+                Binding("Recovery channel"), null);
             controller.AddParameter("Forced face", AnimatorControllerParameterType.Int);
             ParameterDriverExpressionTests.Driver(selected, ParameterDriverExpressionTests.Op("Set", "Forced face", 1));
             var terminal = State(2, "Selected transient face", Clip("Transient selected face", ("Blink", 0), ("Recovery channel", 60)));
@@ -502,8 +508,8 @@ namespace VRVlog.LilToonExporter.Tests
             enter.AddCondition(AnimatorConditionMode.Greater, 0, "Forced face");
             var leave = terminal.AddTransition(empty); leave.hasExitTime = true; leave.exitTime = .5f; leave.duration = 0;
             var before = ExportSourceFingerprint.Compute(avatar); var serialized = EditorJsonUtility.ToJson(controller);
-            Assert.That(ExpressionDependencies.StationaryMorphBindings(controller, null).Contains(Binding("Recovery channel")), Is.True,
-                "The inherited channel remains an actual scalar root rather than disappearing from ordinary capture.");
+            Assert.That(ExpressionDependencies.StationaryMorphBindings(controller, null).Contains(Binding("Recovery channel")), Is.False,
+                "No independent lower-layer constant can reset or conceal the previous authored value.");
             var clone = Object.Instantiate(avatar); var graph = PlayableGraph.Create("Native sparse held face oracle");
             ExpressionEvaluationSession evaluation = null;
             try
@@ -524,11 +530,9 @@ namespace VRVlog.LilToonExporter.Tests
             }
             finally { graph.Destroy(); evaluation?.Dispose(); Object.DestroyImmediate(clone); }
             Assert.That(UnownedRest(out var preserved), Is.Empty); Assert.That(preserved, Is.Empty);
-            try
-            {
-                var entry = Hold(); Assert.That(entry.Values.Single(value => value.Shape == "Recovery channel").Weight, Is.EqualTo(60).Within(.01));
-            }
-            catch (InvalidOperationException error) { Assert.That(error.Message, Does.Contain("Random")); }
+            // This predecessor channel deliberately has no stationary scalar
+            // root. The native latch proves why the automatic omission proof
+            // must reject the sparse reset, independently of ReadClip's domain.
             Assert.That(ExportSourceFingerprint.Compute(avatar), Is.EqualTo(before)); Assert.That(EditorJsonUtility.ToJson(controller), Is.EqualTo(serialized));
         }
 
@@ -626,6 +630,15 @@ namespace VRVlog.LilToonExporter.Tests
             else if (kind == "unknown callback") control.Unit.AddStateMachineBehaviour<UnknownStateCallbackProbe>();
             else if (kind == "invalid routing") control.Unit.transitions.Single().destinationState = selected;
             var before = ExportSourceFingerprint.Compute(avatar); var serialized = EditorJsonUtility.ToJson(controller);
+            if (kind == "selected input")
+            {
+                var normal = FixedExpressionContext.Create(controller, source.Defaults, source);
+                Assert.That(HeldAutomaticExpressionLayers.FindUnownedRandomRest(avatar, controller, source,
+                    new HashSet<EditorCurveBinding>(AnimationUtility.GetCurveBindings(faceClip)), normal, out var selectedPreserved,
+                    new HashSet<string> { gate }), Is.Empty,
+                    "A final input can enable the dormant whole-FX zero command even when the normal context remains unchanged.");
+                Assert.That(selectedPreserved, Is.Empty);
+            }
             Assert.That(HeldAutomaticExpressionLayers.FindUnownedRandomRest(avatar, controller, source,
                 new HashSet<EditorCurveBinding>(AnimationUtility.GetCurveBindings(faceClip)), context, out var preserved), Is.Empty);
             Assert.That(preserved, Is.Empty);
@@ -786,6 +799,90 @@ namespace VRVlog.LilToonExporter.Tests
                 Assert.That(automatic.Contains(Binding(shape)), Is.True);
             Assert.That(automatic.Contains(Binding("Authored")), Is.False);
             Assert.That(automatic.Contains(Binding("Rest")), Is.False);
+        }
+
+        float NativeDelayedGateRecoveryAtTheCaptureHorizon(bool expectedBlend)
+        {
+            var clone = Object.Instantiate(avatar); var graph = PlayableGraph.Create("Original delayed gate horizon oracle");
+            ExpressionEvaluationSession evaluation = null;
+            try
+            {
+                var dependencies = new ExpressionDependencies(); var unknown = new List<string>();
+                ExpressionDependencies.Inspect(controller, null, dependencies.Drivers, unknown, true);
+                Assert.That(unknown, Is.Empty);
+                dependencies.Layers.UnionWith(new[] { 0, 1, 2 });
+                dependencies.Parameters.UnionWith(new[] { "Enable", "Forced face" });
+                evaluation = new ExpressionEvaluationSession(controller, dependencies, source.ExpressionParameters);
+                var animator = clone.GetComponent<Animator>(); animator.runtimeAnimatorController = null;
+                animator.cullingMode = AnimatorCullingMode.AlwaysAnimate; evaluation.Animator = animator;
+                graph.SetTimeUpdateMode(DirectorUpdateMode.Manual);
+                var playable = AnimatorControllerPlayable.Create(graph, evaluation.Controller);
+                AnimationPlayableOutput.Create(graph, "Native original controller", animator).SetSourcePlayable(playable);
+                graph.Play(); graph.Evaluate(0); evaluation.Check();
+                for (var frame = 0; frame < 120; frame++) { graph.Evaluate(1f / 60f); evaluation.Check(); }
+                Assert.That(playable.GetInteger("Forced face"), Is.EqualTo(1),
+                    "The original selected SDK callback, rather than a manually forced oracle input, selects the deterministic alternative.");
+                if (expectedBlend) Assert.That(playable.IsInTransition(2), Is.True,
+                    "The native ten-second blend must actually be running; an ignored transition is not a clock counterexample.");
+                return clone.transform.Find("Body").GetComponent<SkinnedMeshRenderer>().GetBlendShapeWeight(3);
+            }
+            finally { graph.Destroy(); evaluation?.Dispose(); Object.DestroyImmediate(clone); }
+        }
+
+        [TestCase("long exit")]
+        [TestCase("slow state")]
+        [TestCase("long blend")]
+        [TestCase("long chain")]
+        [TestCase("unused Random marker")]
+        public void SelectedGateCannotHideAResetBeyondTheNativeCaptureHorizon(string kind)
+        {
+            UnownedRandomFixture(); IncomingRandomGate();
+            controller.AddParameter("Forced face", AnimatorControllerParameterType.Int);
+            ParameterDriverExpressionTests.Driver(selected, ParameterDriverExpressionTests.Op("Set", "Forced face", 1));
+            var open = controller.layers[2].stateMachine.states.Single(child => child.state.name == "Open").state;
+            var alternativeClip = Clip("Delayed deterministic recovery", ("Blink", 0), ("Recovery channel", 60));
+            var alternative = State(2, "Selected delayed recovery", alternativeClip);
+            var enter = condition.AddTransition(alternative); enter.hasExitTime = false; enter.duration = 0;
+            enter.canTransitionToSelf = false; enter.AddCondition(AnimatorConditionMode.Greater, 0, "Forced face");
+            var reset = alternative.AddTransition(open); reset.hasExitTime = true; reset.exitTime = 10; reset.duration = 0;
+            if (kind == "slow state") { alternative.speed = .05f; reset.exitTime = 1; }
+            else if (kind == "long blend")
+            {
+                reset.hasExitTime = true; reset.exitTime = .01f; reset.hasFixedDuration = true; reset.duration = 10;
+            }
+            else if (kind == "long chain")
+            {
+                AnimationUtility.SetEditorCurve(alternativeClip, Binding("Blink"), AnimationCurve.Constant(0, 1.5f, 0));
+                AnimationUtility.SetEditorCurve(alternativeClip, Binding("Recovery channel"), AnimationCurve.Constant(0, 1.5f, 60));
+                var nextClip = Clip("Second delayed deterministic recovery", ("Blink", 0), ("Recovery channel", 60));
+                AnimationUtility.SetEditorCurve(nextClip, Binding("Blink"), AnimationCurve.Constant(0, 1.5f, 0));
+                AnimationUtility.SetEditorCurve(nextClip, Binding("Recovery channel"), AnimationCurve.Constant(0, 1.5f, 60));
+                var next = State(2, "Second selected delayed recovery", nextClip);
+                reset.destinationState = next; reset.exitTime = 1;
+                var finish = next.AddTransition(open); finish.hasExitTime = true; finish.exitTime = 1; finish.duration = 0;
+            }
+            else if (kind == "unused Random marker")
+            {
+                controller.AddParameter("Unused random marker", AnimatorControllerParameterType.Float);
+                var marker = alternative.AddStateMachineBehaviour(random.GetType()); EditorUtility.CopySerialized(random, marker);
+                using var data = new SerializedObject(marker);
+                data.FindProperty("parameters").GetArrayElementAtIndex(0).FindPropertyRelative("name").stringValue = "Unused random marker";
+                data.ApplyModifiedPropertiesWithoutUndo();
+            }
+            var before = ExportSourceFingerprint.Compute(avatar); var serialized = EditorJsonUtility.ToJson(controller);
+            var native = NativeDelayedGateRecoveryAtTheCaptureHorizon(kind == "long blend");
+            Assert.That(native, Is.GreaterThan(10), "A merely finite future reset is not the selected pose at the actual two-second native capture horizon.");
+            if (kind != "long blend") Assert.That(native, Is.EqualTo(60).Within(.01));
+            Assert.That(UnownedRest(out var preserved), Is.Empty); Assert.That(preserved, Is.Empty);
+            try
+            {
+                var entry = Hold();
+                Assert.That(entry.Values.Single(value => value.Shape == "Recovery channel").Weight, Is.EqualTo(native).Within(.02),
+                    "The exporter must retain the independently observed selected recovery or refuse its relevant Random dependency.");
+            }
+            catch (InvalidOperationException error) { Assert.That(error.Message, Does.Contain("Random")); }
+            Assert.That(ExportSourceFingerprint.Compute(avatar), Is.EqualTo(before));
+            Assert.That(EditorJsonUtility.ToJson(controller), Is.EqualTo(serialized));
         }
     }
 }

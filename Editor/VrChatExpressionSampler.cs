@@ -581,6 +581,13 @@ namespace VRVlog.LilToonExporter
             bool preserveNativeBasePose = false, FixedExpressionContext fixedContext = null, ISet<string> omittedDriverWrites = null,
             int? expectedLayer = null, string expectedStatePath = null)
         {
+            using var selectedRest = !preserveNativeBasePose && fixedContext != null && metadata != null && selected.Count > 0
+                ? SelectedRandomRestProbe.Create(avatar, runtime, metadata, selected, fixedContext) : null;
+            if (selectedRest != null)
+            {
+                runtime = selectedRest.Runtime;
+                initialMorphs = initialMorphs.Except(selectedRest.PreservedMorphs);
+            }
             if (fixedContext != null)
             {
                 var resolved = new Dictionary<string, float>(defaults, StringComparer.Ordinal);
@@ -589,6 +596,11 @@ namespace VRVlog.LilToonExporter
             }
             var originalController = ExpressionDependencies.Controller(runtime);
             var dependencies = ExpressionDependencies.Analyze(runtime, selected.Keys, excludedPath, metadata, defaults, selected, initialMorphs, preserveNativeBasePose, fixedContext);
+            // Keep the complete original dependency graph and native support.
+            // Inactive alternative clips may mention the preserved rest, but
+            // cannot make it a selected capture root. The observed contributing
+            // clips are checked against the original proof before capture.
+            if (selectedRest != null) dependencies.Morphs.ExceptWith(selectedRest.PreservedMorphs);
             NeutralShapePlan projectionPlan = null;
             if (!preserveNativeBasePose)
             {
@@ -658,6 +670,7 @@ namespace VRVlog.LilToonExporter
                 Action remember = () =>
                 {
                     evaluation.Check();
+                    selectedRest?.Observe(playable, controller, clone);
                     RememberBindings(playable, affected, history, visitedClips, excludedPath, neutralAvatar: avatar,
                         neutralPlan: projectionPlan, capturedMorphs: projectionPlan?.CommittedMorphs,
                         unchangedAppearanceClips: unchangedAppearance);
@@ -684,11 +697,13 @@ namespace VRVlog.LilToonExporter
                         throw new InvalidOperationException("FXの表情候補の状態に到達できませんでした。条件・優先順位・Parameter Driverを確認してください: " + expectedStatePath);
                 }
                 CheckSelectedState();
+                var stableWeights = evaluation.CaptureLayerWeights(playable);
                 ValidateFixedPose(avatar, playable, controller, excludedPath, excludedLayers, equivalentStates,
                     dependencies.NativeSupportLayers, dependencies.Morphs, dependencies: dependencies, metadata: metadata,
                     restrictCapturedMorphs: projectionPlan != null, neutralPlan: projectionPlan, fixedMotionTimeInputs: selected,
                     motionTimeRuntime: runtime);
-                var stableWeights = evaluation.CaptureLayerWeights(playable);
+                selectedRest?.Validate();
+                selectedRest?.ValidateNativeRest(clone);
                 var bindings = ActiveBindings(playable, affected, excludedPath, equivalentStates, neutralAvatar: avatar,
                     neutralPlan: projectionPlan, capturedMorphs: projectionPlan?.CommittedMorphs,
                     unchangedAppearanceClips: unchangedAppearance);
@@ -699,6 +714,9 @@ namespace VRVlog.LilToonExporter
                 {
                     Advance(graph, 7 + checkpoint, evaluation.Check);
                     evaluation.CheckLayerWeights(playable, stableWeights);
+                    selectedRest?.Observe(playable, controller, clone);
+                    selectedRest?.Validate();
+                    selectedRest?.ValidateNativeRest(clone);
                     CheckSelectedState();
                     var nextBindings = ActiveBindings(playable, affected, excludedPath, equivalentStates, neutralAvatar: avatar,
                         neutralPlan: projectionPlan, capturedMorphs: projectionPlan?.CommittedMorphs,
@@ -711,6 +729,7 @@ namespace VRVlog.LilToonExporter
                 if (values.Count == 0 && unevaluated.Count == 0) throw new InvalidOperationException("有効な顔のBlendShapeアニメーションがありません。");
                 if (fixedContext != null)
                     fixedContext.UsedParameters.UnionWith(dependencies.Parameters.Where(fixedContext.Values.ContainsKey));
+                selectedRest?.RecordNotice();
                 return values;
             }
             finally
@@ -718,6 +737,243 @@ namespace VRVlog.LilToonExporter
                 if (graph.IsValid()) graph.Destroy();
                 if (clone != null) UnityEngine.Object.DestroyImmediate(clone);
                 EditorSceneManager.ClosePreviewScene(scene);
+            }
+        }
+
+        // A selector owns its native parameter-driven writers, rather than one
+        // detached clip. Prove rest on the original complete graph, then keep
+        // every selected writer and callback in its authored layer and slot.
+        private sealed class SelectedRandomRestProbe : IDisposable
+        {
+            private readonly List<UnityEngine.Object> owned = new List<UnityEngine.Object>();
+            internal RuntimeAnimatorController Runtime;
+            internal HashSet<EditorCurveBinding> PreservedMorphs;
+            private RuntimeAnimatorController originalRuntime;
+            private VrChatExpressionMenu.Source source;
+            private GameObject avatar;
+            private FixedExpressionContext normal;
+            private HashSet<string> selectedInputs;
+            private HashSet<int> omitted, writerLayers;
+            private readonly HashSet<AnimationClip> observed = new HashSet<AnimationClip>();
+            private readonly HashSet<EditorCurveBinding> explicitWriters = new HashSet<EditorCurveBinding>();
+            private string notice;
+            private FacialProjectionScope geometry;
+            private bool geometryComputed;
+            private readonly Dictionary<(int Layer, int Hash), AnimatorState> observedStates = new Dictionary<(int, int), AnimatorState>();
+
+            internal void Observe(AnimatorControllerPlayable playable, AnimatorController controller, GameObject evaluated)
+            {
+                foreach (var layer in writerLayers)
+                {
+                    var weight = layer == 0 ? 1 : playable.GetLayerWeight(layer);
+                    if (!NeutralShapeSnapshot.Finite(weight) || weight < 0)
+                        throw new InvalidOperationException("選択したFXのレイヤー重みが不正なため、Randomの待機表情を保持できません。");
+                    if (weight > 0)
+                    {
+                        CheckState(playable.GetCurrentAnimatorStateInfo(layer).fullPathHash);
+                        if (playable.IsInTransition(layer)) CheckState(playable.GetNextAnimatorStateInfo(layer).fullPathHash);
+                    }
+                    void CheckState(int hash)
+                    {
+                        if (hash == 0) throw new InvalidOperationException("選択したFXの状態が確定しないため、Randomの待機表情を保持できません。");
+                        if (!observedStates.TryGetValue((layer, hash), out var state))
+                        {
+                            var definition = controller.layers[layer];
+                            var definitions = controller.layers; var sourceIndex = layer; var seen = new HashSet<int>();
+                            while (definitions[sourceIndex].syncedLayerIndex >= 0)
+                            {
+                                if (!seen.Add(sourceIndex)) throw new InvalidOperationException("同期FXの参照が循環しています。");
+                                sourceIndex = definitions[sourceIndex].syncedLayerIndex;
+                                if (sourceIndex < 0 || sourceIndex >= definitions.Length) throw new InvalidOperationException("同期FXの参照が不正です。");
+                            }
+                            var machine = definitions[sourceIndex].stateMachine;
+                            var matches = new HashSet<AnimatorState>();
+                            void Visit(AnimatorStateMachine machine, string path)
+                            {
+                                foreach (var child in machine.states)
+                                    if (Animator.StringToHash(path + "." + child.state.name) == hash) matches.Add(child.state);
+                                foreach (var child in machine.stateMachines) Visit(child.stateMachine, path + "." + child.stateMachine.name);
+                            }
+                            foreach (var root in new[] { definition.name, definitions[sourceIndex].name, machine.name }.Distinct(StringComparer.Ordinal))
+                                Visit(machine, root);
+                            if (matches.Count != 1) throw new InvalidOperationException("選択したFXの状態名を一意に特定できません。");
+                            state = matches.Single(); observedStates.Add((layer, hash), state);
+                        }
+                        if (state.writeDefaultValues)
+                            throw new InvalidOperationException("選択したFXのWrite Defaultsによる暗黙の出力を確定できません。");
+                        var motion = controller.GetStateEffectiveMotion(state, layer) ?? state.motion;
+                        if (motion == null || motion is AnimationClip clip && AnimationUtility.GetCurveBindings(clip).Length == 0 &&
+                            AnimationUtility.GetObjectReferenceCurveBindings(clip).Length == 0)
+                            // An actual empty WD-Off stream may retain earlier
+                            // writes. Every contributing clip stays in history,
+                            // and its omitted channels must equal prepared rest.
+                            ValidateNativeRest(evaluated);
+                    }
+                    foreach (var info in playable.GetCurrentAnimatorClipInfo(layer).Concat(playable.GetNextAnimatorClipInfo(layer)))
+                    {
+                        if (info.clip == null) continue;
+                        if (!NeutralShapeSnapshot.Finite(info.weight) || info.weight < 0)
+                            throw new InvalidOperationException("選択したFXのClip重みが不正なため、Randomの待機表情を保持できません。");
+                        if (info.weight == 0 || !observed.Add(info.clip)) continue;
+                        foreach (var binding in AnimationUtility.GetCurveBindings(info.clip))
+                        {
+                            if (binding.type != typeof(SkinnedMeshRenderer) || !binding.propertyName.StartsWith("blendShape.", StringComparison.Ordinal)) continue;
+                            // A fully explicit prepared-zero facial companion
+                            // cannot become a selected automatic contribution.
+                            // Use the entire effective curve and geometry proof.
+                            if (PreservedMorphs.Contains(binding))
+                            {
+                                if (!geometryComputed) { geometry = FacialProjectionScope.For(avatar, source); geometryComputed = true; }
+                                var curve = AnimationUtility.GetEditorCurve(info.clip, binding);
+                                VrChatGestureExpressions.ReadCurve(curve);
+                                var skin = FindRenderer(avatar, binding.path);
+                                var shape = skin.sharedMesh.GetBlendShapeIndex(binding.propertyName.Substring("blendShape.".Length));
+                                if (geometry?.Morphs.Contains(binding) == true && shape >= 0 && skin.GetBlendShapeWeight(shape) == 0 && curve.length > 0 &&
+                                    IsConstant(curve) && curve.keys[0].value == 0) continue;
+                            }
+                            explicitWriters.Add(binding);
+                        }
+                    }
+                }
+            }
+
+            internal void Validate()
+            {
+                var proved = HeldAutomaticExpressionLayers.FindUnownedRandomRest(avatar, originalRuntime, source,
+                    explicitWriters, normal, out _, selectedInputs);
+                if (!omitted.IsSubsetOf(proved))
+                    throw new InvalidOperationException("選択したFXの表情がRandomを使う待機レイヤーの出力も所有するため、現在のBlendShapeを保持できません。");
+            }
+
+            internal void ValidateNativeRest(GameObject evaluated)
+            {
+                foreach (var binding in PreservedMorphs)
+                {
+                    var name = binding.propertyName.Substring("blendShape.".Length);
+                    var prepared = FindRenderer(avatar, binding.path); var actual = FindRenderer(evaluated, binding.path);
+                    var preparedIndex = prepared.sharedMesh.GetBlendShapeIndex(name); var actualIndex = actual.sharedMesh.GetBlendShapeIndex(name);
+                    if (preparedIndex < 0 || actualIndex < 0)
+                        throw new InvalidOperationException("待機表情のBlendShapeが見つかりません: " + binding.path + " / " + binding.propertyName);
+                    var preparedWeight = prepared.GetBlendShapeWeight(preparedIndex); var actualWeight = actual.GetBlendShapeWeight(actualIndex);
+                    if (!NeutralShapeSnapshot.Finite(preparedWeight) || !NeutralShapeSnapshot.Finite(actualWeight) ||
+                        Math.Abs(preparedWeight - actualWeight) > .01f)
+                        throw new InvalidOperationException("選択したFXの暗黙の出力が待機表情の現在値と一致しません: " + binding.path + " / " + binding.propertyName);
+                }
+            }
+
+            internal void RecordNotice()
+            {
+                if (!source.Messages.Contains(notice)) source.Messages.Add(notice);
+            }
+
+            internal static SelectedRandomRestProbe Create(GameObject avatar, RuntimeAnimatorController runtime,
+                VrChatExpressionMenu.Source source, IDictionary<string, float> selected, FixedExpressionContext normal)
+            {
+                var selectedInputs = new HashSet<string>(selected.Keys, StringComparer.Ordinal);
+                var omitted = HeldAutomaticExpressionLayers.FindUnownedRandomRest(avatar, runtime, source,
+                    new HashSet<EditorCurveBinding>(), normal, out _, selectedInputs);
+                if (omitted.Count == 0) return null;
+                var unknown = new List<string>();
+                var raw = ExpressionDependencies.Inspect(runtime, null,
+                    new Dictionary<StateMachineBehaviour, VrChatParameterDriver.Program>(), unknown, true);
+                var others = source.OtherControllers.Where(value => value != null)
+                    .SelectMany(value => ExpressionDependencies.Inspect(value, null,
+                        new Dictionary<StateMachineBehaviour, VrChatParameterDriver.Program>(), unknown,
+                        typedConditions: true, fxLayerCount: raw.Length)).ToArray();
+                if (unknown.Count != 0) return null;
+                var definitions = ExpressionDependencies.Controller(runtime).layers;
+                var allMorphs = new HashSet<EditorCurveBinding>(raw.Concat(others).SelectMany(layer => layer.Morphs));
+                HashSet<EditorCurveBinding> preserved;
+                var writerLayers = new HashSet<int>();
+                while (true)
+                {
+                    var changed = new HashSet<string>(selectedInputs, StringComparer.Ordinal);
+                    var writers = new HashSet<EditorCurveBinding>();
+                    var controlled = new HashSet<int>();
+                    writerLayers.Clear();
+                    bool added;
+                    do
+                    {
+                        added = false;
+                        for (var index = 0; index < raw.Length; index++)
+                        {
+                            var layer = raw[index];
+                            if (omitted.Contains(index) || !controlled.Contains(index) && !layer.Reads.Overlaps(changed)) continue;
+                            foreach (var name in layer.Writes) added |= changed.Add(name);
+                            writerLayers.Add(index);
+                            if (layer.WriteDefaults || definitions[index].syncedLayerIndex >= 0 && layer.EmptyMotion && layer.Morphs.Count > 0 ||
+                                definitions[index].blendingMode == AnimatorLayerBlendingMode.Additive && layer.HasBindings)
+                                writers.UnionWith(allMorphs);
+                            foreach (var command in layer.WeightControls.Values.Where(control => control.Playable == "FX"))
+                                if (command.AnimatorLayer) added |= controlled.Add(command.LayerIndex);
+                                else writers.UnionWith(allMorphs);
+                        }
+                        foreach (var layer in others.Where(layer => layer.Reads.Overlaps(changed)))
+                        {
+                            foreach (var name in layer.Writes) added |= changed.Add(name);
+                            writers.UnionWith(layer.Morphs);
+                            if (layer.WriteDefaults || layer.EmptyMotion && layer.Morphs.Count > 0 ||
+                                layer.WeightControls.Values.Any(control => control.Playable == "FX"))
+                                writers.UnionWith(allMorphs);
+                        }
+                    } while (added);
+                    var accepted = HeldAutomaticExpressionLayers.FindUnownedRandomRest(avatar, runtime, source,
+                        writers, normal, out preserved, selectedInputs);
+                    // Additional playable morph streams have no replacement
+                    // proof here, even when their raw branch is currently idle.
+                    accepted.RemoveWhere(index => others.Any(layer => layer.Morphs.Overlaps(raw[index].Morphs)));
+                    accepted.IntersectWith(omitted);
+                    if (accepted.SetEquals(omitted)) break;
+                    omitted = accepted;
+                    if (omitted.Count == 0) return null;
+                }
+                preserved = new HashSet<EditorCurveBinding>(omitted.SelectMany(index => raw[index].Morphs));
+                var probe = new SelectedRandomRestProbe { PreservedMorphs = preserved, originalRuntime = runtime,
+                    source = source, avatar = avatar, normal = normal, selectedInputs = selectedInputs,
+                    omitted = omitted, writerLayers = writerLayers };
+                try
+                {
+                    var original = ExpressionDependencies.Controller(runtime);
+                    var controller = new AnimatorController { name = original.name, hideFlags = HideFlags.HideAndDontSave };
+                    probe.owned.Add(controller);
+                    controller.parameters = original.parameters.Select(parameter => new AnimatorControllerParameter
+                    {
+                        name = parameter.name, type = parameter.type, defaultBool = parameter.defaultBool,
+                        defaultInt = parameter.defaultInt, defaultFloat = parameter.defaultFloat
+                    }).ToArray();
+                    var layers = original.layers;
+                    foreach (var index in omitted)
+                    {
+                        var machine = new AnimatorStateMachine { name = layers[index].name, hideFlags = HideFlags.HideAndDontSave };
+                        probe.owned.Add(machine);
+                        var idle = machine.AddState("Prepared independent rest"); probe.owned.Add(idle);
+                        idle.writeDefaultValues = false; machine.defaultState = idle;
+                        layers[index] = new AnimatorControllerLayer { name = layers[index].name, stateMachine = machine,
+                            defaultWeight = 0, syncedLayerIndex = -1, blendingMode = AnimatorLayerBlendingMode.Override };
+                    }
+                    controller.layers = layers; probe.Runtime = controller;
+                    var replacements = ExpressionDependencies.Overrides(runtime);
+                    if (replacements.Count > 0)
+                    {
+                        var overrides = new AnimatorOverrideController(controller) { hideFlags = HideFlags.HideAndDontSave };
+                        probe.owned.Add(overrides);
+                        var pairs = new List<KeyValuePair<AnimationClip, AnimationClip>>(); overrides.GetOverrides(pairs);
+                        for (var index = 0; index < pairs.Count; index++)
+                            if (replacements.TryGetValue(pairs[index].Key, out var replacement))
+                                pairs[index] = new KeyValuePair<AnimationClip, AnimationClip>(pairs[index].Key, replacement);
+                        overrides.ApplyOverrides(pairs); probe.Runtime = overrides;
+                    }
+                    probe.notice = ExporterLocalization.T("Randomを使う独立した待機アニメーションは実行せず、選択した表情が所有しないBlendShapeの現在値を保持しました: ") +
+                        string.Join(", ", omitted.OrderBy(index => index).Select(index => original.layers[index].name));
+                    return probe;
+                }
+                catch { probe.Dispose(); throw; }
+            }
+
+            public void Dispose()
+            {
+                for (var index = owned.Count - 1; index >= 0; index--)
+                    if (owned[index] != null) UnityEngine.Object.DestroyImmediate(owned[index]);
             }
         }
 
@@ -1261,6 +1517,13 @@ namespace VRVlog.LilToonExporter
             for (var layer = 0; layer < layers.Length; layer++)
             {
                 if (excludedLayers.Contains(layer)) continue;
+                // Only complete constant-motion control proofs may use their
+                // observed invariant signals in the future-edge check. Native
+                // settled-control validation runs before this selected guard;
+                // unrelated timed expression layers keep their existing proof.
+                var layerTimedValues = !neutral && dependencies?.RequireSettledWeightControls == true &&
+                    dependencies.WeightControlLayers.Contains(layer) ?
+                    NeutralCurveConditions.FixedTimedValues(playable, controller, timedValues, dependencies, null) : timedValues;
                 if (layer > 0 && playable.GetLayerWeight(layer) <= 0.00001f && dependencies?.WeightControlLayers.Contains(layer) != true) continue;
                 if (playable.IsInTransition(layer) && equivalentStates?.Contains(layer) != true)
                     throw Unstable("FXの状態遷移が静止していません。");
@@ -1270,7 +1533,7 @@ namespace VRVlog.LilToonExporter
                 var fixedMotionTime = false;
                 void Visit(AnimatorStateMachine machine, string path, bool timedAncestor)
                 {
-                    var timed = timedAncestor || machine.anyStateTransitions.Any(t => !t.mute && t.hasExitTime && !ExpressionDependencies.IsFalse(t, timedValues));
+                    var timed = timedAncestor || machine.anyStateTransitions.Any(t => !t.mute && t.hasExitTime && !ExpressionDependencies.IsFalse(t, layerTimedValues));
                     foreach (var child in machine.states)
                     {
                         if (Animator.StringToHash(path + "." + child.state.name) != hash) continue;
@@ -1306,7 +1569,7 @@ namespace VRVlog.LilToonExporter
                             CheckControlMotion(child.state.motion);
                         }
                         if (equivalentStates?.Contains(layer) != true && (timed || child.state.transitions.Any(t =>
-                            !t.mute && t.hasExitTime && !ExpressionDependencies.IsFalse(t, timedValues))))
+                            !t.mute && t.hasExitTime && !ExpressionDependencies.IsFalse(t, layerTimedValues))))
                             throw Unstable("時間で遷移するFX状態は固定表情に変換できません: " + path + "." + child.state.name);
                     }
                     foreach (var child in machine.stateMachines) Visit(child.stateMachine, path + "." + child.stateMachine.name, timed);

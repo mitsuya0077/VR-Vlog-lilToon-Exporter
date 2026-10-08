@@ -151,7 +151,7 @@ namespace VRVlog.LilToonExporter
                 // their boundary. Never use deformation names or a distance
                 // tolerance to turn an accessory into connected facial mesh.
                 var seams = components.Select(_ => new HashSet<int>()).ToArray();
-                var edgeOwners = new Dictionary<(Vector3, Vector3), List<int>>();
+                var edgeOwners = new Dictionary<(float, float, float, float, float, float), List<int>>();
                 bool FinitePoint(Vector3 point) => NeutralShapeSnapshot.Finite(point.x) &&
                     NeutralShapeSnapshot.Finite(point.y) && NeutralShapeSnapshot.Finite(point.z);
                 int Compare(Vector3 a, Vector3 b)
@@ -164,9 +164,10 @@ namespace VRVlog.LilToonExporter
                     {
                         if (vertex >= neighbour || nonHeadBoundary[vertex] || nonHeadBoundary[neighbour]) continue;
                         var first = vertices[vertex]; var second = vertices[neighbour];
-                        if (!FinitePoint(first) || !FinitePoint(second) || first.Equals(second)) continue;
+                        if (!FinitePoint(first) || !FinitePoint(second) ||
+                            first.x == second.x && first.y == second.y && first.z == second.z) continue;
                         if (Compare(first, second) > 0) (first, second) = (second, first);
-                        var key = (first, second); var index = componentAt[vertex];
+                        var key = (first.x, first.y, first.z, second.x, second.y, second.z); var index = componentAt[vertex];
                         if (!edgeOwners.TryGetValue(key, out var owners)) edgeOwners.Add(key, new List<int> { index });
                         else if (!owners.Contains(index))
                         {
