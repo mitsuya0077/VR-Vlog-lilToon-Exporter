@@ -17,6 +17,8 @@ namespace VRVlog.LilToonExporter
         private string lastSavedPath, lastSavedSummary;
         private string[] lastSavedWarnings = Array.Empty<string>();
         private bool showAppearanceOptions;
+        [SerializeField] private AvatarLicenseOptions licenseOptions = new AvatarLicenseOptions();
+        [SerializeField] private bool showLicenseSettings;
         private bool showEnvironment;
         private bool showBlink;
         private BlinkExportOptions blinkOptions = new BlinkExportOptions();
@@ -113,6 +115,7 @@ namespace VRVlog.LilToonExporter
                 includedGimmicks.Clear();
                 gimmickFindings.Clear();
                 InvalidateAvatarScan();
+                licenseOptions = new AvatarLicenseOptions();
             }
             avatar = selectedAvatar;
             EditorGUILayout.LabelField(ExporterLocalization.T("Hierarchyからアバターを指定"), hintStyle);
@@ -157,6 +160,10 @@ namespace VRVlog.LilToonExporter
                 if (EditorGUI.EndChangeCheck()) InvalidateAvatarScan();
                 if (GUILayout.Button(ExporterLocalization.T("除外するオブジェクトを追加"))) { excludedObjects.Add(null); InvalidateAvatarScan(); }
             }
+
+            EditorGUILayout.Space(8f);
+            if (licenseOptions == null) licenseOptions = new AvatarLicenseOptions();
+            AvatarLicenseSettingsUi.Draw(ref showLicenseSettings, licenseOptions);
 
             EditorGUILayout.Space(14f);
             var canExport = avatar != null && !string.IsNullOrWhiteSpace(author);
@@ -418,6 +425,7 @@ namespace VRVlog.LilToonExporter
             var targetOutput = outputPath;
             var targetBlink = blinkOptions.Copy();
             var targetPoses = poseOptions.Copy();
+            var targetLicense = licenseOptions.Copy();
             var targetExclusions = excludedObjects.ToArray();
             var targetGimmicks = new ExportGimmickOptions { AutoExclude = autoExcludeGimmicks, IncludedObjects = includedGimmicks.ToArray() };
             if (File.Exists(targetOutput) && !EditorUtility.DisplayDialog(
@@ -436,7 +444,7 @@ namespace VRVlog.LilToonExporter
                     if (targetAvatar == null) throw new InvalidOperationException(ExporterLocalization.T("この書き出しで選んだアバターが見つかりません。アバターを指定し直してください。"));
                     return UniVrmOneClickExporter.Export(targetAvatar, targetName, targetAuthor, warnings, false,
                         PackageVersion(), RequireSupportedLilToon(), false, targetExclusions, null, targetGimmicks, targetBlink, targetPoses,
-                        recoveryOptions: options, recoveryReport: report);
+                        recoveryOptions: options, recoveryReport: report, licenseOptions: targetLicense);
                 }, ExportCompleted, targetExclusions, targetGimmicks);
                 if (session != null) ExportFailureWindow.Show(session, Completed);
             }
@@ -499,7 +507,7 @@ namespace VRVlog.LilToonExporter
         private static string PackageVersion()
         {
             var info = PackageManagerPackageInfo.FindForAssembly(typeof(LilToonExporterWindow).Assembly);
-            return info != null && !string.IsNullOrWhiteSpace(info.version) ? info.version : "0.11.11-beta.17";
+            return info != null && !string.IsNullOrWhiteSpace(info.version) ? info.version : "0.11.11-beta.16";
         }
 
         private static string InstalledLilToonStatus()

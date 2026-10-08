@@ -16,14 +16,14 @@ namespace VRVlog.LilToonExporter
         public static byte[] Export(GameObject source, string avatarName, string author, ICollection<string> warnings = null, bool suppressSharedTextureEmission = false,
             string exporterVersion = null, string lilToonVersion = null, bool suppressHdrTextureEmission = false,
             IEnumerable<GameObject> excludedObjects = null, MaterialBakeOptions bakeOptions = null, ExportGimmickOptions gimmickOptions = null, BlinkExportOptions blinkOptions = null, PoseExportOptions poseOptions = null,
-            ExportRecoveryOptions recoveryOptions = null, ExportRecoveryReport recoveryReport = null)
+            ExportRecoveryOptions recoveryOptions = null, ExportRecoveryReport recoveryReport = null, AvatarLicenseOptions licenseOptions = null)
         {
             var report = recoveryReport ?? new ExportRecoveryReport();
             report.Begin();
             try
             {
                 var bytes = ExportCore(source, avatarName, author, warnings, suppressSharedTextureEmission, exporterVersion, lilToonVersion,
-                    suppressHdrTextureEmission, excludedObjects, bakeOptions, gimmickOptions, blinkOptions, poseOptions, recoveryOptions, report);
+                    suppressHdrTextureEmission, excludedObjects, bakeOptions, gimmickOptions, blinkOptions, poseOptions, recoveryOptions, report, licenseOptions?.Copy());
                 report.Stage = "完了";
                 report.Succeeded = true;
                 return bytes;
@@ -40,7 +40,7 @@ namespace VRVlog.LilToonExporter
         static byte[] ExportCore(GameObject source, string avatarName, string author, ICollection<string> warnings, bool suppressSharedTextureEmission,
             string exporterVersion, string lilToonVersion, bool suppressHdrTextureEmission, IEnumerable<GameObject> excludedObjects,
             MaterialBakeOptions bakeOptions, ExportGimmickOptions gimmickOptions, BlinkExportOptions blinkOptions, PoseExportOptions poseOptions,
-            ExportRecoveryOptions recoveryOptions, ExportRecoveryReport recoveryReport)
+            ExportRecoveryOptions recoveryOptions, ExportRecoveryReport recoveryReport, AvatarLicenseOptions licenseOptions)
         {
             if (source == null) throw new ArgumentNullException(nameof(source));
             // Cloning detaches the avatar from its parents. Reject an inactive
@@ -220,7 +220,7 @@ namespace VRVlog.LilToonExporter
                     clone,
                     materialExporter: new BuiltInVrm10MaterialExporter(),
                     textureSerializer: new MobileTextureSerializer(warnings),
-                    vrmMeta: CreateMeta(avatarName.Trim(), author.Trim()),
+                    vrmMeta: CreateMeta(avatarName.Trim(), author.Trim(), licenseOptions),
                     afterExport: (converter, model, storage) =>
                     {
                         fullSnapshot?.Bind(converter, model, storage);
@@ -328,18 +328,20 @@ namespace VRVlog.LilToonExporter
             Compatibility.DependencyPolicy.RequireUniVrm(package?.version, gltf?.version);
         }
 
-        private static VRM10ObjectMeta CreateMeta(string avatarName, string author)
+        internal static VRM10ObjectMeta CreateMeta(string avatarName, string author, AvatarLicenseOptions licenseOptions = null)
         {
             // Build disclosure-sensitive metadata from the fields shown in this
             // export window. Never copy contact information, references,
             // thumbnails, or license settings from an imported VRM implicitly.
-            return new VRM10ObjectMeta
+            var meta = new VRM10ObjectMeta
             {
                 Name = avatarName,
                 Version = "1.0",
                 Authors = new List<string> { author },
                 Redistribution = false,
             };
+            licenseOptions?.ApplyTo(meta);
+            return meta;
         }
 
         private static Dictionary<Material, Material> ReplaceLilToonMaterials(GameObject clone, List<Material> created, List<Texture2D> textures, ICollection<string> warnings, bool suppressSharedTextureEmission)
