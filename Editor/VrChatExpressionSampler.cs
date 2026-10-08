@@ -756,6 +756,7 @@ namespace VRVlog.LilToonExporter
             private HashSet<int> omitted, writerLayers;
             private readonly HashSet<AnimationClip> observed = new HashSet<AnimationClip>();
             private readonly HashSet<EditorCurveBinding> explicitWriters = new HashSet<EditorCurveBinding>();
+            private int validatedWriterCount = -1;
             private string notice;
             private FacialProjectionScope geometry;
             private bool geometryComputed;
@@ -839,10 +840,16 @@ namespace VRVlog.LilToonExporter
 
             internal void Validate()
             {
+                // The original graph, normal inputs and selection are fixed
+                // throughout this probe. This set only grows when native clip
+                // history reveals a new writer; re-prove that expanded domain.
+                // Native rest, state and weight checks still run every time.
+                if (validatedWriterCount == explicitWriters.Count) return;
                 var proved = HeldAutomaticExpressionLayers.FindUnownedRandomRest(avatar, originalRuntime, source,
                     explicitWriters, normal, out _, selectedInputs);
                 if (!omitted.IsSubsetOf(proved))
                     throw new InvalidOperationException("選択したFXの表情がRandomを使う待機レイヤーの出力も所有するため、現在のBlendShapeを保持できません。");
+                validatedWriterCount = explicitWriters.Count;
             }
 
             internal void ValidateNativeRest(GameObject evaluated)
