@@ -118,7 +118,7 @@ namespace VRVlog.LilToonExporter.LanTransfer
             using (var scrolling = new EditorGUILayout.ScrollViewScope(scroll))
             {
                 scroll = scrolling.scrollPosition;
-                EditorGUILayout.HelpBox("アバターをクラウドに一時保存し、スマホへ転送します。受取期限は転送作成時から3分です。アップロード中も期限が進みます。完了・中止・期限切れで転送用コピーを削除します。", MessageType.Info);
+                EditorGUILayout.HelpBox("アバターをPCで暗号化してからクラウドに一時保存し、スマホで復号します。復号鍵はQRにだけ含まれ、転送サービスには送りません。受取期限は転送作成時から3分です。アップロード中も期限が進みます。完了・中止・期限切れで暗号化コピーを削除します。", MessageType.Info);
                 EditorGUILayout.LabelField(source?.Name ?? "Exporterの「スマホに送る」でVRMを書き出してください。", EditorStyles.wordWrappedLabel);
                 EditorGUILayout.HelpBox("PCとスマホにインターネット接続が必要です。同じWi-Fiは不要です。QRを持つ人はアバターを受け取れるため、共有・撮影しないでください。スマホではVR Vlog内のカメラで読み取ります。", MessageType.None);
                 if (!string.IsNullOrEmpty(error)) EditorGUILayout.HelpBox(error, MessageType.Error);
@@ -131,7 +131,7 @@ namespace VRVlog.LilToonExporter.LanTransfer
                     if (session.State == CloudTransferState.Uploading && source != null)
                     {
                         var rect = EditorGUILayout.GetControlRect(false, 20);
-                        EditorGUI.ProgressBar(rect, (float)session.Transferred / source.Size, session.Transferred.ToString("N0") + " / " + source.Size.ToString("N0") + " バイト");
+                        EditorGUI.ProgressBar(rect, (float)session.Transferred / Math.Max(1, session.UploadSize), session.Transferred.ToString("N0") + " / " + session.UploadSize.ToString("N0") + " バイト（暗号化済み）");
                     }
                     if (!session.Terminal && session.ExpiresAt != 0)
                         EditorGUILayout.LabelField("残り時間", Math.Max(0, session.ExpiresAt - DateTimeOffset.UtcNow.ToUnixTimeSeconds()) + " 秒");

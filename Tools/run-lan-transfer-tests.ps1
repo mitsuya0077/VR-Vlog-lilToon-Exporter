@@ -25,6 +25,7 @@ $sources = @(
     (Join-Path $repoRoot 'Editor/LanTransfer/LanTransferProtocol.cs'),
     (Join-Path $repoRoot 'Editor/LanTransfer/LanVrmTransferServer.cs'),
     (Join-Path $repoRoot 'Editor/LanTransfer/CloudTransferProtocol.cs'),
+    (Join-Path $repoRoot 'Editor/LanTransfer/CloudTransferEncryption.cs'),
     (Join-Path $repoRoot 'Editor/LanTransfer/CloudVrmTransferSession.cs'),
     (Join-Path $repoRoot 'Tests/LanTransfer/LanTransferTests.cs'),
     (Join-Path $repoRoot 'Tests/LanTransfer/CloudTransferTests.cs'),

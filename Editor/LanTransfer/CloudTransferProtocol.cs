@@ -24,21 +24,23 @@ namespace VRVlog.LilToonExporter.LanTransfer
             return true;
         }
 
-        internal static bool IsToken(string value)
+        internal static bool IsToken(string value) => IsBase64Url(value, 32);
+        internal static bool IsKey(string value) => IsBase64Url(value, 64);
+        private static bool IsBase64Url(string value, int bytes)
         {
-            if (value == null || value.Length != 43) return false;
+            if (value == null || value.Length != (bytes * 8 + 5) / 6) return false;
             foreach (var c in value) if (!(c >= 'a' && c <= 'z' || c >= 'A' && c <= 'Z' || c >= '0' && c <= '9' || c == '-' || c == '_')) return false;
-            try { return LanTransferProtocol.Base64Url(Convert.FromBase64String(value.Replace('-', '+').Replace('_', '/') + "=")) == value; }
+            try { return LanTransferProtocol.Base64Url(Convert.FromBase64String(value.Replace('-', '+').Replace('_', '/') + (bytes == 64 ? "==" : "="))) == value; }
             catch (FormatException) { return false; }
         }
 
         internal static string CreateBody(string name, long size, string hash) =>
             "{\"name\":" + LanTransferProtocol.JsonString(name) + ",\"size\":" + size.ToString(CultureInfo.InvariantCulture) + ",\"sha256\":" + LanTransferProtocol.JsonString(hash) + "}";
 
-        internal static string Qr(string id, string token, string name, long size, string hash, long expiresAt) =>
-            LanTransferProtocol.QrPrefix + "{\"v\":2,\"id\":" + LanTransferProtocol.JsonString(id) + ",\"token\":" + LanTransferProtocol.JsonString(token)
+        internal static string Qr(string id, string token, string name, long size, string hash, long expiresAt, string key) =>
+            LanTransferProtocol.QrPrefix + "{\"v\":3,\"id\":" + LanTransferProtocol.JsonString(id) + ",\"token\":" + LanTransferProtocol.JsonString(token)
             + ",\"name\":" + LanTransferProtocol.JsonString(name) + ",\"size\":" + size.ToString(CultureInfo.InvariantCulture)
-            + ",\"sha256\":" + LanTransferProtocol.JsonString(hash) + ",\"expiresAt\":" + expiresAt.ToString(CultureInfo.InvariantCulture) + "}";
+            + ",\"sha256\":" + LanTransferProtocol.JsonString(hash) + ",\"expiresAt\":" + expiresAt.ToString(CultureInfo.InvariantCulture) + ",\"key\":" + LanTransferProtocol.JsonString(key) + "}";
 
         // The service contract is a bounded flat JSON object. Reject duplicate
         // fields, arrays, nested objects and number coercions before using it.
