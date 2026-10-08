@@ -1,14 +1,14 @@
 """Build the Unity package from an explicit allowlist of tracked files."""
 import argparse
-import hashlib
 import json
+import re
 import subprocess
 import zipfile
 from pathlib import Path, PurePosixPath
 
 ROOT = Path(__file__).resolve().parents[1]
-ROOT_FILES = {"package.json", "LICENSE", "CHANGELOG.md", "Documentation~/README.md", "Documentation~/LanTransfer.md",
-              "Documentation~/CloudTransfer.md", "Documentation~/HumanoidPoses.md", "Documentation~/HumanoidAnimations.md"}
+ROOT_FILES = {"package.json", "LICENSE", "CHANGELOG.md", "Documentation~/README.md",
+              "Documentation~/HumanoidPoses.md", "Documentation~/HumanoidAnimations.md"}
 DEPENDENCY_PATCH_FILES = {
     "Tools/patch-aao-vertex-buffer.py", "Tools/patch-aao-vertex-buffer.py.meta",
     "Documentation~/DependencyPatches/README.md",
@@ -21,10 +21,17 @@ LOCALE_ASSETS = {
     for locale in ("en", "ko", "zh-Hans", "zh-Hant")
 }
 LOCALE_FILES = LOCALE_ASSETS | {name + ".meta" for name in LOCALE_ASSETS}
-PINNED_DLLS = {
-    "Editor/LanTransfer/Dependencies/BouncyCastle.Cryptography.dll": "d61c1f2ba929a230a58e101ccd850e21f2675fa6b9814ec279633e8a089c3495",
-    "Editor/LanTransfer/Dependencies/zxing.dll": "f3b823b6fd6492525a7547989056883def5d43be1e12c4f63fa54df73e3c5cfc",
+TRANSFER_FILES = {
+    "Editor/LanTransfer.meta",
+    "Documentation~/LanTransfer.md", "Documentation~/CloudTransfer.md",
+    "ThirdPartyNotices/LanTransfer.md", "ThirdPartyNotices/BouncyCastle-LICENSE.txt", "ThirdPartyNotices/ZXing-LICENSE.txt",
 }
+TRANSFER_DLLS = {"bouncycastle.cryptography.dll", "zxing.dll"}
+# Source and host tests retain the unreleased implementation. Distribution must
+# also fail if a caller or copied implementation is added outside that subtree.
+TRANSFER_REFERENCE = re.compile(
+    r"\b(?:LanTransfer\w*|CloudTransfer\w*|(?:Cloud|Lan)VrmTransfer\w*|CloudEncryptedSnapshot|ZXing|BouncyCastle)\b"
+    r"|\b(?:GUID:)?b15e228f27f843bdbdd4c2335be4354b\b", re.IGNORECASE)
 
 
 def tracked_files(root):
@@ -36,27 +43,34 @@ def included(name):
     path = PurePosixPath(name)
     if path.is_absolute() or ".." in path.parts:
         return False
+    if (name.startswith("Editor/LanTransfer/") or name in TRANSFER_FILES
+            or name.removesuffix(".meta") in TRANSFER_FILES
+            or path.name.lower().removesuffix(".meta") in TRANSFER_DLLS):
+        return False
     return (name in ROOT_FILES or name in LOCALE_FILES or name in DEPENDENCY_PATCH_FILES
-            or name in PINNED_DLLS or name == "Runtime.meta"
+            or name == "Runtime.meta"
             or (path.parts[0] in {"Editor", "Runtime"} and path.suffix in PACKAGE_SUFFIXES)
             or (path.parts[0] == "ThirdPartyNotices" and path.suffix in {".md", ".txt"}))
 
 
-def verify_lan_dependencies(contents):
-    assembly = "Editor/LanTransfer/VRVlog.LanTransfer.Editor.asmdef"
-    referenced = b'"VRVlog.LanTransfer.Editor"' in contents.get("Editor/VRVlog.LilToonExporter.Editor.asmdef", b"")
-    if assembly not in contents and not referenced:
-        return
-    if assembly not in contents:
-        raise ValueError("Required LAN transfer assembly is not tracked")
-    for name, expected in PINNED_DLLS.items():
-        if name not in contents or hashlib.sha256(contents[name]).hexdigest() != expected:
-            raise ValueError("Pinned LAN transfer dependency is missing or has a different SHA-256: " + name)
-        if name + ".meta" not in contents:
-            raise ValueError("Pinned LAN transfer dependency is missing its Editor-only importer: " + name)
-    for name in ("ThirdPartyNotices/LanTransfer.md", "ThirdPartyNotices/BouncyCastle-LICENSE.txt", "ThirdPartyNotices/ZXing-LICENSE.txt"):
-        if name not in contents:
-            raise ValueError("Required LAN transfer license/provenance is not tracked: " + name)
+def verify_no_transfer_dependencies(contents):
+    for name, content in contents.items():
+        if (name.startswith("Editor/LanTransfer/") or name in TRANSFER_FILES
+                or name.removesuffix(".meta") in TRANSFER_FILES
+                or PurePosixPath(name).name.lower().removesuffix(".meta") in TRANSFER_DLLS):
+            raise ValueError("QR transfer input cannot be distributed: " + name)
+        if PurePosixPath(name).suffix not in {".cs", ".asmdef"}:
+            continue
+        try:
+            text = content.decode("utf-8-sig")
+        except UnicodeDecodeError as error:
+            raise ValueError("Package source must be UTF-8: " + name) from error
+        # C# identifiers and JSON strings can spell a reference with Unicode
+        # escapes. Normalize those too; report the path, never source contents.
+        text = re.sub(r"\\u([0-9a-fA-F]{4})|\\U([0-9a-fA-F]{8})",
+                      lambda match: chr(int(match[1] or match[2], 16)), text)
+        if TRANSFER_REFERENCE.search(text):
+            raise ValueError("QR transfer dependency cannot be distributed: " + name)
 
 
 def build(root, output):
@@ -77,7 +91,7 @@ def build(root, output):
         if not path.resolve().is_relative_to(root.resolve()):
             raise ValueError("Package input escapes repository: " + name)
         contents[name] = path.read_bytes()
-    verify_lan_dependencies(contents)
+    verify_no_transfer_dependencies(contents)
     if not any(name.startswith("Editor/") and name.endswith(".cs") for name in names):
         raise ValueError("Package has no Editor source")
     output.parent.mkdir(parents=True, exist_ok=True)

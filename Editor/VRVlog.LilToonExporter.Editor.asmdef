@@ -11,8 +11,7 @@
     "VrmLib",
     "Unity.Collections",
     "VRVlog.LilToonExporter.Runtime",
-    "VRVlog.LilToonExporter.Compatibility",
-    "VRVlog.LanTransfer.Editor"
+    "VRVlog.LilToonExporter.Compatibility"
   ],
   "includePlatforms": [
     "Editor"
