@@ -141,6 +141,13 @@ BEHAVIOR_CASES = {
         'AnIdempotentResetDoesNotAuthorizeALaterMalformedNeededOperation': 3,
         'OnlyAnIndependentUnchangedInputCanPruneAConflictingProducer': 2,
         'IdempotenceUsesTheValidatedSdkTypedAndExpressionParameterValue': 3,
+        'SoleDormantResetPreservesTheNativeNeutralAndSelectedExpression': 2,
+        'DormantResetCannotBeAssumedClosedThroughACandidateOrChangingGate': 5,
+        'DormantResetCannotExcuseAnIndependentReachableAdditionalEffect': 3,
+        'SavedOrUnknownCandidateMetadataCannotBeBypassedByAutomaticContext': 8,
+        'SavedOrUnknownGateMetadataCannotBeBypassedByAutomaticContext': 4,
+        'NetworkedResetsRequireAnUnchangedTypedLocalPreview': 9,
+        'SerializedUnsavedSdkInputsAreReadBeforeMenuEvaluationAndSurviveOmission': 2,
     },
     'TemporalNeutralShapeTests': {
         'TemporalRestKeepsPreparedWeightAndReconstructsTheIndependentConstant': 3,

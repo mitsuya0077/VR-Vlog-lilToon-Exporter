@@ -23,6 +23,7 @@ namespace VRVlog.LilToonExporter
                 .Select(parameter => parameter.name), StringComparer.Ordinal);
             var declarations = new Dictionary<string, List<AnimatorControllerParameter>>(StringComparer.Ordinal);
             var raw = new List<ExpressionDependencies.Layer>();
+            var rawAdditionalWrites = new HashSet<string>(StringComparer.Ordinal);
             var unknown = new List<string>();
             foreach (var current in runtimes)
             {
@@ -34,12 +35,15 @@ namespace VRVlog.LilToonExporter
                         declarations.Add(parameter.name, values = new List<AnimatorControllerParameter>());
                     values.Add(parameter);
                 }
-                raw.AddRange(ExpressionDependencies.Inspect(current, null,
+                var inspected = ExpressionDependencies.Inspect(current, null,
                     new Dictionary<StateMachineBehaviour, VrChatParameterDriver.Program>(), unknown, true,
-                    typedConditions: true, fxLayerCount: ExpressionDependencies.Controller(runtime).layers.Length));
+                    typedConditions: true, fxLayerCount: ExpressionDependencies.Controller(runtime).layers.Length);
+                raw.AddRange(inspected);
+                if (current != runtime) rawAdditionalWrites.UnionWith(inspected.SelectMany(layer => layer.Writes));
             }
             if (unknown.Count != 0) return result;
             var written = new HashSet<string>(raw.SelectMany(layer => layer.Writes), StringComparer.Ordinal);
+            var localInput = HasLocalInput(declarations, written, context, selection);
             var initial = new Dictionary<string, float>(StringComparer.Ordinal);
             var invariant = new Dictionary<string, float>(StringComparer.Ordinal);
             foreach (var pair in declarations)
@@ -49,10 +53,11 @@ namespace VRVlog.LilToonExporter
                     type != AnimatorControllerParameterType.Float || values.Any(value => value.type != type) ||
                     values.Any(value => !Default(value).Equals(Default(values[0]))) ||
                     !NeutralShapeSnapshot.Finite(Default(values[0]))) continue;
-                // External producers have no inferred constant. The explicit
-                // export environment must supply their initial input.
-                if ((VrChatParameterDriver.BuiltIn.Contains(name) || source.ExternalParameters.Contains(name)) &&
-                    context?.Values.ContainsKey(name) != true) continue;
+                // Saved values may have been restored before startup. Missing
+                // SDK metadata also cannot certify that an input is transient.
+                // Automatic external-input defaults carry no restored-value
+                // provenance, so they cannot bypass this metadata check.
+                if (!HasKnownInitial(name, type, source, context, localInput)) continue;
                 var value = Default(values[0]);
                 if (source.Defaults.TryGetValue(name, out var supplied)) value = supplied;
                 if (defaults?.TryGetValue(name, out supplied) == true) value = supplied;
@@ -72,22 +77,21 @@ namespace VRVlog.LilToonExporter
                     invariant, typedConditions: true, fxLayerCount: ExpressionDependencies.Controller(runtime).layers.Length));
             if (unknown.Count != 0 || reachable.SelectMany(layer => layer.Clips)
                 .Any(clip => AnimationUtility.GetAnimationEvents(clip).Length != 0)) return result;
-            var otherWrites = new HashSet<string>(runtimes.Skip(1).SelectMany(current =>
-                ExpressionDependencies.Inspect(current, null,
-                    new Dictionary<StateMachineBehaviour, VrChatParameterDriver.Program>(), new List<string>(), true,
-                    invariant, typedConditions: true, fxLayerCount: ExpressionDependencies.Controller(runtime).layers.Length))
-                .SelectMany(layer => layer.Writes), StringComparer.Ordinal);
             var curves = new HashSet<string>(reachable.SelectMany(layer => layer.CurveWrites), StringComparer.Ordinal);
             var programs = reachable.SelectMany(layer => layer.DriverPrograms).Distinct().ToArray();
             if (programs.Any(program => program.Error != null)) return result;
-            foreach (var pair in initial.Where(pair => otherWrites.Contains(pair.Key)))
+            foreach (var pair in initial.Where(pair => rawAdditionalWrites.Contains(pair.Key)))
             {
                 var name = pair.Key;
                 if (!fxParameters.Contains(name) || VrChatParameterDriver.BuiltIn.Contains(name) || curves.Contains(name)) continue;
                 var type = declarations[name][0].type;
                 if (source.ExpressionParameterTypes.TryGetValue(name, out var declaredType) && declaredType != type.ToString()) continue;
                 var operations = programs.SelectMany(program => program.Operations).Where(operation => operation.Destination == name).ToArray();
-                if (operations.Length == 0 || operations.Any(operation => operation.Kind != "Set" || operation.Error != null ||
+                // A sole reset can itself be dormant under an independent
+                // unchanged input. Retain its raw identity for the caller's
+                // broader guard, but require no reachable writer in that case.
+                if (operations.Length == 0 && reachable.Any(layer => layer.Writes.Contains(name)) ||
+                    operations.Any(operation => operation.Kind != "Set" || operation.Error != null ||
                     !SetValue(operation.Value, type, source.ExpressionParameters.Contains(name), out var value) || !value.Equals(pair.Value))) continue;
                 result.Add(name, pair.Value);
             }
@@ -97,6 +101,35 @@ namespace VRVlog.LilToonExporter
         private static float Default(AnimatorControllerParameter parameter) =>
             parameter.type == AnimatorControllerParameterType.Bool ? (parameter.defaultBool ? 1 : 0) :
             parameter.type == AnimatorControllerParameterType.Int ? parameter.defaultInt : parameter.defaultFloat;
+
+        private static bool HasKnownInitial(string name, AnimatorControllerParameterType type,
+            VrChatExpressionMenu.Source source, FixedExpressionContext context, bool localInput)
+        {
+            if (VrChatParameterDriver.BuiltIn.Contains(name)) return context?.Values.ContainsKey(name) == true;
+            if (!source.NeutralInputInventoryComplete) return false;
+            if (source.ExpressionParameters.Contains(name) || source.MenuInputs.Contains(name) ||
+                source.ParameterPersistence.ContainsKey(name) || source.ExpressionParameterTypes.ContainsKey(name))
+            {
+                if (!source.ParameterPersistence.TryGetValue(name, out var persistence) || persistence.Saved ||
+                    !source.ExpressionParameterTypes.TryGetValue(name, out var declaredType) || declaredType != type.ToString() ||
+                    persistence.NetworkSynced && !localInput) return false;
+            }
+            // A complete SDK inventory establishes that a controller-only
+            // input has no persistent expression-parameter producer.
+            return !source.ExternalParameters.Contains(name) || context?.Values.ContainsKey(name) == true;
+        }
+
+        private static bool HasLocalInput(Dictionary<string, List<AnimatorControllerParameter>> declarations,
+            ISet<string> written, FixedExpressionContext context, IDictionary<string, float> selection)
+        {
+            // Networked parameters are locally authored only in this explicit
+            // unchanged local preview. No candidate may certify IsLocal itself.
+            if (written.Contains("IsLocal") || !declarations.TryGetValue("IsLocal", out var values) ||
+                values.Any(value => value.type != AnimatorControllerParameterType.Bool ||
+                    !Default(value).Equals(Default(values[0]))) || context == null || !context.Values.TryGetValue("IsLocal", out var local) ||
+                !local.Equals(1f)) return false;
+            return selection == null || !selection.TryGetValue("IsLocal", out var selected) || selected.Equals(1f);
+        }
 
         private static bool NormalizeInput(float value, AnimatorControllerParameterType type, out float normalized)
         {

@@ -29,6 +29,7 @@ namespace VRVlog.LilToonExporter
             GameObject authoringSource = null, FaceEmoExpressions.BindingSnapshot faceEmoBindings = null)
         {
             var source = VrChatExpressionMenu.Read(avatar, menuPolicy);
+            NeutralInputProof.Read(avatar, source);
             source.FacialProjectionSession = new FacialProjectionScope.Session(avatar);
             try
             {
