@@ -59,7 +59,7 @@ class PackageTests(unittest.TestCase):
         for name in package.ROOT_FILES | package.LOCALE_FILES | {"Editor/Example.cs", "Editor/Example.cs.meta", "Editor/Test.asmdef", "Editor/Example.shader", "Runtime.meta", "Runtime/Tracking.cs", "Runtime/Tracking.cs.meta", "Runtime/Tracking.asmdef", "ThirdPartyNotices/Example.md"}:
             self.write(name, name)
         repository = Path(__file__).resolve().parents[1]
-        for name in package.DEPENDENCY_PATCH_FILES:
+        for name in package.DEPENDENCY_PATCH_FILES | package.TRANSFER_DLL_PATHS:
             path = self.root / name
             path.parent.mkdir(parents=True, exist_ok=True)
             path.write_bytes((repository / name).read_bytes())
@@ -163,7 +163,8 @@ class PackageTests(unittest.TestCase):
             "Editor/LanTransfer.meta",
         } | package.TRANSFER_DLL_PATHS | {name + ".meta" for name in package.TRANSFER_DLL_PATHS}
         for name in inputs:
-            self.write(name, "reviewed cloud transfer input")
+            if name not in package.TRANSFER_DLL_PATHS:
+                self.write(name, "reviewed cloud transfer input")
         self.git("add", ".")
         names = package.build(self.root, self.root / "cloud.zip")
         self.assertTrue(inputs <= set(names))
@@ -185,10 +186,21 @@ class PackageTests(unittest.TestCase):
 
     def test_partial_transfer_dependency_set_is_rejected(self):
         name = sorted(package.TRANSFER_DLL_PATHS)[0]
-        self.write(name, "synthetic dependency")
-        self.git("add", name)
+        self.git("rm", "--cached", name)
         with self.assertRaisesRegex(ValueError, "Both pinned transfer DLLs"):
             package.build(self.root, self.root / "invalid.zip")
+
+    def test_both_missing_or_modified_transfer_dlls_are_rejected(self):
+        for name in package.TRANSFER_DLL_PATHS:
+            original = (self.root / name).read_bytes()
+            self.write(name, "unexpected executable bytes")
+            with self.assertRaisesRegex(ValueError, "Pinned transfer DLL hash mismatch"):
+                package.build(self.root, self.root / "modified.zip")
+            (self.root / name).write_bytes(original)
+        for name in package.TRANSFER_DLL_PATHS:
+            self.git("rm", "--cached", name)
+        with self.assertRaisesRegex(ValueError, "Both pinned transfer DLLs"):
+            package.build(self.root, self.root / "missing.zip")
 
     def test_unreadable_shipped_source_cannot_bypass_transfer_verification(self):
         name = "Editor/Unexpected.cs"

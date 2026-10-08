@@ -1,5 +1,6 @@
 """Build the Unity package from an explicit allowlist of tracked files."""
 import argparse
+import hashlib
 import json
 import re
 import subprocess
@@ -23,10 +24,11 @@ LOCALE_ASSETS = {
 }
 LOCALE_FILES = LOCALE_ASSETS | {name + ".meta" for name in LOCALE_ASSETS}
 TRANSFER_DLLS = {"bouncycastle.cryptography.dll", "zxing.dll"}
-TRANSFER_DLL_PATHS = {
-    "Editor/LanTransfer/Dependencies/BouncyCastle.Cryptography.dll",
-    "Editor/LanTransfer/Dependencies/zxing.dll",
+TRANSFER_DLL_HASHES = {
+    "Editor/LanTransfer/Dependencies/BouncyCastle.Cryptography.dll": "d61c1f2ba929a230a58e101ccd850e21f2675fa6b9814ec279633e8a089c3495",
+    "Editor/LanTransfer/Dependencies/zxing.dll": "f3b823b6fd6492525a7547989056883def5d43be1e12c4f63fa54df73e3c5cfc",
 }
+TRANSFER_DLL_PATHS = set(TRANSFER_DLL_HASHES)
 
 
 def tracked_files(root):
@@ -55,8 +57,11 @@ def verify_transfer_dependencies(contents):
             except UnicodeDecodeError as error:
                 raise ValueError("Package source must be UTF-8: " + name) from error
     present = TRANSFER_DLL_PATHS & set(contents)
-    if present and present != TRANSFER_DLL_PATHS:
+    if present != TRANSFER_DLL_PATHS:
         raise ValueError("Both pinned transfer DLLs must be included")
+    for name, expected in TRANSFER_DLL_HASHES.items():
+        if hashlib.sha256(contents[name]).hexdigest() != expected:
+            raise ValueError("Pinned transfer DLL hash mismatch: " + name)
 
 
 def build(root, output):
