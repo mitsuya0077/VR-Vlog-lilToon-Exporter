@@ -306,6 +306,14 @@ namespace VRVlog.LilToonExporter
                     !dependency.WeightControls.Values.Any(control => control.AnimatorLayer && control.Playable == "FX" &&
                         (dependencies[control.LayerIndex].Morphs.Count > 0 || dependencies[control.LayerIndex].Writes.Overlaps(faceInputs))))
                     continue;
+                // A complete layer inventory includes transition conditions,
+                // ancestor routes, driver sources, tree controls and clocks.
+                // Without a selectable read, neither route conditions nor a
+                // motion point can supply a candidate assignment. Avoid walking
+                // that readonly graph before the same candidate eligibility
+                // check below; dense automatic graphs must not consume the
+                // budget needed to discover an independent authored face.
+                if (!dependency.Reads.Any(Selectable)) continue;
                 var origin = layer;
                 var sync = new HashSet<int>();
                 while (layers[origin].syncedLayerIndex >= 0)
@@ -395,6 +403,28 @@ namespace VRVlog.LilToonExporter
                     .GroupBy(edge => edge.Transition.destinationState).ToDictionary(group => group.Key, group => group.ToArray());
                 var exits = edges.Where(edge => edge.Transition.isExit)
                     .GroupBy(edge => edge.Owner).ToDictionary(group => group.Key, group => group.ToArray());
+                var gateQueries = new Dictionary<string, Constraint[][]>(StringComparer.Ordinal);
+                IEnumerable<Constraint[]> RememberGates(string kind, UnityEngine.Object node,
+                    HashSet<UnityEngine.Object> stack, Func<IEnumerable<Constraint[]>> compute)
+                {
+                    Visit();
+                    // Recursive eligibility depends on the complete visited
+                    // set, including individual Exit edges. A state-only cache
+                    // would mix distinct historical entry/exit restrictions.
+                    var key = kind + "/" + node.GetInstanceID() + "/" +
+                        string.Join(",", stack.Select(value => value.GetInstanceID()).OrderBy(value => value));
+                    if (!gateQueries.TryGetValue(key, out var values))
+                    {
+                        var pendingGates = new List<Constraint[]>();
+                        foreach (var gate in compute())
+                        {
+                            Visit(); // Also bound materialized cached routes.
+                            pendingGates.Add(gate);
+                        }
+                        values = pendingGates.ToArray(); gateQueries.Add(key, values);
+                    }
+                    foreach (var gate in values) yield return gate;
+                }
                 Constraint[] Append(Constraint[] gate, IEnumerable<AnimatorCondition> conditions) => gate.Concat(
                     conditions.Select(condition => new Constraint { Condition = condition })).ToArray();
                 var priorityRoot = new PriorityPrefix { Alternatives = new[] { Array.Empty<Constraint>() } };
@@ -483,8 +513,9 @@ namespace VRVlog.LilToonExporter
                         foreach (var fallback in Fallthrough(gate, Enabled(machine.entryTransitions))) yield return fallback;
                 }
                 IEnumerable<Constraint[]> ExitGates(AnimatorStateMachine machine, HashSet<UnityEngine.Object> stack)
+                    => RememberGates("exit", machine, stack, () => ComputeExitGates(machine, stack));
+                IEnumerable<Constraint[]> ComputeExitGates(AnimatorStateMachine machine, HashSet<UnityEngine.Object> stack)
                 {
-                    Visit();
                     if (!exits.TryGetValue(machine, out var entries)) yield break;
                     foreach (var entry in entries)
                     {
@@ -503,8 +534,9 @@ namespace VRVlog.LilToonExporter
                     }
                 }
                 IEnumerable<Constraint[]> Gates(AnimatorStateMachine machine, HashSet<UnityEngine.Object> stack)
+                    => RememberGates("machine", machine, stack, () => ComputeMachineGates(machine, stack));
+                IEnumerable<Constraint[]> ComputeMachineGates(AnimatorStateMachine machine, HashSet<UnityEngine.Object> stack)
                 {
-                    Visit();
                     if (stack.Count >= MaximumDepth)
                         throw new InvalidOperationException("FXの条件経路が深すぎるため、自動表情探索を完全に完了できません。");
                     if (!stack.Add(machine)) yield break;
@@ -519,8 +551,9 @@ namespace VRVlog.LilToonExporter
                     finally { stack.Remove(machine); }
                 }
                 IEnumerable<Constraint[]> StateGates(AnimatorState state, HashSet<UnityEngine.Object> stack)
+                    => RememberGates("state", state, stack, () => ComputeStateGates(state, stack));
+                IEnumerable<Constraint[]> ComputeStateGates(AnimatorState state, HashSet<UnityEngine.Object> stack)
                 {
-                    Visit();
                     if (stack.Count >= MaximumDepth)
                         throw new InvalidOperationException("FXの条件経路が深すぎるため、自動表情探索を安全に完了できません。");
                     if (!stack.Add(state)) yield break;

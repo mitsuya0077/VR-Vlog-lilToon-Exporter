@@ -142,6 +142,22 @@ namespace VRVlog.LilToonExporter.Tests
             Control(normal, weight: 1); Control(mmd, weight: 0);
         }
 
+        private static void UnitFxWithDormantStation(AnimatorController target)
+        {
+            target.AddParameter("InStation", AnimatorControllerParameterType.Bool);
+            var machine = target.layers[0].stateMachine;
+            Control(machine.defaultState, global: true, weight: 1);
+            var station = State(machine, "Station FX zero", Clip(target, "Station"));
+            Control(station, global: true, weight: 0);
+            Transition(machine.defaultState, station, "InStation", AnimatorConditionMode.If, 0);
+        }
+
+        private static void FiniteTiming(AnimatorStateTransition transition, bool fixedDuration)
+        {
+            transition.hasExitTime = true; transition.exitTime = .9f;
+            transition.duration = .1f; transition.hasFixedDuration = fixedDuration;
+        }
+
         private Dictionary<Object, string> CaptureAssets() => AssetDatabase.LoadAllAssetsAtPath(folder + "/FX.controller")
             .Concat(new Object[] { mesh, descriptor }).ToDictionary(value => value, value => EditorJsonUtility.ToJson(value));
 
@@ -173,7 +189,9 @@ namespace VRVlog.LilToonExporter.Tests
             AssertSourceUnchanged(before);
         }
 
-        private float NativeSdkRelay(string signal, AnimatorController reference = null, GameObject referenceAvatar = null, string referencePath = "Body", float finalWeight = 1)
+        private float NativeSdkRelay(string signal, AnimatorController reference = null, GameObject referenceAvatar = null,
+            string referencePath = "Body", float finalWeight = 1, float[] expectedCommands = null, string expectedState = null,
+            bool expectUnitGlobalFx = false)
         {
             reference = reference ?? controller;
             var clone = Object.Instantiate(referenceAvatar ?? avatar); var graph = PlayableGraph.Create("Original native relay with SDK primitive bridge");
@@ -186,9 +204,17 @@ namespace VRVlog.LilToonExporter.Tests
                 animator.fireEvents = false; animator.applyRootMotion = false;
                 graph.SetTimeUpdateMode(DirectorUpdateMode.Manual);
                 var playable = AnimatorControllerPlayable.Create(graph, reference);
-                AnimationPlayableOutput.Create(graph, "Original graph", animator).SetSourcePlayable(playable);
+                var output = AnimationPlayableOutput.Create(graph, "Original graph", animator);
+                var mixer = default(AnimationMixerPlayable);
+                if (expectUnitGlobalFx)
+                {
+                    mixer = AnimationMixerPlayable.Create(graph, 1);
+                    graph.Connect(playable, 0, mixer, 0); mixer.SetInputWeight(0, 1); output.SetSourcePlayable(mixer);
+                }
+                else output.SetSourcePlayable(playable);
                 var commands = new List<float>(); var observations = new List<string>();
                 var prior = new HashSet<int>();
+                var priorGlobal = new HashSet<(int Layer, int Hash)>(); var globalCommands = new List<float>();
                 var layer = reference.layers[ControlLayer]; var machine = layer.stateMachine;
                 var stateHashes = machine.states.Select(child => child.state).SelectMany(state =>
                     new[] { layer.name, machine.name }.Distinct().Select(root => (Hash: Animator.StringToHash(root + "." + state.name), State: state)))
@@ -213,6 +239,33 @@ namespace VRVlog.LilToonExporter.Tests
                         }
                     }
                     prior = active;
+                    if (expectUnitGlobalFx)
+                    {
+                        var now = new HashSet<(int Layer, int Hash)>(); var globalSdk = SdkType("VRCPlayableLayerControl");
+                        for (var index = 0; index < reference.layers.Length; index++)
+                        {
+                            var definition = reference.layers[index];
+                            var hashes = new[] { playable.GetCurrentAnimatorStateInfo(index).fullPathHash }
+                                .Concat(playable.IsInTransition(index) ? new[] { playable.GetNextAnimatorStateInfo(index).fullPathHash } : Array.Empty<int>());
+                            foreach (var hash in hashes.Where(value => value != 0))
+                            {
+                                now.Add((index, hash)); if (priorGlobal.Contains((index, hash))) continue;
+                                var entered = definition.stateMachine.states.Select(child => child.state).Single(state =>
+                                    Animator.StringToHash(definition.name + "." + state.name) == hash ||
+                                    Animator.StringToHash(definition.stateMachine.name + "." + state.name) == hash);
+                                foreach (var command in entered.behaviours.Where(globalSdk.IsInstanceOfType))
+                                    using (var data = new SerializedObject(command))
+                                    {
+                                        var kind = data.FindProperty("layer");
+                                        Assert.That(kind.enumNames[kind.enumValueIndex], Is.EqualTo("FX"));
+                                        Assert.That(data.FindProperty("blendDuration").floatValue, Is.Zero);
+                                        var weight = data.FindProperty("goalWeight").floatValue;
+                                        globalCommands.Add(weight); mixer.SetInputWeight(0, weight);
+                                    }
+                            }
+                        }
+                        priorGlobal = now;
+                    }
                 }
                 // The vendor overrides only the three-argument OnStateEnter.
                 // Unity's four-argument playable overload does not forward it.
@@ -224,18 +277,29 @@ namespace VRVlog.LilToonExporter.Tests
                 ObserveNativeEntries();
                 for (var frame = 0; frame < 120; frame++) { graph.Evaluate(1f / 60); ObserveNativeEntries(); }
                 Assert.That(playable.GetFloat(signal), Is.EqualTo(1).Within(.00001));
-                Assert.That(commands, Is.EqualTo(new[] { 0f, finalWeight }),
-                    "The original native graph must expose disabled then enabled entries; bridge both serialized SDK commands.");
+                Assert.That(commands, Is.EqualTo(expectedCommands ?? new[] { 0f, finalWeight }),
+                    "Bridge only the SDK commands whose original native current/next states actually entered.");
                 Assert.That(playable.GetLayerWeight(BodyLayer), Is.EqualTo(finalWeight).Within(.00001));
                 Assert.That(playable.IsInTransition(ControlLayer), Is.False);
                 Assert.That(playable.GetCurrentAnimatorStateInfo(ControlLayer).shortNameHash,
-                    Is.EqualTo(Animator.StringToHash(reference.layers[ControlLayer].stateMachine.states[1].state.name)));
+                    Is.EqualTo(Animator.StringToHash(expectedState ?? reference.layers[ControlLayer].stateMachine.states[1].state.name)));
+                if (expectUnitGlobalFx)
+                {
+                    Assert.That(globalCommands, Is.EqualTo(new[] { 1f }), "The normal original graph must never enter the dormant station FX-zero callback.");
+                    Assert.That(mixer.GetInputWeight(0), Is.EqualTo(1)); Assert.That(playable.GetBool("InStation"), Is.False);
+                }
                 var expected = clone.transform.Find(referencePath).GetComponent<SkinnedMeshRenderer>().GetBlendShapeWeight(0);
                 for (var frame = 0; frame < 120; frame++) { graph.Evaluate(1f / 60); ObserveNativeEntries(); }
                 Assert.That(playable.GetLayerWeight(BodyLayer), Is.EqualTo(finalWeight).Within(.00001));
                 Assert.That(clone.transform.Find(referencePath).GetComponent<SkinnedMeshRenderer>().GetBlendShapeWeight(0), Is.EqualTo(expected).Within(.01));
+                if (expectUnitGlobalFx)
+                {
+                    Assert.That(globalCommands, Is.EqualTo(new[] { 1f }));
+                    Assert.That(mixer.GetInputWeight(0), Is.EqualTo(1));
+                }
                 TestContext.WriteLine("Original native relay with serialized SDK primitive bridge: declared=0, entries=" + string.Join(",", observations) +
-                    ", settled signal=" + playable.GetFloat(signal) + ", target weight=" + playable.GetLayerWeight(BodyLayer) + ", native body=" + expected);
+                    ", global FX entries=" + string.Join(",", globalCommands) + ", settled signal=" + playable.GetFloat(signal) +
+                    ", target weight=" + playable.GetLayerWeight(BodyLayer) + ", native body=" + expected);
                 return expected;
             }
             finally
@@ -243,6 +307,51 @@ namespace VRVlog.LilToonExporter.Tests
                 if (graph.IsValid()) graph.Destroy();
                 Object.DestroyImmediate(clone);
             }
+        }
+
+        [TestCase(false)]
+        [TestCase(true)]
+        public void FiniteTimedRelayCanRemainInItsNativeConditionalInitialState(bool fixedDuration)
+        {
+            MmdRelay(controller, false); UnitFxWithDormantStation(controller);
+            var machine = controller.layers[ControlLayer].stateMachine;
+            foreach (var child in machine.states)
+            {
+                child.state.writeDefaultValues = true;
+                foreach (var transition in child.state.transitions) FiniteTiming(transition, fixedDuration);
+            }
+            var before = CaptureAssets();
+            var expected = NativeSdkRelay("Generic layer relay", expectedCommands: Array.Empty<float>(),
+                expectedState: machine.defaultState.name, expectUnitGlobalFx: true);
+            var warnings = new List<string>(); var values = NeutralShapeSampler.Sample(avatar, warnings: warnings);
+            var body = values.SingleOrDefault(value => value.Shape == "Body size");
+            Assert.That(body?.Weight ?? skin.GetBlendShapeWeight(0), Is.EqualTo(expected).Within(.01));
+            Assert.That(values.Single(value => value.Shape == "Open").Weight, Is.EqualTo(100).Within(.01));
+            Assert.That(warnings, Is.Empty); AssertSourceUnchanged(before);
+        }
+
+        [TestCase(false)]
+        [TestCase(true)]
+        public void FiniteTimedRelayUsesItsNativeStartupAndSettledCommands(bool fixedDuration)
+        {
+            MmdRelay(controller, false); UnitFxWithDormantStation(controller);
+            var machine = controller.layers[ControlLayer].stateMachine;
+            FiniteTiming(machine.states[2].state.transitions.Single(), fixedDuration);
+            FiniteTiming(machine.states[1].state.transitions.Single(), fixedDuration);
+            var enabled = machine.states[1].state;
+            var command = enabled.behaviours.Single(behaviour => SdkType("VRCAnimatorLayerControl").IsInstanceOfType(behaviour));
+            using (var data = new SerializedObject(command))
+            { data.FindProperty("goalWeight").floatValue = .5f; data.ApplyModifiedPropertiesWithoutUndo(); }
+            AnimationUtility.SetEditorCurve((AnimationClip)controller.layers[0].stateMachine.defaultState.motion,
+                EditorCurveBinding.FloatCurve("Body", typeof(SkinnedMeshRenderer), "blendShape.Body size"),
+                AnimationCurve.Constant(0, 1, 17));
+            var before = CaptureAssets();
+            var expected = NativeSdkRelay("Generic layer relay", finalWeight: .5f, expectUnitGlobalFx: true);
+            Assert.That(expected, Is.EqualTo(40).Within(.01), "The observed SDK half-weight must contribute to the original native pose.");
+            var warnings = new List<string>(); var values = NeutralShapeSampler.Sample(avatar, warnings: warnings);
+            Assert.That(values.Single(value => value.Shape == "Body size").Weight, Is.EqualTo(expected).Within(.01));
+            Assert.That(values.Single(value => value.Shape == "Open").Weight, Is.EqualTo(100).Within(.01));
+            Assert.That(warnings, Is.Empty); AssertSourceUnchanged(before);
         }
 
         [TestCase(false)]
@@ -263,6 +372,14 @@ namespace VRVlog.LilToonExporter.Tests
         public void ConstantRelayReproducesASteadySdkWeightDifferentFromItsAuthoredDefault(float goal)
         {
             MmdRelay(controller, false);
+            // With Write Defaults off, a zero-weight layer can leave its
+            // previous value behind if no lower layer authors that channel.
+            // Give the original graph an explicit underlying rest so changing
+            // the SDK weight has an observable native contribution to compare.
+            var underlyingRest = (AnimationClip)controller.layers[0].stateMachine.defaultState.motion;
+            AnimationUtility.SetEditorCurve(underlyingRest,
+                EditorCurveBinding.FloatCurve("Body", typeof(SkinnedMeshRenderer), "blendShape.Body size"),
+                AnimationCurve.Constant(0, 1, 17));
             var enabled = controller.layers[ControlLayer].stateMachine.states[1].state;
             var command = enabled.behaviours.Single(behaviour => SdkType("VRCAnimatorLayerControl").IsInstanceOfType(behaviour));
             using (var data = new SerializedObject(command))
@@ -323,7 +440,9 @@ namespace VRVlog.LilToonExporter.Tests
             var before = CaptureAssets(); var warnings = new List<string>();
             var values = NeutralShapeSampler.Sample(avatar, warnings: warnings);
             Assert.That(values.Any(value => value.Shape == "Body size"), Is.False);
-            Assert.That(warnings.Any(value => value.Contains("Body size") && value.Contains("VRCAnimatorLayerControl")), Is.True, string.Join("\n", warnings));
+            Assert.That(warnings.Any(value => value.Contains("Body size") &&
+                (value.Contains("VRCAnimatorLayerControl") || variation == "timed transition" && value.Contains("時間で遷移するFX状態"))),
+                Is.True, string.Join("\n", warnings));
             if (variation != "changing defaults") Assert.That(values.Single(value => value.Shape == "Open").Weight, Is.EqualTo(100).Within(.01));
             AssertSourceUnchanged(before);
         }

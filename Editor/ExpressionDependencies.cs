@@ -74,6 +74,7 @@ namespace VRVlog.LilToonExporter
         internal readonly Dictionary<StateMachineBehaviour, SdkLayerWeightControl> EvaluatedWeightControls = new Dictionary<StateMachineBehaviour, SdkLayerWeightControl>();
         internal readonly HashSet<int> WeightControlLayers = new HashSet<int>();
         internal bool RequireSettledWeightControls;
+        internal readonly HashSet<string> NeutralRelaySignals = new HashSet<string>(StringComparer.Ordinal);
         internal int IndependentTopOverrideLayer = -1;
         internal readonly HashSet<string> Parameters = new HashSet<string>(StringComparer.Ordinal);
         internal readonly HashSet<EditorCurveBinding> Morphs = new HashSet<EditorCurveBinding>();
@@ -313,10 +314,11 @@ namespace VRVlog.LilToonExporter
                 // and execute their SDK commands; never substitute its final
                 // parameter value into startup reachability.
                 if (!evaluateLayerWeights && CanEvaluateNeutralRelay(runtime, source, rawInfo, info,
-                    result.NeutralFixedValues, otherControllers))
+                    result.NeutralFixedValues, otherControllers, fixedContext, out var relaySignals))
                 {
                     evaluateLayerWeights = true;
                     result.RequireSettledWeightControls = true;
+                    result.NeutralRelaySignals.UnionWith(relaySignals);
                 }
             }
             var weightScope = info;
@@ -579,17 +581,31 @@ namespace VRVlog.LilToonExporter
         // real startup order and verifies a terminal control state and weight.
         private static bool CanEvaluateNeutralRelay(RuntimeAnimatorController runtime, VrChatExpressionMenu.Source source,
             Layer[] raw, Layer[] reachable, IDictionary<string, float> fixedValues,
-            IEnumerable<OtherControllerInspection> otherControllers)
+            IEnumerable<OtherControllerInspection> otherControllers, FixedExpressionContext fixedContext,
+            out HashSet<string> provenSignals)
         {
+            provenSignals = null;
             var controller = Controller(runtime);
             var layers = controller.layers;
             var other = otherControllers.ToArray();
             var commands = reachable.SelectMany((layer, index) => layer.WeightControls.Values
                 .Where(control => control.Playable == "FX").Select(control => (Owner: index, Control: control))).ToArray();
-            if (commands.Length == 0 || raw.Any(layer => layer.FxControl) || other.Any(item => item.Unknown.Count != 0 ||
+            if (commands.Length == 0 || other.Any(item => item.Unknown.Count != 0 ||
                 item.Layers.Any(layer => layer.FxControl || layer.WeightControls.Values.Any(control => control.Playable == "FX"))) ||
                 commands.Any(item => !item.Control.AnimatorLayer || item.Control.SourceState == null || item.Control.BlendDuration != 0) ||
                 commands.GroupBy(item => item.Control.LayerIndex).Any(group => group.Select(item => item.Owner).Distinct().Count() != 1)) return false;
+            if (raw.Any(layer => layer.FxControl))
+            {
+                if (source == null) return false;
+                var rawOthers = new List<Layer>();
+                var unknown = new List<string>();
+                foreach (var additional in source.OtherControllers.Where(value => value != null))
+                    rawOthers.AddRange(Inspect(additional, null, new Dictionary<StateMachineBehaviour, VrChatParameterDriver.Program>(),
+                        unknown, allowFxControls: true, typedConditions: true, fxLayerCount: layers.Length));
+                if (unknown.Count != 0 || rawOthers.Any(layer => layer.FxControl ||
+                    layer.WeightControls.Values.Any(control => control.Playable == "FX")) ||
+                    !HeldAutomaticExpressionLayers.HasOnlyUnchangedUnitFxCommands(runtime, source, raw, rawOthers, fixedContext)) return false;
+            }
             var owners = new HashSet<int>(commands.Select(item => item.Owner));
             var targets = new HashSet<int>(commands.Select(item => item.Control.LayerIndex));
             if (owners.Overlaps(targets)) return false;
@@ -657,7 +673,10 @@ namespace VRVlog.LilToonExporter
                         !NeutralShapeSnapshot.Finite(state.speed) || !NeutralShapeSnapshot.Finite(state.cycleOffset) ||
                         (controller.GetStateEffectiveMotion(state, index) ?? state.motion) != motion ||
                         state.transitions.Any(transition => transition.isExit || transition.destinationStateMachine != null ||
-                            !members.Contains(transition.destinationState) || control && (transition.hasExitTime || transition.duration != 0))) return false;
+                            !members.Contains(transition.destinationState) || control &&
+                            (!NeutralShapeSnapshot.Finite(transition.duration) || transition.duration < 0 ||
+                                !NeutralShapeSnapshot.Finite(transition.exitTime) || transition.exitTime < 0 ||
+                                !NeutralShapeSnapshot.Finite(transition.offset)))) return false;
                     foreach (var behaviour in controller.GetStateEffectiveBehaviours(state, index) ?? Array.Empty<StateMachineBehaviour>())
                     {
                         if (IsInertAuthoringMarker(behaviour)) continue;
@@ -668,6 +687,10 @@ namespace VRVlog.LilToonExporter
                 }
                 return true;
             }
+            // Identical constant motions keep the relay invariant through a
+            // finite state blend. Native capture still rejects an active blend
+            // and every current-state edge not disproved independently of its
+            // exit-time gate, including a delayed unconditional future exit.
             // A changing WD stream can implicitly reset a relay without an
             // explicit Animator binding. Its observed value is insufficient.
             for (var index = 0; index < raw.Length; index++)
@@ -677,6 +700,7 @@ namespace VRVlog.LilToonExporter
                 foreach (var signal in signals)
                     if (Controller(item.Runtime).parameters.Any(parameter => parameter.name == signal) &&
                         item.Layers.Any(layer => layer.WriteDefaults)) return false;
+            provenSignals = signals;
             return true;
         }
 

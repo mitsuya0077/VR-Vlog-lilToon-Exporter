@@ -610,6 +610,40 @@ namespace VRVlog.LilToonExporter.Tests
         }
 
         [Test]
+        public void LargeReadonlyFaceGraphsDoNotConsumeSelectableRouteBudget()
+        {
+            controller.AddParameter("Voice", AnimatorControllerParameterType.Float);
+            controller.AddParameter("FaceChoice", AnimatorControllerParameterType.Bool);
+            var automatic = Clip("Readonly automatic rest", 5);
+            for (var index = 0; index < 4; index++)
+            {
+                controller.AddLayer("Readonly automatic " + index);
+                var definition = controller.layers.Last();
+                var states = Enumerable.Range(0, 48).Select(value =>
+                    State(definition.stateMachine, "Automatic " + value, automatic)).ToArray();
+                definition.stateMachine.defaultState = states[0];
+                foreach (var from in states)
+                    foreach (var to in states)
+                        Transition(from, to, "Voice", 1, AnimatorConditionMode.Greater);
+            }
+            controller.AddLayer("Authored face");
+            var all = controller.layers;
+            for (var index = 1; index < all.Length; index++) all[index].defaultWeight = 1;
+            controller.layers = all;
+            var selectedMachine = all.Last().stateMachine;
+            var rest = State(selectedMachine, "Rest", Clip("Authored rest", 0));
+            var selected = State(selectedMachine, "Selected", Clip("Authored selection", 85));
+            selectedMachine.defaultState = rest;
+            Transition(rest, selected, "FaceChoice", 0, AnimatorConditionMode.If);
+            var source = Read();
+            Assert.That(source.Messages, Is.Empty);
+            var entry = source.Entries.Single();
+            Assert.That(entry.Parameters["FaceChoice"], Is.EqualTo(1));
+            AssertNativeFace(entry, "Selected", observedLayer: all.Length - 1);
+            Assert.That(Weight(entry), Is.EqualTo(85).Within(.01));
+        }
+
+        [Test]
         public void LongPriorityExclusionsRespectTheConditionWorkBudget()
         {
             var faces = EntryFaces();
@@ -617,7 +651,10 @@ namespace VRVlog.LilToonExporter.Tests
             // There is only one surviving negation branch. Excluding values
             // around the default makes each candidate assignment scan many
             // constraints, so counting graph nodes alone cannot bound work.
-            for (var index = 0; index < 64; index++)
+            // Simultaneous destination contradictions now prune the smaller
+            // selector, but this facial default still needs the full fallback
+            // exclusion proof. Keep that actual solver work above its budget.
+            for (var index = 0; index < 128; index++)
             {
                 var value = index % 2 == 0 ? -index / 2 : (index + 1) / 2;
                 faces.Machine.AddEntryTransition(faces.Earlier).AddCondition(AnimatorConditionMode.Equals, value, "Mode");
