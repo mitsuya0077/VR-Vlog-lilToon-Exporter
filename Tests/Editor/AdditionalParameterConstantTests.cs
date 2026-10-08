@@ -516,7 +516,7 @@ namespace VRVlog.LilToonExporter.Tests
                 // gate before graph startup; it does not use the new reset
                 // proof to classify a saved default as an invariant input.
                 var normal = VrChatExpressionSampler.SampleFixed(avatar, fx, source.Defaults,
-                    new Dictionary<string, float>(), null, source, fixedContext: context);
+                    new Dictionary<string, float> { ["Menu"] = 0 }, null, source, fixedContext: context);
                 var values = VrChatExpressionSampler.SampleFixed(avatar, fx, source.Defaults,
                     selected, null, source, fixedContext: context);
                 Assert.That(normal.Single(value => value.Shape == "Open").Weight, Is.EqualTo(Native(false)).Within(.01));
