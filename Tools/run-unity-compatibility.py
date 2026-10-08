@@ -250,6 +250,7 @@ BEHAVIOR_CASES = {
         'EveryReachableInstantSetToTheDefaultLayerWeightKeepsNativeNeutral': 2,
         'AnIdempotentWeightSetCannotCertifyACompetingOrBlendedProducer': 4,
         'MmdControlledNativeRestAndAuthoredEndpointSurviveFullExportAndVrmRoundTrip': 1,
+        'ConstantRelayReproducesASteadySdkWeightDifferentFromItsAuthoredDefault': 2,
     },
     'SelectedLayerControlTests': {
         'InstantIndividualFxControlMatchesNativeSelectedWeight': 9,

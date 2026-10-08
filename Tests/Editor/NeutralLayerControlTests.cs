@@ -173,7 +173,7 @@ namespace VRVlog.LilToonExporter.Tests
             AssertSourceUnchanged(before);
         }
 
-        private float NativeSdkRelay(string signal, AnimatorController reference = null, GameObject referenceAvatar = null, string referencePath = "Body")
+        private float NativeSdkRelay(string signal, AnimatorController reference = null, GameObject referenceAvatar = null, string referencePath = "Body", float finalWeight = 1)
         {
             reference = reference ?? controller;
             var clone = Object.Instantiate(referenceAvatar ?? avatar); var graph = PlayableGraph.Create("Original native relay with SDK primitive bridge");
@@ -224,15 +224,15 @@ namespace VRVlog.LilToonExporter.Tests
                 ObserveNativeEntries();
                 for (var frame = 0; frame < 120; frame++) { graph.Evaluate(1f / 60); ObserveNativeEntries(); }
                 Assert.That(playable.GetFloat(signal), Is.EqualTo(1).Within(.00001));
-                Assert.That(commands, Is.EqualTo(new[] { 0f, 1f }),
+                Assert.That(commands, Is.EqualTo(new[] { 0f, finalWeight }),
                     "The original native graph must expose disabled then enabled entries; bridge both serialized SDK commands.");
-                Assert.That(playable.GetLayerWeight(BodyLayer), Is.EqualTo(1).Within(.00001));
+                Assert.That(playable.GetLayerWeight(BodyLayer), Is.EqualTo(finalWeight).Within(.00001));
                 Assert.That(playable.IsInTransition(ControlLayer), Is.False);
                 Assert.That(playable.GetCurrentAnimatorStateInfo(ControlLayer).shortNameHash,
                     Is.EqualTo(Animator.StringToHash(reference.layers[ControlLayer].stateMachine.states[1].state.name)));
                 var expected = clone.transform.Find(referencePath).GetComponent<SkinnedMeshRenderer>().GetBlendShapeWeight(0);
                 for (var frame = 0; frame < 120; frame++) { graph.Evaluate(1f / 60); ObserveNativeEntries(); }
-                Assert.That(playable.GetLayerWeight(BodyLayer), Is.EqualTo(1).Within(.00001));
+                Assert.That(playable.GetLayerWeight(BodyLayer), Is.EqualTo(finalWeight).Within(.00001));
                 Assert.That(clone.transform.Find(referencePath).GetComponent<SkinnedMeshRenderer>().GetBlendShapeWeight(0), Is.EqualTo(expected).Within(.01));
                 TestContext.WriteLine("Original native relay with serialized SDK primitive bridge: declared=0, entries=" + string.Join(",", observations) +
                     ", settled signal=" + playable.GetFloat(signal) + ", target weight=" + playable.GetLayerWeight(BodyLayer) + ", native body=" + expected);
@@ -254,6 +254,28 @@ namespace VRVlog.LilToonExporter.Tests
             var before = CaptureAssets(); var expected = NativeSdkRelay("Generic layer relay"); var warnings = new List<string>();
             var values = NeutralShapeSampler.Sample(avatar, warnings: warnings);
             Assert.That(values.Single(value => value.Shape == "Body size").Weight, Is.EqualTo(expected).Within(.01));
+            Assert.That(values.Single(value => value.Shape == "Open").Weight, Is.EqualTo(100).Within(.01));
+            Assert.That(warnings, Is.Empty); AssertSourceUnchanged(before);
+        }
+
+        [TestCase(0f)]
+        [TestCase(.5f)]
+        public void ConstantRelayReproducesASteadySdkWeightDifferentFromItsAuthoredDefault(float goal)
+        {
+            MmdRelay(controller, false);
+            var enabled = controller.layers[ControlLayer].stateMachine.states[1].state;
+            var command = enabled.behaviours.Single(behaviour => SdkType("VRCAnimatorLayerControl").IsInstanceOfType(behaviour));
+            using (var data = new SerializedObject(command))
+            { data.FindProperty("goalWeight").floatValue = goal; data.ApplyModifiedPropertiesWithoutUndo(); }
+            Assert.That(controller.layers[BodyLayer].defaultWeight, Is.EqualTo(1));
+            var before = CaptureAssets(); var expected = NativeSdkRelay("Generic layer relay", finalWeight: goal);
+            var warnings = new List<string>(); var values = NeutralShapeSampler.Sample(avatar, warnings: warnings);
+            Assert.That(expected, Is.LessThan(63), "Ignoring the SDK command would leave the uncontrolled authored 63 pose.");
+            // A disabled target can leave exactly the prepared 17 weight.
+            // Neutral capture legitimately omits an unchanged scalar; compare
+            // the effective exported rest, including that prepared value.
+            var body = values.SingleOrDefault(value => value.Shape == "Body size");
+            Assert.That(body?.Weight ?? skin.GetBlendShapeWeight(0), Is.EqualTo(expected).Within(.01));
             Assert.That(values.Single(value => value.Shape == "Open").Weight, Is.EqualTo(100).Within(.01));
             Assert.That(warnings, Is.Empty); AssertSourceUnchanged(before);
         }
