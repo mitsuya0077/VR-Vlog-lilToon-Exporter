@@ -448,6 +448,69 @@ namespace VRVlog.LilToonExporter.Tests
             }
         }
 
+        private static void BakeAuthoredNegativeBracket(Mesh source, int shape, double value, Mesh baked)
+        {
+            // EditMode can retain native clamping after the declared policy is
+            // changed. Read the original authored bracket independently, then
+            // use a fresh positive-100 frame as the native geometry witness.
+            // Its coefficient is in range under either native policy.
+            Assert.That(source.GetBlendShapeFrameWeight(shape, 0), Is.EqualTo(-100));
+            Assert.That(source.GetBlendShapeFrameWeight(shape, 1), Is.EqualTo(50));
+            Assert.That(value, Is.InRange(-100d, 0d));
+            var lowV = new Vector3[source.vertexCount]; var lowN = new Vector3[source.vertexCount]; var lowT = new Vector3[source.vertexCount];
+            var highV = new Vector3[source.vertexCount]; var highN = new Vector3[source.vertexCount]; var highT = new Vector3[source.vertexCount];
+            source.GetBlendShapeFrameVertices(shape, 0, lowV, lowN, lowT);
+            source.GetBlendShapeFrameVertices(shape, 1, highV, highN, highT);
+            var alpha = (float)((value + 100) / 150);
+            for (var vertex = 0; vertex < source.vertexCount; vertex++)
+            {
+                lowV[vertex] = Vector3.LerpUnclamped(lowV[vertex], highV[vertex], alpha);
+                lowN[vertex] = Vector3.LerpUnclamped(lowN[vertex], highN[vertex], alpha);
+                lowT[vertex] = Vector3.LerpUnclamped(lowT[vertex], highT[vertex], alpha);
+            }
+            Assert.That(lowV[0].x, Is.LessThan(-.001f), "The independently interpolated original authored frames must have a nonzero negative displacement.");
+            var witness = new Mesh { vertices = source.vertices, normals = source.normals, tangents = source.tangents, triangles = source.triangles };
+            var root = new GameObject("Original authored bracket witness", typeof(SkinnedMeshRenderer));
+            try
+            {
+                witness.AddBlendShapeFrame("Authored sample", 100, lowV, lowN, lowT);
+                var skin = root.GetComponent<SkinnedMeshRenderer>(); skin.sharedMesh = witness; skin.SetBlendShapeWeight(0, 100);
+                skin.BakeMesh(baked);
+                Assert.That(baked.vertices[0].x, Is.LessThan(-.001f), "The independent in-range native witness must retain the signed authored displacement.");
+            }
+            finally { UnityEngine.Object.DestroyImmediate(root); UnityEngine.Object.DestroyImmediate(witness); }
+        }
+
+        private static void AssertSignedBasisAgainstAuthoredFrames(Mesh source, int shape, Mesh target, ExpressionAnimationData.Channel channel)
+        {
+            var restV = new Vector3[source.vertexCount]; var restN = new Vector3[source.vertexCount]; var restT = new Vector3[source.vertexCount];
+            var middleV = new Vector3[source.vertexCount]; var middleN = new Vector3[source.vertexCount]; var middleT = new Vector3[source.vertexCount];
+            source.GetBlendShapeFrameVertices(shape, 0, restV, restN, restT);
+            source.GetBlendShapeFrameVertices(shape, 1, middleV, middleN, middleT);
+            for (var vertex = 0; vertex < source.vertexCount; vertex++)
+            {
+                restV[vertex] = Vector3.LerpUnclamped(restV[vertex], middleV[vertex], 2f / 3f);
+                restN[vertex] = Vector3.LerpUnclamped(restN[vertex], middleN[vertex], 2f / 3f);
+                restT[vertex] = Vector3.LerpUnclamped(restT[vertex], middleT[vertex], 2f / 3f);
+            }
+            foreach (var point in channel.Points)
+            {
+                if (point.Value == 0) { Assert.That(point.Target, Is.Null); continue; }
+                var frame = Enumerable.Range(0, source.GetBlendShapeFrameCount(shape)).Single(index => source.GetBlendShapeFrameWeight(shape, index) == point.Value);
+                var expectedV = new Vector3[source.vertexCount]; var expectedN = new Vector3[source.vertexCount]; var expectedT = new Vector3[source.vertexCount];
+                var actualV = new Vector3[source.vertexCount]; var actualN = new Vector3[source.vertexCount]; var actualT = new Vector3[source.vertexCount];
+                source.GetBlendShapeFrameVertices(shape, frame, expectedV, expectedN, expectedT);
+                target.GetBlendShapeFrameVertices(target.GetBlendShapeIndex(point.Target), 0, actualV, actualN, actualT);
+                for (var vertex = 0; vertex < source.vertexCount; vertex++)
+                {
+                    Assert.That(Vector3.Distance(actualV[vertex], expectedV[vertex] - restV[vertex]), Is.LessThan(.0000001f));
+                    Assert.That(Vector3.Distance(actualN[vertex], expectedN[vertex] - restN[vertex]), Is.LessThan(.0000001f));
+                    Assert.That(Vector3.Distance(actualT[vertex], expectedT[vertex] - restT[vertex]), Is.LessThan(.0000001f));
+                }
+                if (point.Value < 0) Assert.That(actualV[0].x, Is.LessThan(-.009f), "The stored signed basis must retain the original negative frame's nonzero residual.");
+            }
+        }
+
         [TestCase("alias")]
         [TestCase("position")]
         [TestCase("normal")]
@@ -490,13 +553,21 @@ namespace VRVlog.LilToonExporter.Tests
                     Assert.That(expressions[row].Animation.Duration, Is.EqualTo(menu.Entries[row].Duration));
                     Assert.That(expressions[row].Animation.Loop, Is.EqualTo(menu.Entries[row].Loop));
                     Assert.That(expressions[row].Animation.Channels.Single().Curve, Is.SameAs(menu.Entries[row].Animation.Single().Curve));
-                    if (kind == "alias") Assert.That(expressions[row].Animation.Channels.Single().Points.Select(point => point.Value), Is.EqualTo(new[] { -100d, 0, 50, 100 }));
+                    if (kind == "alias")
+                    {
+                        Assert.That(expressions[row].Animation.Channels.Single().Points.Select(point => point.Value), Is.EqualTo(new[] { -100d, 0, 50, 100 }));
+                        AssertSignedBasisAgainstAuthoredFrames(mesh, row, copy.sharedMesh, expressions[row].Animation.Channels.Single());
+                    }
                     foreach (var time in new[] { 0d, menu.Entries[row].Duration * .25, menu.Entries[row].Duration })
                     {
                         original.SetBlendShapeWeight(0, 0); original.SetBlendShapeWeight(1, 0);
-                        original.SetBlendShapeWeight(row, (float)menu.Entries[row].Animation.Single().Curve.Evaluate(time)); original.BakeMesh(native);
-                        if (kind == "alias" && time == menu.Entries[row].Duration * .25)
-                            Assert.That(native.vertices[0].x, Is.LessThan(-.001f), "The original signed source frame actually moves below neutral; zero-clamping is not a signed oracle.");
+                        var authoredWeight = menu.Entries[row].Animation.Single().Curve.Evaluate(time);
+                        original.SetBlendShapeWeight(row, (float)authoredWeight); original.BakeMesh(native);
+                        if (kind == "alias" && authoredWeight < 0)
+                        {
+                            Assert.That(original.GetBlendShapeWeight(row), Is.LessThan(-1), "The original renderer retains the signed authored scalar.");
+                            BakeAuthoredNegativeBracket(mesh, row, authoredWeight, native);
+                        }
                         ApplyBasis(copy, expressions[row], time); copy.BakeMesh(baked);
                         for (var vertex = 0; vertex < native.vertexCount; vertex++)
                         {
