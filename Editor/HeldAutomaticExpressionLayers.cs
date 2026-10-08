@@ -58,6 +58,10 @@ namespace VRVlog.LilToonExporter
                 foreach (var program in layers.SelectMany(item => item.DriverPrograms))
                     VrChatParameterDriver.ValidateTargets(program, types, needed);
                 var gates = new HashSet<string>(layer.Reads, StringComparer.Ordinal); gates.ExceptWith(layer.Writes);
+                // An unselected saved value can have been restored before any
+                // producer runs. Even no producer cannot certify its authored
+                // default: check every read-only input before omitting the layer.
+                if (!HasKnownTransientGates(runtime, source, context, gates, layers, others, selectedInputs)) continue;
                 var producers = layers.Where((item, otherIndex) => otherIndex != index && item.Writes.Overlaps(gates)).ToArray();
                 if (producers.Any(item => item.CurveWrites.Overlaps(gates) || item.DriverPrograms.SelectMany(program => program.Operations)
                     .Any(operation => gates.Contains(operation.Destination) &&
@@ -72,6 +76,63 @@ namespace VRVlog.LilToonExporter
                 result.Add(index); preservedMorphs.UnionWith(layer.Morphs);
             }
             return result;
+        }
+
+        private static bool HasKnownTransientGates(RuntimeAnimatorController runtime, VrChatExpressionMenu.Source source,
+            FixedExpressionContext context, ISet<string> gates, ExpressionDependencies.Layer[] layers,
+            IList<ExpressionDependencies.Layer> others, ISet<string> selectedInputs)
+        {
+            if (gates.Count == 0) return true;
+            var declarations = new Dictionary<string, List<AnimatorControllerParameter>>(StringComparer.Ordinal);
+            foreach (var current in new[] { runtime }.Concat(source.OtherControllers.Where(value => value != null)))
+            {
+                var parameters = ExpressionDependencies.Controller(current).parameters;
+                foreach (var name in gates.Concat(new[] { "IsLocal" }).Distinct(StringComparer.Ordinal))
+                {
+                    var matches = parameters.Where(parameter => parameter.name == name).ToArray();
+                    if (matches.Length > 1) return false;
+                    if (matches.Length == 0) continue;
+                    if (!declarations.TryGetValue(name, out var values)) declarations.Add(name, values = new List<AnimatorControllerParameter>());
+                    values.Add(matches[0]);
+                }
+            }
+            float Default(AnimatorControllerParameter parameter) => parameter.type == AnimatorControllerParameterType.Bool ? (parameter.defaultBool ? 1 : 0) :
+                parameter.type == AnimatorControllerParameterType.Int ? parameter.defaultInt : parameter.defaultFloat;
+            var written = new HashSet<string>(layers.Concat(others).SelectMany(layer => layer.Writes), StringComparer.Ordinal);
+            var local = !written.Contains("IsLocal") && selectedInputs?.Contains("IsLocal") != true &&
+                context != null && context.Values.TryGetValue("IsLocal", out var localValue) && localValue.Equals(1f) &&
+                declarations.TryGetValue("IsLocal", out var locals) && locals.All(parameter =>
+                    parameter.type == AnimatorControllerParameterType.Bool && Default(parameter).Equals(Default(locals[0])));
+            foreach (var name in gates)
+            {
+                if (!declarations.TryGetValue(name, out var values)) return false;
+                var type = values[0].type;
+                if (type != AnimatorControllerParameterType.Bool && type != AnimatorControllerParameterType.Int &&
+                    type != AnimatorControllerParameterType.Float || values.Any(parameter => parameter.type != type ||
+                    !NeutralShapeSnapshot.Finite(Default(parameter)) || !Default(parameter).Equals(Default(values[0])))) return false;
+                if (VrChatParameterDriver.BuiltIn.Contains(name))
+                {
+                    if (context?.Values.ContainsKey(name) != true) return false;
+                }
+                else
+                {
+                    if (!source.NeutralInputInventoryComplete) return false;
+                    if (source.ExpressionParameters.Contains(name) || source.MenuInputs.Contains(name) ||
+                        source.ParameterPersistence.ContainsKey(name) || source.ExpressionParameterTypes.ContainsKey(name))
+                    {
+                        if (!source.ParameterPersistence.TryGetValue(name, out var persistence) || persistence.Saved ||
+                            !source.ExpressionParameterTypes.TryGetValue(name, out var declaredType) || declaredType != type.ToString() ||
+                            persistence.NetworkSynced && !local) return false;
+                    }
+                    if (source.ExternalParameters.Contains(name) && context?.Values.ContainsKey(name) != true) return false;
+                }
+                var value = Default(values[0]);
+                if (source.Defaults.TryGetValue(name, out var supplied)) value = supplied;
+                if (context?.Values.TryGetValue(name, out supplied) == true) value = supplied;
+                if (!NeutralShapeSnapshot.Finite(value) || type == AnimatorControllerParameterType.Bool && value != 0 && value != 1 ||
+                    type == AnimatorControllerParameterType.Int && (value != Math.Truncate(value) || value < int.MinValue || (double)value > int.MaxValue)) return false;
+            }
+            return true;
         }
 
         internal static bool HasOnlyUnchangedUnitFxCommands(RuntimeAnimatorController runtime, VrChatExpressionMenu.Source source,

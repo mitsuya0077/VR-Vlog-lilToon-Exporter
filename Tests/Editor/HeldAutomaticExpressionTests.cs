@@ -55,7 +55,9 @@ namespace VRVlog.LilToonExporter.Tests
             var enter = condition.AddTransition(closed); enter.hasExitTime = true; enter.exitTime = .1f; enter.duration = 0;
             enter.AddCondition(AnimatorConditionMode.If, 0, "Enable"); enter.AddCondition(AnimatorConditionMode.Greater, -1, "Lottery");
             var leave = closed.AddTransition(open); leave.hasExitTime = true; leave.exitTime = .5f; leave.duration = 0;
-            source = new VrChatExpressionMenu.Source { Controller = controller };
+            // This synthetic avatar has a known empty SDK expression inventory;
+            // all undeclared custom gates belong only to the supplied controller.
+            source = new VrChatExpressionMenu.Source { Controller = controller, NeutralInputInventoryComplete = true };
         }
 
         [TearDown]
@@ -278,6 +280,163 @@ namespace VRVlog.LilToonExporter.Tests
         void IncomingRandomGate()
         {
             condition.transitions.Single().AddCondition(AnimatorConditionMode.If, 0, "Enable");
+        }
+
+        const string RestorationGate = "Restoration gate";
+
+        AnimatorState RestorableInputGateFixture(bool producer)
+        {
+            UnownedRandomFixture();
+            controller.AddParameter(RestorationGate, AnimatorControllerParameterType.Bool);
+            source.Defaults[RestorationGate] = 0;
+            source.ExpressionParameters.Add(RestorationGate);
+            source.ParameterPersistence[RestorationGate] = (false, false);
+            source.ExpressionParameterTypes[RestorationGate] = "Bool";
+            var alternative = State(2, "Restored deterministic face", Clip("Restored face", ("Blink", 0), ("Recovery channel", 60)));
+            var enter = condition.AddTransition(alternative); enter.hasExitTime = false; enter.duration = 0;
+            enter.AddCondition(AnimatorConditionMode.If, 0, RestorationGate);
+            var open = controller.layers[2].stateMachine.states.Single(child => child.state.name == "Open").state;
+            var reset = alternative.AddTransition(open); reset.hasExitTime = true; reset.exitTime = 10; reset.duration = 0;
+            if (producer) ParameterDriverExpressionTests.Driver(selected, ParameterDriverExpressionTests.Op("Set", RestorationGate, 0));
+            return alternative;
+        }
+
+        [TestCase("saved", false)]
+        [TestCase("saved", true)]
+        [TestCase("incomplete controller inventory", false)]
+        [TestCase("incomplete controller inventory", true)]
+        [TestCase("missing persistence", false)]
+        [TestCase("missing persistence", true)]
+        [TestCase("missing type", false)]
+        [TestCase("missing type", true)]
+        [TestCase("expression type mismatch", false)]
+        [TestCase("expression type mismatch", true)]
+        [TestCase("shared type mismatch", false)]
+        [TestCase("shared type mismatch", true)]
+        [TestCase("shared default mismatch", false)]
+        [TestCase("shared default mismatch", true)]
+        public void ReadOnlyRestGatesRequireCompleteTransientInputEvidence(string kind, bool producer)
+        {
+            RestorableInputGateFixture(producer);
+            if (kind == "saved")
+            {
+                source.ParameterPersistence[RestorationGate] = (true, false);
+                source.ExternalParameters.Add(RestorationGate);
+                Assert.That(FixedExpressionContext.Create(controller, source.Defaults, source).Values[RestorationGate], Is.Zero,
+                    "An automatically supplied authored default cannot prove a saved startup value.");
+            }
+            else if (kind == "incomplete controller inventory")
+            {
+                source.ExpressionParameters.Clear(); source.ParameterPersistence.Clear(); source.ExpressionParameterTypes.Clear();
+                source.NeutralInputInventoryComplete = false;
+            }
+            else if (kind == "missing persistence") source.ParameterPersistence.Remove(RestorationGate);
+            else if (kind == "missing type") source.ExpressionParameterTypes.Remove(RestorationGate);
+            else if (kind == "expression type mismatch") source.ExpressionParameterTypes[RestorationGate] = "Int";
+            else
+            {
+                var other = AnimatorController.CreateAnimatorControllerAtPath(folder + "/SharedRestGate.controller");
+                other.AddParameter(RestorationGate, kind == "shared type mismatch" ? AnimatorControllerParameterType.Int : AnimatorControllerParameterType.Bool);
+                if (kind == "shared default mismatch")
+                {
+                    var parameters = other.parameters; parameters.Single().defaultBool = true; other.parameters = parameters;
+                }
+                var machine = other.layers[0].stateMachine; var state = machine.AddState("Unrelated additional rest");
+                state.motion = Clip("Additional gate declaration", ("Rest", 12)); state.writeDefaultValues = false; machine.defaultState = state;
+                source.OtherControllers.Add(other);
+            }
+            var before = ExportSourceFingerprint.Compute(avatar); var serialized = EditorJsonUtility.ToJson(controller);
+            Assert.That(UnownedRest(out var preserved), Is.Empty);
+            Assert.That(preserved, Is.Empty, "An unproved initial gate cannot authorize omission even without a producer, or with only Set-to-default producers.");
+            Assert.That(ExportSourceFingerprint.Compute(avatar), Is.EqualTo(before));
+            Assert.That(EditorJsonUtility.ToJson(controller), Is.EqualTo(serialized));
+        }
+
+        [TestCase("controller only", false)]
+        [TestCase("controller only", true)]
+        [TestCase("unsaved SDK input", false)]
+        [TestCase("unsaved SDK input", true)]
+        [TestCase("local synced SDK input", false)]
+        [TestCase("local synced SDK input", true)]
+        public void KnownUnsavedReadOnlyRestGatesKeepTheirNativeAuthoredFace(string kind, bool producer)
+        {
+            RestorableInputGateFixture(producer);
+            if (kind == "controller only")
+            {
+                source.ExpressionParameters.Clear(); source.ParameterPersistence.Clear(); source.ExpressionParameterTypes.Clear();
+            }
+            else if (kind == "local synced SDK input")
+            {
+                controller.AddParameter("IsLocal", AnimatorControllerParameterType.Bool);
+                source.ParameterPersistence[RestorationGate] = (false, true);
+                Assert.That(FixedExpressionContext.Create(controller, source.Defaults, source).Values["IsLocal"], Is.EqualTo(1));
+            }
+            var before = ExportSourceFingerprint.Compute(avatar); var serialized = EditorJsonUtility.ToJson(controller);
+            var native = NativeRestoredGatePose(false);
+            Assert.That(native.Authored, Is.EqualTo(75).Within(.01));
+            Assert.That(UnownedRest(out var preserved), Is.EquivalentTo(new[] { 2 }));
+            Assert.That(preserved, Is.EquivalentTo(new[] { Binding("Blink"), Binding("Recovery channel") }));
+            var entry = Hold();
+            Assert.That(entry.Values.Single(value => value.Shape == "Authored").Weight, Is.EqualTo(native.Authored).Within(.01));
+            Assert.That(entry.Values.Any(value => value.Shape == "Blink" || value.Shape == "Recovery channel"), Is.False);
+            Assert.That(ExportSourceFingerprint.Compute(avatar), Is.EqualTo(before));
+            Assert.That(EditorJsonUtility.ToJson(controller), Is.EqualTo(serialized));
+        }
+
+        [TestCase("remote preview")]
+        [TestCase("local writer")]
+        [TestCase("selected local input")]
+        public void SyncedRestGatesRequireAnUnchangedUnwrittenLocalPreview(string kind)
+        {
+            RestorableInputGateFixture(false); controller.AddParameter("IsLocal", AnimatorControllerParameterType.Bool);
+            source.ParameterPersistence[RestorationGate] = (false, true);
+            var context = FixedExpressionContext.Create(controller, source.Defaults, source);
+            if (kind == "remote preview") context.Values["IsLocal"] = 0;
+            else if (kind == "local writer")
+                AnimationUtility.SetEditorCurve(faceClip, EditorCurveBinding.FloatCurve("", typeof(Animator), "IsLocal"), AnimationCurve.Constant(0, 1, 1));
+            var selectedInputs = kind == "selected local input" ? new HashSet<string>(StringComparer.Ordinal) { "IsLocal" } : null;
+            Assert.That(HeldAutomaticExpressionLayers.FindUnownedRandomRest(avatar, controller, source,
+                new HashSet<EditorCurveBinding>(AnimationUtility.GetCurveBindings(faceClip)), context, out var preserved, selectedInputs), Is.Empty);
+            Assert.That(preserved, Is.Empty);
+        }
+
+        (float Authored, float Recovery, int StateHash) NativeRestoredGatePose(bool restored)
+        {
+            var clone = Object.Instantiate(avatar); var graph = PlayableGraph.Create("Original restored startup gate oracle");
+            try
+            {
+                var animator = clone.GetComponent<Animator>(); animator.runtimeAnimatorController = null;
+                animator.cullingMode = AnimatorCullingMode.AlwaysAnimate; graph.SetTimeUpdateMode(DirectorUpdateMode.Manual);
+                var playable = AnimatorControllerPlayable.Create(graph, controller);
+                AnimationPlayableOutput.Create(graph, "Original", animator).SetSourcePlayable(playable);
+                // A restored startup input is supplied before entering the
+                // original graph. No exporter dependency or Random evaluator
+                // participates in this deterministic native branch witness.
+                playable.SetBool(RestorationGate, restored); graph.Play(); graph.Evaluate(0);
+                for (var frame = 0; frame < 120; frame++) graph.Evaluate(1f / 60f);
+                Assert.That(playable.GetBool(RestorationGate), Is.EqualTo(restored));
+                var skin = clone.transform.Find("Body").GetComponent<SkinnedMeshRenderer>();
+                return (skin.GetBlendShapeWeight(0), skin.GetBlendShapeWeight(3), playable.GetCurrentAnimatorStateInfo(2).fullPathHash);
+            }
+            finally { graph.Destroy(); Object.DestroyImmediate(clone); }
+        }
+
+        [Test]
+        public void AStoredGateCanRetainAnOriginalNativeFaceDespiteAnAuthoredZeroDefault()
+        {
+            var alternative = RestorableInputGateFixture(false);
+            source.ParameterPersistence[RestorationGate] = (true, false); source.ExternalParameters.Add(RestorationGate);
+            var before = ExportSourceFingerprint.Compute(avatar); var serialized = EditorJsonUtility.ToJson(controller);
+            Assert.That(source.Defaults[RestorationGate], Is.Zero);
+            Assert.That(controller.parameters.Single(parameter => parameter.name == RestorationGate).defaultBool, Is.False);
+            Assert.That(FixedExpressionContext.Create(controller, source.Defaults, source).Values[RestorationGate], Is.Zero);
+            var native = NativeRestoredGatePose(true);
+            Assert.That(native.StateHash, Is.EqualTo(Animator.StringToHash(controller.layers[2].name + "." + alternative.name)));
+            Assert.That(native.Authored, Is.EqualTo(75).Within(.01));
+            Assert.That(native.Recovery, Is.EqualTo(60).Within(.01), "The stored startup value keeps a distinct face beyond the first native capture.");
+            Assert.That(UnownedRest(out var preserved), Is.Empty); Assert.That(preserved, Is.Empty);
+            Assert.That(ExportSourceFingerprint.Compute(avatar), Is.EqualTo(before));
+            Assert.That(EditorJsonUtility.ToJson(controller), Is.EqualTo(serialized));
         }
 
         [TestCase("Set")]

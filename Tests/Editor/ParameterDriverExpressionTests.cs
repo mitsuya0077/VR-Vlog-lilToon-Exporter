@@ -124,6 +124,9 @@ namespace VRVlog.LilToonExporter.Tests
 
         private (AnimatorState Gate, AnimatorState Random, AnimatorState IdleRest, AnimatorStateTransition Reset) SelectorRandomRest(string operation = "Set", bool gateProducer = true)
         {
+            // This controller-only fixture has a known empty SDK expression
+            // inventory; no persisted client input can replace its defaults.
+            metadata.NeutralInputInventoryComplete = true;
             controller.AddParameter("Enable", AnimatorControllerParameterType.Bool);
             controller.AddParameter("Lottery", AnimatorControllerParameterType.Float);
             controller.AddParameter("Source signal", AnimatorControllerParameterType.Float);

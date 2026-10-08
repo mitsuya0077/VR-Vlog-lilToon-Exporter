@@ -802,6 +802,10 @@ BEHAVIOR_CASES = {
         'UnownedRandomRestRetainsNativeUnitFxCallbacksBehindAnUnchangedNormalGate': 1,
         'UnownedRandomRestCannotHideAnUnprovenGlobalFxCommand': 10,
         'SelectedGateCannotHideAResetBeyondTheNativeCaptureHorizon': 5,
+        'ReadOnlyRestGatesRequireCompleteTransientInputEvidence': 14,
+        'KnownUnsavedReadOnlyRestGatesKeepTheirNativeAuthoredFace': 6,
+        'SyncedRestGatesRequireAnUnchangedUnwrittenLocalPreview': 3,
+        'AStoredGateCanRetainAnOriginalNativeFaceDespiteAnAuthoredZeroDefault': 1,
     },
     'InvariantMorphOwnershipTests': {
         'ExplicitIdenticalFaceResetsDoNotOwnTheChangingWardrobeOption': 1,
