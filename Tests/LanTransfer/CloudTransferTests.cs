@@ -69,7 +69,7 @@ namespace VRVlog.LilToonExporter.LanTransfer.Tests
             Assert.That(Encoding.UTF8.GetByteCount(qr), Is.LessThanOrEqualTo(4096));
         }
 
-        [TestCase("part-failure")][TestCase("publish-mismatch")][TestCase("redirect")][TestCase("quota")]
+        [TestCase("part-failure")][TestCase("publish-mismatch")][TestCase("redirect")][TestCase("quota")][TestCase("legacy-create")][TestCase("legacy-publish")]
         public async Task UploadFailuresNeverExposeQrAndCleanCreatedTransfer(string failure)
         {
             using (var fixture = new Fixture(17))
@@ -391,6 +391,24 @@ namespace VRVlog.LilToonExporter.LanTransfer.Tests
             }
         }
 
+        [Test]
+        public async Task PublishedQrKeepsOnlyTheKeyAndReleasesItsUploadedCiphertextFile()
+        {
+            var directory = System.IO.Path.Combine(System.IO.Path.GetTempPath(), "VRVlogEncryptedTransfers");
+            var before = Directory.Exists(directory) ? Directory.GetFiles(directory) : Array.Empty<string>();
+            using (var fixture = new Fixture(101))
+            using (var session = new CloudVrmTransferSession(fixture.Source, fixture.Transport))
+            {
+                fixture.Transport.BeforePublish = () => Assert.That(Directory.GetFiles(directory).Except(before).Count(), Is.EqualTo(1));
+                await session.UploadAsync();
+                Assert.That(Directory.GetFiles(directory).Except(before).Any(), Is.False);
+                Assert.That(session.HasEncryptionKey, Is.True);
+                await session.CancelAsync();
+                Assert.That(session.HasEncryptionKey, Is.False);
+                Assert.That(session.Qr == null, Is.True);
+            }
+        }
+
         private sealed class InterruptedInput : Stream
         {
             private readonly byte[] bytes; private bool read;
@@ -531,7 +549,7 @@ namespace VRVlog.LilToonExporter.LanTransfer.Tests
                     Created++; id = Created.ToString("x32"); expiry = Now() + LifetimeSeconds;
                     CreateObserved.TrySetResult(true);
                     if (CreateRelease != null) await CreateRelease.Task;
-                    return new CloudTransferResponse(201, "{\"v\":3,\"id\":\"" + id + "\",\"token\":\"" + ReadToken + "\",\"uploadToken\":\"" + UploadToken + "\",\"expiresAt\":" + expiry + ",\"partSize\":8388608}");
+                    return new CloudTransferResponse(201, "{\"v\":" + (Failure == "legacy-create" ? 2 : 3) + ",\"id\":\"" + id + "\",\"token\":\"" + ReadToken + "\",\"uploadToken\":\"" + UploadToken + "\",\"expiresAt\":" + expiry + ",\"partSize\":8388608}");
                 }
                 AuthenticatedCorrectly &= token == UploadToken;
                 if (path.EndsWith("/cancel", StringComparison.Ordinal)) { CancelCalls++; return new CloudTransferResponse(200, "{}"); }
@@ -549,7 +567,7 @@ namespace VRVlog.LilToonExporter.LanTransfer.Tests
                     BeforePublish?.Invoke();
                     var hash = Failure == "publish-mismatch" ? new string('f', 64) : wireHash;
                     using (var digest = SHA256.Create()) Assert.That(LanTransferProtocol.Hex(digest.ComputeHash(Parts.SelectMany(part => part).ToArray())), Is.EqualTo(wireHash));
-                    return new CloudTransferResponse(200, "{\"v\":3,\"id\":\"" + id + "\",\"token\":\"" + ReadToken + "\",\"name\":\"encrypted-avatar.bin\",\"size\":" + wireSize + ",\"sha256\":\"" + hash + "\",\"expiresAt\":" + expiry + "}");
+                    return new CloudTransferResponse(200, "{\"v\":" + (Failure == "legacy-publish" ? 2 : 3) + ",\"id\":\"" + id + "\",\"token\":\"" + ReadToken + "\",\"name\":\"encrypted-avatar.bin\",\"size\":" + wireSize + ",\"sha256\":\"" + hash + "\",\"expiresAt\":" + expiry + "}");
                 }
                 Assert.That(method, Is.EqualTo("GET"));
                 if (StatusRelease != null)

@@ -164,14 +164,14 @@ namespace VRVlog.LilToonExporter.LanTransfer
                     fields.Exact("v", "id", "token", "uploadToken", "expiresAt", "partSize");
                     var newId = fields.Text("id"); var token = fields.Text("token"); var owner = fields.Text("uploadToken"); var expiry = fields.Number("expiresAt");
                     var currentTime = now();
-                    if (fields.Number("v") != 3 || !CloudTransferProtocol.IsHex(newId, 32) || !CloudTransferProtocol.IsToken(token) || !CloudTransferProtocol.IsToken(owner)
-                        || token == owner || fields.Number("partSize") != CloudTransferProtocol.PartSize) throw CloudTransferProtocol.Invalid();
+                    if (!CloudTransferProtocol.IsHex(newId, 32) || !CloudTransferProtocol.IsToken(owner)) throw CloudTransferProtocol.Invalid();
                     // A valid create response has already reserved server storage.
                     // Retain authenticated cleanup credentials even when its
                     // lifetime is rejected before any VRM bytes are uploaded.
-                    lock (gate) { id = newId; readToken = token; uploadToken = owner; }
+                    lock (gate) { id = newId; uploadToken = owner; }
+                    if (fields.Number("v") != 3 || !CloudTransferProtocol.IsToken(token) || token == owner || fields.Number("partSize") != CloudTransferProtocol.PartSize) throw CloudTransferProtocol.Invalid();
                     if (expiry <= currentTime || expiry > currentTime + (CloudTransferProtocol.LifetimeMinutes + 1) * 60) throw CloudTransferProtocol.Invalid();
-                    lock (gate) { expiresAt = expiry; if (!disposed && state != CloudTransferState.Canceled) state = CloudTransferState.Uploading; }
+                    lock (gate) { readToken = token; expiresAt = expiry; if (!disposed && state != CloudTransferState.Canceled) state = CloudTransferState.Uploading; }
                     ct.ThrowIfCancellationRequested();
                     using (var reader = protectedSnapshot.OpenRead())
                     using (var hash = SHA256.Create())
