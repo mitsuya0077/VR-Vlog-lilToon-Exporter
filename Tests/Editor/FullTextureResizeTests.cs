@@ -342,19 +342,79 @@ namespace VRVlog.LilToonExporter.Tests
                 Assert.That(F.Int(record, "height"), Is.EqualTo(2));
                 Assert.That(F.Bool(record, "normal"), Is.True);
                 Assert.That(F.Bool(record, "srgb"), Is.False);
-                Assert.That(F.Text(record, "format"), Is.EqualTo("rgbaFloat"));
+                Assert.That(F.Text(record, "format"), Is.EqualTo("rgbaHalf"));
                 for (var mip = 0; mip < F.Int(record, "mips"); mip++)
                 {
                     var bytes = Pixels(snapshot, record, 0, mip);
-                    for (var pixel = 0; pixel < bytes.Length / 16; pixel++)
+                    for (var pixel = 0; pixel < bytes.Length / 8; pixel++)
                     {
-                        Assert.That(BitConverter.ToSingle(bytes, pixel * 16), Is.EqualTo(.5f).Within(.02f));
-                        Assert.That(BitConverter.ToSingle(bytes, pixel * 16 + 4), Is.EqualTo(.5f).Within(.02f));
-                        Assert.That(BitConverter.ToSingle(bytes, pixel * 16 + 8), Is.GreaterThan(.99f));
-                        Assert.That(BitConverter.ToSingle(bytes, pixel * 16 + 12), Is.EqualTo(1));
+                        Assert.That(Mathf.HalfToFloat(BitConverter.ToUInt16(bytes, pixel * 8)), Is.EqualTo(.5f).Within(.02f));
+                        Assert.That(Mathf.HalfToFloat(BitConverter.ToUInt16(bytes, pixel * 8 + 2)), Is.EqualTo(.5f).Within(.02f));
+                        Assert.That(Mathf.HalfToFloat(BitConverter.ToUInt16(bytes, pixel * 8 + 4)), Is.GreaterThan(.99f));
+                        Assert.That(Mathf.HalfToFloat(BitConverter.ToUInt16(bytes, pixel * 8 + 6)), Is.EqualTo(1));
                     }
                 }
                 Assert.That(source.width, Is.EqualTo(4096));
+                Assert.That(source.isReadable, Is.False);
+                Assert.That(EditorJsonUtility.ToJson(importer), Is.EqualTo(settingsBefore));
+                Assert.That(File.ReadAllBytes(path), Is.EqualTo(fileBefore));
+                Assert.That(File.ReadAllBytes(path + ".meta"), Is.EqualTo(metaBefore));
+                Assert.That(fixture.Material.GetTexture("_BumpMap"), Is.SameAs(source));
+            }
+            finally { AssetDatabase.DeleteAsset(path); Object.DestroyImmediate(original); }
+        }
+
+        [TestCase(TextureImporterCompression.Uncompressed, FilterMode.Bilinear)]
+        [TestCase(TextureImporterCompression.Compressed, FilterMode.Trilinear)]
+        public void ImportedLdrNormalPreservesAllMipsAndSamplerWithinHalfPrecision(
+            TextureImporterCompression compression, FilterMode filter)
+        {
+            var path = "Assets/__VRVlogFilterableNormal_" + Guid.NewGuid().ToString("N") + ".png";
+            var original = Image(16, 16, true, index => new Color32(
+                (byte)(48 + index % 16 * 11), (byte)(48 + index / 16 * 11), 255, 255));
+            using var fixture = new SurfaceFixture();
+            try
+            {
+                File.WriteAllBytes(path, ImageConversion.EncodeToPNG(original));
+                AssetDatabase.ImportAsset(path);
+                var importer = (TextureImporter)AssetImporter.GetAtPath(path);
+                importer.textureType = TextureImporterType.NormalMap;
+                importer.textureCompression = compression;
+                importer.isReadable = false;
+                importer.mipmapEnabled = true;
+                importer.filterMode = filter;
+                importer.wrapModeU = TextureWrapMode.Clamp;
+                importer.wrapModeV = TextureWrapMode.Mirror;
+                importer.anisoLevel = 2;
+                importer.mipMapBias = .125f;
+                importer.SaveAndReimport();
+                var source = AssetDatabase.LoadAssetAtPath<Texture2D>(path);
+                var settingsBefore = EditorJsonUtility.ToJson(importer);
+                var fileBefore = File.ReadAllBytes(path);
+                var metaBefore = File.ReadAllBytes(path + ".meta");
+                fixture.Material.SetFloat("_UseBumpMap", 1);
+                fixture.Material.SetTexture("_BumpMap", source);
+                var snapshot = LilToonFullSnapshot.Capture(fixture.Avatar);
+                var record = Texture(snapshot, source.name);
+                Assert.That(F.Text(record, "format"), Is.EqualTo("rgbaHalf"));
+                Assert.That(F.Bool(record, "normal"), Is.True);
+                Assert.That(F.Bool(record, "srgb"), Is.False);
+                Assert.That(F.Int(record, "mips"), Is.EqualTo(source.mipmapCount));
+                Assert.That(F.Int(record, "filter"), Is.EqualTo((int)filter));
+                Assert.That(F.Int(record, "wrapU"), Is.EqualTo((int)TextureWrapMode.Clamp));
+                Assert.That(F.Int(record, "wrapV"), Is.EqualTo((int)TextureWrapMode.Mirror));
+                Assert.That(F.Int(record, "aniso"), Is.EqualTo(2));
+                Assert.That(F.Number(record, "mipBias"), Is.EqualTo(.125));
+                for (var mip = 0; mip < source.mipmapCount; mip++)
+                {
+                    var expected = LilToonFullTexture.Read(source, mip, 0, true, false, true);
+                    var actual = Pixels(snapshot, record, 0, mip);
+                    Assert.That(actual.Length * 2, Is.EqualTo(expected.Length));
+                    for (var component = 0; component < actual.Length / 2; component++)
+                        Assert.That(Mathf.HalfToFloat(BitConverter.ToUInt16(actual, component * 2)),
+                            Is.EqualTo(BitConverter.ToSingle(expected, component * 4)).Within(1f / 2048f),
+                            "mip " + mip + " component " + component);
+                }
                 Assert.That(source.isReadable, Is.False);
                 Assert.That(EditorJsonUtility.ToJson(importer), Is.EqualTo(settingsBefore));
                 Assert.That(File.ReadAllBytes(path), Is.EqualTo(fileBefore));

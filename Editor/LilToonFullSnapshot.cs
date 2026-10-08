@@ -176,14 +176,23 @@ namespace VRVlog.LilToonExporter
 
         internal static string StorageFormat(UnityEngine.Experimental.Rendering.GraphicsFormat format, bool normal)
         {
-            // Decoded normal components and >8-bit UNorm masks also need more
-            // precision, even when Unity does not classify their format as HDR.
+            // Canonical normals need more precision than an RGBA8 copy, but
+            // ordinary imported maps do not require full 32-bit components.
+            // Half retains finer precision than their 8-bit source samples and
+            // supports linear filtering on mobile GPUs without Float32 filtering.
+            // Keep authored HDR and >8-bit normalized source precision intact.
             var name = format.ToString();
-            if (normal || name.EndsWith("_SNorm", StringComparison.Ordinal)) return "rgbaFloat";
             if (name.StartsWith("R16", StringComparison.Ordinal) && name.EndsWith("_SFloat", StringComparison.Ordinal)) return "rgbaHalf";
             if (UnityEngine.Experimental.Rendering.GraphicsFormatUtility.IsHDRFormat(format)) return "rgbaFloat";
             foreach (System.Text.RegularExpressions.Match component in System.Text.RegularExpressions.Regex.Matches(name, "[RGBA]([0-9]+)"))
                 if (int.Parse(component.Groups[1].Value, System.Globalization.CultureInfo.InvariantCulture) > 8) return "rgbaFloat";
+            // EAC decodes 11-bit components although Unity's names omit that width.
+            if (normal && (format == UnityEngine.Experimental.Rendering.GraphicsFormat.R_EAC_UNorm
+                || format == UnityEngine.Experimental.Rendering.GraphicsFormat.RG_EAC_UNorm
+                || format == UnityEngine.Experimental.Rendering.GraphicsFormat.R_EAC_SNorm
+                || format == UnityEngine.Experimental.Rendering.GraphicsFormat.RG_EAC_SNorm)) return "rgbaFloat";
+            if (normal) return "rgbaHalf";
+            if (name.EndsWith("_SNorm", StringComparison.Ordinal)) return "rgbaFloat";
             return "rgba32";
         }
 
