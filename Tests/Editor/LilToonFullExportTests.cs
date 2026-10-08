@@ -162,6 +162,87 @@ namespace VRVlog.LilToonExporter.Tests
             finally {Object.DestroyImmediate(source);}
         }
 
+        [TestCase(UnityEngine.Experimental.Rendering.GraphicsFormat.R8G8B8A8_UNorm, true, "rgbaHalf")]
+        [TestCase(UnityEngine.Experimental.Rendering.GraphicsFormat.RG_BC5_UNorm, true, "rgbaHalf")]
+        [TestCase(UnityEngine.Experimental.Rendering.GraphicsFormat.RGBA_DXT5_UNorm, true, "rgbaHalf")]
+        [TestCase(UnityEngine.Experimental.Rendering.GraphicsFormat.R16G16B16A16_SFloat, true, "rgbaHalf")]
+        [TestCase(UnityEngine.Experimental.Rendering.GraphicsFormat.R32G32B32A32_SFloat, true, "rgbaFloat")]
+        [TestCase(UnityEngine.Experimental.Rendering.GraphicsFormat.R16G16B16A16_UNorm, true, "rgbaFloat")]
+        [TestCase(UnityEngine.Experimental.Rendering.GraphicsFormat.R_EAC_UNorm, true, "rgbaFloat")]
+        [TestCase(UnityEngine.Experimental.Rendering.GraphicsFormat.RG_EAC_UNorm, true, "rgbaFloat")]
+        [TestCase(UnityEngine.Experimental.Rendering.GraphicsFormat.R_EAC_SNorm, true, "rgbaFloat")]
+        [TestCase(UnityEngine.Experimental.Rendering.GraphicsFormat.RG_EAC_SNorm, true, "rgbaFloat")]
+        [TestCase(UnityEngine.Experimental.Rendering.GraphicsFormat.R8G8B8A8_UNorm, false, "rgba32")]
+        [TestCase(UnityEngine.Experimental.Rendering.GraphicsFormat.R16G16B16A16_SFloat, false, "rgbaHalf")]
+        [TestCase(UnityEngine.Experimental.Rendering.GraphicsFormat.R32G32B32A32_SFloat, false, "rgbaFloat")]
+        [TestCase(UnityEngine.Experimental.Rendering.GraphicsFormat.R16G16B16A16_UNorm, false, "rgbaFloat")]
+        [TestCase(UnityEngine.Experimental.Rendering.GraphicsFormat.R8_SNorm, false, "rgbaFloat")]
+        [TestCase(UnityEngine.Experimental.Rendering.GraphicsFormat.R16_SNorm, false, "rgbaFloat")]
+        [TestCase(UnityEngine.Experimental.Rendering.GraphicsFormat.R_EAC_UNorm, false, "rgba32")]
+        [TestCase(UnityEngine.Experimental.Rendering.GraphicsFormat.RG_EAC_UNorm, false, "rgba32")]
+        [TestCase(UnityEngine.Experimental.Rendering.GraphicsFormat.R_EAC_SNorm, false, "rgbaFloat")]
+        [TestCase(UnityEngine.Experimental.Rendering.GraphicsFormat.RG_EAC_SNorm, false, "rgbaFloat")]
+        public void NormalStorageSupportsMobileFilteringWithoutReducingAuthoredHighPrecision(
+            UnityEngine.Experimental.Rendering.GraphicsFormat format, bool normal, string expected)
+            => Assert.That(LilToonFullSnapshot.StorageFormat(format, normal), Is.EqualTo(expected));
+
+        [Test]
+        public void UnassignedNormalDefaultsUseHalfAndPreserveTheirSampler()
+        {
+            var source = new Material(Shader.Find("lilToon"));
+            try
+            {
+                var before = source.GetTexture("_BumpMap");
+                var snapshot = new LilToonFullSnapshot();
+                var record = (Dictionary<string, object>)typeof(LilToonFullSnapshot)
+                    .GetMethod("ReadMaterial", BindingFlags.Instance | BindingFlags.NonPublic)
+                    .Invoke(snapshot, new object[] { source });
+                var slot = F.List(record, "textures").Select(F.Object).Single(value => F.Text(value, "name") == "_BumpMap");
+                var textures = (List<object>)typeof(LilToonFullSnapshot)
+                    .GetField("textures", BindingFlags.Instance | BindingFlags.NonPublic).GetValue(snapshot);
+                var texture = F.Object(F.At(textures, F.Int(slot, "texture")));
+                var normal = Texture2D.normalTexture;
+                Assert.That(F.Text(texture, "format"), Is.EqualTo("rgbaHalf"));
+                Assert.That(F.Bool(texture, "normal"), Is.True);
+                Assert.That(F.Bool(texture, "srgb"), Is.False);
+                Assert.That(F.Int(texture, "filter"), Is.EqualTo((int)normal.filterMode));
+                Assert.That(F.Int(texture, "wrapU"), Is.EqualTo((int)normal.wrapModeU));
+                Assert.That(F.Int(texture, "wrapV"), Is.EqualTo((int)normal.wrapModeV));
+                Assert.That(F.Int(texture, "mips"), Is.EqualTo(normal.mipmapCount));
+                Assert.That(source.GetTexture("_BumpMap"), Is.SameAs(before));
+            }
+            finally { Object.DestroyImmediate(source); }
+        }
+
+        [TestCase(TextureFormat.RGBAHalf, "rgbaHalf")]
+        [TestCase(TextureFormat.RGBAFloat, "rgbaFloat")]
+        public void AuthoredFloatingNormalCaptureKeepsItsComponentFormat(TextureFormat format, string expected)
+        {
+            var texture = new Texture2D(4, 4, format, false, true)
+                { name = "Authored floating-point normal", filterMode = FilterMode.Bilinear };
+            var material = new Material(Shader.Find("lilToon"));
+            try
+            {
+                texture.SetPixels(Enumerable.Repeat(new Color(.317239f, .523451f, .981234f, 1), 16).ToArray());
+                texture.Apply(false, false);
+                material.SetTexture("_BumpMap", texture);
+                var snapshot = new LilToonFullSnapshot();
+                var record = (Dictionary<string, object>)typeof(LilToonFullSnapshot)
+                    .GetMethod("ReadMaterial", BindingFlags.Instance | BindingFlags.NonPublic)
+                    .Invoke(snapshot, new object[] { material });
+                var slot = F.List(record, "textures").Select(F.Object).Single(value => F.Text(value, "name") == "_BumpMap");
+                var textures = (List<object>)typeof(LilToonFullSnapshot)
+                    .GetField("textures", BindingFlags.Instance | BindingFlags.NonPublic).GetValue(snapshot);
+                var spec = F.Object(F.At(textures, F.Int(slot, "texture")));
+                Assert.That(F.Text(spec, "format"), Is.EqualTo(expected));
+                Assert.That(F.Int(spec, "filter"), Is.EqualTo((int)FilterMode.Bilinear));
+                Assert.That(F.Bool(spec, "normal"), Is.True);
+                Assert.That(material.GetTexture("_BumpMap"), Is.SameAs(texture));
+                Assert.That(texture.format, Is.EqualTo(format));
+            }
+            finally { Object.DestroyImmediate(material); Object.DestroyImmediate(texture); }
+        }
+
         [TestCase(false,false)][TestCase(true,false)][TestCase(false,true)]
         public void ExplicitEmissionSuppressionReachesBothFullLayersWithoutEditingSource(bool shared,bool hdr)
         {
