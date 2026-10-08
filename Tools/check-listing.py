@@ -38,7 +38,7 @@ def zip_manifest(data):
 
 
 def validate(listing, package, source, compatibility, *, expected_version=None,
-             preserve_version="0.11.10", fixture_base=None, read_zip=download):
+             preserve_version="0.11.11", fixture_base=None, read_zip=download):
     expected_version = expected_version or package["version"]
     require(package["name"] == EXPORTER, "Unexpected current package name")
     require(listing.get("id") == source["id"] and listing.get("url") == source["url"],
@@ -96,7 +96,7 @@ def main():
     parser.add_argument("--source", type=Path, default=ROOT / "source.json")
     parser.add_argument("--compatibility", type=Path, default=ROOT / "Compatibility/dependencies.json")
     parser.add_argument("--expected-version")
-    parser.add_argument("--preserve-version", default="0.11.10")
+    parser.add_argument("--preserve-version", default="0.11.11")
     parser.add_argument("--fixture-base-url")
     args = parser.parse_args()
     read_json = lambda path: json.loads(path.read_text(encoding="utf-8-sig"))

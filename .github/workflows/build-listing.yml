@@ -126,7 +126,7 @@ jobs:
           base = "http://127.0.0.1:8765/listing-fixture/release"
           releases = []
           empty = {"name": data["name"], "id": data["id"], "url": data["url"], "packages": {}}
-          variants = [(package["name"], "0.11.10"), (package["name"], package["version"])]
+          variants = [(package["name"], "0.11.11"), (package["name"], package["version"])]
           variants += [(name, compatibility["uniVrm"]["releaseVersion"]) for name in sorted(package["vpmDependencies"])]
           for name, version in variants:
               manifest = copy.deepcopy(package) if name == package["name"] else {"name": name, "displayName": name, "unity": "2022.3"}
