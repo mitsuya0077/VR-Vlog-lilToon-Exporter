@@ -80,6 +80,44 @@ namespace VRVlog.LilToonExporter.Tests
             return metadata;
         }
 
+        [TestCase(false)]
+        [TestCase(true)]
+        public void CustomSelectorRoutesStillDiscoverNativeHandWeightTreeCorners(bool nested)
+        {
+            controller.AddParameter("MenuFace", AnimatorControllerParameterType.Int);
+            var root = controller.layers[0].stateMachine;
+            foreach (var transition in root.defaultState.transitions) root.defaultState.RemoveTransition(transition);
+            var enter = root.defaultState.AddTransition(selected); enter.hasExitTime = false; enter.duration = 0;
+            enter.AddCondition(AnimatorConditionMode.Equals, 1, "MenuFace");
+            var tree = Tree("Original hand corners behind a custom selector", BlendTreeType.FreeformCartesian2D,
+                "GestureLeftWeight", "GestureRightWeight");
+            tree.AddChild(Clip("Original resting corner", 20), Vector2.zero);
+            tree.AddChild(Clip("Original left corner", 40), Vector2.right);
+            tree.AddChild(Clip("Original right corner", 60), Vector2.up);
+            tree.AddChild(Clip("Original combined corner", 80), Vector2.one);
+            selected.motion = tree;
+            if (nested)
+            {
+                controller.AddParameter("Configuration", AnimatorControllerParameterType.Float);
+                var outer = Tree("Custom configured parent", BlendTreeType.Simple1D, "Configuration");
+                outer.AddChild(tree, 0); selected.motion = outer;
+            }
+            var source = Read();
+            Assert.That(source.Entries, Has.Count.EqualTo(4));
+            Assert.That(source.Entries.All(entry => entry.Error == null && entry.Parameters["MenuFace"] == 1), Is.True);
+            Assert.That(source.Entries.Select(entry => (entry.Parameters["GestureLeftWeight"], entry.Parameters["GestureRightWeight"])),
+                Is.EquivalentTo(new[] { (0f, 0f), (1f, 0f), (0f, 1f), (1f, 1f) }));
+            foreach (var entry in source.Entries)
+            {
+                var selectors = entry.Parameters.Where(pair => !VrChatParameterDriver.BuiltIn.Contains(pair.Key))
+                    .ToDictionary(pair => pair.Key, pair => pair.Value);
+                var native = Native(entry.Parameters, selectors: selectors);
+                Assert.That(native.Hash, Is.EqualTo(Animator.StringToHash(root.name + "." + selected.name)));
+                Assert.That(entry.Values.Single(value => value.Shape == "Face size").Weight, Is.EqualTo(native.Weight).Within(.01));
+                Assert.That(entry.Animation, Is.Empty);
+            }
+        }
+
         (float Weight, int Hash, float Blink, Dictionary<AnimationClip, float> Coefficients, float Phase) Native(IDictionary<string, float> inputs, RuntimeAnimatorController runtime = null,
             float? phase = null, IDictionary<string, float> selectors = null, float[] seekHistory = null,
             IDictionary<string, float> arrival = null)

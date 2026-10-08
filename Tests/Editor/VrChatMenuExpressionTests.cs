@@ -5,6 +5,8 @@ using NUnit.Framework;
 using UnityEditor;
 using UnityEditor.Animations;
 using UnityEngine;
+using UnityEngine.Animations;
+using UnityEngine.Playables;
 using VRVlog.Expressions;
 
 namespace VRVlog.LilToonExporter.Tests
@@ -117,6 +119,118 @@ namespace VRVlog.LilToonExporter.Tests
             var curve = new AnimationCurve(new Keyframe(0, 75, 0, float.PositiveInfinity), new Keyframe(10, 100, float.PositiveInfinity, 0));
             AnimationUtility.SetEditorCurve(clip, EditorCurveBinding.FloatCurve("Face", typeof(SkinnedMeshRenderer), "blendShape.Face size"), curve);
             Assert.Throws<InvalidOperationException>(() => VrChatExpressionSampler.Sample(avatar, controller, Params("Face", 0), Params("Face", 1)));
+        }
+
+        private (float Face, float Blink, AnimatorStateInfo State) OriginalNativeSelectedPose(RuntimeAnimatorController runtime)
+        {
+            // Independent original-controller witness: no exporter dependency,
+            // graph rewrite, sampler, or synthesized expected expression.
+            var clone = UnityEngine.Object.Instantiate(avatar);
+            var graph = PlayableGraph.Create("Original selected terminal witness");
+            try
+            {
+                var animator = clone.GetComponent<Animator>(); animator.runtimeAnimatorController = null;
+                animator.cullingMode = AnimatorCullingMode.AlwaysAnimate;
+                graph.SetTimeUpdateMode(DirectorUpdateMode.Manual);
+                var playable = AnimatorControllerPlayable.Create(graph, runtime);
+                AnimationPlayableOutput.Create(graph, "Original", animator).SetSourcePlayable(playable);
+                playable.SetInteger("Face", 0); graph.Play(); graph.Evaluate(0);
+                for (var frame = 0; frame < 120; frame++) graph.Evaluate(1f / 60f);
+                playable.SetInteger("Face", 1);
+                for (var frame = 0; frame < 120; frame++) graph.Evaluate(1f / 60f);
+                var renderer = clone.GetComponentInChildren<SkinnedMeshRenderer>();
+                return (renderer.GetBlendShapeWeight(0), renderer.GetBlendShapeWeight(1), playable.GetCurrentAnimatorStateInfo(0));
+            }
+            finally { graph.Destroy(); UnityEngine.Object.DestroyImmediate(clone); }
+        }
+
+        [TestCase(false)]
+        [TestCase(true)]
+        public void ReachedNonLoopingMorphTerminalsKeepTheOriginalNativeHeldPose(bool effectiveOverride)
+        {
+            DiscreteController();
+            var state = controller.layers[0].stateMachine.states.Single(child => child.state.name == "Smile").state;
+            var clip = (AnimationClip)state.motion;
+            AnimationUtility.SetEditorCurve(clip, EditorCurveBinding.FloatCurve("Face", typeof(SkinnedMeshRenderer), "blendShape.Face size"),
+                AnimationCurve.Linear(0, 0, .5f, 75));
+            RuntimeAnimatorController runtime = controller; AnimatorOverrideController overrides = null;
+            if (effectiveOverride)
+            {
+                var replacement = Clip("Original effective terminal", 90, 0);
+                AnimationUtility.SetEditorCurve(replacement, EditorCurveBinding.FloatCurve("Face", typeof(SkinnedMeshRenderer), "blendShape.Face size"),
+                    AnimationCurve.Linear(0, 0, .5f, 90));
+                overrides = new AnimatorOverrideController(controller); overrides[clip] = replacement; runtime = overrides;
+            }
+            var before = ExportSourceFingerprint.Compute(avatar); var serialized = EditorJsonUtility.ToJson(controller);
+            try
+            {
+                var native = OriginalNativeSelectedPose(runtime);
+                Assert.That(native.State.loop, Is.False); Assert.That(native.State.normalizedTime, Is.GreaterThan(1));
+                Assert.That(native.Face, Is.EqualTo(effectiveOverride ? 90 : 75).Within(.01));
+                var values = VrChatExpressionSampler.Sample(avatar, runtime, Params("Face", 0), Params("Face", 1));
+                Assert.That(values.Single(value => value.Shape == "Face size").Weight, Is.EqualTo(native.Face).Within(.01));
+                Assert.That(values.Single(value => value.Shape == "Blink").Weight, Is.EqualTo(native.Blink).Within(.01));
+                Assert.That(ExportSourceFingerprint.Compute(avatar), Is.EqualTo(before));
+                Assert.That(EditorJsonUtility.ToJson(controller), Is.EqualTo(serialized));
+            }
+            finally { if (overrides != null) UnityEngine.Object.DestroyImmediate(overrides); }
+        }
+
+        [TestCase("loop")]
+        [TestCase("late curve")]
+        [TestCase("speed input")]
+        [TestCase("motion time")]
+        [TestCase("cycle offset")]
+        [TestCase("parameter curve")]
+        [TestCase("future exit")]
+        public void TerminalMorphProofCannotReplaceAnUnprovenNativeClockOrFutureState(string kind)
+        {
+            DiscreteController();
+            var machine = controller.layers[0].stateMachine;
+            var state = machine.states.Single(child => child.state.name == "Smile").state;
+            var clip = (AnimationClip)state.motion;
+            AnimationUtility.SetEditorCurve(clip, EditorCurveBinding.FloatCurve("Face", typeof(SkinnedMeshRenderer), "blendShape.Face size"),
+                AnimationCurve.Linear(0, 0, kind == "late curve" ? 10 : .5f, 75));
+            if (kind == "loop") { var settings = AnimationUtility.GetAnimationClipSettings(clip); settings.loopTime = true; AnimationUtility.SetAnimationClipSettings(clip, settings); }
+            if (kind == "speed input" || kind == "motion time" || kind == "parameter curve") controller.AddParameter("Clock", AnimatorControllerParameterType.Float);
+            if (kind == "speed input") { state.speedParameterActive = true; state.speedParameter = "Clock"; }
+            if (kind == "motion time") { state.timeParameterActive = true; state.timeParameter = "Clock"; }
+            if (kind == "cycle offset") state.cycleOffset = .25f;
+            if (kind == "parameter curve") AnimationUtility.SetEditorCurve(clip, EditorCurveBinding.FloatCurve("", typeof(Animator), "Clock"), AnimationCurve.Linear(0, 0, .5f, 1));
+            if (kind == "future exit") { var exit = state.AddTransition(machine.defaultState); exit.hasExitTime = true; exit.exitTime = 10; exit.duration = 0; }
+            Assert.Throws<InvalidOperationException>(() => VrChatExpressionSampler.Sample(avatar, controller, Params("Face", 0), Params("Face", 1)));
+        }
+
+        [TestCase("constant override", true)]
+        [TestCase("terminal override", true)]
+        [TestCase("fractional override", false)]
+        [TestCase("additive", false)]
+        [TestCase("unbound channel", false)]
+        public void SelectedNativeUpperWritersDominateOnlyTheirExactLowerMorphStream(string kind, bool supported)
+        {
+            DiscreteController();
+            var layers = controller.layers;
+            var moving = Clip("Original lower loop", 0, 0);
+            AnimationUtility.SetEditorCurve(moving, EditorCurveBinding.FloatCurve("Face", typeof(SkinnedMeshRenderer), "blendShape.Face size"), AnimationCurve.Linear(0, 0, .8f, 40));
+            if (kind == "unbound channel") AnimationUtility.SetEditorCurve(moving, EditorCurveBinding.FloatCurve("Face", typeof(SkinnedMeshRenderer), "blendShape.Blink"), AnimationCurve.Linear(0, 0, .8f, 60));
+            var settings = AnimationUtility.GetAnimationClipSettings(moving); settings.loopTime = true; AnimationUtility.SetAnimationClipSettings(moving, settings);
+            var lower = new AnimatorStateMachine { name = "Original lower moving support" }; AssetDatabase.AddObjectToAsset(lower, controller);
+            var idle = lower.AddState("Original moving rest"); idle.motion = moving; idle.writeDefaultValues = false; lower.defaultState = idle;
+            var upper = layers[0]; upper.name = "Selected upper face"; upper.defaultWeight = kind == "fractional override" ? .5f : 1;
+            upper.blendingMode = kind == "additive" ? AnimatorLayerBlendingMode.Additive : AnimatorLayerBlendingMode.Override;
+            if (kind == "terminal override")
+                AnimationUtility.SetEditorCurve((AnimationClip)upper.stateMachine.states.Single(child => child.state.name == "Smile").state.motion,
+                    EditorCurveBinding.FloatCurve("Face", typeof(SkinnedMeshRenderer), "blendShape.Face size"), AnimationCurve.Linear(0, 0, .5f, 75));
+            if (kind == "unbound channel")
+                AnimationUtility.SetEditorCurve((AnimationClip)upper.stateMachine.states.Single(child => child.state.name == "Smile").state.motion,
+                    EditorCurveBinding.FloatCurve("Face", typeof(SkinnedMeshRenderer), "blendShape.Blink"), null);
+            controller.layers = new[] { new AnimatorControllerLayer { name = lower.name, stateMachine = lower, defaultWeight = 1 }, upper };
+            if (!supported)
+            { Assert.Throws<InvalidOperationException>(() => VrChatExpressionSampler.Sample(avatar, controller, Params("Face", 0), Params("Face", 1))); return; }
+            var native = OriginalNativeSelectedPose(controller);
+            Assert.That(native.Face, Is.EqualTo(75).Within(.01));
+            var values = VrChatExpressionSampler.Sample(avatar, controller, Params("Face", 0), Params("Face", 1));
+            Assert.That(values.Single(value => value.Shape == "Face size").Weight, Is.EqualTo(native.Face).Within(.01));
         }
 
         [Test]

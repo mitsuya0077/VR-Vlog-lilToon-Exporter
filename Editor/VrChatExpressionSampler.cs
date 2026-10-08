@@ -698,10 +698,12 @@ namespace VRVlog.LilToonExporter
                 }
                 CheckSelectedState();
                 var stableWeights = evaluation.CaptureLayerWeights(playable);
+                var shadowedCurves = PreserveTemporalRest(avatar, playable, controller,
+                    affected.Concat(supportLayers), dependencies.Morphs, excludedPath, null);
                 ValidateFixedPose(avatar, playable, controller, excludedPath, excludedLayers, equivalentStates,
                     dependencies.NativeSupportLayers, dependencies.Morphs, dependencies: dependencies, metadata: metadata,
                     restrictCapturedMorphs: projectionPlan != null, neutralPlan: projectionPlan, fixedMotionTimeInputs: selected,
-                    motionTimeRuntime: runtime);
+                    motionTimeRuntime: runtime, shadowedNeutralCurves: shadowedCurves);
                 selectedRest?.Validate();
                 selectedRest?.ValidateNativeRest(clone);
                 var bindings = ActiveBindings(playable, affected, excludedPath, equivalentStates, neutralAvatar: avatar,
@@ -1159,7 +1161,8 @@ namespace VRVlog.LilToonExporter
                     if (current.Length != 1 || current[0].weight != 1 ||
                         playable.GetNextAnimatorClipInfo(upper).Any(info => info.clip != null && info.weight > .00001f)) continue;
                     var curve = AnimationUtility.GetEditorCurve(current[0].clip, binding);
-                    if (curve == null || curve.length == 0 || !IsConstant(curve)) continue;
+                    if (curve == null || curve.length == 0 || !IsConstant(curve) &&
+                        NativeTerminalClip(playable, controller, upper) != current[0].clip) continue;
                     VrChatGestureExpressions.ReadCurve(curve);
                     return true;
                 }
@@ -1193,6 +1196,48 @@ namespace VRVlog.LilToonExporter
                 }
             }
             return shadowed;
+        }
+
+        // A nonlooping native clip clamps at its authored end. Structural
+        // variation earlier in that clip does not make its reached terminal
+        // pose dynamic. This proof covers only one explicit morph-only stream;
+        // state/SDK/future-transition and pose stability checks remain separate.
+        private static AnimationClip NativeTerminalClip(AnimatorControllerPlayable playable,
+            AnimatorController controller, int layer)
+        {
+            bool Finite(float value) => !float.IsNaN(value) && !float.IsInfinity(value);
+            var definition = controller.layers[layer];
+            if (definition.syncedLayerIndex >= 0 || playable.IsInTransition(layer)) return null;
+            var info = playable.GetCurrentAnimatorStateInfo(layer);
+            if (info.loop || !Finite(info.normalizedTime) || info.normalizedTime < 1 ||
+                !Finite(info.speed) || !Finite(info.speedMultiplier) || !Finite(info.speed * info.speedMultiplier) ||
+                info.speed * info.speedMultiplier <= 0) return null;
+            var current = playable.GetCurrentAnimatorClipInfo(layer).Where(value => value.clip != null && value.weight > .00001f).ToArray();
+            if (current.Length != 1 || current[0].weight != 1 ||
+                playable.GetNextAnimatorClipInfo(layer).Any(value => value.clip != null && value.weight > .00001f)) return null;
+            var clip = current[0].clip;
+            if (clip.isLooping || !Finite(clip.length) || clip.length <= 0 ||
+                AnimationUtility.GetAnimationEvents(clip).Length != 0 || AnimationUtility.GetObjectReferenceCurveBindings(clip).Length != 0) return null;
+            var matches = new HashSet<AnimatorState>();
+            void Visit(AnimatorStateMachine machine, string path)
+            {
+                foreach (var child in machine.states)
+                    if (Animator.StringToHash(path + "." + child.state.name) == info.fullPathHash) matches.Add(child.state);
+                foreach (var child in machine.stateMachines) Visit(child.stateMachine, path + "." + child.stateMachine.name);
+            }
+            foreach (var root in new[] { definition.name, definition.stateMachine.name }.Distinct(StringComparer.Ordinal))
+                Visit(definition.stateMachine, root);
+            if (matches.Count != 1) return null;
+            var state = matches.Single();
+            if ((controller.GetStateEffectiveMotion(state, layer) ?? state.motion) != clip || state.timeParameterActive || state.speedParameterActive ||
+                state.cycleOffsetParameterActive || state.mirrorParameterActive || state.cycleOffset != 0 || state.mirror || state.iKOnFeet ||
+                !Finite(state.speed) || state.speed <= 0) return null;
+            var bindings = AnimationUtility.GetCurveBindings(clip);
+            if (bindings.Length == 0 || bindings.Any(binding => binding.type != typeof(SkinnedMeshRenderer) ||
+                !binding.propertyName.StartsWith("blendShape.", StringComparison.Ordinal))) return null;
+            foreach (var binding in bindings)
+                ValidateNativeParameterCurve(AnimationUtility.GetEditorCurve(clip, binding), clip.name + " / " + binding.propertyName);
+            return clip;
         }
 
         // A current pet-only state can still transition to a facial state later.
@@ -1538,6 +1583,7 @@ namespace VRVlog.LilToonExporter
                 if (hash == 0) continue;
                 var found = false;
                 var fixedMotionTime = false;
+                var terminalClip = NativeTerminalClip(playable, controller, layer);
                 void Visit(AnimatorStateMachine machine, string path, bool timedAncestor)
                 {
                     var timed = timedAncestor || machine.anyStateTransitions.Any(t => !t.mute && t.hasExitTime && !ExpressionDependencies.IsFalse(t, layerTimedValues));
@@ -1622,13 +1668,18 @@ namespace VRVlog.LilToonExporter
                             if (binding.type == typeof(SkinnedMeshRenderer) && FindRenderer(avatar, binding.path).sharedMesh
                                 .GetBlendShapeIndex(binding.propertyName.Substring("blendShape.".Length)) < 0) continue;
                             var curve = AnimationUtility.GetEditorCurve(info.clip, binding);
-                            if (neutral && shadowedNeutralCurves?.Contains((layer, info.clip, binding)) == true) continue;
+                            if (shadowedNeutralCurves?.Contains((layer, info.clip, binding)) == true) continue;
                             if (fixedMotionTime)
                             {
                                 // A readonly normalized Motion Time freezes the
                                 // active clip's actual native interpolation.
                                 // Keep data checks and the later graph/weight/
                                 // binding/pose stability checkpoints intact.
+                                ValidateNativeParameterCurve(curve, layers[layer].name + " / " + info.clip.name + " / " + binding.propertyName);
+                                continue;
+                            }
+                            if (terminalClip == info.clip && binding.type == typeof(SkinnedMeshRenderer))
+                            {
                                 ValidateNativeParameterCurve(curve, layers[layer].name + " / " + info.clip.name + " / " + binding.propertyName);
                                 continue;
                             }

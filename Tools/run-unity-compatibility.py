@@ -294,6 +294,9 @@ BEHAVIOR_CASES = {
         'ColorCanonicalizationDoesNotRelaxOtherPropertyDomains': 4,
     },
     'VrChatMenuExpressionTests': {
+        'ReachedNonLoopingMorphTerminalsKeepTheOriginalNativeHeldPose': 2,
+        'TerminalMorphProofCannotReplaceAnUnprovenNativeClockOrFutureState': 7,
+        'SelectedNativeUpperWritersDominateOnlyTheirExactLowerMorphStream': 5,
         'MutuallyExclusiveAnimationsReuseOnlyExactStoredPnt': 5,
         'AnimationProgramsKeepUniqueBasisNamesWithinEachFace': 2,
         'EqualScalarPosesRetainIndependentSimultaneousTargets': 1,
@@ -634,6 +637,7 @@ BEHAVIOR_CASES = {
         'UsesGenericOnlyWhenSourceHasNoPrimaryPlatform': 1,
     },
     'GestureBlendTreeTests': {
+        'CustomSelectorRoutesStillDiscoverNativeHandWeightTreeCorners': 2,
         'TwoDimensionalHandKnotsKeepTheNativeGraphAndMatchingGestureGate': 1,
         'NestedHandKnotsAreComposedAndEquivalentNativePosesAreDeduplicated': 1,
         'SelectedTreeDriverRetainsItsNativeUpperLayerContribution': 1,

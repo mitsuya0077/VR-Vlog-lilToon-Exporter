@@ -194,6 +194,20 @@ namespace VRVlog.LilToonExporter
                     foreach (var child in machine.stateMachines)
                         foreach (var transition in EnabledTransitions(machine.GetStateMachineTransitions(child.stateMachine))) Inspect(transition, machine);
                 }
+                // A hand-weight tree can be entered through a custom selector
+                // or a driver relay. Its own controls still define authored
+                // hand expressions, even when no transition names a hand.
+                bool HandMotion(Motion motion, HashSet<Motion> visited)
+                {
+                    if (!(motion is BlendTree tree) || !visited.Add(motion)) return false;
+                    if (tree.blendType == BlendTreeType.Direct && tree.children.Any(child => IsGesture(child.directBlendParameter)) ||
+                        tree.blendType != BlendTreeType.Direct && (IsGesture(tree.blendParameter) ||
+                            tree.blendType != BlendTreeType.Simple1D && IsGesture(tree.blendParameterY))) return true;
+                    return tree.children.Any(child => HandMotion(child.motion, visited));
+                }
+                foreach (var state in paths.Keys)
+                    if (HandMotion(EffectiveMotion(controller, state, layerIndex), new HashSet<Motion>()) ||
+                        state.timeParameterActive && IsGesture(state.timeParameter)) targets.Add(state);
                 foreach (var state in targets.Where(paths.ContainsKey).OrderBy(s => paths[s], StringComparer.Ordinal))
                     yield return new Target { State = state, Layer = layerIndex, Path = layerIndex + "/" + paths[state] };
             }
@@ -299,7 +313,8 @@ namespace VRVlog.LilToonExporter
             return result;
         }
 
-        private static bool IsGesture(string name) => name == "GestureLeft" || name == "GestureRight";
+        private static bool IsGesture(string name) => name == "GestureLeft" || name == "GestureRight" ||
+            name == "GestureLeftWeight" || name == "GestureRightWeight";
         private static bool IsMorph(EditorCurveBinding binding) => binding.type == typeof(SkinnedMeshRenderer) &&
             binding.propertyName.StartsWith("blendShape.", StringComparison.Ordinal);
     }
