@@ -5,6 +5,7 @@ param(
 )
 $ErrorActionPreference = 'Stop'
 $repoRoot = Split-Path $PSScriptRoot -Parent
+$env:VRVLOG_LAN_TRANSFER_CLI_ROOT = $repoRoot
 $dependencyRoot = Join-Path $repoRoot 'Editor/LanTransfer/Dependencies'
 $dependencies = @(
     (Join-Path $dependencyRoot 'BouncyCastle.Cryptography.dll'),

@@ -1,5 +1,6 @@
 """Build the Unity package from an explicit allowlist of tracked files."""
 import argparse
+import hashlib
 import json
 import re
 import subprocess
@@ -21,17 +22,28 @@ LOCALE_ASSETS = {
     for locale in ("en", "ko", "zh-Hans", "zh-Hant")
 }
 LOCALE_FILES = LOCALE_ASSETS | {name + ".meta" for name in LOCALE_ASSETS}
+TRANSFER_DLLS = {"bouncycastle.cryptography.dll", "zxing.dll"}
+TRANSFER_DLL_HASHES = {
+    "Editor/LanTransfer/Dependencies/BouncyCastle.Cryptography.dll": "d61c1f2ba929a230a58e101ccd850e21f2675fa6b9814ec279633e8a089c3495",
+    "Editor/LanTransfer/Dependencies/zxing.dll": "f3b823b6fd6492525a7547989056883def5d43be1e12c4f63fa54df73e3c5cfc",
+}
+TRANSFER_DLL_PATHS = set(TRANSFER_DLL_HASHES)
 TRANSFER_FILES = {
-    "Editor/LanTransfer.meta",
-    "Documentation~/LanTransfer.md", "Documentation~/CloudTransfer.md",
+    "Editor/LanTransfer.meta", "Documentation~/LanTransfer.md", "Documentation~/CloudTransfer.md",
     "ThirdPartyNotices/LanTransfer.md", "ThirdPartyNotices/BouncyCastle-LICENSE.txt", "ThirdPartyNotices/ZXing-LICENSE.txt",
 }
-TRANSFER_DLLS = {"bouncycastle.cryptography.dll", "zxing.dll"}
-# Source and host tests retain the unreleased implementation. Distribution must
-# also fail if a caller or copied implementation is added outside that subtree.
 TRANSFER_REFERENCE = re.compile(
     r"\b(?:LanTransfer\w*|CloudTransfer\w*|CloudDevelopment\w*|(?:Cloud|Lan)VrmTransfer\w*|CloudEncryptedSnapshot|ZXing|BouncyCastle)\b"
     r"|\b(?:GUID:)?b15e228f27f843bdbdd4c2335be4354b\b", re.IGNORECASE)
+OPTIONAL_TRANSFER_TYPE_LITERAL = '"VRVlog.LilToonExporter.LanTransfer.CloudVrmTransferWindow, VRVlog.LanTransfer.Editor"'
+VERSION = re.compile(r"\d+\.\d+\.\d+(?:-([0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*))?(?:\+[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?")
+
+
+def prerelease(version):
+    match = VERSION.fullmatch(version) if isinstance(version, str) else None
+    if match is None:
+        raise ValueError("Package version must be a semantic version")
+    return match[1] is not None
 
 
 def tracked_files(root):
@@ -39,44 +51,67 @@ def tracked_files(root):
     return sorted(set(data.decode("utf-8").split("\0")) - {""})
 
 
-def included(name):
+def included(name, transfer=False):
     path = PurePosixPath(name)
     if path.is_absolute() or ".." in path.parts:
         return False
-    if (name.startswith("Editor/LanTransfer/") or name in TRANSFER_FILES
-            or name.removesuffix(".meta") in TRANSFER_FILES
-            or path.name.lower().removesuffix(".meta") in TRANSFER_DLLS):
+    if not transfer and (name.startswith("Editor/LanTransfer/") or name in TRANSFER_FILES
+                         or name.removesuffix(".meta") in TRANSFER_FILES
+                         or path.name.lower().removesuffix(".meta") in TRANSFER_DLLS):
         return False
-    return (name in ROOT_FILES or name in LOCALE_FILES or name in DEPENDENCY_PATCH_FILES
+    # Prereleases ship only the two pinned transfer DLLs at reviewed paths.
+    if path.name.lower().removesuffix(".meta") in TRANSFER_DLLS:
+        return transfer and name.removesuffix(".meta") in TRANSFER_DLL_PATHS
+    return (name in ROOT_FILES or transfer and name == "Documentation~/CloudTransfer.md"
+            or name in LOCALE_FILES or name in DEPENDENCY_PATCH_FILES
             or name == "Runtime.meta"
             or (path.parts[0] in {"Editor", "Runtime"} and path.suffix in PACKAGE_SUFFIXES)
             or (path.parts[0] == "ThirdPartyNotices" and path.suffix in {".md", ".txt"}))
 
 
-def verify_no_transfer_dependencies(contents):
+def verify_transfer_dependencies(contents, transfer):
     for name, content in contents.items():
-        if (name.startswith("Editor/LanTransfer/") or name in TRANSFER_FILES
-                or name.removesuffix(".meta") in TRANSFER_FILES
-                or PurePosixPath(name).name.lower().removesuffix(".meta") in TRANSFER_DLLS):
-            raise ValueError("QR transfer input cannot be distributed: " + name)
-        if PurePosixPath(name).suffix not in {".cs", ".asmdef"}:
-            continue
-        try:
-            text = content.decode("utf-8-sig")
-        except UnicodeDecodeError as error:
-            raise ValueError("Package source must be UTF-8: " + name) from error
-        # C# identifiers and JSON strings can spell a reference with Unicode
-        # escapes. Normalize those too; report the path, never source contents.
-        text = re.sub(r"\\u([0-9a-fA-F]{4})|\\U([0-9a-fA-F]{8})",
-                      lambda match: chr(int(match[1] or match[2], 16)), text)
-        if TRANSFER_REFERENCE.search(text):
-            raise ValueError("QR transfer dependency cannot be distributed: " + name)
+        if not transfer and (name.startswith("Editor/LanTransfer/") or name in TRANSFER_FILES
+                             or name.removesuffix(".meta") in TRANSFER_FILES
+                             or PurePosixPath(name).name.lower().removesuffix(".meta") in TRANSFER_DLLS):
+            raise ValueError("QR transfer input cannot be distributed in stable: " + name)
+        if PurePosixPath(name).suffix in {".cs", ".asmdef"}:
+            try:
+                text = content.decode("utf-8-sig")
+            except UnicodeDecodeError as error:
+                raise ValueError("Package source must be UTF-8: " + name) from error
+            if not transfer:
+                text = re.sub(r"\\u([0-9a-fA-F]{4})|\\U([0-9a-fA-F]{8})",
+                              lambda match: chr(int(match[1] or match[2], 16)), text)
+                # One optional lookup is reviewed. No typed/GUID reference or
+                # copied transfer implementation may enter the stable package.
+                if name == "Editor/LilToonExporterWindow.cs" and text.count(OPTIONAL_TRANSFER_TYPE_LITERAL) == 1:
+                    text = text.replace(OPTIONAL_TRANSFER_TYPE_LITERAL, '""')
+                if TRANSFER_REFERENCE.search(text):
+                    raise ValueError("QR transfer dependency cannot be distributed in stable: " + name)
+    if not transfer:
+        return
+    present = TRANSFER_DLL_PATHS & set(contents)
+    if present != TRANSFER_DLL_PATHS:
+        raise ValueError("Both pinned transfer DLLs must be included")
+    for name, expected in TRANSFER_DLL_HASHES.items():
+        if hashlib.sha256(contents[name]).hexdigest() != expected:
+            raise ValueError("Pinned transfer DLL hash mismatch: " + name)
+
+
+def verify_no_transfer_dependencies(contents):
+    """Keep the explicit stable-only verification API for release tooling."""
+    verify_transfer_dependencies(contents, False)
 
 
 def build(root, output):
     root = root.resolve()
-    names = [name for name in tracked_files(root) if included(name)]
-    missing = (ROOT_FILES | LOCALE_FILES | DEPENDENCY_PATCH_FILES) - set(names)
+    transfer = prerelease(json.loads((root / "package.json").read_text(encoding="utf-8-sig"))["version"])
+    names = [name for name in tracked_files(root) if included(name, transfer)]
+    required = ROOT_FILES | LOCALE_FILES | DEPENDENCY_PATCH_FILES
+    if transfer:
+        required |= {"Documentation~/CloudTransfer.md"}
+    missing = required - set(names)
     if missing:
         raise ValueError("Required package files are not tracked: " + ", ".join(sorted(missing)))
     contents = {}
@@ -91,7 +126,7 @@ def build(root, output):
         if not path.resolve().is_relative_to(root.resolve()):
             raise ValueError("Package input escapes repository: " + name)
         contents[name] = path.read_bytes()
-    verify_no_transfer_dependencies(contents)
+    verify_transfer_dependencies(contents, transfer)
     if not any(name.startswith("Editor/") and name.endswith(".cs") for name in names):
         raise ValueError("Package has no Editor source")
     output.parent.mkdir(parents=True, exist_ok=True)

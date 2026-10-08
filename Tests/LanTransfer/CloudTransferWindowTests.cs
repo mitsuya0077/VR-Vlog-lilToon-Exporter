@@ -19,14 +19,33 @@ namespace VRVlog.LilToonExporter.LanTransfer.Tests
         {
             Assert.That(LanTransferAvailability.Enabled, Is.False);
             var menu = typeof(CloudVrmTransferWindow).GetMethod("OpenDevelopmentTransfer", BindingFlags.NonPublic | BindingFlags.Static);
-#if UNITY_EDITOR && VRVLOG_CLOUD_TRANSFER_DEVELOPMENT
-            Assert.That(CloudTransferAvailability.Enabled, Is.True);
+#if UNITY_EDITOR
             Assert.That(menu, Is.Not.Null);
             Assert.That(menu.GetCustomAttributes(typeof(MenuItem), false).Length, Is.EqualTo(1));
+            var validation = typeof(CloudVrmTransferWindow).GetMethod("CanOpenDevelopmentTransfer", BindingFlags.NonPublic | BindingFlags.Static);
+            Assert.That(validation, Is.Not.Null);
+            Assert.That(validation.GetCustomAttributes(typeof(MenuItem), false).Length, Is.EqualTo(1));
+            Assert.That(validation.Invoke(null, null), Is.EqualTo(CloudTransferAvailability.Enabled));
+            Assert.That(CloudVrmTransferWindow.IsAvailable, Is.EqualTo(CloudTransferAvailability.Enabled));
 #else
             Assert.That(CloudTransferAvailability.Enabled, Is.False);
             Assert.That(menu, Is.Null);
 #endif
+        }
+
+        [Test]
+        public void OptionalExporterEntryMatchesInstalledReleaseChannel()
+        {
+            var exporter = Type.GetType("VRVlog.LilToonExporter.LilToonExporterWindow, VRVlog.LilToonExporter.Editor", true);
+            var method = exporter.GetMethod("SavedVrmTransferMethod", BindingFlags.NonPublic | BindingFlags.Static);
+            Assert.That(method, Is.Not.Null);
+            var entry = (MethodInfo)method.Invoke(null, null);
+            Assert.That(entry != null, Is.EqualTo(CloudTransferAvailability.Enabled));
+            if (entry != null)
+            {
+                Assert.That(entry.DeclaringType, Is.EqualTo(typeof(CloudVrmTransferWindow)));
+                Assert.That(entry.Name, Is.EqualTo("OpenSavedVrmForDevelopment"));
+            }
         }
 
         [Test]
@@ -38,20 +57,21 @@ namespace VRVlog.LilToonExporter.LanTransfer.Tests
             try
             {
                 File.WriteAllBytes(path, bytes);
-#if UNITY_EDITOR && VRVLOG_CLOUD_TRANSFER_DEVELOPMENT
-                Assert.Throws<InvalidOperationException>(() => CloudVrmTransferWindow.Show(path, "saved.vrm"));
-#else
+                if (CloudTransferAvailability.Enabled)
+                    Assert.Throws<InvalidOperationException>(() => CloudVrmTransferWindow.Show(path, "saved.vrm"));
+                else
+                {
                 Assert.Throws<NotSupportedException>(() => CloudVrmTransferWindow.CreateSnapshotPath());
                 Assert.Throws<NotSupportedException>(() => CloudVrmTransferWindow.Show(path, "saved.vrm"));
                 Assert.Throws<NotSupportedException>(() => CloudVrmTransferWindow.OpenSavedVrmForDevelopment(path));
-#endif
+                }
                 Assert.That(Resources.FindObjectsOfTypeAll<CloudVrmTransferWindow>(), Is.EquivalentTo(windows));
                 Assert.That(File.ReadAllBytes(path), Is.EqualTo(bytes));
             }
             finally { File.Delete(path); }
         }
 
-#if !(UNITY_EDITOR && VRVLOG_CLOUD_TRANSFER_DEVELOPMENT)
+#if !(UNITY_EDITOR)
         [Test]
         public void RejectedCloudEntryDeletesOnlyItsPreviouslyIssuedSnapshot()
         {
@@ -100,7 +120,7 @@ namespace VRVlog.LilToonExporter.LanTransfer.Tests
         }
 #endif
 
-#if UNITY_EDITOR && VRVLOG_CLOUD_TRANSFER_DEVELOPMENT
+#if UNITY_EDITOR
         [Test]
         public void DevelopmentFileSelectionCopiesTheVrmWithoutStartingAnUploadAndClosureDeletesOnlyTheCopy()
         {
@@ -111,6 +131,12 @@ namespace VRVlog.LilToonExporter.LanTransfer.Tests
             try
             {
                 File.WriteAllBytes(path, bytes);
+                if (!CloudTransferAvailability.Enabled)
+                {
+                    Assert.Throws<NotSupportedException>(() => CloudVrmTransferWindow.OpenSavedVrmForDevelopment(path));
+                    Assert.That(File.ReadAllBytes(path), Is.EqualTo(bytes));
+                    return;
+                }
                 CloudVrmTransferWindow.OpenSavedVrmForDevelopment(path);
                 window = EditorWindow.GetWindow<CloudVrmTransferWindow>();
                 var source = (CloudVrmTransferSource)Get(window, "source");
@@ -151,7 +177,8 @@ namespace VRVlog.LilToonExporter.LanTransfer.Tests
                 source = new CloudVrmTransferSource(path, "existing.vrm");
                 session = new CloudVrmTransferSession(source);
                 Set(window, "source", source); Set(window, "session", session);
-                CloudVrmTransferWindow.OpenSavedVrmForDevelopment(selection);
+                if (CloudTransferAvailability.Enabled) CloudVrmTransferWindow.OpenSavedVrmForDevelopment(selection);
+                else Assert.Throws<NotSupportedException>(() => CloudVrmTransferWindow.OpenSavedVrmForDevelopment(selection));
                 Assert.That(Get(window, "source"), Is.SameAs(source));
                 Assert.That(Get(window, "session"), Is.SameAs(session));
                 Assert.That(session.State, Is.EqualTo(CloudTransferState.Preparing));
@@ -175,7 +202,9 @@ namespace VRVlog.LilToonExporter.LanTransfer.Tests
                 source = new CloudVrmTransferSource(path, "existing.vrm");
                 session = new CloudVrmTransferSession(source);
                 Set(window, "source", source); Set(window, "session", session);
-                Assert.Throws<FileNotFoundException>(() => CloudVrmTransferWindow.OpenSavedVrmForDevelopment(path + ".missing.vrm"));
+                if (CloudTransferAvailability.Enabled)
+                    Assert.Throws<FileNotFoundException>(() => CloudVrmTransferWindow.OpenSavedVrmForDevelopment(path + ".missing.vrm"));
+                else Assert.Throws<NotSupportedException>(() => CloudVrmTransferWindow.OpenSavedVrmForDevelopment(path + ".missing.vrm"));
                 Assert.That(Get(window, "source"), Is.SameAs(source));
                 Assert.That(Get(window, "session"), Is.SameAs(session));
                 Assert.That(session.State, Is.EqualTo(CloudTransferState.Preparing));
@@ -188,6 +217,11 @@ namespace VRVlog.LilToonExporter.LanTransfer.Tests
         [Test]
         public void InvalidOwnedSelectionKeepsTheExistingSessionAndDeletesOnlyTheRejectedSnapshot()
         {
+            if (!CloudTransferAvailability.Enabled)
+            {
+                Assert.Throws<NotSupportedException>(() => CloudVrmTransferWindow.CreateSnapshotPath());
+                return;
+            }
             var window = EditorWindow.GetWindow<CloudVrmTransferWindow>();
             var path = Path.Combine(Path.GetTempPath(), "vrvlog-dev-existing-owned-" + Guid.NewGuid().ToString("N") + ".vrm");
             var rejected = CloudVrmTransferWindow.CreateSnapshotPath();

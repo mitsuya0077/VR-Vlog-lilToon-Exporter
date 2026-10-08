@@ -21,7 +21,7 @@ class ListingTests(unittest.TestCase):
         self.compatibility = {"uniVrm": {"releaseVersion": "0.131.0"}}
         self.listing = dict(self.source, packages={})
         self.zips = {}
-        for name, version in [(check.EXPORTER, "0.11.10"), (check.EXPORTER, "0.11.11-beta.1"),
+        for name, version in [(check.EXPORTER, "0.11.11"), (check.EXPORTER, "0.11.11-beta.1"),
                               ("com.vrmc.gltf", "0.131.0"), ("com.vrmc.vrm", "0.131.0")]:
             manifest = dict(self.package, version=version) if name == check.EXPORTER else {"name": name, "version": version}
             url = f"https://github.com/{check.REPOSITORY}/releases/download/v0.11.11-beta.1/{name}-{version}.zip"
@@ -50,7 +50,7 @@ class ListingTests(unittest.TestCase):
         result = self.run_check()
         self.assertEqual("passed", result["status"])
         self.assertEqual(4, len(result["verifiedPackages"]))
-        self.assertEqual("0.11.10", result["preservedStableVersion"])
+        self.assertEqual("0.11.11", result["preservedStableVersion"])
 
     def test_loopback_fixture_uses_the_same_hash_and_manifest_checks(self):
         for group in self.listing["packages"].values():
@@ -61,7 +61,7 @@ class ListingTests(unittest.TestCase):
         self.assertEqual(4, len(self.run_check(fixture_base=check.FIXTURE_BASE)["verifiedPackages"]))
 
     def test_missing_current_or_stable_is_rejected(self):
-        for version in ("0.11.10", self.package["version"]):
+        for version in ("0.11.11", self.package["version"]):
             with self.subTest(version=version):
                 saved = self.listing["packages"][check.EXPORTER]["versions"].pop(version)
                 with self.assertRaisesRegex(ValueError, "Missing listed package"):
@@ -74,7 +74,7 @@ class ListingTests(unittest.TestCase):
             self.run_check()
 
     def test_version_key_cannot_hide_another_manifest(self):
-        self.current()["version"] = "0.11.10"
+        self.current()["version"] = "0.11.11"
         with self.assertRaisesRegex(ValueError, "version key and manifest disagree"):
             self.run_check()
 
@@ -87,7 +87,7 @@ class ListingTests(unittest.TestCase):
 
     def test_valid_hash_cannot_hide_a_different_downloaded_version(self):
         entry = self.current()
-        data = self.archive(dict(self.package, version="0.11.10"))
+        data = self.archive(dict(self.package, version="0.11.11"))
         self.zips[entry["url"]] = data
         entry["zipSHA256"] = hashlib.sha256(data).hexdigest()
         with self.assertRaisesRegex(ValueError, "Downloaded package identity differs"):
@@ -120,7 +120,7 @@ class ListingTests(unittest.TestCase):
         entry = self.current()
         original = entry["url"]
         for url in (original.replace("github.com", "example.invalid"), original.replace("https:", "http:"),
-                    original.replace("/v0.11.11-beta.1/", "/v0.11.10/"), original + "?token=private",
+                    original.replace("/v0.11.11-beta.1/", "/v0.11.11/"), original + "?token=private",
                     original.replace(".zip", ".unitypackage")):
             with self.subTest(url=url):
                 entry["url"] = url
