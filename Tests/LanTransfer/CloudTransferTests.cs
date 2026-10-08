@@ -14,6 +14,118 @@ namespace VRVlog.LilToonExporter.LanTransfer.Tests
     public sealed class CloudTransferTests
     {
         [Test]
+        public void CloudDevelopmentAvailabilityRequiresBothEditorAndExplicitDevelopmentDefine()
+        {
+#if UNITY_EDITOR && VRVLOG_CLOUD_TRANSFER_DEVELOPMENT
+            Assert.That(CloudTransferAvailability.Enabled, Is.True);
+            CloudTransferAvailability.RequireEnabled();
+#else
+            Assert.That(CloudTransferAvailability.Enabled, Is.False);
+            Assert.Throws<NotSupportedException>(() => CloudTransferAvailability.RequireEnabled());
+#endif
+            Assert.That(LanTransferAvailability.Enabled, Is.False);
+        }
+
+        [TestCase(false)][TestCase(true)]
+        public void DevelopmentCopyPreservesTheSavedVrmAndDeletesOnlyItsOwnedCopy(bool adopt)
+        {
+            var original = Path.Combine(Path.GetTempPath(), "vrvlog-saved-copy-" + Guid.NewGuid().ToString("N") + ".vrm");
+            var bytes = Enumerable.Range(0, 65537).Select(index => (byte)(index * 37 + 11)).ToArray();
+            string snapshotPath = null;
+            File.WriteAllBytes(original, bytes);
+            try
+            {
+                string before;
+                using (var hash = SHA256.Create()) before = LanTransferProtocol.Hex(hash.ComputeHash(File.ReadAllBytes(original)));
+                using (var snapshot = CloudDevelopmentSnapshot.CopySavedVrm(original))
+                {
+                    snapshotPath = snapshot.SnapshotPath;
+                    Assert.That(snapshotPath == original, Is.False);
+                    Assert.That(snapshot.Name, Is.EqualTo(Path.GetFileName(original)));
+                    Assert.That(File.ReadAllBytes(snapshotPath), Is.EqualTo(bytes));
+                    if (adopt)
+                    {
+                        using (var source = new CloudVrmTransferSource(snapshotPath, snapshot.Name))
+                        {
+                            snapshot.ReleaseOwnership();
+                            snapshot.Dispose();
+                            Assert.That(File.Exists(snapshotPath), Is.True);
+                            Assert.That(source.FileHash, Is.EqualTo(before));
+                        }
+                    }
+                }
+                Assert.That(File.Exists(snapshotPath), Is.False);
+                Assert.That(File.ReadAllBytes(original), Is.EqualTo(bytes));
+                using (var hash = SHA256.Create()) Assert.That(LanTransferProtocol.Hex(hash.ComputeHash(File.ReadAllBytes(original))), Is.EqualTo(before));
+            }
+            finally { if (snapshotPath != null) LanVrmTransferServer.TryDelete(snapshotPath); File.Delete(original); }
+        }
+
+        [TestCase("short")][TestCase("long")][TestCase("io")]
+        public void InterruptedDevelopmentCopyDeletesPartialDataWithoutChangingTheSavedVrm(string fault)
+        {
+            var original = Path.Combine(Path.GetTempPath(), "vrvlog-saved-failure-" + Guid.NewGuid().ToString("N") + ".vrm");
+            var bytes = new byte[65537]; bytes[65536] = 17;
+            string partial = null;
+            File.WriteAllBytes(original, bytes);
+            try
+            {
+                var declared = bytes.Length + (fault == "short" ? 1 : fault == "long" ? -1 : 0);
+                var input = new DevelopmentCopyInput(bytes, declared, fault == "io");
+                Assert.Throws<IOException>(() => CloudDevelopmentSnapshot.CopySavedVrm(original, () => input, path => partial = path));
+                Assert.That(input.Disposed, Is.True);
+                Assert.That(partial != null, Is.True);
+                Assert.That(File.Exists(partial), Is.False);
+                Assert.That(File.ReadAllBytes(original), Is.EqualTo(bytes));
+            }
+            finally { File.Delete(original); }
+        }
+
+        [TestCase(0L)][TestCase(268435457L)]
+        public void DevelopmentCopyRejectsInvalidSizeBeforeCreatingOrReadingPayload(long declared)
+        {
+            var input = new DevelopmentCopyInput(new byte[] { 1 }, declared);
+            var created = false;
+            Assert.Throws<InvalidOperationException>(() => CloudDevelopmentSnapshot.CopySavedVrm("synthetic.vrm", () => input, path => created = true));
+            Assert.That(input.ReadCalls, Is.EqualTo(0));
+            Assert.That(input.Disposed, Is.True);
+            Assert.That(created, Is.False);
+        }
+
+        [Test]
+        public void DevelopmentCopyReadsInBoundedChunksAndRejectsNonVrmSelections()
+        {
+            var bytes = new byte[1048577]; bytes[1048576] = 29;
+            var input = new DevelopmentCopyInput(bytes, bytes.Length);
+            using (var snapshot = CloudDevelopmentSnapshot.CopySavedVrm("synthetic.VRM", () => input))
+                Assert.That(File.ReadAllBytes(snapshot.SnapshotPath), Is.EqualTo(bytes));
+            Assert.That(input.LargestRead, Is.LessThanOrEqualTo(64 * 1024));
+            Assert.That(input.Disposed, Is.True);
+            var opened = false;
+            Assert.Throws<InvalidOperationException>(() => CloudDevelopmentSnapshot.CopySavedVrm("synthetic.zip", () => { opened = true; return new MemoryStream(bytes); }));
+            Assert.That(opened, Is.False);
+        }
+
+        private sealed class DevelopmentCopyInput : MemoryStream
+        {
+            private readonly long declared;
+            private readonly bool failAfterFirstRead;
+            internal int LargestRead, ReadCalls;
+            internal bool Disposed;
+            internal DevelopmentCopyInput(byte[] bytes, long declared, bool failAfterFirstRead = false) : base(bytes)
+            { this.declared = declared; this.failAfterFirstRead = failAfterFirstRead; }
+            public override long Length => declared;
+            public override int Read(byte[] buffer, int offset, int count)
+            {
+                ReadCalls++;
+                if (failAfterFirstRead && ReadCalls > 1) throw new IOException("synthetic interrupted read");
+                LargestRead = Math.Max(LargestRead, count);
+                return base.Read(buffer, offset, count);
+            }
+            protected override void Dispose(bool disposing) { Disposed = true; base.Dispose(disposing); }
+        }
+
+        [Test]
         public async Task MultipartUploadPreservesBytesAndPublishesQrOnlyAfterSuccess()
         {
             using (var fixture = new Fixture(CloudTransferProtocol.PartSize + 1))

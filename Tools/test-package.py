@@ -221,6 +221,7 @@ class PackageTests(unittest.TestCase):
             "class Unexpected { void Send() { LanTransfer.CloudVrmTransferWindow.CreateSnapshotPath(); } }",
             "using VRVlog.LilToonExporter.LanTransfer; class Unexpected {}",
             "class Unexpected { CloudVrmTransferSession session; }",
+            "class Unexpected { CloudDevelopmentSnapshot snapshot; }",
             "class Unexpected { LanVrmTransferServer server; }",
             "class CloudEncryptedSnapshot {}",
             "using ZXing; class Unexpected {}",
