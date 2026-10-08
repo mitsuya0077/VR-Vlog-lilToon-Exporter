@@ -26,12 +26,12 @@ namespace VRVlog.LilToonExporter.LanTransfer
         [MenuItem("VR Vlog/スマホに送る...")]
         private static void OpenDevelopmentTransfer()
         {
-            var selected = EditorUtility.OpenFilePanel("書き出し済みVRMを選択", "", "vrm");
+            var selected = EditorUtility.OpenFilePanel(ExporterLocalization.T("書き出し済みVRMを選択"), "", "vrm");
             try { OpenSavedVrmForDevelopment(selected); }
             catch
             {
                 // File/provider exceptions can include private paths or values.
-                EditorUtility.DisplayDialog("QR転送の検証", "転送用のコピーを準備できませんでした。256 MiB以下の書き出し済みVRMを選択してください。", "閉じる");
+                EditorUtility.DisplayDialog(ExporterLocalization.T("スマホに送る"), ExporterLocalization.T("転送用のコピーを準備できませんでした。256 MiB以下の書き出し済みVRMを選択してください。"), ExporterLocalization.T("閉じる"));
             }
         }
 #endif
@@ -78,7 +78,7 @@ namespace VRVlog.LilToonExporter.LanTransfer
                 // Validate the new owned copy before replacing an existing
                 // window/session. A failed selection leaves that session live.
                 prepared = new CloudVrmTransferSource(ownedSnapshotPath, name);
-                window = GetWindow<CloudVrmTransferWindow>(false, "QR転送の検証");
+                window = GetWindow<CloudVrmTransferWindow>(false, ExporterLocalization.T("スマホに送る"));
                 window.StopAndClean();
                 window.source = prepared;
                 window.minSize = new Vector2(430, 650);
@@ -181,29 +181,29 @@ namespace VRVlog.LilToonExporter.LanTransfer
             if (!CloudTransferAvailability.Enabled)
             {
                 StopAndClean();
-                EditorGUILayout.HelpBox(CloudTransferAvailability.DisabledMessage, MessageType.Info);
+                EditorGUILayout.HelpBox(ExporterLocalization.T(CloudTransferAvailability.DisabledMessage), MessageType.Info);
                 return;
             }
             using (var scrolling = new EditorGUILayout.ScrollViewScope(scroll))
             {
                 scroll = scrolling.scrollPosition;
-                EditorGUILayout.HelpBox("アバターをPCで暗号化してからクラウドに一時保存し、スマホで復号します。復号鍵はQRにだけ含まれ、転送サービスには送りません。受取期限は転送作成時から3分です。アップロード中も期限が進みます。完了・中止・期限切れで暗号化コピーを削除します。", MessageType.Info);
-                EditorGUILayout.LabelField(source?.Name ?? "開発メニューで書き出し済みVRMを選択してください。", EditorStyles.wordWrappedLabel);
-                EditorGUILayout.HelpBox("PCとスマホにインターネット接続が必要です。同じWi-Fiは不要です。QRを持つ人はアバターを受け取れるため、共有・撮影しないでください。スマホではVR Vlog内のカメラで読み取ります。", MessageType.None);
-                if (!string.IsNullOrEmpty(error)) EditorGUILayout.HelpBox(error, MessageType.Error);
+                EditorGUILayout.HelpBox(ExporterLocalization.T("アバターをPCで暗号化してからクラウドに一時保存し、スマホで復号します。復号鍵はQRにだけ含まれ、転送サービスには送りません。受取期限は転送作成時から3分です。アップロード中も期限が進みます。完了・中止・期限切れで暗号化コピーを削除します。"), MessageType.Info);
+                EditorGUILayout.LabelField(source?.Name ?? ExporterLocalization.T("メニューから書き出し済みVRMを選択してください。"), EditorStyles.wordWrappedLabel);
+                EditorGUILayout.HelpBox(ExporterLocalization.T("PCとスマホにインターネット接続が必要です。同じWi-Fiは不要です。QRを持つ人はアバターを受け取れるため、共有・撮影しないでください。スマホではVR Vlog内のカメラで読み取ります。"), MessageType.None);
+                if (!string.IsNullOrEmpty(error)) EditorGUILayout.HelpBox(ExporterLocalization.T(error), MessageType.Error);
                 using (new EditorGUI.DisabledScope(source == null || uploading != null || session != null && !session.Terminal))
-                    if (GUILayout.Button(session == null ? "アップロードしてQRを表示" : "新しいQRを作成", GUILayout.Height(32))) Begin();
+                    if (GUILayout.Button(ExporterLocalization.T(session == null ? "アップロードしてQRを表示" : "新しいQRを作成"), GUILayout.Height(32))) Begin();
                 if (session != null)
                 {
                     EditorGUILayout.Space();
-                    EditorGUILayout.HelpBox(session.Message, session.State == CloudTransferState.Failed ? MessageType.Error : MessageType.Info);
+                    EditorGUILayout.HelpBox(ExporterLocalization.T(session.Message), session.State == CloudTransferState.Failed ? MessageType.Error : MessageType.Info);
                     if (session.State == CloudTransferState.Uploading && source != null)
                     {
                         var rect = EditorGUILayout.GetControlRect(false, 20);
-                        EditorGUI.ProgressBar(rect, (float)session.Transferred / Math.Max(1, session.UploadSize), session.Transferred.ToString("N0") + " / " + session.UploadSize.ToString("N0") + " バイト（暗号化済み）");
+                        EditorGUI.ProgressBar(rect, (float)session.Transferred / Math.Max(1, session.UploadSize), string.Format(ExporterLocalization.T("{0:N0} / {1:N0} バイト（暗号化済み）"), session.Transferred, session.UploadSize));
                     }
                     if (!session.Terminal && session.ExpiresAt != 0)
-                        EditorGUILayout.LabelField("残り時間", Math.Max(0, session.ExpiresAt - DateTimeOffset.UtcNow.ToUnixTimeSeconds()) + " 秒");
+                        EditorGUILayout.LabelField(ExporterLocalization.T("残り時間"), string.Format(ExporterLocalization.T("{0} 秒"), Math.Max(0, session.ExpiresAt - DateTimeOffset.UtcNow.ToUnixTimeSeconds())));
                     if (qrTexture != null)
                     {
                         var available = Mathf.Min(position.width - 48, 380);
@@ -211,7 +211,7 @@ namespace VRVlog.LilToonExporter.LanTransfer
                         var rect = GUILayoutUtility.GetRect(size, size, GUILayout.ExpandWidth(false));
                         GUI.DrawTexture(rect, qrTexture, ScaleMode.StretchToFill);
                     }
-                    if (!session.Terminal && GUILayout.Button("転送を中止", GUILayout.Height(32)))
+                    if (!session.Terminal && GUILayout.Button(ExporterLocalization.T("転送を中止"), GUILayout.Height(32)))
                     {
                         _ = session.CancelAsync(); ClearQr();
                         error = "中止通知が届かない場合も、受取期限でクラウドのコピーは削除されます。";
