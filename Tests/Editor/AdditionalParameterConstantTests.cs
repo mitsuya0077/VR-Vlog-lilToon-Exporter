@@ -232,7 +232,9 @@ namespace VRVlog.LilToonExporter.Tests
             else if (kind == "Add" || kind == "Copy" || kind == "Random")
             {
                 if (kind == "Copy") additional.AddParameter("CopySource", AnimatorControllerParameterType.Float);
-                Object.DestroyImmediate(driver); driver = ParameterDriverExpressionTests.Driver(reset,
+                // Keep the harmless reset and add another producer. The proof
+                // must inspect both programs rather than accepting the first.
+                driver = ParameterDriverExpressionTests.Driver(reset,
                     ParameterDriverExpressionTests.Op(kind, Axis, source: kind == "Copy" ? "CopySource" : null));
             }
             else if (kind == "override Animator curve")
@@ -324,7 +326,8 @@ namespace VRVlog.LilToonExporter.Tests
             fx.AddParameter("Needed", type); additional.AddParameter("Needed", type);
             var possible = State(fx.layers[0].stateMachine, "Needed branch", Clip("Needed face", 25));
             Transition(neutral, possible).AddCondition(boolean ? AnimatorConditionMode.If : AnimatorConditionMode.Greater, .5f, "Needed");
-            Object.DestroyImmediate(driver);
+            // Preserve the valid first callback; malformed needed operations
+            // in a later callback must still prevent sampling.
             driver = ParameterDriverExpressionTests.Driver(reset, ParameterDriverExpressionTests.Op("Set", Axis),
                 ParameterDriverExpressionTests.Op(kind == "Bool Add" ? "Add" : kind == "missing Copy source" ? "Copy" : "Set", "Needed",
                     kind == "nonfinite Set" ? float.NaN : 1, kind == "missing Copy source" ? "NotDeclared" : null));
