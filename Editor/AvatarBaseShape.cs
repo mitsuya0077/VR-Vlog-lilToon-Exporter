@@ -205,6 +205,13 @@ namespace VRVlog.LilToonExporter
             bool clampToSourceRange = false)
         {
             if (ReferenceEquals(source, target)) throw new ArgumentException("The source mesh must remain unchanged.");
+            var delta = ExpressionDeltas(source, rest, expression, clampToSourceRange);
+            target.AddBlendShapeFrame(name, 100f, delta.Vertices, delta.Normals, delta.Tangents);
+        }
+
+        internal static Deltas ExpressionDeltas(Mesh source, float[] rest, float[] expression,
+            bool clampToSourceRange = false)
+        {
             if (rest.Length != source.blendShapeCount || expression.Length != rest.Length)
                 throw new ArgumentException("BlendShape weight count mismatch.");
             var delta = new Deltas(source.vertexCount);
@@ -222,7 +229,7 @@ namespace VRVlog.LilToonExporter
                     delta.Tangents[v] += after.Tangents[v] - before.Tangents[v];
                 }
             }
-            target.AddBlendShapeFrame(name, 100f, delta.Vertices, delta.Normals, delta.Tangents);
+            return delta;
         }
 
         internal sealed class Deltas

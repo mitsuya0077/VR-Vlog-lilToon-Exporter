@@ -154,6 +154,12 @@ namespace VRVlog.LilToonExporter
             var clampToSourceRange = UnityEditor.PlayerSettings.legacyClampBlendShapeWeights;
             long generatedBytes = 0;
             var basis = new Dictionary<(Mesh mesh, int shape, double initial, double value), string>();
+            // A zero residual remains zero at every accumulated weight, even
+            // with legacy clamping. Only these scalar markers may share an
+            // index; nonzero poses retain independent simultaneous targets.
+            var zeroScalarTargets = new Dictionary<Mesh, string>();
+            bool Zero(AvatarBaseShape.Deltas delta) => new[] { delta.Vertices, delta.Normals, delta.Tangents }
+                .All(values => values.All(value => value.x == 0f && value.y == 0f && value.z == 0f));
             // Animation programs are mutually exclusive. Reuse exact basis
             // geometry across those programs only; scalar menu identities and
             // all distinct targets inside one animation remain independent.
@@ -208,7 +214,6 @@ namespace VRVlog.LilToonExporter
                 {
                     var originalMesh = group.Mesh;
                     var copy = group.Renderer;
-                    Reserve(originalMesh);
                     if (!meshes.Contains(copy.sharedMesh) || ReferenceEquals(copy.sharedMesh, originalMesh))
                     {
                         copy.sharedMesh = UnityEngine.Object.Instantiate(copy.sharedMesh);
@@ -222,8 +227,15 @@ namespace VRVlog.LilToonExporter
                         if (index < 0) throw new InvalidOperationException("表情の元BlendShapeが見つかりません: " + value.Shape);
                         pose[index] = value.Weight;
                     }
-                    var name = prefix + serial++;
-                    AvatarBaseShape.AppendExpression(originalMesh, copy.sharedMesh, name, rest, pose, clampToSourceRange);
+                    var delta = AvatarBaseShape.ExpressionDeltas(originalMesh, rest, pose, clampToSourceRange);
+                    var zero = Zero(delta);
+                    if (!zero || !zeroScalarTargets.TryGetValue(copy.sharedMesh, out var name))
+                    {
+                        Reserve(originalMesh);
+                        name = prefix + serial++;
+                        copy.sharedMesh.AddBlendShapeFrame(name, 100f, delta.Vertices, delta.Normals, delta.Tangents);
+                        if (zero) zeroScalarTargets.Add(copy.sharedMesh, name);
+                    }
                     expression.Targets.Add(name);
                 }
                 if (plan.Animation.Count > 0)
@@ -236,17 +248,30 @@ namespace VRVlog.LilToonExporter
                         var copy = animated.Renderer.sharedMesh;
                         var shape = original.GetBlendShapeIndex(animated.Shape);
                         animated.Curve.Range(out var minimum, out var maximum);
-                        // Morph geometry is linear between source frame weights.
-                        // Store those knots once instead of a mesh per video frame.
-                        var knots = new SortedSet<double> { minimum, maximum };
-                        if (minimum < 0 && maximum > 0) knots.Add(0);
+                        // Morph residuals are affine between source frames.
+                        // Enclose varying curves with canonical frame endpoints,
+                        // so different extrema can use the same exact basis.
+                        var initial = animated.Curve.Evaluate(0);
+                        var frames = new SortedSet<double> { 0 };
                         for (var frame = 0; frame < original.GetBlendShapeFrameCount(shape); frame++)
                         {
                             var weight = original.GetBlendShapeFrameWeight(shape, frame);
-                            if (weight > minimum && weight < maximum) knots.Add(weight);
+                            // Keep the animation schema's existing point bounds;
+                            // a larger source endpoint uses the curve fallback.
+                            if (!float.IsNaN(weight) && !float.IsInfinity(weight) && weight >= -10000 && weight <= 10000) frames.Add(weight);
+                        }
+                        var knots = new SortedSet<double> { minimum, maximum };
+                        if (minimum < maximum)
+                        {
+                            var candidates = new SortedSet<double>(frames) { initial };
+                            var lower = candidates.Where(weight => weight <= minimum).DefaultIfEmpty(minimum).Max();
+                            var upper = candidates.Where(weight => weight >= maximum).DefaultIfEmpty(maximum).Min();
+                            knots = new SortedSet<double> { lower, upper };
+                            // The initial value selects an endpoint when useful;
+                            // do not add an unnecessary interior point for it.
+                            foreach (var weight in frames) if (weight > lower && weight < upper) knots.Add(weight);
                         }
                         var channel = new ExpressionAnimationData.Channel { Curve = animated.Curve };
-                        var initial = animated.Curve.Evaluate(0);
                         foreach (var weight in knots)
                         {
                             string target = null;

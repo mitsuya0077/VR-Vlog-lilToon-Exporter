@@ -294,6 +294,13 @@ BEHAVIOR_CASES = {
         'ColorCanonicalizationDoesNotRelaxOtherPropertyDomains': 4,
     },
     'VrChatMenuExpressionTests': {
+        'CanonicalAnimationKnotsReuseAuthoredEndpointsAcrossCurveRanges': 2,
+        'CanonicalAnimationKnotsPreserveSourceFrameGeometryAndRangeEdges': 6,
+        'CanonicalAnimationKnotsRetainIndependentChannelsInsideOneFace': 1,
+        'ExactZeroScalarMarkersKeepAllExpressionSettingsAndNativeCoactivation': 2,
+        'OnlyAnExactlyZeroScalarPntCanReuseAMarker': 4,
+        'ZeroScalarMarkersRemainUniqueToTheActualRenderer': 1,
+        'ExactZeroScalarReuseRespectsTheOriginalMemoryBudget': 2,
         'ReachedConstantMorphTailsKeepTheNativePoseBeforeTheClipEnd': 2,
         'AReachedMorphTailCannotHideAFutureCurveOrCallback': 6,
         'ReachedNonLoopingMorphTerminalsKeepTheOriginalNativeHeldPose': 2,
