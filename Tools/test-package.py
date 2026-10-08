@@ -1,6 +1,7 @@
 """Exercise package isolation and diagnostic redaction with synthetic inputs."""
 import importlib.util
 import ast
+import json
 import subprocess
 import tempfile
 import unittest
@@ -58,6 +59,8 @@ class PackageTests(unittest.TestCase):
         self.git("init", "--quiet")
         for name in package.ROOT_FILES | package.LOCALE_FILES | {"Editor/Example.cs", "Editor/Example.cs.meta", "Editor/Test.asmdef", "Editor/Example.shader", "Runtime.meta", "Runtime/Tracking.cs", "Runtime/Tracking.cs.meta", "Runtime/Tracking.asmdef", "ThirdPartyNotices/Example.md"}:
             self.write(name, name)
+        self.version("0.11.12-beta.1")
+        self.write("Documentation~/CloudTransfer.md", "prerelease cloud transfer guide")
         repository = Path(__file__).resolve().parents[1]
         for name in package.DEPENDENCY_PATCH_FILES | package.TRANSFER_DLL_PATHS:
             path = self.root / name
@@ -72,6 +75,54 @@ class PackageTests(unittest.TestCase):
         path = self.root / name
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text(text, encoding="utf-8")
+
+    def version(self, version):
+        self.write("package.json", json.dumps({"name": "com.vrvlog.liltoon-vrm-exporter", "version": version}))
+
+    def test_channel_policy_distinguishes_prerelease_from_build_metadata(self):
+        for version, expected in [("0.11.12", False), ("0.11.12+beta.1", False),
+                                  ("0.11.12-beta.1", True), ("0.11.13-rc.1+build.2", True)]:
+            with self.subTest(version=version):
+                self.version(version)
+                names = set(package.build(self.root, self.root / "channel.zip"))
+                self.assertEqual(package.prerelease(version), expected)
+                self.assertEqual(package.TRANSFER_DLL_PATHS <= names, expected)
+                self.assertEqual("Documentation~/CloudTransfer.md" in names, expected)
+        for version in (None, "", "0.11.12 beta", "not-a-beta"):
+            with self.subTest(invalid=version), self.assertRaisesRegex(ValueError, "semantic version"):
+                package.prerelease(version)
+
+    def test_stable_excludes_transfer_sources_dlls_guides_and_development_define(self):
+        self.version("0.11.12")
+        excluded = package.TRANSFER_FILES | {name + ".meta" for name in package.TRANSFER_FILES} | package.TRANSFER_DLL_PATHS | {
+            "Editor/LanTransfer/CloudVrmTransferWindow.cs", "Editor/LanTransfer/CloudVrmTransferWindow.cs.meta",
+            "Editor/LanTransfer/VRVlog.LanTransfer.Editor.asmdef", "Editor/LanTransfer/VRVlog.LanTransfer.Editor.asmdef.meta",
+        } | {name + ".meta" for name in package.TRANSFER_DLL_PATHS}
+        for name in excluded - package.TRANSFER_DLL_PATHS:
+            self.write(name, "#if VRVLOG_CLOUD_TRANSFER_DEVELOPMENT\nCloudVrmTransferSession\n#endif")
+        self.git("add", ".")
+        names = set(package.build(self.root, self.root / "stable.zip"))
+        self.assertFalse(names & excluded)
+        self.assertTrue(package.ROOT_FILES <= names)
+
+    def test_stable_optional_entry_exception_is_one_exact_literal_in_the_window(self):
+        self.version("0.11.12")
+        name = "Editor/LilToonExporterWindow.cs"
+        literal = package.OPTIONAL_TRANSFER_TYPE_LITERAL
+        self.write(name, "var entry = Type.GetType(" + literal + ", false);")
+        self.git("add", name)
+        self.assertIn(name, package.build(self.root, self.root / "optional.zip"))
+        for text in (literal + literal, literal + " CloudVrmTransferSession", '"VRVlog.LanTransfer.Editor"',
+                     r"Cloud\u0056rmTransferSession", "GUID:b15e228f27f843bdbdd4c2335be4354b"):
+            with self.subTest(text=text):
+                self.write(name, text)
+                with self.assertRaisesRegex(ValueError, "QR transfer dependency"):
+                    package.build(self.root, self.root / "rejected.zip")
+        self.write(name, "ordinary exporter")
+        self.write("Editor/Elsewhere.cs", literal)
+        self.git("add", ".")
+        with self.assertRaisesRegex(ValueError, "QR transfer dependency"):
+            package.build(self.root, self.root / "wrong-path.zip")
 
     def test_excludes_tracked_development_and_untracked_inputs(self):
         excluded = ["work/report.md", ".env", ".github/workflows/example.yml", "Tools/debug.py", "Tools/test-aao-vertex-buffer-patch.py", "Tools/test-aao-vertex-buffer-patch.py.meta", "Documentation~/DependencyPatches/debug.patch", "Tests/Editor/Test.cs", "Docs/ReleaseVerification.md", "Editor/private.vrm", "Editor/error.log", "Editor/private.cs.disabled", "Editor/Locales/private.json"]

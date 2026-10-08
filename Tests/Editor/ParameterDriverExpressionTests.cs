@@ -6,6 +6,8 @@ using NUnit.Framework;
 using UnityEditor;
 using UnityEditor.Animations;
 using UnityEngine;
+using UnityEngine.Animations;
+using UnityEngine.Playables;
 using Object = UnityEngine.Object;
 
 namespace VRVlog.LilToonExporter.Tests
@@ -118,6 +120,283 @@ namespace VRVlog.LilToonExporter.Tests
                 data.ApplyModifiedPropertiesWithoutUndo();
             }
             return driver;
+        }
+
+        private (AnimatorState Gate, AnimatorState Random, AnimatorState IdleRest, AnimatorStateTransition Reset) SelectorRandomRest(string operation = "Set", bool gateProducer = true)
+        {
+            // This controller-only fixture has a known empty SDK expression
+            // inventory; no persisted client input can replace its defaults.
+            metadata.NeutralInputInventoryComplete = true;
+            controller.AddParameter("Enable", AnimatorControllerParameterType.Bool);
+            controller.AddParameter("Lottery", AnimatorControllerParameterType.Float);
+            controller.AddParameter("Source signal", AnimatorControllerParameterType.Float);
+            var parameters = controller.parameters;
+            parameters.Single(parameter => parameter.name == "Enable").defaultBool = true;
+            parameters.Single(parameter => parameter.name == "Source signal").defaultFloat = 1;
+            controller.parameters = parameters;
+            mesh.AddBlendShapeFrame("Recovery", 100, Enumerable.Repeat(Vector3.right * .01f, mesh.vertexCount).ToArray(), null, null);
+            var gate = Gate();
+            Driver(gate, operation == "Copy" ? Op("Copy", "Face", source: "Source signal") : Op(operation, "Face", 1));
+            if (gateProducer) Driver(gate, Op("Set", "Enable", 0));
+            FaceLayer();
+            foreach (var value in controller.animationClips)
+                AnimationUtility.SetEditorCurve(value, EditorCurveBinding.FloatCurve("Body", typeof(SkinnedMeshRenderer), "blendShape.Blink"), null);
+            AnimationClip Recovery(string name, AnimationCurve curve)
+            {
+                var value = new AnimationClip { name = name };
+                AnimationUtility.SetEditorCurve(value, EditorCurveBinding.FloatCurve("Body", typeof(SkinnedMeshRenderer), "blendShape.Recovery"), curve);
+                AssetDatabase.AddObjectToAsset(value, controller); return value;
+            }
+            var support = Layer("Prepared recovery"); support.defaultState = State(support, "Support", Recovery("Prepared", AnimationCurve.Constant(0, 1, 0)));
+            var machine = Layer("Independent idle");
+            var randomState = State(machine, "Random entry", Recovery("Idle", AnimationCurve.Constant(0, 1, 0))); machine.defaultState = randomState;
+            var randomDriver = Driver(randomState, Op("Random", "Lottery"));
+            using (var data = new SerializedObject(randomDriver))
+            {
+                var item = data.FindProperty("parameters").GetArrayElementAtIndex(0);
+                item.FindPropertyRelative("valueMin").floatValue = 1; item.FindPropertyRelative("valueMax").floatValue = 2;
+                item.FindPropertyRelative("chance").floatValue = 1; data.ApplyModifiedPropertiesWithoutUndo();
+            }
+            var moving = State(machine, "Moving", Recovery("Changing recovery", new AnimationCurve(
+                new Keyframe(0, 0), new Keyframe(.3f, 60), new Keyframe(.7f, 60), new Keyframe(1, 0))));
+            var enter = randomState.AddTransition(moving); enter.hasExitTime = true; enter.exitTime = .1f; enter.duration = 0;
+            enter.AddCondition(AnimatorConditionMode.Greater, -1, "Lottery"); enter.AddCondition(AnimatorConditionMode.If, 0, "Enable");
+            var repeat = moving.AddTransition(randomState); repeat.hasExitTime = true; repeat.exitTime = 1; repeat.duration = 0;
+            var rest = State(machine, "Complete rest", Recovery("Rest", AnimationCurve.Constant(0, 1, 0)));
+            var reset = machine.AddAnyStateTransition(rest); reset.hasExitTime = false; reset.duration = 0; reset.canTransitionToSelf = false;
+            reset.AddCondition(AnimatorConditionMode.IfNot, 0, "Enable");
+            Transition(rest, randomState, "Enable", 0, AnimatorConditionMode.If);
+            return (gate, randomState, rest, reset);
+        }
+
+        // The real SDK's editor ControllerPlayable does not dispatch its vendor
+        // three-argument entry callback. This independent reference observes the
+        // original native gate entry and applies its serialized Set/Add/Copy
+        // primitives directly; it uses no exporter analysis or driver adapter.
+        private (float Face, float Recovery, int Entries) NativeSelectorPose(RuntimeAnimatorController runtime, AnimatorState gate,
+            IDictionary<string, float> selected)
+        {
+            var clone = Object.Instantiate(avatar); var graph = PlayableGraph.Create("Original selector reference");
+            try
+            {
+                foreach (var behaviour in clone.GetComponentsInChildren<Behaviour>(true)) behaviour.enabled = false;
+                var animator = clone.GetComponent<Animator>(); animator.enabled = true; animator.runtimeAnimatorController = null;
+                animator.cullingMode = AnimatorCullingMode.AlwaysAnimate; animator.fireEvents = false;
+                var playable = AnimatorControllerPlayable.Create(graph, runtime);
+                AnimationPlayableOutput.Create(graph, "Original", animator).SetSourcePlayable(playable);
+                graph.SetTimeUpdateMode(DirectorUpdateMode.Manual); graph.Play(); graph.Evaluate(0);
+                var types = controller.parameters.ToDictionary(parameter => parameter.name, parameter => parameter.type);
+                float Get(string name) => types[name] == AnimatorControllerParameterType.Bool ? (playable.GetBool(name) ? 1 : 0) :
+                    types[name] == AnimatorControllerParameterType.Int ? playable.GetInteger(name) : playable.GetFloat(name);
+                void Set(string name, float value)
+                {
+                    if (types[name] == AnimatorControllerParameterType.Bool) playable.SetBool(name, value != 0);
+                    else if (types[name] == AnimatorControllerParameterType.Int) playable.SetInteger(name, Mathf.RoundToInt(value));
+                    else playable.SetFloat(name, value);
+                }
+                var gateHash = Animator.StringToHash(controller.layers[0].name + "." + gate.name); var entries = 0;
+                for (var stage = 0; stage < 2; stage++)
+                {
+                    if (stage == 1) foreach (var input in selected) Set(input.Key, input.Value);
+                    for (var frame = 0; frame < 120; frame++)
+                    {
+                        graph.Evaluate(1f / 60f);
+                        if (entries != 0 || playable.GetCurrentAnimatorStateInfo(0).fullPathHash != gateHash) continue;
+                        entries++;
+                        foreach (var driver in gate.behaviours)
+                            using (var data = new SerializedObject(driver))
+                            {
+                                var values = data.FindProperty("parameters"); Assert.That(values, Is.Not.Null);
+                                for (var index = 0; index < values.arraySize; index++)
+                                {
+                                    var item = values.GetArrayElementAtIndex(index); var kind = item.FindPropertyRelative("type");
+                                    var mode = kind.enumNames[kind.enumValueIndex]; var destination = item.FindPropertyRelative("name").stringValue;
+                                    var value = item.FindPropertyRelative("value").floatValue;
+                                    if (mode == "Copy") value = Get(item.FindPropertyRelative("source").stringValue);
+                                    else if (mode == "Add") value += Get(destination);
+                                    else Assert.That(mode, Is.EqualTo("Set"));
+                                    Set(destination, value);
+                                }
+                            }
+                    }
+                }
+                var skin = clone.transform.Find("Body").GetComponent<SkinnedMeshRenderer>();
+                return (skin.GetBlendShapeWeight(mesh.GetBlendShapeIndex("Face size")),
+                    skin.GetBlendShapeWeight(mesh.GetBlendShapeIndex("Recovery")), entries);
+            }
+            finally { graph.Destroy(); Object.DestroyImmediate(clone); }
+        }
+
+        [TestCase("Set", false)]
+        [TestCase("Add", false)]
+        [TestCase("Copy", false)]
+        [TestCase("Set", true)]
+        [TestCase("Add", true)]
+        [TestCase("Copy", true)]
+        public void FixedSelectorsRetainNativeSdkWritersAndEffectiveOverridesWithIndependentRandomRest(string operation, bool effectiveOverride)
+        {
+            var fixture = SelectorRandomRest(operation); RuntimeAnimatorController runtime = controller; AnimatorOverrideController overrides = null;
+            if (effectiveOverride)
+            {
+                overrides = new AnimatorOverrideController(controller); runtime = overrides;
+                var original = controller.layers[1].stateMachine.states.Single(child => child.state.name == "Smile").state.motion as AnimationClip;
+                var replacement = new AnimationClip { name = "Effective selected face" };
+                AnimationUtility.SetEditorCurve(replacement, EditorCurveBinding.FloatCurve("Body", typeof(SkinnedMeshRenderer), "blendShape.Face size"), AnimationCurve.Constant(0, 1, 90));
+                AssetDatabase.AddObjectToAsset(replacement, controller); overrides[original] = replacement;
+            }
+            metadata.Controller = runtime;
+            var selected = new Dictionary<string, float> { ["Menu"] = 1 };
+            var before = ExportSourceFingerprint.Compute(avatar); var serialized = EditorJsonUtility.ToJson(controller);
+            try
+            {
+                var native = NativeSelectorPose(runtime, fixture.Gate, selected);
+                Assert.That(native.Entries, Is.EqualTo(1)); Assert.That(native.Face, Is.EqualTo(effectiveOverride ? 90 : 75).Within(.01));
+                Assert.That(native.Recovery, Is.EqualTo(0).Within(.01));
+                var values = VrChatExpressionSampler.SampleFixed(avatar, runtime, metadata.Defaults, selected, metadata: metadata);
+                Assert.That(values.Single(value => value.Shape == "Face size").Weight, Is.EqualTo(native.Face).Within(.01));
+                Assert.That(values.Any(value => value.Shape == "Recovery"), Is.False);
+                Assert.That(metadata.Messages.Any(value => value.Contains("Random") && value.Contains("Independent idle")), Is.True);
+                Assert.That(ExportSourceFingerprint.Compute(avatar), Is.EqualTo(before)); Assert.That(EditorJsonUtility.ToJson(controller), Is.EqualTo(serialized));
+            }
+            finally { if (overrides != null) Object.DestroyImmediate(overrides); }
+        }
+
+        [Test]
+        public void ADirectSelectedRandomGateUsesTheCompleteImmediateRestProof()
+        {
+            var fixture = SelectorRandomRest(gateProducer: false);
+            var selected = new Dictionary<string, float> { ["Menu"] = 1, ["Enable"] = 0 };
+            var native = NativeSelectorPose(controller, fixture.Gate, selected);
+            Assert.That(native.Face, Is.EqualTo(75).Within(.01)); Assert.That(native.Recovery, Is.EqualTo(0).Within(.01));
+            var values = SampleFixed(selected: selected);
+            Assert.That(values.Single(value => value.Shape == "Face size").Weight, Is.EqualTo(native.Face).Within(.01));
+            Assert.That(values.Any(value => value.Shape == "Recovery"), Is.False);
+        }
+
+        [Test]
+        public void AnInactiveFaceAlternativeCannotOwnTheNativeSelectedRandomRest()
+        {
+            var fixture = SelectorRandomRest();
+            var machine = controller.layers[1].stateMachine;
+            var alternative = Clip("Inactive facial alternative", 90);
+            AnimationUtility.SetEditorCurve(alternative, EditorCurveBinding.FloatCurve("Body", typeof(SkinnedMeshRenderer), "blendShape.Recovery"), AnimationCurve.Constant(0, 1, 60));
+            var dormant = State(machine, "Different selected face", alternative);
+            Transition(machine.defaultState, dormant, "Face", 2);
+            var selected = new Dictionary<string, float> { ["Menu"] = 1 };
+            var before = ExportSourceFingerprint.Compute(avatar); var serialized = EditorJsonUtility.ToJson(controller);
+            var native = NativeSelectorPose(controller, fixture.Gate, selected);
+            Assert.That(native.Entries, Is.EqualTo(1));
+            Assert.That(native.Face, Is.EqualTo(75).Within(.01)); Assert.That(native.Recovery, Is.EqualTo(0).Within(.01));
+            var values = SampleFixed(selected: selected);
+            Assert.That(values.Single(value => value.Shape == "Face size").Weight, Is.EqualTo(native.Face).Within(.01));
+            // The dormant authored binding remains in the capture domain, but
+            // cannot replace the native selected rest with its authored 60.
+            Assert.That(values.Single(value => value.Shape == "Recovery").Weight, Is.EqualTo(native.Recovery).Within(.01));
+            Assert.That(metadata.Messages.Any(value => value.Contains("Random") && value.Contains("Independent idle")), Is.True);
+            Assert.That(ExportSourceFingerprint.Compute(avatar), Is.EqualTo(before)); Assert.That(EditorJsonUtility.ToJson(controller), Is.EqualTo(serialized));
+        }
+
+        [TestCase(false)]
+        [TestCase(true)]
+        public void MixedEmptyWriteDefaultsOffSelectorsUseActualNativeOwnership(bool initialEmpty)
+        {
+            var fixture = SelectorRandomRest();
+            var machine = controller.layers[1].stateMachine;
+            if (initialEmpty) machine.defaultState.motion = null;
+            else
+            {
+                var unused = State(machine, "Unused empty alternative", null);
+                Transition(machine.defaultState, unused, "Face", 2);
+            }
+            var selected = new Dictionary<string, float> { ["Menu"] = 1 };
+            var before = ExportSourceFingerprint.Compute(avatar); var serialized = EditorJsonUtility.ToJson(controller);
+            var native = NativeSelectorPose(controller, fixture.Gate, selected);
+            Assert.That(native.Entries, Is.EqualTo(1)); Assert.That(native.Face, Is.EqualTo(75).Within(.01));
+            Assert.That(native.Recovery, Is.EqualTo(0).Within(.01));
+            var values = SampleFixed(selected: selected);
+            Assert.That(values.Single(value => value.Shape == "Face size").Weight, Is.EqualTo(native.Face).Within(.01));
+            Assert.That(values.Where(value => value.Shape == "Recovery").All(value => Math.Abs(value.Weight - native.Recovery) < .01f), Is.True);
+            Assert.That(metadata.Messages.Any(value => value.Contains("Random") && value.Contains("Independent idle")), Is.True);
+            Assert.That(ExportSourceFingerprint.Compute(avatar), Is.EqualTo(before)); Assert.That(EditorJsonUtility.ToJson(controller), Is.EqualTo(serialized));
+        }
+
+        [TestCase("latched startup output")]
+        [TestCase("timed empty escape")]
+        [TestCase("Write Defaults empty state")]
+        public void MixedEmptySelectorsCannotHideLatchedOrFutureNativeOwnership(string kind)
+        {
+            var fixture = SelectorRandomRest();
+            var machine = controller.layers[1].stateMachine;
+            var selectedState = machine.states.Single(child => child.state.name == "Smile").state;
+            if (kind == "latched startup output")
+            {
+                var initial = Clip("Initial face with a recovery write", 75);
+                AnimationUtility.SetEditorCurve(initial, EditorCurveBinding.FloatCurve("Body", typeof(SkinnedMeshRenderer), "blendShape.Recovery"), AnimationCurve.Constant(0, 1, 60));
+                machine.defaultState.motion = initial; selectedState.motion = null;
+            }
+            else if (kind == "timed empty escape")
+            {
+                var empty = State(machine, "Later empty state", null);
+                var transition = selectedState.AddTransition(empty); transition.hasExitTime = true; transition.exitTime = 10; transition.duration = 0;
+            }
+            else
+            {
+                var unused = State(machine, "Empty state with defaults", null); unused.writeDefaultValues = true;
+                Transition(machine.defaultState, unused, "Face", 2);
+            }
+            var selected = new Dictionary<string, float> { ["Menu"] = 1 };
+            var before = ExportSourceFingerprint.Compute(avatar); var serialized = EditorJsonUtility.ToJson(controller);
+            var native = NativeSelectorPose(controller, fixture.Gate, selected);
+            Assert.That(native.Entries, Is.EqualTo(1)); Assert.That(native.Recovery, Is.EqualTo(0).Within(.01));
+            Assert.Throws<InvalidOperationException>(() => SampleFixed(selected: selected));
+            Assert.That(metadata.Messages.Any(value => value.Contains("Random") && value.Contains("Independent idle")), Is.False);
+            Assert.That(ExportSourceFingerprint.Compute(avatar), Is.EqualTo(before)); Assert.That(EditorJsonUtility.ToJson(controller), Is.EqualTo(serialized));
+        }
+
+        [TestCase("delayed direct gate")]
+        [TestCase("selected Random destination")]
+        [TestCase("selected output overlap")]
+        [TestCase("escaping Random reader")]
+        [TestCase("additional morph writer")]
+        [TestCase("unknown callback")]
+        [TestCase("selected global FX gate")]
+        public void FixedSelectorsCannotOmitUnprovenRandomEffects(string kind)
+        {
+            var fixture = SelectorRandomRest(gateProducer: kind != "delayed direct gate");
+            var selected = new Dictionary<string, float> { ["Menu"] = 1 };
+            if (kind == "delayed direct gate") { selected["Enable"] = 0; fixture.Reset.hasExitTime = true; fixture.Reset.exitTime = 10; }
+            else if (kind == "selected Random destination") selected["Lottery"] = 1;
+            else if (kind == "selected output overlap")
+                foreach (var child in controller.layers[1].stateMachine.states)
+                    AnimationUtility.SetEditorCurve((AnimationClip)child.state.motion, EditorCurveBinding.FloatCurve("Body", typeof(SkinnedMeshRenderer), "blendShape.Recovery"), AnimationCurve.Constant(0, 1, 40));
+            else if (kind == "escaping Random reader")
+            {
+                var observer = Layer("Escaping reader"); var idle = State(observer, "Read", Clip("Reader", 0)); observer.defaultState = idle;
+                Transition(idle, idle, "Lottery", 1, AnimatorConditionMode.Greater);
+            }
+            else if (kind == "additional morph writer")
+            {
+                var other = AnimatorController.CreateAnimatorControllerAtPath(folder + "/Other.controller");
+                var value = new AnimationClip { name = "Additional recovery" };
+                AnimationUtility.SetEditorCurve(value, EditorCurveBinding.FloatCurve("Body", typeof(SkinnedMeshRenderer), "blendShape.Recovery"), AnimationCurve.Constant(0, 1, 30));
+                AssetDatabase.AddObjectToAsset(value, other); other.layers[0].stateMachine.defaultState = State(other.layers[0].stateMachine, "Recovery", value);
+                metadata.OtherControllers.Add(other);
+            }
+            else if (kind == "selected global FX gate")
+            {
+                controller.AddParameter("InStation", AnimatorControllerParameterType.Bool); selected["InStation"] = 1;
+                var machine = Layer("Global FX gate");
+                var unit = State(machine, "Unit", Clip("Unit FX motion", 0)); machine.defaultState = unit;
+                var disabled = State(machine, "Disabled", Clip("Disabled FX motion", 0));
+                PlayableControl(unit, "FX", 1, 0); PlayableControl(disabled, "FX", 0, 0);
+                Transition(unit, disabled, "InStation", 0, AnimatorConditionMode.If);
+                Transition(disabled, unit, "InStation", 0, AnimatorConditionMode.IfNot);
+            }
+            else fixture.Random.AddStateMachineBehaviour<UnknownStateCallbackProbe>();
+            var before = ExportSourceFingerprint.Compute(avatar); var serialized = EditorJsonUtility.ToJson(controller);
+            Assert.Catch<InvalidOperationException>(() => SampleFixed(selected: selected));
+            Assert.That(metadata.Messages.Any(value => value.Contains("Random") && value.Contains("Independent idle")), Is.False);
+            Assert.That(ExportSourceFingerprint.Compute(avatar), Is.EqualTo(before)); Assert.That(EditorJsonUtility.ToJson(controller), Is.EqualTo(serialized));
         }
 
         private static StateMachineBehaviour SdkBehaviour(AnimatorState state, string name)

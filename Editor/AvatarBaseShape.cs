@@ -205,6 +205,13 @@ namespace VRVlog.LilToonExporter
             bool clampToSourceRange = false)
         {
             if (ReferenceEquals(source, target)) throw new ArgumentException("The source mesh must remain unchanged.");
+            var delta = ExpressionDeltas(source, rest, expression, clampToSourceRange);
+            target.AddBlendShapeFrame(name, 100f, delta.Vertices, delta.Normals, delta.Tangents);
+        }
+
+        internal static Deltas ExpressionDeltas(Mesh source, float[] rest, float[] expression,
+            bool clampToSourceRange = false)
+        {
             if (rest.Length != source.blendShapeCount || expression.Length != rest.Length)
                 throw new ArgumentException("BlendShape weight count mismatch.");
             var delta = new Deltas(source.vertexCount);
@@ -222,10 +229,10 @@ namespace VRVlog.LilToonExporter
                     delta.Tangents[v] += after.Tangents[v] - before.Tangents[v];
                 }
             }
-            target.AddBlendShapeFrame(name, 100f, delta.Vertices, delta.Normals, delta.Tangents);
+            return delta;
         }
 
-        sealed class Deltas
+        internal sealed class Deltas
         {
             internal readonly Vector3[] Vertices, Normals, Tangents;
             internal Deltas(int count)
@@ -240,6 +247,15 @@ namespace VRVlog.LilToonExporter
             bool clampToSourceRange = false)
         {
             if (ReferenceEquals(source, target)) throw new ArgumentException("The source mesh must remain unchanged.");
+            var delta = AnimatedDeltas(source, shape, initial, weight, clampToSourceRange);
+            target.AddBlendShapeFrame(name, 100f, delta.Vertices, delta.Normals, delta.Tangents);
+        }
+
+        // Baking can compare the exact generated residual before storing it.
+        // Keep the same interpolation/subtraction as the append operation.
+        internal static Deltas AnimatedDeltas(Mesh source, int shape, double initial, double weight,
+            bool clampToSourceRange = false)
+        {
             var before = Evaluate(source, shape, clampToSourceRange ? ClampSourceWeight(source, shape, initial) : initial);
             var after = Evaluate(source, shape, clampToSourceRange ? ClampSourceWeight(source, shape, weight) : weight);
             for (var v = 0; v < source.vertexCount; v++)
@@ -248,7 +264,7 @@ namespace VRVlog.LilToonExporter
                 after.Normals[v] -= before.Normals[v];
                 after.Tangents[v] -= before.Tangents[v];
             }
-            target.AddBlendShapeFrame(name, 100f, after.Vertices, after.Normals, after.Tangents);
+            return after;
         }
 
         private static bool SpansZero(Mesh mesh, int shape)

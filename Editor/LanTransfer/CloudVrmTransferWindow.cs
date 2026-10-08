@@ -12,6 +12,7 @@ namespace VRVlog.LilToonExporter.LanTransfer
 {
     public sealed class CloudVrmTransferWindow : EditorWindow
     {
+        public static bool IsAvailable => CloudTransferAvailability.Enabled;
         private static readonly HashSet<string> OwnedSnapshots = new HashSet<string>(StringComparer.Ordinal);
         [NonSerialized] private CloudVrmTransferSource source;
         [NonSerialized] private CloudVrmTransferSession session;
@@ -26,6 +27,7 @@ namespace VRVlog.LilToonExporter.LanTransfer
         [MenuItem("VR Vlog/スマホに送る...")]
         private static void OpenDevelopmentTransfer()
         {
+            CloudTransferAvailability.RequireEnabled();
             var selected = EditorUtility.OpenFilePanel(ExporterLocalization.T("書き出し済みVRMを選択"), "", "vrm");
             try { OpenSavedVrmForDevelopment(selected); }
             catch
@@ -34,6 +36,9 @@ namespace VRVlog.LilToonExporter.LanTransfer
                 EditorUtility.DisplayDialog(ExporterLocalization.T("スマホに送る"), ExporterLocalization.T("転送用のコピーを準備できませんでした。256 MiB以下の書き出し済みVRMを選択してください。"), ExporterLocalization.T("閉じる"));
             }
         }
+
+        [MenuItem("VR Vlog/スマホに送る...", true)]
+        private static bool CanOpenDevelopmentTransfer() => IsAvailable;
 #endif
         public static void OpenSavedVrmForDevelopment(string savedVrmPath)
         {

@@ -154,6 +154,52 @@ namespace VRVlog.LilToonExporter
             var clampToSourceRange = UnityEditor.PlayerSettings.legacyClampBlendShapeWeights;
             long generatedBytes = 0;
             var basis = new Dictionary<(Mesh mesh, int shape, double initial, double value), string>();
+            // A zero residual remains zero at every accumulated weight, even
+            // with legacy clamping. Only these scalar markers may share an
+            // index; nonzero poses retain independent simultaneous targets.
+            var zeroScalarTargets = new Dictionary<Mesh, string>();
+            bool Zero(AvatarBaseShape.Deltas delta) => new[] { delta.Vertices, delta.Normals, delta.Tangents }
+                .All(values => values.All(value => value.x == 0f && value.y == 0f && value.z == 0f));
+            // Animation programs are mutually exclusive. Reuse exact basis
+            // geometry across those programs only; scalar menu identities and
+            // all distinct targets inside one animation remain independent.
+            var geometry = new Dictionary<(Mesh mesh, ulong hash), List<string>>();
+            Vector3[] compareVertices = null, compareNormals = null, compareTangents = null;
+            ulong Hash(AvatarBaseShape.Deltas delta)
+            {
+                ulong hash = 14695981039346656037UL;
+                unchecked
+                {
+                    foreach (var values in new[] { delta.Vertices, delta.Normals, delta.Tangents })
+                        foreach (var value in values)
+                        {
+                            hash = (hash ^ (uint)value.x.GetHashCode()) * 1099511628211UL;
+                            hash = (hash ^ (uint)value.y.GetHashCode()) * 1099511628211UL;
+                            hash = (hash ^ (uint)value.z.GetHashCode()) * 1099511628211UL;
+                        }
+                }
+                return hash;
+            }
+            string EquivalentTarget(Mesh mesh, AvatarBaseShape.Deltas delta, ISet<string> used, ulong hash)
+            {
+                if (!geometry.TryGetValue((mesh, hash), out var names)) return null;
+                if (compareVertices == null || compareVertices.Length != mesh.vertexCount)
+                {
+                    compareVertices = new Vector3[mesh.vertexCount];
+                    compareNormals = new Vector3[mesh.vertexCount];
+                    compareTangents = new Vector3[mesh.vertexCount];
+                }
+                foreach (var name in names)
+                {
+                    if (used.Contains(name)) continue;
+                    mesh.GetBlendShapeFrameVertices(mesh.GetBlendShapeIndex(name), 0, compareVertices, compareNormals, compareTangents);
+                    // Hashes only choose candidates. Exact P/N/T equality,
+                    // never a distance tolerance, establishes reuse.
+                    if (delta.Vertices.SequenceEqual(compareVertices) && delta.Normals.SequenceEqual(compareNormals) &&
+                        delta.Tangents.SequenceEqual(compareTangents)) return name;
+                }
+                return null;
+            }
             void Reserve(Mesh mesh)
             {
                 generatedBytes += mesh.vertexCount * 36L;
@@ -168,7 +214,6 @@ namespace VRVlog.LilToonExporter
                 {
                     var originalMesh = group.Mesh;
                     var copy = group.Renderer;
-                    Reserve(originalMesh);
                     if (!meshes.Contains(copy.sharedMesh) || ReferenceEquals(copy.sharedMesh, originalMesh))
                     {
                         copy.sharedMesh = UnityEngine.Object.Instantiate(copy.sharedMesh);
@@ -182,40 +227,70 @@ namespace VRVlog.LilToonExporter
                         if (index < 0) throw new InvalidOperationException("表情の元BlendShapeが見つかりません: " + value.Shape);
                         pose[index] = value.Weight;
                     }
-                    var name = prefix + serial++;
-                    AvatarBaseShape.AppendExpression(originalMesh, copy.sharedMesh, name, rest, pose, clampToSourceRange);
+                    var delta = AvatarBaseShape.ExpressionDeltas(originalMesh, rest, pose, clampToSourceRange);
+                    var zero = Zero(delta);
+                    if (!zero || !zeroScalarTargets.TryGetValue(copy.sharedMesh, out var name))
+                    {
+                        Reserve(originalMesh);
+                        name = prefix + serial++;
+                        copy.sharedMesh.AddBlendShapeFrame(name, 100f, delta.Vertices, delta.Normals, delta.Tangents);
+                        if (zero) zeroScalarTargets.Add(copy.sharedMesh, name);
+                    }
                     expression.Targets.Add(name);
                 }
                 if (plan.Animation.Count > 0)
                 {
                     expression.Animation = new ExpressionAnimationData { Duration = entry.Duration, Loop = entry.Loop };
+                    var usedTargets = new HashSet<string>(StringComparer.Ordinal);
                     foreach (var animated in plan.Animation)
                     {
                         var original = animated.Mesh;
                         var copy = animated.Renderer.sharedMesh;
                         var shape = original.GetBlendShapeIndex(animated.Shape);
                         animated.Curve.Range(out var minimum, out var maximum);
-                        // Morph geometry is linear between source frame weights.
-                        // Store those knots once instead of a mesh per video frame.
-                        var knots = new SortedSet<double> { minimum, maximum };
-                        if (minimum < 0 && maximum > 0) knots.Add(0);
+                        // Morph residuals are affine between source frames.
+                        // Enclose varying curves with canonical frame endpoints,
+                        // so different extrema can use the same exact basis.
+                        var initial = animated.Curve.Evaluate(0);
+                        var frames = new SortedSet<double> { 0 };
                         for (var frame = 0; frame < original.GetBlendShapeFrameCount(shape); frame++)
                         {
                             var weight = original.GetBlendShapeFrameWeight(shape, frame);
-                            if (weight > minimum && weight < maximum) knots.Add(weight);
+                            // Keep the animation schema's existing point bounds;
+                            // a larger source endpoint uses the curve fallback.
+                            if (!float.IsNaN(weight) && !float.IsInfinity(weight) && weight >= -10000 && weight <= 10000) frames.Add(weight);
+                        }
+                        var knots = new SortedSet<double> { minimum, maximum };
+                        if (minimum < maximum)
+                        {
+                            var candidates = new SortedSet<double>(frames) { initial };
+                            var lower = candidates.Where(weight => weight <= minimum).DefaultIfEmpty(minimum).Max();
+                            var upper = candidates.Where(weight => weight >= maximum).DefaultIfEmpty(maximum).Min();
+                            knots = new SortedSet<double> { lower, upper };
+                            // The initial value selects an endpoint when useful;
+                            // do not add an unnecessary interior point for it.
+                            foreach (var weight in frames) if (weight > lower && weight < upper) knots.Add(weight);
                         }
                         var channel = new ExpressionAnimationData.Channel { Curve = animated.Curve };
-                        var initial = animated.Curve.Evaluate(0);
                         foreach (var weight in knots)
                         {
                             string target = null;
-                            if (weight != initial && !basis.TryGetValue((copy, shape, initial, weight), out target))
+                            if (weight != initial && (!basis.TryGetValue((copy, shape, initial, weight), out target) || usedTargets.Contains(target)))
                             {
-                                Reserve(original);
-                                target = ExpressionAnimationData.TargetPrefix + prefix + serial++;
-                                AvatarBaseShape.AppendAnimatedShape(original, copy, target, shape, initial, weight, clampToSourceRange);
-                                basis.Add((copy, shape, initial, weight), target);
+                                var delta = AvatarBaseShape.AnimatedDeltas(original, shape, initial, weight, clampToSourceRange);
+                                var hash = Hash(delta);
+                                target = EquivalentTarget(copy, delta, usedTargets, hash);
+                                if (target == null)
+                                {
+                                    Reserve(original);
+                                    target = ExpressionAnimationData.TargetPrefix + prefix + serial++;
+                                    copy.AddBlendShapeFrame(target, 100f, delta.Vertices, delta.Normals, delta.Tangents);
+                                    if (!geometry.TryGetValue((copy, hash), out var names)) geometry.Add((copy, hash), names = new List<string>());
+                                    names.Add(target);
+                                }
+                                basis[(copy, shape, initial, weight)] = target;
                             }
+                            if (target != null) usedTargets.Add(target);
                             channel.Points.Add(new ExpressionAnimationData.Point { Value = weight, Target = target });
                         }
                         expression.Animation.Channels.Add(channel);

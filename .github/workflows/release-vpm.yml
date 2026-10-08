@@ -6,7 +6,7 @@ on:
       version:
         description: Exporter version without the v prefix
         required: true
-        default: 0.11.11
+        default: 0.11.12
       channel:
         description: Explicit publication channel (beta keeps the stable latest release)
         type: choice

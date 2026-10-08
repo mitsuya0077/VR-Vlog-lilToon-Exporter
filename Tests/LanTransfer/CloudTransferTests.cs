@@ -16,15 +16,27 @@ namespace VRVlog.LilToonExporter.LanTransfer.Tests
         [Test]
         public void CloudDevelopmentAvailabilityRequiresBothEditorAndExplicitDevelopmentDefine()
         {
-#if UNITY_EDITOR
+#if UNITY_EDITOR && VRVLOG_CLOUD_TRANSFER_DEVELOPMENT
             Assert.That(CloudTransferAvailability.Enabled, Is.True);
-            CloudTransferAvailability.RequireEnabled();
+#elif UNITY_EDITOR
+            var version = UnityEditor.PackageManager.PackageInfo.FindForAssembly(typeof(CloudTransferAvailability).Assembly)?.version;
+            Assert.That(CloudTransferAvailability.Enabled, Is.EqualTo(CloudTransferAvailability.IsPrereleaseVersion(version)));
 #else
             Assert.That(CloudTransferAvailability.Enabled, Is.False);
-            Assert.Throws<NotSupportedException>(() => CloudTransferAvailability.RequireEnabled());
 #endif
+            if (CloudTransferAvailability.Enabled) CloudTransferAvailability.RequireEnabled();
+            else Assert.Throws<NotSupportedException>(() => CloudTransferAvailability.RequireEnabled());
             Assert.That(LanTransferAvailability.Enabled, Is.False);
         }
+
+        [TestCase("0.11.12", false)]
+        [TestCase("0.11.12+beta.1", false)]
+        [TestCase("0.11.12-beta.1", true)]
+        [TestCase("0.11.13-rc.1+build.2", true)]
+        [TestCase("not-a-beta", false)]
+        [TestCase(null, false)]
+        public void CloudReleaseChannelRequiresAnActualPrerelease(string version, bool enabled) =>
+            Assert.That(CloudTransferAvailability.IsPrereleaseVersion(version), Is.EqualTo(enabled));
 
         [TestCase(false)][TestCase(true)]
         public void DevelopmentCopyPreservesTheSavedVrmAndDeletesOnlyItsOwnedCopy(bool adopt)

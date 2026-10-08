@@ -18,6 +18,18 @@ namespace VRVlog.LilToonExporter
         {
             var result = fixedValues == null ? new Dictionary<string, float>(StringComparer.Ordinal)
                 : new Dictionary<string, float>(fixedValues, StringComparer.Ordinal);
+            // CanEvaluateNeutralRelay separately proves every raw producer and
+            // implicit WD contribution is an invariant constant motion, with
+            // no driver, live input, controlled producer or additional writer.
+            // Only this post-evaluation condition check may use the observed
+            // signal. Keep the authored zero during native startup and never
+            // use this settled value to prune the original controller graph.
+            if (dependencies?.RequireSettledWeightControls == true)
+                foreach (var name in dependencies.NeutralRelaySignals)
+                {
+                    var observed = playable.GetFloat(name);
+                    if (Finite(observed)) result[name] = observed;
+                }
             if (dependencies == null || metadata == null || metadata.OtherControllers.Any(value => value != null)) return result;
             var layers = controller.layers;
             for (var owner = 0; owner < layers.Length; owner++)

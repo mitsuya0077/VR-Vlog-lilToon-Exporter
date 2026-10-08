@@ -6,6 +6,27 @@ using System;
 using System.Collections;
 using System.Reflection;
 
+#if UNITY_EDITOR
+// The CLI has no Unity runtime. Supply only the observed package metadata for
+// the release-channel branch; native assembly discovery is tested in Unity.
+namespace UnityEditor.PackageManager
+{
+    public sealed class PackageInfo
+    {
+        public string version;
+        public static PackageInfo FindForAssembly(Assembly assembly)
+        {
+            var root = Environment.GetEnvironmentVariable("VRVLOG_LAN_TRANSFER_CLI_ROOT");
+            if (string.IsNullOrEmpty(root)) throw new InvalidOperationException("The CLI package metadata root is required.");
+            var manifest = System.IO.File.ReadAllText(System.IO.Path.Combine(root, "package.json"));
+            var match = System.Text.RegularExpressions.Regex.Match(manifest, "\"version\"\\s*:\\s*\"([^\"]+)\"");
+            if (!match.Success) throw new InvalidOperationException("The CLI package metadata has no version.");
+            return new PackageInfo { version = match.Groups[1].Value };
+        }
+    }
+}
+#endif
+
 namespace NUnit.Framework
 {
     [AttributeUsage(AttributeTargets.Method)] public sealed class TestAttribute : Attribute { }

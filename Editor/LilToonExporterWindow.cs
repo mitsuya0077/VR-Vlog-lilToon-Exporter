@@ -178,9 +178,10 @@ namespace VRVlog.LilToonExporter
                 EditorGUILayout.HelpBox(ExporterLocalization.T("VRMを保存しました。") + "\n" + System.IO.Path.GetFileName(lastSavedPath) + "\n" + lastSavedSummary, MessageType.Info);
                 using (new EditorGUILayout.HorizontalScope())
                 {
-                    if (GUILayout.Button(ExporterLocalization.T("スマホに送る")))
+                    var sendSavedVrm = SavedVrmTransferMethod();
+                    if (sendSavedVrm != null && GUILayout.Button(ExporterLocalization.T("スマホに送る")))
                     {
-                        try { LanTransfer.CloudVrmTransferWindow.OpenSavedVrmForDevelopment(lastSavedPath); }
+                        try { sendSavedVrm.Invoke(null, new object[] { lastSavedPath }); }
                         catch { EditorUtility.DisplayDialog(ExporterLocalization.T("スマホに送る"), ExporterLocalization.T("転送用のコピーを準備できません"), ExporterLocalization.T("閉じる")); }
                     }
                     if (GUILayout.Button(ExporterLocalization.T("保存先を開く"))) EditorUtility.RevealInFinder(lastSavedPath);
@@ -512,7 +513,21 @@ namespace VRVlog.LilToonExporter
         private static string PackageVersion()
         {
             var info = PackageManagerPackageInfo.FindForAssembly(typeof(LilToonExporterWindow).Assembly);
-            return info != null && !string.IsNullOrWhiteSpace(info.version) ? info.version : "0.11.12-beta.1";
+            return info != null && !string.IsNullOrWhiteSpace(info.version) ? info.version : "0.11.12";
+        }
+
+        // Stable packages omit this assembly. Resolve only its public optional
+        // entry so exporting never requires the prerelease transfer module.
+        private static System.Reflection.MethodInfo SavedVrmTransferMethod()
+        {
+            try
+            {
+                var type = Type.GetType("VRVlog.LilToonExporter.LanTransfer.CloudVrmTransferWindow, VRVlog.LanTransfer.Editor", false);
+                if (type == null || !Equals(type.GetProperty("IsAvailable", System.Reflection.BindingFlags.Public | System.Reflection.BindingFlags.Static)?.GetValue(null), true)) return null;
+                return type.GetMethod("OpenSavedVrmForDevelopment", System.Reflection.BindingFlags.Public | System.Reflection.BindingFlags.Static,
+                    null, new[] { typeof(string) }, null);
+            }
+            catch { return null; }
         }
 
         private static string InstalledLilToonStatus()
