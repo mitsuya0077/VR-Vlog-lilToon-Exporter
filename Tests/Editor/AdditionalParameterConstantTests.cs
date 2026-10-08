@@ -505,11 +505,26 @@ namespace VRVlog.LilToonExporter.Tests
             else source.ParameterPersistence.Remove("ResetGate");
             if (supplied) source.ExternalParameters.Add("ResetGate");
             var context = Context(); Assert.That(context.Values.ContainsKey("ResetGate"), Is.EqualTo(supplied));
+            var objects = new Object[] { fx, additional, descriptor, reset, skin, mesh, reset.motion }.Concat(reset.behaviours).ToArray();
+            var before = objects.Select(value => EditorJsonUtility.ToJson(value)).ToArray();
             var selected = new Dictionary<string, float> { ["Menu"] = 1 };
             var constants = AdditionalParameterConstants.Prove(fx, source, context, source.Defaults, selected);
             Assert.That(constants, Is.Empty, "A saved or unknown gate must retain its potentially changing producer.");
-            Assert.Throws<InvalidOperationException>(() => VrChatExpressionSampler.SampleFixed(avatar, fx, source.Defaults,
+            if (supplied)
+            {
+                // This existing explicit-environment path sets the external
+                // gate before graph startup; it does not use the new reset
+                // proof to classify a saved default as an invariant input.
+                var normal = VrChatExpressionSampler.SampleFixed(avatar, fx, source.Defaults,
+                    new Dictionary<string, float>(), null, source, fixedContext: context);
+                var values = VrChatExpressionSampler.SampleFixed(avatar, fx, source.Defaults,
+                    selected, null, source, fixedContext: context);
+                Assert.That(normal.Single(value => value.Shape == "Open").Weight, Is.EqualTo(Native(false)).Within(.01));
+                Assert.That(values.Single(value => value.Shape == "Open").Weight, Is.EqualTo(Native(true)).Within(.01));
+            }
+            else Assert.Throws<InvalidOperationException>(() => VrChatExpressionSampler.SampleFixed(avatar, fx, source.Defaults,
                 selected, null, source, fixedContext: context));
+            Assert.That(objects.Select(value => EditorJsonUtility.ToJson(value)), Is.EqualTo(before));
             Assert.That(skin.GetBlendShapeWeight(0), Is.EqualTo(35));
         }
 
