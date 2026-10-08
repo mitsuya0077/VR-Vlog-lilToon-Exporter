@@ -178,6 +178,11 @@ namespace VRVlog.LilToonExporter
                 EditorGUILayout.HelpBox(ExporterLocalization.T("VRMを保存しました。") + "\n" + System.IO.Path.GetFileName(lastSavedPath) + "\n" + lastSavedSummary, MessageType.Info);
                 using (new EditorGUILayout.HorizontalScope())
                 {
+                    if (GUILayout.Button(ExporterLocalization.T("スマホに送る")))
+                    {
+                        try { LanTransfer.CloudVrmTransferWindow.OpenSavedVrmForDevelopment(lastSavedPath); }
+                        catch { EditorUtility.DisplayDialog(ExporterLocalization.T("スマホに送る"), ExporterLocalization.T("転送用のコピーを準備できません"), ExporterLocalization.T("閉じる")); }
+                    }
                     if (GUILayout.Button(ExporterLocalization.T("保存先を開く"))) EditorUtility.RevealInFinder(lastSavedPath);
                     if (lastSavedWarnings.Length > 0 && GUILayout.Button(ExporterLocalization.T("書き出しの詳細"))) ExportAppearanceReportWindow.Open(lastSavedWarnings);
                 }
@@ -507,7 +512,7 @@ namespace VRVlog.LilToonExporter
         private static string PackageVersion()
         {
             var info = PackageManagerPackageInfo.FindForAssembly(typeof(LilToonExporterWindow).Assembly);
-            return info != null && !string.IsNullOrWhiteSpace(info.version) ? info.version : "0.11.11";
+            return info != null && !string.IsNullOrWhiteSpace(info.version) ? info.version : "0.11.12-beta.1";
         }
 
         private static string InstalledLilToonStatus()

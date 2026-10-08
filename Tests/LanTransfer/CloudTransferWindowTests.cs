@@ -19,7 +19,7 @@ namespace VRVlog.LilToonExporter.LanTransfer.Tests
         {
             Assert.That(LanTransferAvailability.Enabled, Is.False);
             var menu = typeof(CloudVrmTransferWindow).GetMethod("OpenDevelopmentTransfer", BindingFlags.NonPublic | BindingFlags.Static);
-#if UNITY_EDITOR && VRVLOG_CLOUD_TRANSFER_DEVELOPMENT
+#if UNITY_EDITOR
             Assert.That(CloudTransferAvailability.Enabled, Is.True);
             Assert.That(menu, Is.Not.Null);
             Assert.That(menu.GetCustomAttributes(typeof(MenuItem), false).Length, Is.EqualTo(1));
@@ -38,7 +38,7 @@ namespace VRVlog.LilToonExporter.LanTransfer.Tests
             try
             {
                 File.WriteAllBytes(path, bytes);
-#if UNITY_EDITOR && VRVLOG_CLOUD_TRANSFER_DEVELOPMENT
+#if UNITY_EDITOR
                 Assert.Throws<InvalidOperationException>(() => CloudVrmTransferWindow.Show(path, "saved.vrm"));
 #else
                 Assert.Throws<NotSupportedException>(() => CloudVrmTransferWindow.CreateSnapshotPath());
@@ -51,7 +51,7 @@ namespace VRVlog.LilToonExporter.LanTransfer.Tests
             finally { File.Delete(path); }
         }
 
-#if !(UNITY_EDITOR && VRVLOG_CLOUD_TRANSFER_DEVELOPMENT)
+#if !(UNITY_EDITOR)
         [Test]
         public void RejectedCloudEntryDeletesOnlyItsPreviouslyIssuedSnapshot()
         {
@@ -100,7 +100,7 @@ namespace VRVlog.LilToonExporter.LanTransfer.Tests
         }
 #endif
 
-#if UNITY_EDITOR && VRVLOG_CLOUD_TRANSFER_DEVELOPMENT
+#if UNITY_EDITOR
         [Test]
         public void DevelopmentFileSelectionCopiesTheVrmWithoutStartingAnUploadAndClosureDeletesOnlyTheCopy()
         {

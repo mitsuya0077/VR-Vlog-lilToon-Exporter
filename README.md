@@ -33,13 +33,15 @@ https://mitsuya0077.github.io/VR-Vlog-lilToon-Exporter/index.json
 
 正式版 **0.11.11** は、0.11.11-beta.16と同じ機能を安定版として公開したものです。VCC／ALCOMのパッケージ一覧から選択できます。ALCOMの **Show pre-release packages** 設定を有効にする必要はありません。
 
-この版は **VRM書き出し専用版** です。QR転送の実装と転送ガイドは配布パッケージに含めません。書き出したVRMを端末の「ファイル」に保存し、VR Vlogから読み込んでください。QR転送対応版の配布バージョンは未定です。
+この版は **VRM書き出し専用版** です。QR転送の実装と転送ガイドは配布パッケージに含めません。書き出したVRMを端末の「ファイル」に保存し、VR Vlogから読み込んでください。QR転送は下記のβ版で利用できます。
 
 ### ZIPで手動導入する
 
 1. [インストールページ](https://mitsuya0077.github.io/VR-Vlog-lilToon-Exporter/)の **ZIPで導入** から、エクスポーター・UniGLTF・VRMの3つのZIPをダウンロードします。
 2. プロジェクトの `Packages` 内の別々のフォルダーへ展開し、それぞれの直下に `package.json` がある状態にします。
 3. Unityで読み込みが終わるのを待ちます。同じUniVRMパッケージを重複して導入しないでください。
+
+QR転送対応のβ版 **0.11.12-beta.1** はALCOMの **Show pre-release packages** を有効にして選択します。VRM保存後の **スマホに送る** 又は **VR Vlog → スマホに送る...** から送信し、最新のQR対応iPhone TestFlightで受信します。Android配布版の受信は無効です。安定版は **0.11.11** を維持します。
 
 ## 使い方
 
