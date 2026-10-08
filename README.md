@@ -33,7 +33,7 @@ https://mitsuya0077.github.io/VR-Vlog-lilToon-Exporter/index.json
 
 配布済みベータ版 **0.11.11-beta.15** を試す場合は、ALCOMの設定で **Show pre-release packages** を有効にし、パッケージ一覧からこの版を選んでください。安定版は引き続き **0.11.10** です。配布済みbeta.15では **スマホに送る** を無効化しています。
 
-このソースでは **0.11.11-beta.16** のクラウドQR転送を準備しています。利用には転送サービスとQR v2対応のAndroid・iPhone版VR Vlogの配布が必要です。[転送手順と一時保存の条件](Documentation~/CloudTransfer.md)を確認してください。通常のVRMファイル書き出しも引き続き利用できます。
+このソースでは **0.11.11-beta.17** のE2E暗号化に対応したクラウドQR転送を準備しています。PCで暗号化し、QRに含まれる鍵でスマホが復号します。転送サービスには復号鍵を送りません。利用には転送サービスとQR v3対応のAndroid・iPhone版VR Vlogの配布が必要です。[転送手順と一時保存の条件](Documentation~/CloudTransfer.md)を確認してください。通常のVRMファイル書き出しも引き続き利用できます。
 
 ### ZIPで手動導入する
 
