@@ -154,56 +154,104 @@ class PackageTests(unittest.TestCase):
                         for name, expected in inputs.items():
                             self.assertEqual(archive.read(name), expected)
 
-    def test_lan_transfer_guide_is_packaged_and_required(self):
-        guide = "Documentation~/LanTransfer.md"
-        content = "Public LAN installation, permissions and acceptance instructions\n"
-        self.write(guide, content)
-        expected = (self.root / guide).read_bytes()
-        self.git("add", guide)
-        archive = self.root / "with-lan-guide.zip"
+    def test_tracked_transfer_implementation_and_guides_are_excluded(self):
+        excluded = package.TRANSFER_FILES | {name + ".meta" for name in package.TRANSFER_FILES} | {
+            "Editor/LanTransfer/CloudVrmTransferWindow.cs",
+            "Editor/LanTransfer/CloudVrmTransferWindow.cs.meta",
+            "Editor/LanTransfer/VRVlog.LanTransfer.Editor.asmdef",
+            "Editor/LanTransfer/VRVlog.LanTransfer.Editor.asmdef.meta",
+            "Editor/LanTransfer/NewEditorFeature.cs",
+            "Editor/LanTransfer/NewEditorFeature.shader",
+            "Editor/LanTransfer/Dependencies/BouncyCastle.Cryptography.dll",
+            "Editor/LanTransfer/Dependencies/BouncyCastle.Cryptography.dll.meta",
+            "Editor/LanTransfer/Dependencies/zxing.dll",
+            "Editor/LanTransfer/Dependencies/zxing.dll.meta",
+        }
+        for name in excluded:
+            self.write(name, "retained development source")
+        self.git("add", ".")
+        archive = self.root / "export-only.zip"
         names = package.build(self.root, archive)
-        self.assertIn(guide, names)
+        self.assertFalse(excluded & set(names))
         with zipfile.ZipFile(archive) as built:
-            self.assertEqual(built.read(guide), expected)
-        self.assertFalse(package.included("Documentation~/private-notes.md"))
-        self.git("rm", "--cached", guide)
-        with self.assertRaisesRegex(ValueError, "Required package files.*LanTransfer"):
-            package.build(self.root, self.root / "missing-lan-guide.zip")
+            self.assertFalse(excluded & set(built.namelist()))
+            self.assertIn("Editor/Example.cs", built.namelist())
+            self.assertIn("ThirdPartyNotices/Example.md", built.namelist())
+        # The retained development guides must not become release prerequisites.
+        for guide in ["Documentation~/LanTransfer.md", "Documentation~/CloudTransfer.md"]:
+            self.git("rm", "--cached", guide)
+        self.assertEqual(names, package.build(self.root, self.root / "without-guides.zip"))
 
-    def test_cloud_transfer_guide_is_packaged_and_required(self):
-        guide = "Documentation~/CloudTransfer.md"
-        self.write(guide, "Public cloud lifetime, compatibility and retry instructions\n")
-        expected = (self.root / guide).read_bytes()
-        self.git("add", guide)
-        archive = self.root / "with-cloud-guide.zip"
-        names = package.build(self.root, archive)
-        self.assertIn(guide, names)
+    def test_transfer_dll_copies_and_importers_under_other_prefixes_are_excluded(self):
+        excluded = {
+            "Editor/AnotherFeature/zxing.dll", "Editor/AnotherFeature/zxing.dll.meta",
+            "Editor/AnotherFeature/BouncyCastle.Cryptography.dll", "Editor/AnotherFeature/BouncyCastle.Cryptography.dll.meta",
+            "Runtime/Plugins/ZXING.DLL", "Runtime/Plugins/ZXING.DLL.meta",
+            "Runtime/Plugins/BOUNCYCASTLE.CRYPTOGRAPHY.DLL", "Runtime/Plugins/BOUNCYCASTLE.CRYPTOGRAPHY.DLL.meta",
+            "Editor/arbitrary.dll", "Runtime/Plugins/renamed-transfer.dll",
+        }
+        for name in excluded:
+            self.write(name, "synthetic DLL/importer")
+        self.git("add", ".")
+        archive = self.root / "without-dlls.zip"
+        self.assertFalse(excluded & set(package.build(self.root, archive)))
         with zipfile.ZipFile(archive) as built:
-            self.assertEqual(built.read(guide), expected)
-        self.git("rm", "--cached", guide)
-        with self.assertRaisesRegex(ValueError, "Required package files.*CloudTransfer"):
-            package.build(self.root, self.root / "missing-cloud-guide.zip")
+            self.assertFalse(excluded & set(built.namelist()))
 
-    def test_only_pinned_dlls_are_allowed(self):
-        for name in package.PINNED_DLLS:
-            self.assertTrue(package.included(name))
-        self.assertFalse(package.included("Editor/arbitrary.dll"))
-        self.assertFalse(package.included("Runtime/BouncyCastle.Cryptography.dll"))
+    def test_transfer_assembly_reference_in_any_shipped_assembly_fails(self):
+        cases = [
+            ("Editor/VRVlog.LilToonExporter.Editor.asmdef", '{"references":["VRVlog.LanTransfer.Editor"]}'),
+            ("Runtime/NewFeature.asmdef", '{"references":["GUID:b15e228f27f843bdbdd4c2335be4354b"]}'),
+            ("Editor/AnotherFeature.asmdef", '{"precompiledReferences":["zxing.dll"]}'),
+            ("Editor/AnotherFeature.asmdef", '{"precompiledReferences":["BouncyCastle.Cryptography.dll"]}'),
+            ("Editor/AnotherFeature.asmdef", r'{"references":["VRVlog.\u004canTransfer.Editor"]}'),
+        ]
+        for name, content in cases:
+            with self.subTest(name=name, content=content):
+                self.write(name, content)
+                self.git("add", name)
+                output = self.root / "invalid-reference.zip"
+                with self.assertRaisesRegex(ValueError, "QR transfer dependency cannot be distributed"):
+                    package.build(self.root, output)
+                self.assertFalse(output.exists())
+                self.git("rm", "--cached", name)
 
-    def test_missing_or_modified_transfer_dependency_fails(self):
-        contents = {"Editor/LanTransfer/VRVlog.LanTransfer.Editor.asmdef": b"{}"}
-        with self.assertRaisesRegex(ValueError, "Pinned LAN transfer dependency"):
-            package.verify_lan_dependencies(contents)
-        for name in package.PINNED_DLLS:
-            contents[name] = b"modified DLL"
-            contents[name + ".meta"] = b"importer"
-        with self.assertRaisesRegex(ValueError, "different SHA-256"):
-            package.verify_lan_dependencies(contents)
+    def test_transfer_code_reintroduced_outside_excluded_subtree_fails(self):
+        cases = [
+            "class Unexpected { void Send() { LanTransfer.CloudVrmTransferWindow.CreateSnapshotPath(); } }",
+            "using VRVlog.LilToonExporter.LanTransfer; class Unexpected {}",
+            "class Unexpected { CloudVrmTransferSession session; }",
+            "class Unexpected { LanVrmTransferServer server; }",
+            "class CloudEncryptedSnapshot {}",
+            "using ZXing; class Unexpected {}",
+            "using Org.BouncyCastle.Security; class Unexpected {}",
+            r"class Unexpected { \u0043loudVrmTransferSession session; }",
+        ]
+        name = "Editor/AnotherFeature/Unexpected.cs"
+        self.git("add", ".")
+        for content in cases:
+            with self.subTest(content=content):
+                self.write(name, content)
+                self.git("add", name)
+                output = self.root / "invalid-code.zip"
+                with self.assertRaisesRegex(ValueError, "QR transfer dependency cannot be distributed"):
+                    package.build(self.root, output)
+                self.assertFalse(output.exists())
 
-    def test_referenced_untracked_transfer_assembly_fails(self):
-        contents = {"Editor/VRVlog.LilToonExporter.Editor.asmdef": b'{"references":["VRVlog.LanTransfer.Editor"]}'}
-        with self.assertRaisesRegex(ValueError, "Required LAN transfer assembly"):
-            package.verify_lan_dependencies(contents)
+    def test_transfer_content_verification_rejects_readded_inputs(self):
+        # The final guard also protects against a future allowlist regression.
+        for name in ["Editor/LanTransfer/NewFeature.cs", "Editor/LanTransfer.meta",
+                     "ThirdPartyNotices/ZXing-LICENSE.txt", "Editor/Other/zxing.dll.meta"]:
+            with self.subTest(name=name):
+                with self.assertRaisesRegex(ValueError, "QR transfer input cannot be distributed"):
+                    package.verify_no_transfer_dependencies({name: b"synthetic development input"})
+
+    def test_unreadable_shipped_source_cannot_bypass_transfer_verification(self):
+        name = "Editor/Unexpected.cs"
+        (self.root / name).write_bytes(b"\xff\xfe" + "CloudVrmTransferSession".encode("utf-16-le"))
+        self.git("add", name)
+        with self.assertRaisesRegex(ValueError, "Package source must be UTF-8"):
+            package.build(self.root, self.root / "invalid-encoding.zip")
 
     def test_missing_locale_asset_fails(self):
         self.git("rm", "--cached", "Editor/Locales/ExporterLocale_ko.json")

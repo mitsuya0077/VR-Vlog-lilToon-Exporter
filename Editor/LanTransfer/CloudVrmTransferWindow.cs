@@ -24,6 +24,7 @@ namespace VRVlog.LilToonExporter.LanTransfer
 
         public static string CreateSnapshotPath()
         {
+            LanTransferAvailability.RequireEnabled();
             var path = Path.Combine(Path.GetTempPath(), "VRVlogCloudTransfers", Guid.NewGuid().ToString("N") + ".vrm");
             OwnedSnapshots.Add(path);
             return path;
@@ -31,6 +32,13 @@ namespace VRVlog.LilToonExporter.LanTransfer
 
         public static void Show(string ownedSnapshotPath, string name)
         {
+            if (!LanTransferAvailability.Enabled)
+            {
+                // A caller may still own a snapshot issued by an earlier
+                // version. Ordinary saved VRMs are never in this registry.
+                if (OwnedSnapshots.Remove(ownedSnapshotPath)) LanVrmTransferServer.TryDelete(ownedSnapshotPath);
+                LanTransferAvailability.RequireEnabled();
+            }
             // Only the explicitly generated output path can be adopted. An
             // ordinary saved VRM passed to this public entry is never deleted.
             if (!OwnedSnapshots.Remove(ownedSnapshotPath)) throw new InvalidOperationException("Exporterで転送用のVRMを書き出してください。");
@@ -48,6 +56,11 @@ namespace VRVlog.LilToonExporter.LanTransfer
 
         private void OnEnable()
         {
+            if (!LanTransferAvailability.Enabled)
+            {
+                StopAndClean();
+                return;
+            }
             EditorApplication.update += Poll;
             EditorApplication.quitting += StopAndClean;
             AssemblyReloadEvents.beforeAssemblyReload += StopAndClean;
@@ -61,6 +74,12 @@ namespace VRVlog.LilToonExporter.LanTransfer
         }
         private void Begin()
         {
+            if (!LanTransferAvailability.Enabled)
+            {
+                StopAndClean();
+                error = LanTransferAvailability.DisabledMessage;
+                return;
+            }
             if (source == null || uploading != null || session != null && !session.Terminal) return;
             session?.Dispose();
             session = new CloudVrmTransferSession(source);
@@ -71,6 +90,11 @@ namespace VRVlog.LilToonExporter.LanTransfer
         }
         private void Poll()
         {
+            if (!LanTransferAvailability.Enabled)
+            {
+                StopAndClean();
+                return;
+            }
             // Expiry cannot depend on a status request finishing. This also
             // interrupts a pending poll and unlocks fresh-session issuance.
             session?.ExpireIfDue();
@@ -115,6 +139,12 @@ namespace VRVlog.LilToonExporter.LanTransfer
         }
         private void OnGUI()
         {
+            if (!LanTransferAvailability.Enabled)
+            {
+                StopAndClean();
+                EditorGUILayout.HelpBox(LanTransferAvailability.DisabledMessage, MessageType.Info);
+                return;
+            }
             using (var scrolling = new EditorGUILayout.ScrollViewScope(scroll))
             {
                 scroll = scrolling.scrollPosition;
