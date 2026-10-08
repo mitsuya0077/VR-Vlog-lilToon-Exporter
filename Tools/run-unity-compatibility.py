@@ -148,6 +148,9 @@ BEHAVIOR_CASES = {
         'SavedOrUnknownGateMetadataCannotBeBypassedByAutomaticContext': 4,
         'NetworkedResetsRequireAnUnchangedTypedLocalPreview': 9,
         'SerializedUnsavedSdkInputsAreReadBeforeMenuEvaluationAndSurviveOmission': 2,
+        'DormantAnimatorCurvesKeepTheirNativeWriteDefaultsContribution': 4,
+        'AnotherControllersImplicitParameterResetCannotCertifyAnAdditionalSdkSet': 2,
+        'WriteDefaultsWithoutAnAnimatorParameterBindingDoesNotInventAReset': 1,
     },
     'TemporalNeutralShapeTests': {
         'TemporalRestKeepsPreparedWeightAndReconstructsTheIndependentConstant': 3,

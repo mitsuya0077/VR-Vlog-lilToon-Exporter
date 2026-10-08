@@ -140,6 +140,131 @@ namespace VRVlog.LilToonExporter.Tests
             data.ApplyModifiedPropertiesWithoutUndo();
         }
 
+        private void DormantParameterCurve(AnimatorController controller, bool writeDefaults, float initial)
+        {
+            const string gate = "NeverEnterCurve";
+            if (!fx.parameters.Any(parameter => parameter.name == gate)) fx.AddParameter(gate, AnimatorControllerParameterType.Bool);
+            if (controller != fx) controller.AddParameter(gate, AnimatorControllerParameterType.Bool);
+            var machine = controller.layers[0].stateMachine;
+            machine.defaultState.writeDefaultValues = writeDefaults;
+            var motion = Clip("Unreachable parameter curve");
+            AnimationUtility.SetEditorCurve(motion, EditorCurveBinding.FloatCurve("", typeof(Animator), Axis),
+                AnimationCurve.Constant(0, 1, .75f));
+            var dormant = State(machine, "Unreachable writer", motion);
+            Transition(machine.defaultState, dormant).AddCondition(AnimatorConditionMode.If, 0, gate);
+            source.Defaults[gate] = 0; source.Defaults[Axis] = initial;
+        }
+
+        // Evaluate Unity's original controller, including its implicit WD
+        // stream. Apply the real serialized SDK Set once, as an on-enter
+        // callback, after graph startup; Unity then supplies all later values.
+        private float NativeAdditionalParameter(RuntimeAnimatorController runtime, float initial)
+        {
+            var clone = Object.Instantiate(avatar); var animator = clone.GetComponent<Animator>();
+            animator.runtimeAnimatorController = null; animator.cullingMode = AnimatorCullingMode.AlwaysAnimate; animator.fireEvents = false;
+            var graph = PlayableGraph.Create("Original additional parameter defaults"); graph.SetTimeUpdateMode(DirectorUpdateMode.Manual);
+            try
+            {
+                var playable = AnimatorControllerPlayable.Create(graph, runtime);
+                AnimationPlayableOutput.Create(graph, "Original", animator).SetSourcePlayable(playable);
+                graph.Play(); graph.Evaluate(0);
+                playable.SetFloat(Axis, initial);
+                var types = ExpressionDependencies.Controller(runtime).parameters.ToDictionary(parameter => parameter.name, parameter => parameter.type);
+                var program = VrChatParameterDriver.Read(driver, reset.name);
+                VrChatParameterDriver.ValidateTargets(program, types, source.ExpressionParameters);
+                VrChatParameterDriver.Execute(program, types, source.ExpressionParameters, new HashSet<string> { Axis }, true,
+                    name => playable.GetFloat(name), (name, value) => playable.SetFloat(name, (float)value));
+                Assert.That(playable.GetFloat(Axis), Is.EqualTo(initial).Within(.00001), "The authored SDK Set itself is idempotent.");
+                for (var frame = 0; frame < 120; frame++) graph.Evaluate(1f / 60);
+                Assert.That(playable.GetCurrentAnimatorStateInfo(0).shortNameHash,
+                    Is.EqualTo(Animator.StringToHash(ExpressionDependencies.Controller(runtime).layers[0].stateMachine.defaultState.name)),
+                    "The clip that binds the parameter is never entered.");
+                return playable.GetFloat(Axis);
+            }
+            finally { graph.Destroy(); Object.DestroyImmediate(clone); }
+        }
+
+        [TestCase(false, false, false)]
+        [TestCase(true, false, false)]
+        [TestCase(true, true, false)]
+        [TestCase(true, false, true)]
+        public void DormantAnimatorCurvesKeepTheirNativeWriteDefaultsContribution(bool writeDefaults, bool matchingDefault, bool overrideCurve)
+        {
+            const float initial = .5f;
+            SetParameter(fx, AnimatorControllerParameterType.Float, matchingDefault ? initial : 0);
+            SetParameter(additional, AnimatorControllerParameterType.Float, matchingDefault ? initial : 0);
+            SetDriverValue(initial); DormantParameterCurve(additional, writeDefaults, initial);
+            var runtime = (RuntimeAnimatorController)additional;
+            if (overrideCurve)
+            {
+                var dormant = additional.layers[0].stateMachine.states.Single(child => child.state.name == "Unreachable writer").state;
+                var original = (AnimationClip)dormant.motion;
+                var replacement = Clip("Effective unreachable curve");
+                AnimationUtility.SetEditorCurve(replacement, EditorCurveBinding.FloatCurve("", typeof(Animator), Axis),
+                    AnimationCurve.Constant(0, 1, .25f));
+                // The effective override is the only Animator binding.
+                AnimationUtility.SetEditorCurve(original, EditorCurveBinding.FloatCurve("", typeof(Animator), Axis), null);
+                var overridden = new AnimatorOverrideController(additional); overridden[original] = replacement;
+                AssetDatabase.CreateAsset(overridden, folder + "/Dormant.overrideController");
+                source.OtherControllers[0] = runtime = overridden; SetControllers();
+            }
+            var raw = ExpressionDependencies.Inspect(runtime, null,
+                new Dictionary<StateMachineBehaviour, VrChatParameterDriver.Program>(), new List<string>(), true);
+            var reached = ExpressionDependencies.Inspect(runtime, null,
+                new Dictionary<StateMachineBehaviour, VrChatParameterDriver.Program>(), new List<string>(), true,
+                new Dictionary<string, float> { ["NeverEnterCurve"] = 0 }, typedConditions: true);
+            Assert.That(raw.SelectMany(layer => layer.CurveWrites), Does.Contain(Axis));
+            Assert.That(reached.SelectMany(layer => layer.CurveWrites), Does.Not.Contain(Axis));
+            Assert.That(reached.Any(layer => layer.WriteDefaults), Is.EqualTo(writeDefaults));
+            var objects = new Object[] { fx, additional, runtime, driver, skin, mesh }.Concat(runtime.animationClips).Distinct().ToArray();
+            var before = objects.Select(value => EditorJsonUtility.ToJson(value)).ToArray();
+            var native = NativeAdditionalParameter(runtime, initial);
+            Assert.That(native, Is.EqualTo(writeDefaults && !matchingDefault ? 0 : initial).Within(.00001));
+            var constants = AdditionalParameterConstants.Prove(fx, source, Context());
+            if (writeDefaults && !matchingDefault)
+            {
+                Assert.That(constants, Is.Empty, "An on-enter Set cannot certify the later implicit controller reset.");
+                Assert.Throws<InvalidOperationException>(() => Dependencies());
+                Assert.Throws<InvalidOperationException>(() => Selected());
+            }
+            else
+            {
+                Assert.That(constants[Axis], Is.EqualTo(initial));
+                Assert.That(Selected().Single(value => value.Shape == "Open").Weight, Is.EqualTo(Native(true)).Within(.01));
+            }
+            Assert.That(objects.Select(value => EditorJsonUtility.ToJson(value)), Is.EqualTo(before));
+            Assert.That(skin.GetBlendShapeWeight(0), Is.EqualTo(35));
+        }
+
+        [TestCase("FX")]
+        [TestCase("third playable")]
+        public void AnotherControllersImplicitParameterResetCannotCertifyAnAdditionalSdkSet(string kind)
+        {
+            const float initial = .5f; SetDriverValue(initial);
+            AnimatorController controller;
+            if (kind == "FX") controller = fx;
+            else
+            {
+                controller = AnimatorController.CreateAnimatorControllerAtPath(folder + "/ImplicitDefaults.controller");
+                controller.AddParameter(Axis, AnimatorControllerParameterType.Float);
+                var empty = State(controller.layers[0].stateMachine, "Implicit reset", Clip("Other empty"));
+                controller.layers[0].stateMachine.defaultState = empty; source.OtherControllers.Add(controller); SetControllers();
+            }
+            DormantParameterCurve(controller, true, initial);
+            Assert.That(NativeAdditionalParameter(controller, initial), Is.Zero.Within(.00001));
+            Assert.That(AdditionalParameterConstants.Prove(fx, source, Context()), Is.Empty);
+            Assert.Throws<InvalidOperationException>(() => Selected());
+            Assert.That(skin.GetBlendShapeWeight(0), Is.EqualTo(35));
+        }
+
+        [Test]
+        public void WriteDefaultsWithoutAnAnimatorParameterBindingDoesNotInventAReset()
+        {
+            const float initial = .5f; SetDriverValue(initial); source.Defaults[Axis] = initial; reset.writeDefaultValues = true;
+            Assert.That(NativeAdditionalParameter(additional, initial), Is.EqualTo(initial).Within(.00001));
+            Assert.That(AdditionalParameterConstants.Prove(fx, source, Context())[Axis], Is.EqualTo(initial));
+        }
+
         // Independent original controller evaluation, without the dependency
         // clone/proof under test. The additional SDK Set assigns this same
         // typed value, so executing it cannot change this reference stream.
