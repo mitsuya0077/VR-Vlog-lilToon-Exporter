@@ -22,8 +22,8 @@ namespace VRVlog.LilToonExporter.LanTransfer
         private double nextPoll;
         private Vector2 scroll;
 
-#if UNITY_EDITOR && VRVLOG_CLOUD_TRANSFER_DEVELOPMENT
-        [MenuItem("VR Vlog/開発/QR転送を検証...")]
+#if UNITY_EDITOR
+        [MenuItem("VR Vlog/スマホに送る...")]
         private static void OpenDevelopmentTransfer()
         {
             var selected = EditorUtility.OpenFilePanel("書き出し済みVRMを選択", "", "vrm");
@@ -35,7 +35,7 @@ namespace VRVlog.LilToonExporter.LanTransfer
             }
         }
 #endif
-        internal static void OpenSavedVrmForDevelopment(string savedVrmPath)
+        public static void OpenSavedVrmForDevelopment(string savedVrmPath)
         {
             CloudTransferAvailability.RequireEnabled();
             if (string.IsNullOrEmpty(savedVrmPath)) return;

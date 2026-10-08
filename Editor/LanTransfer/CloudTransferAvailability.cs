@@ -4,7 +4,7 @@ namespace VRVlog.LilToonExporter.LanTransfer
 {
     internal static class CloudTransferAvailability
     {
-#if UNITY_EDITOR && VRVLOG_CLOUD_TRANSFER_DEVELOPMENT
+#if UNITY_EDITOR
         internal static bool Enabled => true;
 #else
         internal static bool Enabled => false;

@@ -16,7 +16,7 @@ namespace VRVlog.LilToonExporter.LanTransfer.Tests
         [Test]
         public void CloudDevelopmentAvailabilityRequiresBothEditorAndExplicitDevelopmentDefine()
         {
-#if UNITY_EDITOR && VRVLOG_CLOUD_TRANSFER_DEVELOPMENT
+#if UNITY_EDITOR
             Assert.That(CloudTransferAvailability.Enabled, Is.True);
             CloudTransferAvailability.RequireEnabled();
 #else
