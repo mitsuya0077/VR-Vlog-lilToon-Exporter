@@ -78,18 +78,18 @@ namespace VRVlog.LilToonExporter
             if (unknown.Count != 0 || reachable.SelectMany(layer => layer.Clips)
                 .Any(clip => AnimationUtility.GetAnimationEvents(clip).Length != 0)) return result;
             var curves = new HashSet<string>(reachable.SelectMany(layer => layer.CurveWrites), StringComparer.Ordinal);
-            // WD restores the controller's binding defaults, including a
-            // parameter curve in a state that cannot be entered. Reachability
-            // may hide that curve, but must not hide its implicit reset.
+            // A raw Animator curve can keep a parameter at its controller
+            // default even while its state is unreachable and WD is off.
+            // Supplied expression defaults cannot certify a different initial
+            // value merely because reachability hides that binding.
             var defaultCurves = new HashSet<string>(raw.SelectMany(layer => layer.CurveWrites), StringComparer.Ordinal);
-            var writesDefaults = reachable.Any(layer => layer.WriteDefaults);
             var programs = reachable.SelectMany(layer => layer.DriverPrograms).Distinct().ToArray();
             if (programs.Any(program => program.Error != null)) return result;
             foreach (var pair in initial.Where(pair => rawAdditionalWrites.Contains(pair.Key)))
             {
                 var name = pair.Key;
                 if (!fxParameters.Contains(name) || VrChatParameterDriver.BuiltIn.Contains(name) || curves.Contains(name)) continue;
-                if (writesDefaults && defaultCurves.Contains(name) && !Default(declarations[name][0]).Equals(pair.Value)) continue;
+                if (defaultCurves.Contains(name) && !Default(declarations[name][0]).Equals(pair.Value)) continue;
                 var type = declarations[name][0].type;
                 if (source.ExpressionParameterTypes.TryGetValue(name, out var declaredType) && declaredType != type.ToString()) continue;
                 var operations = programs.SelectMany(program => program.Operations).Where(operation => operation.Destination == name).ToArray();

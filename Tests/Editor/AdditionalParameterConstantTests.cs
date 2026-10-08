@@ -155,10 +155,16 @@ namespace VRVlog.LilToonExporter.Tests
             source.Defaults[gate] = 0; source.Defaults[Axis] = initial;
         }
 
-        // Evaluate Unity's original controller, including its implicit WD
-        // stream. Apply the real serialized SDK Set once, as an on-enter
-        // callback, after graph startup; Unity then supplies all later values.
-        private float NativeAdditionalParameter(RuntimeAnimatorController runtime, float initial)
+        private sealed class NativeParameterObservation
+        {
+            internal float Startup, AfterSelection, RequestedSet, AfterCallback, Settled;
+            internal bool StartupCurveControlled, AfterSelectionCurveControlled, AfterCallbackCurveControlled, SettledCurveControlled;
+        }
+
+        // Evaluate Unity's original controller, including dormant binding and
+        // WD/default streams. Apply the real serialized SDK Set once, as an
+        // on-enter callback, and keep requested and observed values separate.
+        private NativeParameterObservation NativeAdditionalParameter(RuntimeAnimatorController runtime, float initial)
         {
             var clone = Object.Instantiate(avatar); var animator = clone.GetComponent<Animator>();
             animator.runtimeAnimatorController = null; animator.cullingMode = AnimatorCullingMode.AlwaysAnimate; animator.fireEvents = false;
@@ -168,18 +174,30 @@ namespace VRVlog.LilToonExporter.Tests
                 var playable = AnimatorControllerPlayable.Create(graph, runtime);
                 AnimationPlayableOutput.Create(graph, "Original", animator).SetSourcePlayable(playable);
                 graph.Play(); graph.Evaluate(0);
+                var observed = new NativeParameterObservation { Startup = playable.GetFloat(Axis),
+                    StartupCurveControlled = playable.IsParameterControlledByCurve(Axis) };
                 playable.SetFloat(Axis, initial);
+                observed.AfterSelection = playable.GetFloat(Axis);
+                observed.AfterSelectionCurveControlled = playable.IsParameterControlledByCurve(Axis);
                 var types = ExpressionDependencies.Controller(runtime).parameters.ToDictionary(parameter => parameter.name, parameter => parameter.type);
                 var program = VrChatParameterDriver.Read(driver, reset.name);
                 VrChatParameterDriver.ValidateTargets(program, types, source.ExpressionParameters);
                 VrChatParameterDriver.Execute(program, types, source.ExpressionParameters, new HashSet<string> { Axis }, true,
-                    name => playable.GetFloat(name), (name, value) => playable.SetFloat(name, (float)value));
-                Assert.That(playable.GetFloat(Axis), Is.EqualTo(initial).Within(.00001), "The authored SDK Set itself is idempotent.");
+                    name => playable.GetFloat(name), (name, value) => { observed.RequestedSet = (float)value; playable.SetFloat(name, (float)value); });
+                observed.AfterCallback = playable.GetFloat(Axis);
+                observed.AfterCallbackCurveControlled = playable.IsParameterControlledByCurve(Axis);
+                Assert.That(observed.RequestedSet, Is.EqualTo(initial).Within(.00001), "The serialized SDK callback requests the supplied initial value.");
                 for (var frame = 0; frame < 120; frame++) graph.Evaluate(1f / 60);
                 Assert.That(playable.GetCurrentAnimatorStateInfo(0).shortNameHash,
                     Is.EqualTo(Animator.StringToHash(ExpressionDependencies.Controller(runtime).layers[0].stateMachine.defaultState.name)),
                     "The clip that binds the parameter is never entered.");
-                return playable.GetFloat(Axis);
+                observed.Settled = playable.GetFloat(Axis);
+                observed.SettledCurveControlled = playable.IsParameterControlledByCurve(Axis);
+                TestContext.WriteLine("Native parameter: startup=" + observed.Startup + "/curve=" + observed.StartupCurveControlled +
+                    ", direct SetFloat=" + observed.AfterSelection + "/curve=" + observed.AfterSelectionCurveControlled +
+                    ", SDK requested=" + observed.RequestedSet + ", after SDK=" + observed.AfterCallback + "/curve=" + observed.AfterCallbackCurveControlled +
+                    ", settled=" + observed.Settled + "/curve=" + observed.SettledCurveControlled);
+                return observed;
             }
             finally { graph.Destroy(); Object.DestroyImmediate(clone); }
         }
@@ -219,11 +237,15 @@ namespace VRVlog.LilToonExporter.Tests
             var objects = new Object[] { fx, additional, runtime, driver, skin, mesh }.Concat(runtime.animationClips).Distinct().ToArray();
             var before = objects.Select(value => EditorJsonUtility.ToJson(value)).ToArray();
             var native = NativeAdditionalParameter(runtime, initial);
-            Assert.That(native, Is.EqualTo(writeDefaults && !matchingDefault ? 0 : initial).Within(.00001));
+            var expected = matchingDefault ? initial : 0;
+            Assert.That(native.Startup, Is.EqualTo(expected).Within(.00001));
+            Assert.That(native.AfterSelection, Is.EqualTo(expected).Within(.00001));
+            Assert.That(native.AfterCallback, Is.EqualTo(expected).Within(.00001));
+            Assert.That(native.Settled, Is.EqualTo(expected).Within(.00001));
             var constants = AdditionalParameterConstants.Prove(fx, source, Context());
-            if (writeDefaults && !matchingDefault)
+            if (!matchingDefault)
             {
-                Assert.That(constants, Is.Empty, "An on-enter Set cannot certify the later implicit controller reset.");
+                Assert.That(constants, Is.Empty, "An unreachable binding cannot certify a supplied default that Unity does not apply.");
                 Assert.Throws<InvalidOperationException>(() => Dependencies());
                 Assert.Throws<InvalidOperationException>(() => Selected());
             }
@@ -251,7 +273,11 @@ namespace VRVlog.LilToonExporter.Tests
                 controller.layers[0].stateMachine.defaultState = empty; source.OtherControllers.Add(controller); SetControllers();
             }
             DormantParameterCurve(controller, true, initial);
-            Assert.That(NativeAdditionalParameter(controller, initial), Is.Zero.Within(.00001));
+            var native = NativeAdditionalParameter(controller, initial);
+            Assert.That(native.Startup, Is.Zero.Within(.00001));
+            Assert.That(native.AfterSelection, Is.Zero.Within(.00001));
+            Assert.That(native.AfterCallback, Is.Zero.Within(.00001));
+            Assert.That(native.Settled, Is.Zero.Within(.00001));
             Assert.That(AdditionalParameterConstants.Prove(fx, source, Context()), Is.Empty);
             Assert.Throws<InvalidOperationException>(() => Selected());
             Assert.That(skin.GetBlendShapeWeight(0), Is.EqualTo(35));
@@ -261,7 +287,11 @@ namespace VRVlog.LilToonExporter.Tests
         public void WriteDefaultsWithoutAnAnimatorParameterBindingDoesNotInventAReset()
         {
             const float initial = .5f; SetDriverValue(initial); source.Defaults[Axis] = initial; reset.writeDefaultValues = true;
-            Assert.That(NativeAdditionalParameter(additional, initial), Is.EqualTo(initial).Within(.00001));
+            var native = NativeAdditionalParameter(additional, initial);
+            Assert.That(native.Startup, Is.Zero.Within(.00001));
+            Assert.That(native.AfterSelection, Is.EqualTo(initial).Within(.00001));
+            Assert.That(native.AfterCallback, Is.EqualTo(initial).Within(.00001));
+            Assert.That(native.Settled, Is.EqualTo(initial).Within(.00001));
             Assert.That(AdditionalParameterConstants.Prove(fx, source, Context())[Axis], Is.EqualTo(initial));
         }
 
