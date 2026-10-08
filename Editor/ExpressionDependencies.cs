@@ -73,6 +73,7 @@ namespace VRVlog.LilToonExporter
         internal readonly HashSet<StateMachineBehaviour> IgnoredWeightControls = new HashSet<StateMachineBehaviour>();
         internal readonly Dictionary<StateMachineBehaviour, SdkLayerWeightControl> EvaluatedWeightControls = new Dictionary<StateMachineBehaviour, SdkLayerWeightControl>();
         internal readonly HashSet<int> WeightControlLayers = new HashSet<int>();
+        internal bool RequireSettledWeightControls;
         internal int IndependentTopOverrideLayer = -1;
         internal readonly HashSet<string> Parameters = new HashSet<string>(StringComparer.Ordinal);
         internal readonly HashSet<EditorCurveBinding> Morphs = new HashSet<EditorCurveBinding>();
@@ -282,6 +283,7 @@ namespace VRVlog.LilToonExporter
                     }
             }
             RemapWeights(info);
+            var rawInfo = info;
             var rawWeightControls = info.SelectMany(layer => layer.WeightControls.Keys).ToArray();
             var nativeHasBindings = info.Select(layer => layer.HasBindings).ToArray();
             result.HasFxControls = info.Any(layer => layer.FxControl);
@@ -306,6 +308,16 @@ namespace VRVlog.LilToonExporter
                 // before removing their morphs from neutral capture.
                 nativeHasBindings = info.Select(layer => layer.HasBindings).ToArray();
                 RemoveIndependentAutomaticWriters(info, automatic, source, trackingValues, trackingLayers);
+                // A generated relay can begin at the declared zero and then
+                // animate a different constant. Preserve both state entries
+                // and execute their SDK commands; never substitute its final
+                // parameter value into startup reachability.
+                if (!evaluateLayerWeights && CanEvaluateNeutralRelay(runtime, source, rawInfo, info,
+                    result.NeutralFixedValues, otherControllers))
+                {
+                    evaluateLayerWeights = true;
+                    result.RequireSettledWeightControls = true;
+                }
             }
             var weightScope = info;
             if (evaluateLayerWeights && neutralMorphs == null)
@@ -528,8 +540,20 @@ namespace VRVlog.LilToonExporter
             }
             else
             {
-                var unresolvedWeight = weightControls.FirstOrDefault(control => result.IndependentTopOverrideLayer < 0 ||
-                    !control.AnimatorLayer || control.LayerIndex >= result.IndependentTopOverrideLayer);
+                // An instant per-layer Set cannot change a weight already at
+                // that value. Prove every reachable producer of the target
+                // together; a competing/global/blended command invalidates it.
+                var idempotentTargets = new HashSet<int>(weightControls.Where(control => control.AnimatorLayer)
+                    .Select(control => control.LayerIndex).Distinct().Where(target =>
+                    {
+                        var producers = weightControls.Where(control => !control.AnimatorLayer || control.LayerIndex == target).ToArray();
+                        return producers.All(control => control.AnimatorLayer && control.SourceState != null && control.BlendDuration == 0 &&
+                            NeutralShapeSnapshot.Finite(controller.layers[target].defaultWeight) &&
+                            control.GoalWeight == (control.FixedBaseLayer ? 1 : controller.layers[target].defaultWeight));
+                    }));
+                var unresolvedWeight = weightControls.FirstOrDefault(control => !control.AnimatorLayer ||
+                    !idempotentTargets.Contains(control.LayerIndex) && (result.IndependentTopOverrideLayer < 0 ||
+                    control.LayerIndex >= result.IndependentTopOverrideLayer));
                 if (unresolvedWeight != null) throw WeightControlCapability(unresolvedWeight, true, result.NeutralDependencyMorphs);
             }
             // The controller copy retains every state, including states proven
@@ -547,6 +571,113 @@ namespace VRVlog.LilToonExporter
                 throw new NeutralShapeSamplingException(message, dependencyMorphs: result.NeutralDependencyMorphs);
             }
             return result;
+        }
+
+        // Opt neutral capture into the existing native SDK layer evaluator only
+        // for a bounded constant-motion relay. Unknown/live/timed producers keep
+        // the prepared-rest fallback. Native evaluation still establishes the
+        // real startup order and verifies a terminal control state and weight.
+        private static bool CanEvaluateNeutralRelay(RuntimeAnimatorController runtime, VrChatExpressionMenu.Source source,
+            Layer[] raw, Layer[] reachable, IDictionary<string, float> fixedValues,
+            IEnumerable<OtherControllerInspection> otherControllers)
+        {
+            var controller = Controller(runtime);
+            var layers = controller.layers;
+            var other = otherControllers.ToArray();
+            var commands = reachable.SelectMany((layer, index) => layer.WeightControls.Values
+                .Where(control => control.Playable == "FX").Select(control => (Owner: index, Control: control))).ToArray();
+            if (commands.Length == 0 || raw.Any(layer => layer.FxControl) || other.Any(item => item.Unknown.Count != 0 ||
+                item.Layers.Any(layer => layer.FxControl || layer.WeightControls.Values.Any(control => control.Playable == "FX"))) ||
+                commands.Any(item => !item.Control.AnimatorLayer || item.Control.SourceState == null || item.Control.BlendDuration != 0) ||
+                commands.GroupBy(item => item.Control.LayerIndex).Any(group => group.Select(item => item.Owner).Distinct().Count() != 1)) return false;
+            var owners = new HashSet<int>(commands.Select(item => item.Owner));
+            var targets = new HashSet<int>(commands.Select(item => item.Control.LayerIndex));
+            if (owners.Overlaps(targets)) return false;
+            var replacements = Overrides(runtime);
+            var signals = new HashSet<string>(owners.SelectMany(index => raw[index].Reads)
+                .Where(name => !fixedValues.ContainsKey(name)), StringComparer.Ordinal);
+            if (signals.Count == 0) return false;
+            foreach (var signal in signals)
+            {
+                var declarations = controller.parameters.Where(parameter => parameter.name == signal).ToArray();
+                if (declarations.Length != 1 || declarations[0].type != AnimatorControllerParameterType.Float ||
+                    !NeutralShapeSnapshot.Finite(declarations[0].defaultFloat) || VrChatParameterDriver.BuiltIn.Contains(signal) ||
+                    source?.ExternalParameters.Contains(signal) == true || source?.MenuInputs.Contains(signal) == true ||
+                    source?.ExpressionParameters.Contains(signal) == true || raw.Any(layer => layer.DriverWrites.Contains(signal)) ||
+                    other.Any(item => item.Layers.Any(layer => layer.Writes.Contains(signal)))) return false;
+                if (!raw.Any(layer => layer.CurveWrites.Contains(signal))) return false;
+            }
+            var visiting = new HashSet<Motion>();
+            bool StaticMotion(Motion motion)
+            {
+                if (motion == null) return true;
+                if (!visiting.Add(motion)) return false;
+                try
+                {
+                    if (motion is BlendTree tree)
+                    {
+                        var children = tree.children;
+                        var inputs = tree.blendType == BlendTreeType.Direct ? children.Select(child => child.directBlendParameter) :
+                            tree.blendType == BlendTreeType.Simple1D ? new[] { tree.blendParameter } : new[] { tree.blendParameter, tree.blendParameterY };
+                        return inputs.All(input => !string.IsNullOrEmpty(input) && fixedValues.TryGetValue(input, out var value) &&
+                            NeutralShapeSnapshot.Finite(value)) && children.All(child => NeutralShapeSnapshot.Finite(child.threshold) &&
+                            NeutralShapeSnapshot.Finite(child.position.x) && NeutralShapeSnapshot.Finite(child.position.y) &&
+                            NeutralShapeSnapshot.Finite(child.timeScale) && NeutralShapeSnapshot.Finite(child.cycleOffset) && StaticMotion(child.motion));
+                    }
+                    if (!(motion is AnimationClip clip)) return false;
+                    if (replacements.TryGetValue(clip, out var replacement)) clip = replacement;
+                    if (AnimationUtility.GetAnimationEvents(clip).Length != 0 || AnimationUtility.GetObjectReferenceCurveBindings(clip).Length != 0 ||
+                        AnimationUtility.GetAnimationClipSettings(clip).hasAdditiveReferencePose) return false;
+                    foreach (var binding in AnimationUtility.GetCurveBindings(clip))
+                    {
+                        var curve = AnimationUtility.GetEditorCurve(clip, binding);
+                        VrChatExpressionSampler.ValidateNativeParameterCurve(curve, clip.name + " / " + binding.propertyName);
+                        if (curve == null || curve.length == 0 || !VrChatExpressionSampler.IsConstant(curve)) return false;
+                    }
+                    return true;
+                }
+                finally { visiting.Remove(motion); }
+            }
+            bool UniformLayer(int index, bool control)
+            {
+                var layer = layers[index]; var machine = layer.stateMachine;
+                if (layer.syncedLayerIndex >= 0 || layer.iKPass || machine == null || HasEffectfulBehaviours(machine.behaviours) ||
+                    machine.stateMachines.Length != 0 || machine.anyStateTransitions.Length != 0 || machine.entryTransitions.Length != 0 ||
+                    machine.states.Length == 0 || targets.Contains(index)) return false;
+                var states = machine.states.Select(child => child.state).ToArray();
+                var members = new HashSet<AnimatorState>(states);
+                if (members.Contains(null) || machine.defaultState == null || !members.Contains(machine.defaultState)) return false;
+                var first = states[0];
+                var motion = controller.GetStateEffectiveMotion(first, index) ?? first.motion;
+                if (!StaticMotion(motion)) return false;
+                foreach (var state in states)
+                {
+                    if (state.writeDefaultValues != first.writeDefaultValues || state.iKOnFeet || state.timeParameterActive ||
+                        state.speedParameterActive || state.mirrorParameterActive || state.cycleOffsetParameterActive ||
+                        !NeutralShapeSnapshot.Finite(state.speed) || !NeutralShapeSnapshot.Finite(state.cycleOffset) ||
+                        (controller.GetStateEffectiveMotion(state, index) ?? state.motion) != motion ||
+                        state.transitions.Any(transition => transition.isExit || transition.destinationStateMachine != null ||
+                            !members.Contains(transition.destinationState) || control && (transition.hasExitTime || transition.duration != 0))) return false;
+                    foreach (var behaviour in controller.GetStateEffectiveBehaviours(state, index) ?? Array.Empty<StateMachineBehaviour>())
+                    {
+                        if (IsInertAuthoringMarker(behaviour)) continue;
+                        var command = control ? SdkLayerWeightControl.Read(behaviour, state.name, layers.Length) : null;
+                        if (command == null || !command.AnimatorLayer || command.Playable != "FX" || command.BlendDuration != 0 ||
+                            command.LayerIndex == index) return false;
+                    }
+                }
+                return true;
+            }
+            // A changing WD stream can implicitly reset a relay without an
+            // explicit Animator binding. Its observed value is insufficient.
+            for (var index = 0; index < raw.Length; index++)
+                if ((owners.Contains(index) || raw[index].CurveWrites.Overlaps(signals) || raw[index].WriteDefaults) &&
+                    !UniformLayer(index, owners.Contains(index))) return false;
+            foreach (var item in other)
+                foreach (var signal in signals)
+                    if (Controller(item.Runtime).parameters.Any(parameter => parameter.name == signal) &&
+                        item.Layers.Any(layer => layer.WriteDefaults)) return false;
+            return true;
         }
 
         private static InvalidOperationException WeightControlCapability(SdkLayerWeightControl control, bool neutral,

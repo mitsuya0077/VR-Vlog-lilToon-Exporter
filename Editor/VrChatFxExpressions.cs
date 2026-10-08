@@ -475,7 +475,7 @@ namespace VRVlog.LilToonExporter
                     foreach (var gate in gates)
                         if (edge.PreviousEntries == null) yield return gate;
                         else foreach (var prior in Fallthrough(gate, edge.PreviousEntries,
-                            stateFilter == null ? null : Append(Array.Empty<Constraint>(), edge.Transition.conditions))) yield return prior;
+                            Append(Array.Empty<Constraint>(), edge.Transition.conditions))) yield return prior;
                 }
                 IEnumerable<Constraint[]> DefaultGates(AnimatorStateMachine machine, HashSet<UnityEngine.Object> stack)
                 {
@@ -541,6 +541,20 @@ namespace VRVlog.LilToonExporter
                 int WarmPrefix(Constraint[] gate) => gate.All(constraint => !string.IsNullOrEmpty(constraint.Condition.parameter) &&
                     defaults.TryGetValue(constraint.Condition.parameter, out var value) &&
                     Matches(constraint.Condition, value) != constraint.Negated) ? gate.Length : 0;
+                bool SuppliesFace(AnimatorState state)
+                {
+                    var behaviours = controller.GetStateEffectiveBehaviours(state, layer) ?? Array.Empty<StateMachineBehaviour>();
+                    if (behaviours.Any(behaviour => behaviour != null && drivers.TryGetValue(behaviour, out var program) &&
+                        (program.Error != null || program.Operations.Any(operation => faceInputs.Contains(operation.Destination)))) ||
+                        behaviours.Any(behaviour => behaviour != null && weightControls.TryGetValue(behaviour, out var control) &&
+                        control.AnimatorLayer && control.Playable == "FX" && (dependencies[control.LayerIndex].Morphs.Count > 0 ||
+                            dependencies[control.LayerIndex].Writes.Overlaps(faceInputs)))) return true;
+                    var motion = EffectiveMotion(controller, state, layer);
+                    if (motion == null) return false;
+                    if (!faceOutputs.TryGetValue(motion, out var hasFace))
+                    { hasFace = HasFaceOutput(motion, replacements, excludedPath, faceInputs, new HashSet<Motion>(), Visit); faceOutputs.Add(motion, hasFace); }
+                    return hasFace;
+                }
                 var routes = new List<(AnimatorState State, Constraint[] Conditions, int WarmPrefix)>();
                 void Destination(AnimatorTransitionBase transition, Constraint[] conditions, HashSet<AnimatorStateMachine> stack, int warmPrefix)
                 {
@@ -557,12 +571,16 @@ namespace VRVlog.LilToonExporter
                         {
                             if (RelevantDestination(entry))
                                 foreach (var prior in Fallthrough(conditions, previousEntries,
-                                    stateFilter == null ? null : Append(Array.Empty<Constraint>(), entry.conditions)))
+                                    Append(Array.Empty<Constraint>(), entry.conditions)))
                                     Destination(entry, Append(prior, entry.conditions), stack, warmPrefix);
                             if (entry.conditions.Length == 0) return;
                             previousEntries.Add(entry);
                         }
-                        if (machine.defaultState != null && (wantedStates == null || wantedStates.Contains(machine.defaultState)))
+                        // A fallback with no face/relay/weight output cannot
+                        // supply a candidate. Historical gates for later real
+                        // outputs are still audited by StateGates separately.
+                        if (machine.defaultState != null && SuppliesFace(machine.defaultState) &&
+                            (wantedStates == null || wantedStates.Contains(machine.defaultState)))
                             foreach (var fallback in Fallthrough(conditions, previousEntries)) routes.Add((machine.defaultState, fallback, warmPrefix));
                     }
                     finally { stack.Remove(machine); }

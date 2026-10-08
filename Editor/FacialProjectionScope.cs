@@ -163,6 +163,16 @@ namespace VRVlog.LilToonExporter
                 if (NeutralShapeSnapshot.Finite(extent) && extent > 0)
                 {
                     facialBounds.Expand(extent * .1f);
+                    // A viseme-connected surface can be only the front of a
+                    // face. Separate tears/lids/cheek surfaces behind it are
+                    // still bounded facial topology. Prove that depth using
+                    // the humanoid Head's bind anchor, in avatar-root axes;
+                    // mesh axes can be rotated and current bone poses can move.
+                    // This never widens the descriptor's lateral/vertical
+                    // extent or admits an island touching non-head geometry.
+                    var meshToAvatar = avatar.transform.worldToLocalMatrix * renderer.transform.localToWorldMatrix;
+                    var hasDepthEnvelope = TryDepthEnvelope(vertices, domain, meshToAvatar, mesh.bindposes,
+                        Array.IndexOf(bones, head), out var depthEnvelope);
                     var visited = new HashSet<int>(domain);
                     for (var vertex = 0; vertex < vertices.Length; vertex++)
                     {
@@ -173,8 +183,9 @@ namespace VRVlog.LilToonExporter
                             foreach (var neighbour in adjacency[queue.Dequeue()])
                                 if (visited.Add(neighbour)) { island.Add(neighbour); queue.Enqueue(neighbour); }
                         if (island.All(index => !nonHeadBoundary[index] && NeutralShapeSnapshot.Finite(vertices[index].x) &&
-                            NeutralShapeSnapshot.Finite(vertices[index].y) && NeutralShapeSnapshot.Finite(vertices[index].z) &&
-                            facialBounds.Contains(vertices[index]))) domain.UnionWith(island);
+                            NeutralShapeSnapshot.Finite(vertices[index].y) && NeutralShapeSnapshot.Finite(vertices[index].z)) &&
+                            (island.All(index => facialBounds.Contains(vertices[index])) || hasDepthEnvelope &&
+                                island.All(index => depthEnvelope.Contains(meshToAvatar.MultiplyPoint3x4(vertices[index]))))) domain.UnionWith(island);
                     }
                 }
                 var path = AnimationUtility.CalculateTransformPath(renderer.transform, avatar.transform);
@@ -186,6 +197,49 @@ namespace VRVlog.LilToonExporter
                 }
             }
             return result.Morphs.Count == 0 ? null : result;
+        }
+
+        private static bool FiniteInvertible(Matrix4x4 matrix)
+        {
+            for (var i = 0; i < 16; i++) if (!NeutralShapeSnapshot.Finite(matrix[i])) return false;
+            if (!NeutralShapeSnapshot.Finite(matrix.determinant) || matrix.determinant == 0) return false;
+            var inverse = matrix.inverse;
+            for (var i = 0; i < 16; i++) if (!NeutralShapeSnapshot.Finite(inverse[i])) return false;
+            return inverse.determinant != 0 && NeutralShapeSnapshot.Finite(inverse.determinant);
+        }
+
+        private static bool TryDepthEnvelope(Vector3[] vertices, HashSet<int> domain, Matrix4x4 meshToAvatar,
+            Matrix4x4[] bindposes, int headIndex, out Bounds envelope)
+        {
+            envelope = default;
+            if (headIndex < 0 || headIndex >= bindposes.Length || !FiniteInvertible(meshToAvatar) ||
+                !FiniteInvertible(bindposes[headIndex])) return false;
+            var anchor = meshToAvatar.MultiplyPoint3x4(bindposes[headIndex].inverse.MultiplyPoint3x4(Vector3.zero));
+            if (!NeutralShapeSnapshot.Finite(anchor.x) || !NeutralShapeSnapshot.Finite(anchor.y) ||
+                !NeutralShapeSnapshot.Finite(anchor.z)) return false;
+            var first = true;
+            foreach (var vertex in domain)
+            {
+                var point = meshToAvatar.MultiplyPoint3x4(vertices[vertex]);
+                if (!NeutralShapeSnapshot.Finite(point.x) || !NeutralShapeSnapshot.Finite(point.y) ||
+                    !NeutralShapeSnapshot.Finite(point.z)) return false;
+                if (first) { envelope = new Bounds(point, Vector3.zero); first = false; }
+                else envelope.Encapsulate(point);
+            }
+            if (first) return false;
+            var minimum = envelope.min; var maximum = envelope.max;
+            var extent = envelope.size.magnitude;
+            // An anchor outside the connected face's projection, or a surface
+            // spanning both sides of it, cannot prove a new posterior region.
+            if (!NeutralShapeSnapshot.Finite(extent) || extent <= 0 ||
+                anchor.x < minimum.x || anchor.x > maximum.x || anchor.y < minimum.y || anchor.y > maximum.y ||
+                !(minimum.z >= anchor.z || maximum.z <= anchor.z)) return false;
+            minimum.z = Mathf.Min(minimum.z, 2 * anchor.z - maximum.z);
+            maximum.z = Mathf.Max(maximum.z, 2 * anchor.z - envelope.min.z);
+            if (!NeutralShapeSnapshot.Finite(minimum.z) || !NeutralShapeSnapshot.Finite(maximum.z)) return false;
+            envelope.SetMinMax(minimum, maximum);
+            envelope.Expand(extent * .1f);
+            return true;
         }
 
         internal static void Warn(ICollection<string> messages)

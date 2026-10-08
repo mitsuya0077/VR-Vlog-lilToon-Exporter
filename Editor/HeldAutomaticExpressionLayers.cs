@@ -13,6 +13,57 @@ namespace VRVlog.LilToonExporter
     // establish a fixed phase of the original native automatic animation.
     internal static class HeldAutomaticExpressionLayers
     {
+        // A constant idle/reset clip can promote an unowned Random channel to
+        // a stationary scalar root. Reuse the neutral rest proof rather than
+        // executing that unrelated automatic program in a selected face probe.
+        // Its complete authored output must remain disjoint from the selected
+        // expression, and every incoming/escaping effect is still inspected.
+        internal static HashSet<int> FindUnownedRandomRest(GameObject avatar, RuntimeAnimatorController runtime,
+            VrChatExpressionMenu.Source source, ISet<EditorCurveBinding> selectedMorphs,
+            FixedExpressionContext context, out HashSet<EditorCurveBinding> preservedMorphs)
+        {
+            preservedMorphs = new HashSet<EditorCurveBinding>();
+            var result = new HashSet<int>();
+            var unknown = new List<string>();
+            var layers = ExpressionDependencies.Inspect(runtime, null,
+                new Dictionary<StateMachineBehaviour, VrChatParameterDriver.Program>(), unknown, true);
+            var others = new List<ExpressionDependencies.Layer>();
+            foreach (var other in source.OtherControllers.Where(value => value != null))
+                others.AddRange(ExpressionDependencies.Inspect(other, null,
+                    new Dictionary<StateMachineBehaviour, VrChatParameterDriver.Program>(), unknown,
+                    typedConditions: true, fxLayerCount: layers.Length));
+            if (unknown.Count != 0) return result;
+            var types = ExpressionDependencies.Controller(runtime).parameters.GroupBy(parameter => parameter.name, StringComparer.Ordinal)
+                .Where(group => group.Count() == 1).ToDictionary(group => group.Key, group => group.Single().type, StringComparer.Ordinal);
+            // An empty output plan asks only whether the existing strict rest
+            // proof permits omission. It cannot alter the actual scalar plan.
+            var proof = NeutralShapePlan.CreateProjection(avatar, Array.Empty<EditorCurveBinding>(), Array.Empty<AnimationClip>());
+            foreach (var index in NeutralRandomRest.Preserve(runtime, source, proof, null, context))
+            {
+                var layer = layers[index];
+                if (layer.Morphs.Overlaps(selectedMorphs) || layer.WeightControls.Count != 0) continue;
+                var needed = new HashSet<string>(layer.Reads, StringComparer.Ordinal); needed.UnionWith(layer.Writes);
+                // An incoming write to a Random-owned destination joins its
+                // autonomous program. Additional playables remain unresolved
+                // even when they write only an input gate. FX gate producers,
+                // however, stay in the native graph: their known typed SDK
+                // operations are not replaced with fixed input values.
+                if (others.Any(item => item.Writes.Overlaps(needed)) ||
+                    layers.Where((item, otherIndex) => otherIndex != index).Any(item => item.Writes.Overlaps(layer.Writes))) continue;
+                if (layers.Concat(others).Any(item => item.FxControl || item.WeightControls.Values.Any(control =>
+                    control.Playable == "FX" && (!control.AnimatorLayer || control.LayerIndex == index)))) continue;
+                foreach (var program in layers.SelectMany(item => item.DriverPrograms))
+                    VrChatParameterDriver.ValidateTargets(program, types, needed);
+                var gates = new HashSet<string>(layer.Reads, StringComparer.Ordinal); gates.ExceptWith(layer.Writes);
+                var producers = layers.Where((item, otherIndex) => otherIndex != index && item.Writes.Overlaps(gates)).ToArray();
+                if (producers.Any(item => item.CurveWrites.Overlaps(gates) || item.DriverPrograms.SelectMany(program => program.Operations)
+                    .Any(operation => gates.Contains(operation.Destination) &&
+                        (operation.UnresolvedRandom || operation.Kind != "Set" && operation.Kind != "Add" && operation.Kind != "Copy")))) continue;
+                result.Add(index); preservedMorphs.UnionWith(layer.Morphs);
+            }
+            return result;
+        }
+
         internal static HashSet<int> Find(RuntimeAnimatorController runtime, VrChatExpressionMenu.Source source,
             ISet<EditorCurveBinding> automatic, int selectedLayer, ISet<EditorCurveBinding> selectedMorphs)
         {

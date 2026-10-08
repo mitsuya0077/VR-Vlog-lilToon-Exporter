@@ -231,7 +231,6 @@ BEHAVIOR_CASES = {
         'WriteDefaultsOffInitializerRetainsItsStartupPoseAfterLeavingTheClip': 1,
     },
     'NeutralLayerControlTests': {
-        'MmdRelayRetainsPreparedTargetAndIndependentTopOverrideWithoutNameExceptions': 2,
         'IndividualLayerControlKeepsPreparedRestWithoutAssumingItsGoalIsAlreadyApplied': 4,
         'FxBaseLayerIndexZeroIsValidMetadataWithoutInventingItsRuntimeEffect': 1,
         'AControlOfTheTopLayerOrWholeFxCannotCertifyIndependentNeutral': 2,
@@ -245,7 +244,12 @@ BEHAVIOR_CASES = {
         'InvalidFxDriverReadOnlyByAnotherPlayableRemainsHardBeforeLayerControlFallback': 1,
         'DirectClipEarlyReturnsStillValidateAdditionalFxEffects': 4,
         'ExplicitSelectedExpressionsEvaluateInstantFxLayerControlsAndRejectUnmodelledEffects': 4,
-        'MmdControlledPreparedRestAndAuthoredEndpointSurviveFullExportAndVrmRoundTrip': 1,
+        'ConstantSignalRelayUsesNativeNeutralWithoutNameExceptions': 2,
+        'ConstantRelayExecutesItsNativeStartupCommandsWithUniformWriteDefaults': 2,
+        'AConstantRelayCannotCertifyDynamicOrCompetingFutureControls': 7,
+        'EveryReachableInstantSetToTheDefaultLayerWeightKeepsNativeNeutral': 2,
+        'AnIdempotentWeightSetCannotCertifyACompetingOrBlendedProducer': 4,
+        'MmdControlledNativeRestAndAuthoredEndpointSurviveFullExportAndVrmRoundTrip': 1,
     },
     'SelectedLayerControlTests': {
         'InstantIndividualFxControlMatchesNativeSelectedWeight': 9,
@@ -634,6 +638,7 @@ BEHAVIOR_CASES = {
     'FxDiscoveryPruningTests': {
         'HundredsOfDormantHandBranchesCannotHideALaterCustomFace': 1,
         'EveryPlayableWriterAndUnknownCallbackPreventsAnImmutableInputProof': 14,
+        'LargeMutuallyExclusiveSelectorsKeepEveryNativeFacialChoice': 2,
     },
     'DirectFxExpressionDiscoveryTests': {
         'CustomFxParameterDiscoversFaceWithoutAMenuOrFaceEmo': 1,
@@ -771,6 +776,11 @@ BEHAVIOR_CASES = {
         'GeometryEquivalentAutomaticAliasCanCoexistWithTheManualBlink': 3,
         'AutomaticAliasRequiresUniqueExactMeaningAndCompleteNonInertGeometry': 9,
         'CoexistingKnownBlinkFamiliesAllKeepTheirAutomaticOwnership': 1,
+        'UnownedRandomRecoveryIsPreservedWithoutRecapturingItsStationaryReset': 2,
+        'ReadOnlyRandomGateProducersKeepTheirNativeSelectedCallbacks': 2,
+        'ReadOnlyRandomGateCannotConcealMalformedTypedProducerOperations': 3,
+        'ReadOnlyRandomGateRequiresReproducibleNativeProducerOperations': 2,
+        'UnownedRandomRestStillRequiresEveryOriginalIsolationAndDataGuard': 10,
     },
     'InvariantMorphOwnershipTests': {
         'ExplicitIdenticalFaceResetsDoNotOwnTheChangingWardrobeOption': 1,
@@ -850,6 +860,11 @@ BEHAVIOR_CASES = {
         'ManualTransformClipFollowsPreparedHumanoidPathWithoutChangingSource': 4,
         'MissingPreparedHumanoidTargetCannotSilentlyFlattenManualMotion': 1,
         'RemovedUnanimatedOptionalBonesDoNotBlockSourceSkeletonSampling': 1,
+    },
+    'FacialDepthEnvelopeTests': {
+        'HeadBoundedDisconnectedDepthWorksWithRotatedRenderersAndMeshScales': 6,
+        'DepthCannotAuthorizeUnboundedOrUnprovenTopology': 10,
+        'CurrentHeadAnimationDoesNotMoveTheOriginalMeshEnvelope': 1,
     },
 }
 INTEGRATION_CASES = {

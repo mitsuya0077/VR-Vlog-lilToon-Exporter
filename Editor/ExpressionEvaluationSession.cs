@@ -232,9 +232,51 @@ namespace VRVlog.LilToonExporter
 
         internal void Check() { if (failure != null) throw failure; }
 
-        internal float[] CaptureLayerWeights(AnimatorControllerPlayable playable) => dependencies.EvaluatedWeightControls.Values
-            .Select(control => control.LayerIndex).Distinct().OrderBy(index => index)
-            .Select(index => index == 0 ? 1 : playable.GetLayerWeight(index)).ToArray();
+        internal float[] CaptureLayerWeights(AnimatorControllerPlayable playable)
+        {
+            if (dependencies.RequireSettledWeightControls) CheckSettledWeightControls(playable);
+            return dependencies.EvaluatedWeightControls.Values.Select(control => control.LayerIndex).Distinct().OrderBy(index => index)
+                .Select(index => index == 0 ? 1 : playable.GetLayerWeight(index)).ToArray();
+        }
+
+        private void CheckSettledWeightControls(AnimatorControllerPlayable playable)
+        {
+            foreach (var index in dependencies.WeightControlLayers)
+            {
+                var layer = Controller.layers[index];
+                var machine = layer.stateMachine;
+                var hash = playable.GetCurrentAnimatorStateInfo(index).fullPathHash;
+                var current = machine.states.Select(child => child.state).Where(state =>
+                    Animator.StringToHash(layer.name + "." + state.name) == hash ||
+                    Animator.StringToHash(machine.name + "." + state.name) == hash).ToArray();
+                if (playable.IsInTransition(index) || current.Length != 1)
+                    throw new NeutralShapeSamplingException("FXレイヤー制御の状態遷移が静止していません: " + layer.name + " / VRCAnimatorLayerControl");
+                bool False(AnimatorCondition condition)
+                {
+                    if (!types.TryGetValue(condition.parameter, out var type)) return false;
+                    var value = type == AnimatorControllerParameterType.Float ? playable.GetFloat(condition.parameter) :
+                        type == AnimatorControllerParameterType.Int ? playable.GetInteger(condition.parameter) :
+                        type == AnimatorControllerParameterType.Bool ? (playable.GetBool(condition.parameter) ? 1 : 0) : float.NaN;
+                    if (!NeutralShapeSnapshot.Finite(value)) return false;
+                    switch (condition.mode)
+                    {
+                        case AnimatorConditionMode.If: return value == 0;
+                        case AnimatorConditionMode.IfNot: return value != 0;
+                        case AnimatorConditionMode.Equals: return value != condition.threshold;
+                        case AnimatorConditionMode.NotEqual: return value == condition.threshold;
+                        case AnimatorConditionMode.Greater: return value <= condition.threshold;
+                        case AnimatorConditionMode.Less: return value >= condition.threshold;
+                        default: return false;
+                    }
+                }
+                var transitions = current[0].transitions;
+                var solo = transitions.Any(transition => transition.solo);
+                if (transitions.Any(transition => !transition.mute && (!solo || transition.solo) &&
+                    (transition.destinationState != current[0] || transition.canTransitionToSelf) &&
+                    !transition.conditions.Any(False)))
+                    throw new NeutralShapeSamplingException("FXレイヤー制御に未完了の状態遷移があるため、初期表情を確定できません: " + layer.name + " / VRCAnimatorLayerControl");
+            }
+        }
 
         internal void CheckLayerWeights(AnimatorControllerPlayable playable, float[] expected)
         {

@@ -474,13 +474,27 @@ namespace VRVlog.LilToonExporter
                     {
                         var suspended = HeldAutomaticExpressionLayers.Find(probeRuntime, metadata,
                             NeutralShapeSampler.AutomaticChannels(avatar), layerIndex.Value, explicitMorphs);
+                        var knownAutomatic = suspended.Count > 0;
+                        var unownedRest = HeldAutomaticExpressionLayers.FindUnownedRandomRest(avatar, probeRuntime, metadata,
+                            explicitMorphs, context, out var preparedRestMorphs);
+                        scalarPlan.CommittedMorphs.ExceptWith(preparedRestMorphs);
+                        suspended.UnionWith(unownedRest);
                         if (suspended.Count > 0)
                         {
                             foreach (var index in suspended) layers[index] = Layer(originalLayers[index], null, false, 0);
                             controller.layers = layers.ToArray();
-                            var warning = ExporterLocalization.T("選択した表情を保持するため、独立した自動まばたき・リップシンクのFXを停止しました: ") +
-                                string.Join(", ", suspended.OrderBy(index => index).Select(index => originalLayers[index].name));
-                            if (!entry.Messages.Contains(warning)) entry.Messages.Add(warning);
+                            if (knownAutomatic)
+                            {
+                                var warning = ExporterLocalization.T("選択した表情を保持するため、独立した自動まばたき・リップシンクのFXを停止しました: ") +
+                                    string.Join(", ", suspended.Except(unownedRest).OrderBy(index => index).Select(index => originalLayers[index].name));
+                                if (!entry.Messages.Contains(warning)) entry.Messages.Add(warning);
+                            }
+                            if (unownedRest.Count > 0)
+                            {
+                                var restWarning = ExporterLocalization.T("Randomを使う独立した待機アニメーションは実行せず、選択した表情が所有しないBlendShapeの現在値を保持しました: ") +
+                                    string.Join(", ", unownedRest.OrderBy(index => index).Select(index => originalLayers[index].name));
+                                if (!entry.Messages.Contains(restWarning)) entry.Messages.Add(restWarning);
+                            }
                         }
                     }
                     if (omittedDriverWrites?.Count > 0)

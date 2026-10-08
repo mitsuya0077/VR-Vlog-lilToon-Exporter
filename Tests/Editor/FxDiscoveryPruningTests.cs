@@ -105,6 +105,75 @@ namespace VRVlog.LilToonExporter.Tests
             Assert.That(avatar.GetComponentInChildren<SkinnedMeshRenderer>().GetBlendShapeWeight(0), Is.EqualTo(25));
         }
 
+        [TestCase(false)]
+        [TestCase(true)]
+        public void LargeMutuallyExclusiveSelectorsKeepEveryNativeFacialChoice(bool entries)
+        {
+            const int count = 128;
+            controller.AddParameter("FaceChoice", AnimatorControllerParameterType.Int);
+            controller.AddParameter("Permission", AnimatorControllerParameterType.Bool);
+            var root = controller.layers[0].stateMachine;
+            var machine = root;
+            if (entries)
+            {
+                machine = root.AddStateMachine("Face selector");
+                machine.defaultState = State(machine, "Selector rest", null);
+                var enter = root.defaultState.AddTransition(machine); enter.duration = 0; enter.hasExitTime = false;
+                enter.AddCondition(AnimatorConditionMode.If, 0, "Permission");
+            }
+            for (var index = 1; index <= count; index++)
+            {
+                var face = State(machine, "Choice " + index, Clip("Face " + index, index * 100f / (count + 1)));
+                AnimatorTransitionBase transition;
+                if (entries) transition = machine.AddEntryTransition(face);
+                else
+                {
+                    var any = Any(machine, face); any.canTransitionToSelf = true; transition = any;
+                }
+                transition.AddCondition(AnimatorConditionMode.Equals, index, "FaceChoice");
+                transition.AddCondition(AnimatorConditionMode.If, 0, "Permission");
+            }
+            var before = AssetDatabase.LoadAllAssetsAtPath(folder + "/FX.controller")
+                .ToDictionary(asset => asset, asset => EditorJsonUtility.ToJson(asset));
+            VrChatFxExpressions.Add(avatar, source);
+            Assert.That(source.Messages, Is.Empty, "Each concrete destination excludes every earlier choice at the same native decision.");
+            Assert.That(source.Entries, Has.Count.EqualTo(count));
+            Assert.That(source.Entries.Select(entry => entry.Error), Is.All.Null);
+            var observed = new HashSet<int>();
+            foreach (var entry in source.Entries)
+            {
+                Assert.That(entry.Parameters["Permission"], Is.EqualTo(1));
+                var choice = Mathf.RoundToInt(entry.Parameters["FaceChoice"]); Assert.That(observed.Add(choice), Is.True);
+                Assert.That(entry.Values.Single(value => value.Shape == "Face size").Weight,
+                    Is.EqualTo(choice * 100f / (count + 1)).Within(.01));
+            }
+            Assert.That(observed, Is.EquivalentTo(Enumerable.Range(1, count)));
+            // Use the unchanged original graph to confirm representative
+            // destinations, including the first and last priority entries.
+            foreach (var choice in new[] { 1, count / 2, count })
+            {
+                var copy = Object.Instantiate(avatar); var graph = PlayableGraph.Create("Original mutually exclusive selector");
+                try
+                {
+                    var animator = copy.GetComponent<Animator>(); animator.cullingMode = AnimatorCullingMode.AlwaysAnimate; animator.fireEvents = false;
+                    var playable = AnimatorControllerPlayable.Create(graph, controller);
+                    AnimationPlayableOutput.Create(graph, "Original graph", animator).SetSourcePlayable(playable);
+                    graph.SetTimeUpdateMode(DirectorUpdateMode.Manual); graph.Play(); graph.Evaluate(0);
+                    for (var frame = 0; frame < 120; frame++) graph.Evaluate(1f / 60);
+                    playable.SetInteger("FaceChoice", choice); playable.SetBool("Permission", true);
+                    for (var frame = 0; frame < 120; frame++) graph.Evaluate(1f / 60);
+                    var path = controller.layers[0].name + (entries ? ".Face selector" : "") + ".Choice " + choice;
+                    Assert.That(playable.GetCurrentAnimatorStateInfo(0).fullPathHash, Is.EqualTo(Animator.StringToHash(path)));
+                    var entry = source.Entries.Single(value => value.Parameters["FaceChoice"] == choice);
+                    Assert.That(entry.Values.Single(value => value.Shape == "Face size").Weight,
+                        Is.EqualTo(copy.GetComponentInChildren<SkinnedMeshRenderer>().GetBlendShapeWeight(0)).Within(.01));
+                }
+                finally { graph.Destroy(); Object.DestroyImmediate(copy); }
+            }
+            foreach (var pair in before) Assert.That(EditorJsonUtility.ToJson(pair.Key), Is.EqualTo(pair.Value), pair.Key.name);
+            Assert.That(avatar.GetComponentInChildren<SkinnedMeshRenderer>().GetBlendShapeWeight(0), Is.EqualTo(25));
+        }
+
         [TestCase("none", false)]
         [TestCase("Animator", false)]
         [TestCase("Animator", true)]
