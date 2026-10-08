@@ -118,6 +118,95 @@ namespace VRVlog.LilToonExporter.Tests
             }
         }
 
+        [TestCase("orphan")]
+        [TestCase("unentered nested machine")]
+        [TestCase("muted custom route")]
+        [TestCase("shadowed Entry route")]
+        public void UnreachableHandMotionsCannotManufactureGestureExpressions(string kind)
+        {
+            var root = controller.layers[0].stateMachine;
+            var tree = Tree("Reachable original hand", BlendTreeType.Simple1D, "GestureRightWeight");
+            tree.AddChild(Clip("Reachable first", 20), 0); tree.AddChild(Clip("Reachable second", 80), 1);
+            selected.motion = tree;
+            var owner = kind == "unentered nested machine" ? root.AddStateMachine("Unentered configuration") : root;
+            var orphan = State(owner, "Unreachable hand motion", tree);
+            if (owner != root) owner.defaultState = orphan;
+            if (kind == "muted custom route")
+            {
+                controller.AddParameter("UnusedMenu", AnimatorControllerParameterType.Bool);
+                var transition = root.defaultState.AddTransition(orphan); transition.mute = true;
+                transition.hasExitTime = false; transition.duration = 0;
+                transition.AddCondition(AnimatorConditionMode.If, 0, "UnusedMenu");
+            }
+            if (kind == "shadowed Entry route")
+            {
+                controller.AddParameter("UnusedMenu", AnimatorControllerParameterType.Bool);
+                root.AddEntryTransition(root.defaultState);
+                var later = root.AddEntryTransition(orphan);
+                later.AddCondition(AnimatorConditionMode.If, 0, "UnusedMenu");
+            }
+            var entries = Read().Entries;
+            Assert.That(entries, Has.Count.EqualTo(2));
+            Assert.That(entries.All(entry => entry.Name.Contains(selected.name)), Is.True);
+            foreach (var entry in entries) AssertNative(entry);
+            var dormantInputs = HandInputs(0, 1);
+            if (kind == "muted custom route" || kind == "shadowed Entry route") dormantInputs["UnusedMenu"] = 1;
+            Assert.That(Native(dormantInputs).Hash, Is.EqualTo(Animator.StringToHash(root.name + "." + selected.name)),
+                "The original graph must retain its legal hand route even when the dormant custom input is selected.");
+        }
+
+        [Test]
+        public void OrphanHandTreesCannotSpendTheExpressionRegistrationBudget()
+        {
+            var root = controller.layers[0].stateMachine;
+            var tree = Tree("Original reachable hand budget", BlendTreeType.Simple1D, "GestureRightWeight");
+            tree.AddChild(Clip("Original budget first", 20), 0); tree.AddChild(Clip("Original budget second", 80), 1);
+            selected.motion = tree;
+            for (var index = 0; index < 513; index++) State(root, "Orphan hand " + index, tree);
+            var entries = Read().Entries;
+            Assert.That(entries, Has.Count.EqualTo(2), "Unreachable motions must not consume the 512-entry registration budget.");
+            foreach (var entry in entries) AssertNative(entry);
+        }
+
+        [TestCase(false)]
+        [TestCase(true)]
+        public void NativeDefaultAndNestedEntryHandTreesRemainSelectable(bool nested)
+        {
+            var root = controller.layers[0].stateMachine;
+            root.defaultState.transitions = Array.Empty<AnimatorStateTransition>();
+            var path = root.name + "." + selected.name;
+            if (nested)
+            {
+                controller.AddParameter("MenuFace", AnimatorControllerParameterType.Int);
+                root.RemoveState(selected);
+                var child = root.AddStateMachine("Authored configuration");
+                var rest = State(child, "Nested rest", Clip("Nested rest", 0)); child.defaultState = rest;
+                selected = State(child, "Native nested hand", null);
+                var entry = child.AddEntryTransition(selected);
+                entry.AddCondition(AnimatorConditionMode.Equals, 1, "MenuFace");
+                var route = root.defaultState.AddTransition(child); route.hasExitTime = false; route.duration = 0;
+                route.AddCondition(AnimatorConditionMode.Equals, 1, "MenuFace");
+                path = root.name + "." + child.name + "." + selected.name;
+            }
+            else root.defaultState = selected;
+            var tree = Tree("Native authored entry hand", BlendTreeType.Simple1D, "GestureRightWeight");
+            tree.AddChild(Clip("Authored entry first", 20), 0); tree.AddChild(Clip("Authored entry second", 80), 1);
+            selected.motion = tree;
+            var entries = Read().Entries;
+            Assert.That(entries, Has.Count.EqualTo(nested ? 2 : 1),
+                "A native default needs only its nondefault hand point; a custom Entry route keeps both corners.");
+            foreach (var entry in entries)
+            {
+                Assert.That(entry.Error, Is.Null, entry.Error);
+                var selectors = entry.Parameters.Where(pair => !VrChatParameterDriver.BuiltIn.Contains(pair.Key))
+                    .ToDictionary(pair => pair.Key, pair => pair.Value);
+                var native = Native(entry.Parameters, selectors: selectors);
+                Assert.That(native.Hash, Is.EqualTo(Animator.StringToHash(path)));
+                Assert.That(entry.Values.Single(value => value.Shape == "Face size").Weight, Is.EqualTo(native.Weight).Within(.01));
+                Assert.That(entry.Animation, Is.Empty);
+            }
+        }
+
         (float Weight, int Hash, float Blink, Dictionary<AnimationClip, float> Coefficients, float Phase) Native(IDictionary<string, float> inputs, RuntimeAnimatorController runtime = null,
             float? phase = null, IDictionary<string, float> selectors = null, float[] seekHistory = null,
             IDictionary<string, float> arrival = null)

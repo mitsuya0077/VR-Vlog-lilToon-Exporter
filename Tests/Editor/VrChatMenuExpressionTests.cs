@@ -176,6 +176,78 @@ namespace VRVlog.LilToonExporter.Tests
             finally { if (overrides != null) UnityEngine.Object.DestroyImmediate(overrides); }
         }
 
+        [TestCase(false)]
+        [TestCase(true)]
+        public void ReachedConstantMorphTailsKeepTheNativePoseBeforeTheClipEnd(bool weighted)
+        {
+            DiscreteController();
+            var state = controller.layers[0].stateMachine.states.Single(child => child.state.name == "Smile").state;
+            var clip = (AnimationClip)state.motion;
+            var start = new Keyframe(0, 0, 0, 0);
+            var tail = new Keyframe(.5f, 75, 0, 0);
+            var end = new Keyframe(5, 75, 0, 0);
+            if (weighted)
+            {
+                tail.weightedMode = WeightedMode.Out; tail.outWeight = .8f;
+                end.weightedMode = WeightedMode.In; end.inWeight = .2f;
+            }
+            AnimationUtility.SetEditorCurve(clip, EditorCurveBinding.FloatCurve("Face", typeof(SkinnedMeshRenderer), "blendShape.Face size"),
+                new AnimationCurve(start, tail, end));
+            var before = ExportSourceFingerprint.Compute(avatar); var serialized = EditorJsonUtility.ToJson(controller);
+            var native = OriginalNativeSelectedPose(controller);
+            Assert.That(native.State.loop, Is.False);
+            Assert.That(native.State.normalizedTime, Is.InRange(.1f, .9f), "The original native clock must still be before the clip end.");
+            Assert.That(native.Face, Is.EqualTo(75).Within(.01));
+            var values = VrChatExpressionSampler.Sample(avatar, controller, Params("Face", 0), Params("Face", 1));
+            Assert.That(values.Single(value => value.Shape == "Face size").Weight, Is.EqualTo(native.Face).Within(.01));
+            Assert.That(values.Single(value => value.Shape == "Blink").Weight, Is.EqualTo(native.Blink).Within(.01));
+            Assert.That(ExportSourceFingerprint.Compute(avatar), Is.EqualTo(before));
+            Assert.That(EditorJsonUtility.ToJson(controller), Is.EqualTo(serialized));
+        }
+
+        [TestCase("ongoing segment")]
+        [TestCase("loop")]
+        [TestCase("future bend")]
+        [TestCase("weighted tail bend")]
+        [TestCase("wrapped short curve")]
+        [TestCase("future SDK timer")]
+        public void AReachedMorphTailCannotHideAFutureCurveOrCallback(string kind)
+        {
+            DiscreteController();
+            var machine = controller.layers[0].stateMachine;
+            var state = machine.states.Single(child => child.state.name == "Smile").state;
+            var clip = (AnimationClip)state.motion;
+            var curve = new AnimationCurve(new Keyframe(0, 0, 0, 0), new Keyframe(.5f, 75, 0, 0), new Keyframe(5, 75, 0, 0));
+            if (kind == "ongoing segment") curve = AnimationCurve.Linear(0, 0, 5, 75);
+            if (kind == "loop") { var settings = AnimationUtility.GetAnimationClipSettings(clip); settings.loopTime = true; AnimationUtility.SetAnimationClipSettings(clip, settings); }
+            if (kind == "future bend") curve = new AnimationCurve(new Keyframe(0, 0, 0, 0), new Keyframe(.5f, 75, 0, 0),
+                new Keyframe(2.5f, 75, 0, 0), new Keyframe(3, 30, 0, 0), new Keyframe(5, 30, 0, 0));
+            if (kind == "weighted tail bend")
+            {
+                var keys = curve.keys; var tail = keys[1]; tail.outTangent = 2; tail.weightedMode = WeightedMode.Out; tail.outWeight = .8f;
+                keys[1] = tail; curve.keys = keys;
+            }
+            if (kind == "wrapped short curve")
+            {
+                curve = new AnimationCurve(new Keyframe(0, 0, 0, 0), new Keyframe(.5f, 75, 0, 0), new Keyframe(1, 75, 0, 0));
+                curve.postWrapMode = WrapMode.Loop;
+                AnimationUtility.SetEditorCurve(clip, EditorCurveBinding.FloatCurve("Face", typeof(SkinnedMeshRenderer), "blendShape.Blink"),
+                    AnimationCurve.Constant(0, 5, 0));
+            }
+            if (kind == "future SDK timer")
+            {
+                var next = machine.AddState("Future SDK owner"); next.motion = Clip("Future SDK owner", 10, 0); next.writeDefaultValues = false;
+                ParameterDriverExpressionTests.Driver(next, ParameterDriverExpressionTests.Op("Set", "Face", 0));
+                var transition = state.AddTransition(next); transition.hasExitTime = true; transition.exitTime = 2; transition.duration = 0;
+            }
+            AnimationUtility.SetEditorCurve(clip, EditorCurveBinding.FloatCurve("Face", typeof(SkinnedMeshRenderer), "blendShape.Face size"), curve);
+            var native = OriginalNativeSelectedPose(controller);
+            Assert.That(native.State.normalizedTime, Is.InRange(.1f, .9f));
+            if (kind == "future bend" || kind == "loop" || kind == "future SDK timer")
+                Assert.That(native.Face, Is.EqualTo(75).Within(.01), "A currently constant native pose alone must not certify its future.");
+            Assert.Throws<InvalidOperationException>(() => VrChatExpressionSampler.Sample(avatar, controller, Params("Face", 0), Params("Face", 1)));
+        }
+
         [TestCase("loop")]
         [TestCase("late curve")]
         [TestCase("speed input")]

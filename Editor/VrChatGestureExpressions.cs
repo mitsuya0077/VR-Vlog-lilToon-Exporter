@@ -144,6 +144,7 @@ namespace VRVlog.LilToonExporter
                     foreach (var child in machine.stateMachines) Index(child.stateMachine, path + "/" + child.stateMachine.name, machine);
                 }
                 Index(layers[sourceIndex].stateMachine, layers[layerIndex].name, null);
+                var reachable = ExpressionDependencies.StructurallyReachableStates(layers[sourceIndex].stateMachine);
                 var entering = new HashSet<AnimatorStateMachine>();
                 var exiting = new HashSet<AnimatorStateMachine>();
                 void Enter(AnimatorStateMachine machine)
@@ -206,8 +207,9 @@ namespace VRVlog.LilToonExporter
                     return tree.children.Any(child => HandMotion(child.motion, visited));
                 }
                 foreach (var state in paths.Keys)
-                    if (HandMotion(EffectiveMotion(controller, state, layerIndex), new HashSet<Motion>()) ||
-                        state.timeParameterActive && IsGesture(state.timeParameter)) targets.Add(state);
+                    if (reachable?.Contains(state) == true &&
+                        (HandMotion(EffectiveMotion(controller, state, layerIndex), new HashSet<Motion>()) ||
+                        state.timeParameterActive && IsGesture(state.timeParameter))) targets.Add(state);
                 foreach (var state in targets.Where(paths.ContainsKey).OrderBy(s => paths[s], StringComparer.Ordinal))
                     yield return new Target { State = state, Layer = layerIndex, Path = layerIndex + "/" + paths[state] };
             }

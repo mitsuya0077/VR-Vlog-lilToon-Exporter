@@ -982,6 +982,12 @@ namespace VRVlog.LilToonExporter
             internal readonly HashSet<AnimatorStateMachine> Machines = new HashSet<AnimatorStateMachine>();
         }
 
+        // With no fixed inputs every condition remains possible. Reuse the
+        // same native default/Entry/nested Exit/AnyState route closure to avoid
+        // manufacturing a selectable state from an orphan motion inventory.
+        internal static ISet<AnimatorState> StructurallyReachableStates(AnimatorStateMachine root) =>
+            NeutralStates(root, new Dictionary<string, float>(StringComparer.Ordinal))?.States;
+
         // Over-approximate every state reachable from fixed neutral inputs,
         // including nested entry/exit and ancestor Any State transitions. A
         // transition is pruned only when an AND condition is provably false.

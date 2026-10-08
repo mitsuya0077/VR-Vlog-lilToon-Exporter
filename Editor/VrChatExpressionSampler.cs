@@ -1150,6 +1150,17 @@ namespace VRVlog.LilToonExporter
         {
             var included = layers.Distinct().OrderBy(index => index).ToArray();
             var shadowed = new HashSet<(int Layer, AnimationClip Clip, EditorCurveBinding Binding)>();
+            // This inspection never advances the playable. A terminal proof
+            // validates the complete effective clip, so share it across exact
+            // lower bindings only for this one native observation (including
+            // a failed proof). Later observations get a fresh cache.
+            var terminalClips = new Dictionary<int, AnimationClip>();
+            AnimationClip Terminal(int layer)
+            {
+                if (!terminalClips.TryGetValue(layer, out var clip))
+                { clip = NativeTerminalClip(playable, controller, layer); terminalClips.Add(layer, clip); }
+                return clip;
+            }
             bool Dominated(int lower, EditorCurveBinding binding)
             {
                 foreach (var upper in included.Where(index => index > lower))
@@ -1161,8 +1172,7 @@ namespace VRVlog.LilToonExporter
                     if (current.Length != 1 || current[0].weight != 1 ||
                         playable.GetNextAnimatorClipInfo(upper).Any(info => info.clip != null && info.weight > .00001f)) continue;
                     var curve = AnimationUtility.GetEditorCurve(current[0].clip, binding);
-                    if (curve == null || curve.length == 0 || !IsConstant(curve) &&
-                        NativeTerminalClip(playable, controller, upper) != current[0].clip) continue;
+                    if (curve == null || curve.length == 0 || !IsConstant(curve) && Terminal(upper) != current[0].clip) continue;
                     VrChatGestureExpressions.ReadCurve(curve);
                     return true;
                 }
@@ -1198,9 +1208,9 @@ namespace VRVlog.LilToonExporter
             return shadowed;
         }
 
-        // A nonlooping native clip clamps at its authored end. Structural
-        // variation earlier in that clip does not make its reached terminal
-        // pose dynamic. This proof covers only one explicit morph-only stream;
+        // A nonlooping native clip can reach a constant authored tail before
+        // its clamped end. Earlier variation does not make that reached pose
+        // dynamic. This proof covers only one explicit morph-only stream;
         // state/SDK/future-transition and pose stability checks remain separate.
         private static AnimationClip NativeTerminalClip(AnimatorControllerPlayable playable,
             AnimatorController controller, int layer)
@@ -1209,7 +1219,7 @@ namespace VRVlog.LilToonExporter
             var definition = controller.layers[layer];
             if (definition.syncedLayerIndex >= 0 || playable.IsInTransition(layer)) return null;
             var info = playable.GetCurrentAnimatorStateInfo(layer);
-            if (info.loop || !Finite(info.normalizedTime) || info.normalizedTime < 1 ||
+            if (info.loop || !Finite(info.normalizedTime) || info.normalizedTime < 0 ||
                 !Finite(info.speed) || !Finite(info.speedMultiplier) || !Finite(info.speed * info.speedMultiplier) ||
                 info.speed * info.speedMultiplier <= 0) return null;
             var current = playable.GetCurrentAnimatorClipInfo(layer).Where(value => value.clip != null && value.weight > .00001f).ToArray();
@@ -1235,8 +1245,27 @@ namespace VRVlog.LilToonExporter
             var bindings = AnimationUtility.GetCurveBindings(clip);
             if (bindings.Length == 0 || bindings.Any(binding => binding.type != typeof(SkinnedMeshRenderer) ||
                 !binding.propertyName.StartsWith("blendShape.", StringComparison.Ordinal))) return null;
+            var phase = Math.Min(1.0, info.normalizedTime) * clip.length;
             foreach (var binding in bindings)
-                ValidateNativeParameterCurve(AnimationUtility.GetEditorCurve(clip, binding), clip.name + " / " + binding.propertyName);
+            {
+                var curve = AnimationUtility.GetEditorCurve(clip, binding);
+                ValidateNativeParameterCurve(curve, clip.name + " / " + binding.propertyName);
+                if (curve == null || curve.length == 0) return null;
+                if (info.normalizedTime >= 1) continue; // Native clip time is already clamped.
+                // Before the clip end, prove every remaining segment rather
+                // than comparing sampled endpoints. Equal values alone cannot
+                // exclude Hermite/weighted overshoot or a later changing key.
+                if (curve.postWrapMode == WrapMode.Loop || curve.postWrapMode == WrapMode.PingPong) return null;
+                var keys = curve.keys;
+                for (var index = 1; index < keys.Length; index++)
+                {
+                    var left = keys[index - 1]; var right = keys[index];
+                    if (right.time <= phase) continue;
+                    if (left.value != right.value ||
+                        left.outTangent != 0 && !float.IsInfinity(left.outTangent) ||
+                        right.inTangent != 0 && !float.IsInfinity(right.inTangent)) return null;
+                }
+            }
             return clip;
         }
 
