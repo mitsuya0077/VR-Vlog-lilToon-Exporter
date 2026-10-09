@@ -12,6 +12,10 @@ public static class ExporterStartupProbe
             throw new Exception("Production startup must run without exporter test assemblies");
         var manifest=System.IO.File.ReadAllText("Packages/manifest.json");
         if(manifest.Contains("\"testables\"")) throw new Exception("Production startup must run without testables");
+        var menuEntries=TypeCache.GetMethodsWithAttribute<MenuItem>()
+            .SelectMany(m=>m.GetCustomAttributes(typeof(MenuItem), false).Cast<MenuItem>())
+            .Where(m=>m.menuItem.StartsWith("VR Vlog/", StringComparison.Ordinal)).Select(m=>m.menuItem).ToArray();
+        if(menuEntries.Length!=1 || menuEntries[0]!="VR Vlog/VRMを書き出す") throw new Exception("Exporter menu must contain exactly one entry");
         Debug.Log("PROBE startup registered=" + (DependencyDiagnostics.OpenExporter != null) + " errors=" + EditorUtility.scriptCompilationFailed);
         foreach (var assembly in CompilationPipeline.GetAssemblies(AssembliesType.Editor).Where(a => a.name.StartsWith("VRVlog")))
             Debug.Log("PROBE graph="+assembly.name+" defines="+string.Join(",",assembly.defines.Where(d=>d.StartsWith("VRVLOG"))));
