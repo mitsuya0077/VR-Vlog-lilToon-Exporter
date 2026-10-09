@@ -24,6 +24,7 @@ namespace VRVlog.LilToonExporter
         ICollection<string> warnings;
         bool suppressSharedTextureEmission, suppressHdrTextureEmission;
         LilToonInactiveTextureProof inactiveTextures;
+        readonly string sourceColorSpace = QualitySettings.activeColorSpace == ColorSpace.Linear ? "linear" : "gamma";
 
         internal static LilToonFullSnapshot Capture(GameObject avatar, bool suppressSharedTextureEmission=false, bool suppressHdrTextureEmission=false, ICollection<string> warnings=null, GameObject animationSource=null)
         {
@@ -293,6 +294,9 @@ namespace VRVlog.LilToonExporter
             };
             if (!glb.Json.TryGetValue("extensions", out var raw)) glb.Json["extensions"] = raw = new Dictionary<string, object>();
             ((Dictionary<string, object>)raw)[LilToonMobileProfile.ExtensionName] = extension;
+            var asset = LilToonFullContract.Object(glb.Json["asset"]);
+            if (!asset.TryGetValue("extras", out var extras)) asset["extras"] = extras = new Dictionary<string, object>();
+            LilToonFullContract.Object(extras)[LilToonFullContract.SourceColorSpaceKey] = sourceColorSpace;
             var used = List(glb.Json, "extensionsUsed"); if (!used.Contains(LilToonMobileProfile.ExtensionName)) used.Add(LilToonMobileProfile.ExtensionName);
             GlbBinaryOptimizer.Compact(glb);
             if (System.Text.Encoding.UTF8.GetByteCount(JsonDom.Serialize(glb.Json)) > 8 * 1024 * 1024) throw new InvalidDataException("JSONが8MiB上限を超えています。");

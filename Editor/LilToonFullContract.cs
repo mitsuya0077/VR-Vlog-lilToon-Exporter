@@ -10,6 +10,19 @@ namespace VRVlog.LilToon
     internal static class LilToonFullContract
     {
         internal const string ExtensionName = "VRVLOG_materials_liltoon";
+        internal const string SourceColorSpaceKey = "VRVLOG_lilToonColorSpace";
+
+        // glTF asset extras preserve compatibility with schema 2.0 consumers.
+        // Earlier VRChat exports omit this metadata and use the Linear workflow.
+        internal static string SourceColorSpace(Dictionary<string, object> gltf)
+        {
+            if (!gltf.TryGetValue("asset", out var rawAsset) || !(rawAsset is Dictionary<string, object> asset) ||
+                !asset.TryGetValue("extras", out var rawExtras) || !(rawExtras is Dictionary<string, object> extras) ||
+                !extras.ContainsKey(SourceColorSpaceKey)) return "linear";
+            var value = Text(extras, SourceColorSpaceKey);
+            if (value != "linear" && value != "gamma") Fail("Unsupported lilToon authoring color space.");
+            return value;
+        }
         internal static void ValidatePixels(byte[] bytes, string format)
         {
             // Payloads use little-endian IEEE-754 components. Check exponents
@@ -43,6 +56,7 @@ namespace VRVlog.LilToon
             if (Int(root, "schemaMajor") != 2 || Int(root, "schemaMinor") != 0 || Text(root, "sourceLilToonVersion") != LilToon234Catalogue.Version || Text(root, "sourceCommit") != LilToon234Catalogue.Commit)
                 Fail("Unsupported full lilToon version; update the app/exporter.");
             Text(root, "exporterVersion");
+            SourceColorSpace(gltf);
             if (!List(gltf, "extensionsUsed").Contains(ExtensionName) || gltf.TryGetValue("extensionsRequired", out var required) && List(required).Contains(ExtensionName)) Fail("The lilToon extension must be declared and optional.");
             var views = List(gltf, "bufferViews"); var chunks = List(root, "chunks");
             long decodedBytes = 0;
