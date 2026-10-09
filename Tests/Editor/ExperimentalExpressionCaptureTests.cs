@@ -16,9 +16,11 @@ namespace VRVlog.LilToonExporter.Tests
 {
     public sealed class ExperimentalExpressionCaptureTests
     {
-        [TestCase(false)]
-        [TestCase(true)]
-        public void ChangingAvatarDoesNotCarryLicenseSelectionsIntoTheNextSavedVrm(bool recordFace)
+        [TestCase(false, false)]
+        [TestCase(true, false)]
+        [TestCase(false, true)]
+        [TestCase(true, true)]
+        public void ChangingAvatarDoesNotCarryLicenseSelectionsIntoTheNextSavedVrm(bool recordFace, bool changeFromUnpreparedWindow)
         {
             using var first = new AttachmentConnectionTests.Fixture();
             using var second = new AttachmentConnectionTests.Fixture();
@@ -54,8 +56,8 @@ namespace VRVlog.LilToonExporter.Tests
                 var initial = SavedMeta(path);
                 Assert.That(initial["avatarPermission"], Is.EqualTo("everyone"));
                 Assert.That(initial["thirdPartyLicenses"], Is.EqualTo(selected.ThirdPartyLicenses));
-                type.GetMethod("ChangeAvatar", flags).Invoke(window, null);
-                type.GetField("source", flags).SetValue(window, second.Source);
+                type.GetMethod(changeFromUnpreparedWindow ? "Cleanup" : "ChangeAvatar", flags).Invoke(window, null);
+                type.GetMethod("SelectSource", flags).Invoke(window, new object[] { second.Source });
                 type.GetMethod("Prepare", flags).Invoke(window, null);
                 window.SaveVrm(path);
                 var next = SavedMeta(path);
@@ -111,6 +113,40 @@ namespace VRVlog.LilToonExporter.Tests
             var extensions = (System.Collections.Generic.Dictionary<string, object>)GlbDocument.Read(File.ReadAllBytes(path)).Json["extensions"];
             var vrm = (System.Collections.Generic.Dictionary<string, object>)extensions["VRMC_vrm"];
             return (System.Collections.Generic.Dictionary<string, object>)vrm["meta"];
+        }
+
+        [TestCase(false, false)]
+        [TestCase(true, false)]
+        [TestCase(false, true)]
+        [TestCase(true, true)]
+        public async Task AutomaticAuxiliaryExclusionIsConsistentWithOrWithoutRecordedFaces(bool recordFace, bool moveRendererWithMa)
+        {
+            using var fixture = new AttachmentConnectionTests.Fixture();
+            foreach (var skin in fixture.Source.GetComponentsInChildren<SkinnedMeshRenderer>()) skin.sharedMaterial.shader = Shader.Find("lilToon");
+            var originalSkin = fixture.Source.transform.Find("Front").GetComponent<SkinnedMeshRenderer>();
+            var hiddenMaterial = new Material(Shader.Find("VRVlogTests/UnsupportedHiddenFallback"));
+            var auxiliary = new GameObject("Auxiliary fallback"); auxiliary.transform.SetParent(fixture.Source.transform, false);
+            var hiddenSkin = auxiliary.AddComponent<SkinnedMeshRenderer>();
+            hiddenSkin.sharedMesh = originalSkin.sharedMesh; hiddenSkin.sharedMaterial = hiddenMaterial;
+            hiddenSkin.bones = originalSkin.bones; hiddenSkin.rootBone = originalSkin.rootBone;
+            if (moveRendererWithMa) MoveFrontWithInstalledMa(fixture.Source);
+            var sourceBefore = ExportSourceFingerprint.Compute(fixture.Source);
+            Vrm10Instance imported = null;
+            try
+            {
+                using var session = new ExperimentalExpressionCaptureSession(fixture.Source, false);
+                Assert.That(session.Copy.transform.Find("Auxiliary fallback").GetComponent<Renderer>(), Is.Null);
+                Assert.That(session.Channels.Any(channel => channel.Renderer.name == "Auxiliary fallback"), Is.False);
+                if (recordFace) { session.SetWeight(0, 0, 65); session.Capture("Selected face"); }
+                imported = await Vrm10.LoadBytesAsync(session.Export("Auxiliary exclusion", "Tests", blinkOptions: new BlinkExportOptions { Mode = BlinkExportMode.None }),
+                    canLoadVrm0X: false, awaitCaller: new ImmediateCaller());
+                Assert.That(imported.GetComponentsInChildren<Renderer>(true).Any(renderer => renderer.name == "Auxiliary fallback"), Is.False);
+                Assert.That(imported.GetComponentsInChildren<Renderer>(true), Is.Not.Empty);
+                if (recordFace) Assert.That(imported.Vrm.Expression.CustomClips.Any(clip => clip.name == "VRChat / 記録 / Selected face"), Is.True);
+                Assert.That(hiddenSkin != null && hiddenSkin.sharedMaterial == hiddenMaterial, Is.True);
+                Assert.That(ExportSourceFingerprint.Compute(fixture.Source), Is.EqualTo(sourceBefore));
+            }
+            finally { if (imported != null) Object.DestroyImmediate(imported.gameObject); Object.DestroyImmediate(hiddenMaterial); }
         }
 
         [TestCase(false)]

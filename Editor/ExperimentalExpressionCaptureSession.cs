@@ -61,6 +61,8 @@ namespace VRVlog.LilToonExporter
         NdmfExportPreparation preparation;
         PreparedExpressionBindings authoredBindings;
         BlinkExportSession descriptorBlink;
+        ExportObjectExclusions exclusions;
+        ExportGimmickSession gimmicks;
         ExperimentalExpressionControllerScope controllers;
         FaceEmoExpressions.BindingSnapshot faceEmoBindings;
         Hash128 sourceStamp;
@@ -79,22 +81,32 @@ namespace VRVlog.LilToonExporter
                 Copy = Object.Instantiate(source);
                 Copy.name = source.name;
                 Copy.hideFlags = HideFlags.HideAndDontSave;
-                authoredBindings = new PreparedExpressionBindings(Copy, null, source);
+                var gimmickOptions = new ExportGimmickOptions();
+                var findings = ExportGimmickDetection.Analyze(source);
+                var automaticRoots = ExportGimmickDetection.AutomaticRoots(findings, gimmickOptions).ToArray();
+                exclusions = new ExportObjectExclusions(source, automaticRoots);
+                gimmicks = new ExportGimmickSession(source, Copy, gimmickOptions);
+                bool ExcludedBinding(string path) => exclusions.ContainsPath(path) || gimmicks.ContainsPath(path);
+                authoredBindings = new PreparedExpressionBindings(Copy, null, source, ExcludedBinding);
+                foreach (var finding in findings.Where(value => value.Renderer == null))
+                    if (automaticRoots.Contains(finding.Target)) Warnings.Add("補助ギミックを省略: " + finding.Target.name + " — " + finding.Reason);
+                    else if (finding.Unit == GimmickExclusionUnit.Review) Warnings.Add("自動除外せず保持: " + finding.Target.name + " — " + finding.Reason);
                 // Preserve descriptor shape names/identity before MA can move
                 // the renderer or reorder its channels. Missing automatic
                 // configuration must still permit manual/no-blink exports.
                 try
                 {
-                    using var configured = BlinkExportSession.CaptureForExport(source, null);
+                    using var configured = BlinkExportSession.CaptureForExport(source, null, exclusions.Contains);
                     if (configured.ConfiguredByDescriptor) descriptorBlink = configured.ForClone(source, Copy);
                 }
                 catch (InvalidOperationException) { }
-                using (var exclusions = new ExportObjectExclusions(source, Array.Empty<GameObject>()))
-                    MaAppearanceSnapshot.Apply(source, Copy, ownedMeshes, exclusions, Warnings);
+                MaAppearanceSnapshot.Apply(source, Copy, ownedMeshes, exclusions, Warnings);
                 PoseExportSession.RemoveAplFromCopy(source, Copy);
+                gimmicks.Apply(null, null, Warnings);
                 // As with the blink preview, keep Transforming's committed meshes and FX.
                 // Optimizing is deliberately deferred until generated expression targets exist.
-                faceEmoBindings = FaceEmoExpressions.Capture(source, Copy, deferPermanentOverrides: true);
+                faceEmoBindings = FaceEmoExpressions.Capture(source, Copy, ExcludedBinding,
+                    authoredBindings.ExcludesPreparedPath, deferPermanentOverrides: true);
                 faceEmoBindings.CompletedFacePlayer = (avatar, metadata, state, layer) =>
                     ExperimentalInstalledExpressionPlayer.Sample(avatar, metadata, new Dictionary<string, float>(), state, layer);
                 foreach (var group in Copy.GetComponentsInChildren<SkinnedMeshRenderer>(true).GroupBy(renderer =>
@@ -105,8 +117,9 @@ namespace VRVlog.LilToonExporter
                     authoredBindings.RebindPrepared(transformed.PreparedRendererFor);
                     authoredBindings.RebindAuthoredExpressions(transformed.IsolatedCopyOf);
                     descriptorBlink?.RebindPrepared(transformed.PreparedRendererFor);
+                    faceEmoBindings.RebindPrepared(transformed.PreparedRendererFor, transformed.ObjectRegistry, transformed.IsolatedCopyOf);
+                    gimmicks.Apply(null, null, Warnings);
                 });
-                faceEmoBindings.RebindPrepared(preparation.PreparedRendererFor, preparation.ObjectRegistry, preparation.IsolatedCopyOf);
                 if (replayInstalledDefaults) controllers = new ExperimentalExpressionControllerScope(Copy, Warnings);
                 foreach (var behaviour in Copy.GetComponentsInChildren<Behaviour>(true)) behaviour.enabled = false;
                 foreach (var skin in Copy.GetComponentsInChildren<SkinnedMeshRenderer>(true))
@@ -528,7 +541,7 @@ namespace VRVlog.LilToonExporter
                 }
                 var bytes = UniVrmOneClickExporter.Export(exportCopy, avatarName, author, warnings,
                     exporterVersion: UnityEditor.PackageManager.PackageInfo.FindForAssembly(typeof(UniVrmOneClickExporter).Assembly)?.version ?? "0.11.14",
-                    lilToonVersion: "2.3.4", gimmickOptions: new ExportGimmickOptions { AutoExclude = false }, blinkOptions: exportBlinkOptions,
+                    lilToonVersion: "2.3.4", blinkOptions: exportBlinkOptions,
                     licenseOptions: licenseOptions ?? new AvatarLicenseOptions(), disableAudioLink: true);
                 return InjectManualPoses(bytes);
             }
@@ -570,6 +583,8 @@ namespace VRVlog.LilToonExporter
             descriptorBlink?.Dispose(); descriptorBlink = null;
             preparation?.Dispose(); preparation = null;
             authoredBindings?.Dispose(); authoredBindings = null;
+            gimmicks?.Dispose(); gimmicks = null;
+            exclusions?.Dispose(); exclusions = null;
             foreach (var mesh in ownedMeshes) if (mesh != null) Object.DestroyImmediate(mesh);
             ownedMeshes.Clear();
         }

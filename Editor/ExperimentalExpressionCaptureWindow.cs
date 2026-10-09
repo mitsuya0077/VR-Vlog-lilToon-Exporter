@@ -76,7 +76,7 @@ namespace VRVlog.LilToonExporter
                 {
                     EditorGUILayout.BeginHorizontal();
                     using (new EditorGUI.DisabledScope(session != null))
-                        source = (GameObject)EditorGUILayout.ObjectField(ExporterLocalization.T("アバター"), source, typeof(GameObject), true);
+                        SelectSource((GameObject)EditorGUILayout.ObjectField(ExporterLocalization.T("アバター"), source, typeof(GameObject), true));
                     if (session != null && GUILayout.Button(ExporterLocalization.T("変更"), GUILayout.Width(50)) &&
                         (clipInputs.Count == 0 && session.PoseOptions.Manual.Count == 0 || EditorUtility.DisplayDialog(ExporterLocalization.T("アバターを変更"), ExporterLocalization.T("追加した表情・ポーズの一覧をリセットします。保存済みVRMは残ります。"), ExporterLocalization.T("変更する"), ExporterLocalization.T("戻る"))))
                         Queue(ChangeAvatar);
@@ -444,6 +444,13 @@ namespace VRVlog.LilToonExporter
         }
 
         string AvatarName() => source != null && !string.IsNullOrWhiteSpace(source.name) ? source.name.Trim() : "avatar";
+
+        void SelectSource(GameObject next)
+        {
+            if (source == next) return;
+            source = next;
+            licenseOptions = new AvatarLicenseOptions();
+        }
 
         void ChangeAvatar()
         {
