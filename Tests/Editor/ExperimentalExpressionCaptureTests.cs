@@ -135,7 +135,9 @@ namespace VRVlog.LilToonExporter.Tests
             try
             {
                 using var session = new ExperimentalExpressionCaptureSession(fixture.Source, false);
-                Assert.That(session.Copy.transform.Find("Auxiliary fallback").GetComponent<Renderer>(), Is.Null);
+                Assert.That(session.Copy.transform.Find("Auxiliary fallback")?.GetComponent<Renderer>(), Is.Null);
+                Assert.That(session.Copy.GetComponentsInChildren<Renderer>(true).Any(renderer =>
+                    renderer.sharedMaterials.Any(material => material != null && material.shader == hiddenMaterial.shader)), Is.False);
                 Assert.That(session.Channels.Any(channel => channel.Renderer.name == "Auxiliary fallback"), Is.False);
                 if (recordFace) { session.SetWeight(0, 0, 65); session.Capture("Selected face"); }
                 imported = await Vrm10.LoadBytesAsync(session.Export("Auxiliary exclusion", "Tests", blinkOptions: new BlinkExportOptions { Mode = BlinkExportMode.None }),
