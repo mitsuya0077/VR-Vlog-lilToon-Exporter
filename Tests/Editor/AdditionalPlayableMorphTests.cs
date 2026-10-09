@@ -167,6 +167,16 @@ namespace VRVlog.LilToonExporter.Tests
                 "A previous successful companion sample must not survive a later fallback in its dependency component.");
             Assert.That(warnings.Any(value => value.Contains("Mouth") && value.Contains("Companion") && value.Contains("FX以外")), Is.True);
             Unchanged(before);
+            // Reverse the overlapping writer: the producer-side refusal must
+            // co-retain its downstream consumer, too. The native execution
+            // closure alone follows reader-to-producer dependencies.
+            locomotion.layers[0].stateMachine.defaultState.motion = Clip(locomotion, "Overlapping parameter producer", ("Companion", 0));
+            before = Capture(); warnings.Clear();
+            values = NeutralShapeSampler.Sample(avatar, warnings: warnings);
+            Assert.That(values.Select(value => value.Shape), Is.EqualTo(new[] { "Independent" }),
+                "A producer-side fallback must not keep its sampled downstream consumer as a partial prepared configuration.");
+            Assert.That(warnings.Any(value => value.Contains("Mouth") && value.Contains("Companion") && value.Contains("FX以外")), Is.True);
+            Unchanged(before);
         }
 
         [Test]

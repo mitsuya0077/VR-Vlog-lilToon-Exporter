@@ -494,6 +494,7 @@ namespace VRVlog.LilToonExporter
                 result.NeutralCoupledMorphs.UnionWith(requiredMorphs);
                 var coupledLayers = new HashSet<int>();
                 var coupledReads = new HashSet<string>(StringComparer.Ordinal);
+                var coupledWrites = new HashSet<string>(StringComparer.Ordinal);
                 var coupledChanged = new HashSet<string>(selected, StringComparer.Ordinal);
                 bool connected;
                 do
@@ -504,10 +505,12 @@ namespace VRVlog.LilToonExporter
                         var layer = info[index];
                         var selectedInput = layer.Reads.Overlaps(coupledChanged);
                         if (coupledLayers.Contains(index) || !selectedInput && !layer.Writes.Overlaps(coupledReads) &&
+                            !layer.Reads.Overlaps(coupledWrites) &&
                             !layer.Morphs.Overlaps(result.NeutralCoupledMorphs)) continue;
                         connected |= coupledLayers.Add(index);
                         result.NeutralCoupledMorphs.UnionWith(layer.Morphs);
                         coupledReads.UnionWith(layer.Reads);
+                        coupledWrites.UnionWith(layer.Writes);
                         if (selectedInput) coupledChanged.UnionWith(layer.Writes);
                     }
                 } while (connected);

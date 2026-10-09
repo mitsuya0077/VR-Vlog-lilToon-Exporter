@@ -53,6 +53,7 @@ namespace VRVlog.LilToonExporter
                 if (error.CoupledMorphs != null) coupledPreserved.UnionWith(error.CoupledMorphs);
                 preserved.UnionWith(roots);
                 if (error.DependencyMorphs != null) preserved.UnionWith(error.DependencyMorphs);
+                if (error.CoupledMorphs != null) preserved.UnionWith(error.CoupledMorphs);
                 refusals.Add((roots, error));
             }
             HashSet<EditorCurveBinding>[] groups;
@@ -139,7 +140,18 @@ namespace VRVlog.LilToonExporter
                 List<VrChatExpressionMenu.MorphValue> sampled;
                 try { sampled = VrChatExpressionSampler.SampleNeutral(prepared, metadata.Controller, dependencies, metadata, excludedPath,
                     fixedContext, plan, preserveTemporalRest: true); }
-                catch (NeutralShapeSamplingException error) { Preserve(dependencies.Morphs, error); continue; }
+                catch (NeutralShapeSamplingException error)
+                {
+                    // Native capability refusals can lack a dependency payload.
+                    // Keep explicit error metadata and add the known typed
+                    // component, without changing the hard data-error catch.
+                    var dependencyMorphs = new HashSet<EditorCurveBinding>(dependencies.NeutralDependencyMorphs);
+                    var coupledMorphs = new HashSet<EditorCurveBinding>(dependencies.NeutralCoupledMorphs);
+                    if (error.DependencyMorphs != null) dependencyMorphs.UnionWith(error.DependencyMorphs);
+                    if (error.CoupledMorphs != null) coupledMorphs.UnionWith(error.CoupledMorphs);
+                    Preserve(dependencies.Morphs, new NeutralShapeSamplingException(error.Message, error, dependencyMorphs, coupledMorphs));
+                    continue;
+                }
                 catch (InvalidOperationException error) { throw WithAffected(error, dependencies.Morphs); }
                 // Static proof alone is insufficient. Only a complete native
                 // sample can release support-only outputs from propagation;
@@ -171,6 +183,7 @@ namespace VRVlog.LilToonExporter
             {
                 var targets = new HashSet<EditorCurveBinding>(refusal.Roots);
                 if (refusal.Error.DependencyMorphs != null) targets.UnionWith(refusal.Error.DependencyMorphs);
+                if (refusal.Error.CoupledMorphs != null) targets.UnionWith(refusal.Error.CoupledMorphs);
                 targets.ExceptWith(released);
                 var message = string.Format(ExporterLocalization.T(
                     "FXの初期状態を固定できなかったため、書き出し用コピーの設定を保持しました（対象: {0}）。FXによる通常時の見た目と異なる場合があります。理由: {1}"),
