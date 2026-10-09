@@ -26,7 +26,7 @@ listing = json.loads((root / "source.json").read_text(encoding="utf-8"))
 
 assert package["name"] == "com.vrvlog.liltoon-vrm-exporter"
 assert package["unity"] == "2022.3"
-assert package["version"] == "0.11.13"
+assert package["version"] == "0.11.14"
 assert one_click.index("AvatarBaseShape.Preserve(clone, clone,") < one_click.index("Vrm10AppearanceExporter.Export(")
 assert "foreach (var mesh in temporaryMeshes) UnityEngine.Object.DestroyImmediate(mesh);" in one_click
 assert package["vpmDependencies"] == {
@@ -388,7 +388,8 @@ unified_failure_sources = (
     "Unified Expressions の morph target 参照が不正です: ",
 ) + tuple("Invalid Unified Expressions " + index + " index." for index in ("node", "mesh", "morph", "material"))
 recovery_sources = set()
-for source_text in (recovery, recovery_session, recovery_comparison, failure_window):
+for source_text in (recovery, recovery_session, recovery_comparison, failure_window,
+                    (root / "Editor/ExportDetailsText.cs").read_text(encoding="utf-8")):
     for literal in re.findall(r'"((?:\\.|[^"\\])*)"', source_text):
         source = json.loads('"' + literal + '"')
         if re.search('[ぁ-んァ-ヶ一-龠]', source):

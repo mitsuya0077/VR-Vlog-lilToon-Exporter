@@ -33,7 +33,7 @@ Install Modular Avatar and its dependencies beforehand if your avatar uses them.
 
 1. Open the [installation page](https://mitsuya0077.github.io/VR-Vlog-lilToon-Exporter/) and select **VCC / ALCOMに追加** (add to VCC / ALCOM).
 2. Open your Unity project's package manager in VCC / ALCOM.
-3. Install **VR Vlog lilToon VRM Exporter**. VPM resolves the UniVRM dependencies.
+3. Install **VR Vlog lilToon VRM Exporter 0.11.14** from the stable versions. VPM resolves the UniVRM dependencies.
 
 If the button does not open your package manager, add this repository URL manually:
 
@@ -44,6 +44,10 @@ https://mitsuya0077.github.io/VR-Vlog-lilToon-Exporter/index.json
 For manual installation, use **ZIPで導入** on the installation page. Download the exporter, UniGLTF and VRM ZIPs and extract each into a separate folder under the project's `Packages` directory, with its `package.json` directly inside that folder. Avoid installing the same UniVRM package twice.
 
 Back up your Unity project before updating. Re-export from the original avatar to apply exporter changes to an existing VRM.
+
+Stable **0.11.14** fixes exports stopping during neutral expression sampling when FX and another Playable Layer, such as Locomotion, use the same blend shape. Affected expression groups retain their current settings on the export copy, with the targets and reasons reported as warnings. Independent neutral expressions are still evaluated; the original avatar and controllers are unchanged.
+
+The export details and failure windows offer **Copy full text** and **Save text**. Both include every diagnostic and the complete retained exception, including inner exceptions and stack traces. Text files use UTF-8. Full text includes avatar names and paths; the separate **Copy shareable diagnostics** action keeps its redacted report.
 
 The stable package exports VRM files without QR transfer code or transfer guides. QR transfer is available in a separate prerelease and requires a compatible receiving app. Check the [Japanese release guidance](README.md#インストール) and [cloud transfer guide](Documentation~/CloudTransfer.md) for the supported app and platform before using it.
 
