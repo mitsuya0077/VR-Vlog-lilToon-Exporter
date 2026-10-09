@@ -223,7 +223,7 @@ namespace VRVlog.LilToonExporter
             EditorGUILayout.LabelField("3. VRMを保存してスマホで使う", EditorStyles.boldLabel);
             var chosen = clipInputs.Where(input => input.Selected).ToArray();
             var remaining = session.Expressions.Count(pose => !fileRecords.Values.Contains(pose));
-            EditorGUILayout.LabelField("保存する表情: " + (remaining + chosen.Length) + "件　/　ポーズ: " + session.PoseOptions.Manual.Count + "件");
+            EditorGUILayout.LabelField("保存する表情: " + (remaining + chosen.Length) + "件　/　追加したポーズ: " + session.PoseOptions.Manual.Count + "件");
             author = EditorGUILayout.TextField(new GUIContent("作者名（必須）", "VRMファイルに記録される作者名です。"), author);
             if (licenseOptions == null) licenseOptions = new AvatarLicenseOptions();
             AvatarLicenseSettingsUi.Draw(ref showLicenseSettings, licenseOptions);
@@ -370,7 +370,7 @@ namespace VRVlog.LilToonExporter
             var input = new ExperimentalExpressionCaptureSession.ClipInput { Clip = clip, Name = clip.name };
             input.Error = session.ClipError(clip, 0); input.Selected = input.Error == null;
             clipInputs.Add(input);
-            if (input.Error == null) { session.PreviewClip(clip); previewName = input.Name; }
+            if (input.Error == null) { session.PreviewClip(clip); ShowFace(input.Name); }
             status = input.Error == null ? "追加しました。プレビューで顔を確認し、下の保存へ進めます。" : "追加しました。項目内の理由を確認してください。";
         }
 
@@ -445,7 +445,12 @@ namespace VRVlog.LilToonExporter
             var bytes = session.Export(source.name, author, warnings,
                 automaticBlink ? null : new BlinkExportOptions { Mode = BlinkExportMode.None }, licenseOptions.Copy());
             AtomicWrite(path, bytes);
-            saved = new SavedExpressionVrm(path, bytes, session.Expressions.Count, session.PoseOptions.Manual.Count);
+            var extensions = (System.Collections.Generic.Dictionary<string, object>)GlbDocument.Read(bytes).Json["extensions"];
+            var poseCount = extensions.TryGetValue(VRVlog.Poses.HumanoidPoseData.Extension, out var poses)
+                ? VRVlog.Poses.HumanoidPoseData.Read(poses).Count : 0;
+            if (extensions.TryGetValue(VRVlog.Poses.HumanoidAnimationData.Extension, out var animations))
+                poseCount += VRVlog.Poses.HumanoidAnimationData.Read(animations).Count;
+            saved = new SavedExpressionVrm(path, bytes, session.Expressions.Count, poseCount);
             status = "VRMを保存しました。" + (warnings.Count == 0 ? "" : "\n" + string.Join("\n", warnings));
         }
 
