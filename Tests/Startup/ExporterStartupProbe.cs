@@ -24,7 +24,7 @@ public static class ExporterStartupProbe
         if (!EditorApplication.ExecuteMenuItem("VR Vlog/VRMを書き出す")) throw new Exception("Menu missing");
         var windows=Resources.FindObjectsOfTypeAll<EditorWindow>().Where(w=>w.GetType().FullName.StartsWith("VRVlog")).ToArray();
         Debug.Log("PROBE windows="+string.Join(",", windows.Select(w=>w.GetType().FullName)));
-        bool success=windows.Any(w=>w.GetType().Name=="ExperimentalExpressionCaptureWindow" && w.titleContent.text=="VRM書き出し");
+        bool success=windows.Any(w=>w.GetType().Name=="ExperimentalExpressionCaptureWindow" && w.titleContent.text==VRVlog.LilToonExporter.ExporterLocalization.T("VRM書き出し"));
         foreach(var w in windows) w.Close();
         if(!success) throw new Exception("Exporter did not open");
         DependencyDiagnostics.RefreshBackend();

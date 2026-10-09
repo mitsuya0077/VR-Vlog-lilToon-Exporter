@@ -16,6 +16,90 @@ namespace VRVlog.LilToonExporter.Tests
 {
     public sealed class ExperimentalExpressionCaptureTests
     {
+        [Test]
+        public async Task RecordedFacesRetainAuthoredMouthAndGazePresetsAfterReload()
+        {
+            using var fixture = new AttachmentConnectionTests.Fixture();
+            foreach (var skin in fixture.Source.GetComponentsInChildren<SkinnedMeshRenderer>()) skin.sharedMaterial.shader = Shader.Find("lilToon");
+            fixture.Source.transform.Find("Front").GetComponent<SkinnedMeshRenderer>().SetBlendShapeWeight(0, 0);
+            var presets = new[] { ExpressionPreset.aa, ExpressionPreset.ih, ExpressionPreset.ou, ExpressionPreset.ee, ExpressionPreset.oh,
+                ExpressionPreset.lookUp, ExpressionPreset.lookDown, ExpressionPreset.lookLeft, ExpressionPreset.lookRight };
+            var authored = ScriptableObject.CreateInstance<VRM10Object>();
+            var clips = presets.Select(preset => {
+                var clip = ScriptableObject.CreateInstance<VRM10Expression>();
+                clip.name = "Authored " + preset; clip.MorphTargetBindings = new[] { new MorphTargetBinding("Front", 0, .8f) };
+                authored.Expression.AddClip(preset, clip); return clip;
+            }).ToArray();
+            Vrm10Instance imported = null;
+            try
+            {
+                fixture.Source.AddComponent<Vrm10Instance>().Vrm = authored;
+                var sourceBefore = ExportSourceFingerprint.Compute(fixture.Source);
+                using var session = new ExperimentalExpressionCaptureSession(fixture.Source, false);
+                session.SetWeight(0, 0, 65); session.Capture("Selected face");
+                imported = await Vrm10.LoadBytesAsync(session.Export("Functional presets", "Tests", blinkOptions: new BlinkExportOptions { Mode = BlinkExportMode.None }),
+                    canLoadVrm0X: false, awaitCaller: new ImmediateCaller());
+                var reloaded = imported.Vrm.Expression.Clips.ToDictionary(pair => pair.Preset, pair => pair.Clip);
+                foreach (var preset in presets)
+                {
+                    Assert.That(reloaded.ContainsKey(preset), Is.True, preset.ToString());
+                    Assert.That(reloaded[preset].MorphTargetBindings, Is.Not.Empty);
+                }
+                var skin = imported.transform.Find("Front").GetComponent<SkinnedMeshRenderer>();
+                using var baked = new BlinkTestMesh();
+                imported.Runtime.Expression.SetWeight(ExpressionKey.Aa, 0); imported.Runtime.Process(); skin.BakeMesh(baked.Mesh); var before = baked.Mesh.vertices;
+                imported.Runtime.Expression.SetWeight(ExpressionKey.Aa, 1); imported.Runtime.Process(); skin.BakeMesh(baked.Mesh);
+                Assert.That(baked.Mesh.vertices.Zip(before, (a,b) => (a-b).sqrMagnitude).Max(), Is.GreaterThan(1e-8f));
+                imported.Runtime.Expression.SetWeight(ExpressionKey.Aa, 0); imported.Runtime.Process(); skin.BakeMesh(baked.Mesh);
+                Assert.That(baked.Mesh.vertices.Zip(before, (a,b) => (a-b).sqrMagnitude).Max(), Is.LessThan(1e-8f));
+                Assert.That(ExportSourceFingerprint.Compute(fixture.Source), Is.EqualTo(sourceBefore));
+            }
+            finally { if (imported != null) Object.DestroyImmediate(imported.gameObject); foreach (var clip in clips) Object.DestroyImmediate(clip); Object.DestroyImmediate(authored); }
+        }
+
+        [TestCase(false)]
+        [TestCase(true)]
+        public async Task ManualBlinkConfigurationFromPrimaryWindowSurvivesModelAndRecordedFaceSave(bool recordFace)
+        {
+            using var fixture = new AttachmentConnectionTests.Fixture();
+            foreach (var skin in fixture.Source.GetComponentsInChildren<SkinnedMeshRenderer>()) skin.sharedMaterial.shader = Shader.Find("lilToon");
+            var sourceSkin = fixture.Source.transform.Find("Front").GetComponent<SkinnedMeshRenderer>(); sourceSkin.SetBlendShapeWeight(0, 0);
+            var sourceBefore = ExportSourceFingerprint.Compute(fixture.Source);
+            var flags = System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic;
+            var type = typeof(ExperimentalExpressionCaptureWindow);
+            var window = ScriptableObject.CreateInstance<ExperimentalExpressionCaptureWindow>();
+            var path = Path.Combine(Path.GetTempPath(), "vrvlog-manual-blink-" + Guid.NewGuid().ToString("N") + ".vrm");
+            var clip = new AnimationClip { name = "Selected face" }; Vrm10Instance imported = null;
+            try
+            {
+                type.GetField("source", flags).SetValue(window, fixture.Source);
+                type.GetField("author", flags).SetValue(window, "Tests");
+                type.GetMethod("Prepare", flags).Invoke(window, null);
+                if (recordFace)
+                {
+                    AnimationUtility.SetEditorCurve(clip, EditorCurveBinding.FloatCurve("Front", typeof(SkinnedMeshRenderer), "blendShape.Hair detail"), AnimationCurve.Constant(0, 1, 65));
+                    type.GetMethod("AddClip", flags).Invoke(window, new object[] { clip });
+                }
+                type.GetMethod("ShowBlinkConfiguration", flags).Invoke(window, null);
+                var dialog = Resources.FindObjectsOfTypeAll<BlinkConfigurationWindow>().Single();
+                dialog.Options.SelectMode(BlinkExportMode.Manual);
+                dialog.Options.Both[0].Renderer = sourceSkin; dialog.Options.Both[0].Shape = sourceSkin.sharedMesh.GetBlendShapeName(0); dialog.Options.Both[0].Weight = 80;
+                dialog.ApplySettings();
+                window.SaveVrm(path);
+                imported = await Vrm10.LoadBytesAsync(File.ReadAllBytes(path), canLoadVrm0X: false, awaitCaller: new ImmediateCaller());
+                Assert.That(imported.Vrm.Expression.Blink?.MorphTargetBindings, Is.Not.Empty);
+                var skin = imported.transform.Find("Front").GetComponent<SkinnedMeshRenderer>();
+                using var baked = new BlinkTestMesh();
+                imported.Runtime.Expression.SetWeight(ExpressionKey.Blink, 0); imported.Runtime.Process(); skin.BakeMesh(baked.Mesh); var before = baked.Mesh.vertices;
+                imported.Runtime.Expression.SetWeight(ExpressionKey.Blink, 1); imported.Runtime.Process(); skin.BakeMesh(baked.Mesh);
+                Assert.That(baked.Mesh.vertices.Zip(before, (a,b) => (a-b).sqrMagnitude).Max(), Is.GreaterThan(1e-8f));
+                imported.Runtime.Expression.SetWeight(ExpressionKey.Blink, 0); imported.Runtime.Process(); skin.BakeMesh(baked.Mesh);
+                Assert.That(baked.Mesh.vertices.Zip(before, (a,b) => (a-b).sqrMagnitude).Max(), Is.LessThan(1e-8f));
+                Assert.That(ExportSourceFingerprint.Compute(fixture.Source), Is.EqualTo(sourceBefore));
+            }
+            finally { if (imported != null) Object.DestroyImmediate(imported.gameObject); Object.DestroyImmediate(window); Object.DestroyImmediate(clip); if (File.Exists(path)) File.Delete(path); }
+        }
+
         [TestCase(false)]
         [TestCase(true)]
         public async Task ReadWriteDisabledFaceMeshesCanBePreparedExportedAndReimported(bool recordFace)

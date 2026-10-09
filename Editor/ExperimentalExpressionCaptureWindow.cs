@@ -22,6 +22,8 @@ namespace VRVlog.LilToonExporter
         Vector3 center;
         float distance = 1, yaw, zoom = 1;
         bool automaticBlink = true;
+        BlinkExportOptions configuredBlink;
+        BlinkConfigurationWindow blinkConfiguration;
         bool showLicenseSettings;
         readonly System.Collections.Generic.HashSet<AnimationClip> selectedClips = new System.Collections.Generic.HashSet<AnimationClip>();
         readonly System.Collections.Generic.Dictionary<AnimationClip, string> clipErrors = new System.Collections.Generic.Dictionary<AnimationClip, string>();
@@ -182,7 +184,11 @@ namespace VRVlog.LilToonExporter
             author = EditorGUILayout.TextField(new GUIContent(ExporterLocalization.T("作者名（必須）"), ExporterLocalization.T("VRMファイルに記録される作者名です。")), author);
             if (licenseOptions == null) licenseOptions = new AvatarLicenseOptions();
             AvatarLicenseSettingsUi.Draw(ref showLicenseSettings, licenseOptions);
-            automaticBlink = EditorGUILayout.Toggle(ExporterLocalization.T("瞬きを自動設定する"), automaticBlink);
+            using (new EditorGUILayout.HorizontalScope())
+            {
+                automaticBlink = EditorGUILayout.Toggle(ExporterLocalization.T(configuredBlink?.Mode == BlinkExportMode.Manual ? "瞬き" : "瞬きを自動設定する"), automaticBlink);
+                if (GUILayout.Button(ExporterLocalization.T("確認・調整"), GUILayout.Width(100))) Queue(ShowBlinkConfiguration);
+            }
             EditorGUILayout.Space(8);
             if (string.IsNullOrWhiteSpace(author)) EditorGUILayout.LabelField(ExporterLocalization.T("作者名を入力すると保存できます。"), EditorStyles.miniLabel);
             using (new EditorGUI.DisabledScope(string.IsNullOrWhiteSpace(author) || chosen.Any(input => input.Error != null)))
@@ -393,7 +399,7 @@ namespace VRVlog.LilToonExporter
             RecordSelectedClips();
             var warnings = new System.Collections.Generic.List<string>(session.Warnings);
             var bytes = session.Export(source.name, author, warnings,
-                automaticBlink ? null : new BlinkExportOptions { Mode = BlinkExportMode.None }, licenseOptions.Copy());
+                automaticBlink ? configuredBlink?.Copy() : new BlinkExportOptions { Mode = BlinkExportMode.None }, licenseOptions.Copy());
             AtomicWrite(path, bytes);
             var extensions = (System.Collections.Generic.Dictionary<string, object>)GlbDocument.Read(bytes).Json["extensions"];
             var poseCount = extensions.TryGetValue(VRVlog.Poses.HumanoidPoseData.Extension, out var poses)
@@ -414,6 +420,17 @@ namespace VRVlog.LilToonExporter
             { throw new InvalidOperationException(ExporterLocalization.T("転送用のコピーを準備できませんでした。256 MiB以下の保存済みVRMを指定してください。")); }
         }
 
+        void ShowBlinkConfiguration()
+        {
+            blinkConfiguration?.Close();
+            var options = automaticBlink ? configuredBlink?.Copy() ?? new BlinkExportOptions() : new BlinkExportOptions { Mode = BlinkExportMode.None };
+            blinkConfiguration = BlinkConfigurationWindow.Show(source, options, selected => {
+                configuredBlink = selected.Mode == BlinkExportMode.Auto ? null : selected.Copy();
+                automaticBlink = selected.Mode != BlinkExportMode.None;
+                Repaint();
+            });
+        }
+
         internal static void AtomicWrite(string path, byte[] bytes)
         {
             var temporary = path + "." + Guid.NewGuid().ToString("N") + ".tmp";
@@ -428,6 +445,7 @@ namespace VRVlog.LilToonExporter
 
         void Cleanup()
         {
+            blinkConfiguration?.Close(); blinkConfiguration = null; configuredBlink = null;
             // PreviewRenderUtility owns the preview scene; session owns prepared assets.
             preview?.Cleanup(); preview = null;
             session?.Dispose(); session = null;

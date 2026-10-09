@@ -416,7 +416,20 @@ namespace VRVlog.LilToonExporter
                 // its descriptor. The normal exporter remaps these renderer
                 // references to its own copy before any preparation pass.
                 var exportBlinkOptions = blinkOptions;
-                if (blinkOptions == null || blinkOptions.Mode == BlinkExportMode.Auto)
+                if (blinkOptions?.Mode == BlinkExportMode.Manual)
+                {
+                    using var configured = BlinkExportSession.CaptureForExport(Source, blinkOptions);
+                    configured.RebindPrepared(renderer => {
+                        var path = AnimationUtility.CalculateTransformPath(renderer.transform, Source.transform);
+                        if (!authoringRenderers.TryGetValue(path, out var authoring))
+                            throw new InvalidOperationException(NdmfExportPreparation.UnknownRendererRelocation);
+                        return preparation.PreparedRendererFor(authoring);
+                    });
+                    using var cloned = configured.ForClone(Copy, exportCopy);
+                    exportBlinkOptions = new BlinkExportOptions();
+                    exportBlinkOptions.SelectMode(BlinkExportMode.Manual, cloned);
+                }
+                else if (blinkOptions == null || blinkOptions.Mode == BlinkExportMode.Auto)
                 {
                     using var resolvedBlink = BlinkExportSession.CaptureForExport(exportCopy, blinkOptions);
                     if (resolvedBlink.ConfiguredByDescriptor)
@@ -439,13 +452,16 @@ namespace VRVlog.LilToonExporter
                 var settings = instance.Vrm != null ? Object.Instantiate(instance.Vrm) : ScriptableObject.CreateInstance<VRM10Object>();
                 assets.Add(settings);
                 settings.Prefab = null;
-                // A model-only export retains existing authored VRM expressions.
-                // Explicit faces replace the catalog with the selected records.
+                // Replace selectable custom faces, retaining authored functional
+                // and standard presets (mouth, gaze, blink, neutral and emotions).
                 if (Expressions.Count > 0 || settings.Expression == null)
-                    settings.Expression = new VRM10ObjectExpression {
-                        Blink = settings.Expression?.Blink, BlinkLeft = settings.Expression?.BlinkLeft,
-                        BlinkRight = settings.Expression?.BlinkRight
-                    };
+                {
+                    var previous = settings.Expression;
+                    settings.Expression = new VRM10ObjectExpression();
+                    if (previous != null)
+                        foreach (var (preset, clip) in previous.Clips)
+                            if (preset != ExpressionPreset.custom) settings.Expression.AddClip(preset, clip);
+                }
                 instance.Vrm = settings;
                 var targetPrefix = "__VRVlog_Capture_" + Guid.NewGuid().ToString("N") + "_";
                 var serial = 0;
