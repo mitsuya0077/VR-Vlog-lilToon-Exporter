@@ -1,0 +1,27 @@
+name: 改善提案 / Improvement proposal
+description: エクスポーターや文書で改善したいことを提案する / Suggest an exporter or documentation improvement
+body:
+  - type: markdown
+    attributes:
+      value: |
+        既存のIssueを確認してから提案してください。この投稿は公開されます。秘密情報・有料素材・元プロジェクト・ログ全文は添付しないでください。
+        Please search existing issues first. This report is public; do not attach secrets, purchased assets, complete projects or full logs.
+  - type: textarea
+    id: problem
+    attributes:
+      label: 解決したいこと / Problem
+      description: 困っている操作や用途を具体的な例で説明してください / Describe the affected workflow with a concrete example.
+    validations:
+      required: true
+  - type: textarea
+    id: proposal
+    attributes:
+      label: 提案する改善 / Proposed improvement
+      description: 期待する結果、文書の改善案、試した代替手段など / Explain the expected result, documentation change or alternatives tried.
+    validations:
+      required: true
+  - type: textarea
+    id: environment
+    attributes:
+      label: 関連する環境 / Relevant environment
+      description: 必要に応じてエクスポーター・Unity・依存パッケージのバージョンを記載してください / Include exporter, Unity and dependency versions if relevant.

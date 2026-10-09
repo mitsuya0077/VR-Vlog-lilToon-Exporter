@@ -1,10 +1,33 @@
 # VR Vlog lilToon VRM Exporter
 
+[日本語](README.md) · [English](README.en.md)
+
+[![MIT License](https://img.shields.io/badge/license-MIT-green.svg)](LICENSE)
+[![Validate](https://github.com/mitsuya0077/VR-Vlog-lilToon-Exporter/actions/workflows/validate.yml/badge.svg?branch=main)](https://github.com/mitsuya0077/VR-Vlog-lilToon-Exporter/actions/workflows/validate.yml)
+
 **お気に入りのアバターをVR Vlogで使う。**
 
-lilToonのアバターを、iPhoneのVR Vlogで使う **VRM 1.0** に書き出すUnity用パッケージです。
+lilToonのアバターを、iPhoneのVR Vlogで使う **VRM 1.0** に書き出す、MITライセンスのUnity用パッケージです。標準MToonによる互換表示と、VR Vlog向けのlilToon拡張を一つのVRMに保存します。
 
-[インストールページ](https://mitsuya0077.github.io/VR-Vlog-lilToon-Exporter/) · [最新リリース](https://github.com/mitsuya0077/VR-Vlog-lilToon-Exporter/releases/latest) · [変更履歴](CHANGELOG.md)
+[インストールページ](https://mitsuya0077.github.io/VR-Vlog-lilToon-Exporter/) · [最新安定版](https://github.com/mitsuya0077/VR-Vlog-lilToon-Exporter/releases/latest) · [変更履歴](CHANGELOG.md) · [開発参加](CONTRIBUTING.md)
+
+## できること
+
+- lilToonの材質設定と画像を保存し、対応ビューアーで専用表示、他のVRMビューアーで標準MToon表示を使えます。
+- 対応する表情・瞬き・顔トラッキング用の変形、Modular Avatar／NDMFで処理した見た目、PhysBoneの揺れ物を変換します。
+- 元のアバターを保持し、一時コピーで書き出します。近似・省略した項目や、書き出せない理由を確認できます。
+
+すべてのシェーダー効果やVRChatの動作を再現するものではありません。詳しい条件は[対応範囲と制限](#対応範囲と制限)を参照してください。
+
+## 文書の案内
+
+| 知りたいこと | 文書 |
+| --- | --- |
+| 導入と基本操作 | このREADMEの[インストール](#インストール)・[使い方](#使い方) |
+| アバターの見た目・揺れ物の保存 | [アバターの保存](Compatibility/AvatarPreservation.md)・[PhysBone](Compatibility/PhysBone.md) |
+| 体・指のポーズとアニメーション | [ポーズ](Documentation~/HumanoidPoses.md)・[アニメーション](Documentation~/HumanoidAnimations.md) |
+| QR転送対応β版の使い方 | [クラウド転送](Documentation~/CloudTransfer.md) |
+| 開発環境・検証・変更の提案 | [開発参加ガイド](CONTRIBUTING.md)・[互換性の管理](Compatibility/README.md) |
 
 ## 必要な環境
 
@@ -118,8 +141,28 @@ PhysBoneの重複、左右別メッシュの瞬き、描画が空になったメ
 
 VR Vlogアプリ内の問い合わせからもご連絡いただけます。
 
+## 開発に参加する
+
+不具合報告・改善提案・文書の修正・Pull Requestを受け付けています。[投稿フォーム](https://github.com/mitsuya0077/VR-Vlog-lilToon-Exporter/issues/new/choose)から、使用環境・再現手順、または解決したいことを記載してください。変更の進め方と検証方法は[CONTRIBUTING.md](CONTRIBUTING.md)にまとめています。
+
+| ディレクトリ | 内容 |
+| --- | --- |
+| `Editor/` | Unity Editorの書き出し処理・設定画面・依存環境診断 |
+| `Runtime/` | アバターに付ける設定コンポーネント |
+| `Schema/` | VRMに保存する独自拡張の定義とlilToonのカタログ |
+| `Tests/`・`Tools/` | Unityテスト、ホスト検証、配布パッケージの生成 |
+| `Compatibility/` | 対応する依存パッケージの方針と検証記録 |
+| `Documentation~/` | 利用ガイドと明示的な依存修正パッチ |
+| `Website/` | VCC／ALCOM向けのインストールページ |
+| `ThirdPartyNotices/` | 第三者コード・ライブラリの出典とライセンス |
+
 ## ライセンス
 
-[MIT License](LICENSE) · [lilToon](ThirdPartyNotices/lilToon.md) · [UniVRM](ThirdPartyNotices/UniVRM.md)
+エクスポーターのコードは[MIT License](LICENSE)で公開しています。第三者コード・依存パッケージの出典とライセンスは、それぞれの文書を参照してください。
+
+- [lilToon由来のシェーダー処理](ThirdPartyNotices/lilToon.md)
+- [UniVRM／UniGLTF](ThirdPartyNotices/UniVRM.md)
+- [転送用のBouncy Castle・ZXing.Net](ThirdPartyNotices/LanTransfer.md)（安定版の配布ZIPからは除外）
+- [Avatar Optimizerの明示的な修正パッチ](Documentation~/DependencyPatches/README.md)・[同梱ライセンス](Documentation~/DependencyPatches/AAO-LICENSE.txt)
 
 アバターなどの素材・掲載画像には各権利者の利用条件が適用されます。[画像の出典・クレジット](Website/assets/README.md)
