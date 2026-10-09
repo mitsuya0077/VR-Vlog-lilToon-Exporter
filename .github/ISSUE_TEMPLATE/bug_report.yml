@@ -4,6 +4,7 @@ body:
   - type: markdown
     attributes:
       value: |
+        脆弱性の報告は[セキュリティポリシー](https://github.com/mitsuya0077/VR-Vlog-lilToon-Exporter/security/policy)に従い、[非公開の報告窓口](https://github.com/mitsuya0077/VR-Vlog-lilToon-Exporter/security/advisories/new)へ送ってください。再現手順や悪用条件をこのフォームへ記載しないでください。
         この報告は公開されます。個人情報・認証情報・非公開リンクを伏せ、有料素材・元プロジェクト・ログ全文は添付しないでください。
   - type: textarea
     id: versions

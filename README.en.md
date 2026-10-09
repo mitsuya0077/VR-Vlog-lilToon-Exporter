@@ -80,6 +80,8 @@ Most detailed user guides are currently in Japanese. The compatibility guide and
 
 ## Help and contributions
 
+Report vulnerabilities using the [private reporting instructions](SECURITY.md). Keep vulnerability reproduction details and exploit conditions out of public issues and pull requests.
+
 Use **VR Vlog → 動作環境を確認** to inspect installed package versions. Export details explain unsupported items and possible next steps.
 
 [Report a bug or propose an improvement](https://github.com/mitsuya0077/VR-Vlog-lilToon-Exporter/issues/new/choose) with the relevant versions, reproduction steps and a short sanitized error excerpt. Please keep private avatar assets, credentials and full logs out of public reports. Documentation fixes and pull requests are welcome; see [CONTRIBUTING.md](CONTRIBUTING.md).

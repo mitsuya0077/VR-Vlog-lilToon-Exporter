@@ -12,7 +12,7 @@ VCC／ALCOMのパッケージ一覧から **0.11.14** を選択してくださ�
 
 lilToonのアバターを、iPhoneのVR Vlogで使うVRM 1.0に書き出すUnity用パッケージです。
 
-PhysBoneの重複は元の静止姿勢を残して担当を分け、左右別メッシュの瞬きや最適化後の空メッシュも扱います。揺れ方はVRM向けの近似となる場合があります。[保持する内容と検証方針](../Compatibility/AvatarPreservation.md)を確認してください。
+PhysBoneの重複は元の静止姿勢を残して担当を分け、左右別メッシュの瞬きや最適化後の空メッシュも扱います。揺れ方はVRM向けの近似となる場合があります。[保持する内容と検証方針](https://github.com/mitsuya0077/VR-Vlog-lilToon-Exporter/blob/v0.11.14/Compatibility/AvatarPreservation.md)を確認してください。
 
 ## 必要な環境
 
@@ -86,3 +86,7 @@ Aim・Rotation Constraintが有効かつロックされ、回転の全軸を完�
 lilToon専用表示のレイヤー合成には、書き出し元のUnityプロジェクトの色空間も必要です。Exporterは`asset.extras.VRVLOG_lilToonColorSpace`に`linear`または`gamma`を保存します。色・画像・alpha・マスク・UVの値は変更せず、既存のschema 2.0とMToon標準表示を維持します。
 
 対応するVR Vlogでは、Linearで作った2nd／3rdの重ね合わせをGammaのアプリでもLinearで計算します。出力元の情報がない旧VRMはVRChatのLinearワークフローを前提に読み込みます。旧ExporterでGammaプロジェクトから書き出したVRMは、対応版のExporterで書き出し直す必要があります。透明材質を背景に合成する工程や照明全体をLinearへ変更する修正ではありません。
+
+## 脆弱性の報告
+
+脆弱性は[セキュリティポリシー](https://github.com/mitsuya0077/VR-Vlog-lilToon-Exporter/security/policy)に従い、[GitHubの非公開報告](https://github.com/mitsuya0077/VR-Vlog-lilToon-Exporter/security/advisories/new)から管理者へ連絡してください（GitHubへのログインが必要です）。再現手順や悪用条件を公開Issue・PRへ投稿しないでください。
