@@ -34,7 +34,7 @@ namespace VRVlog.LilToonExporter.Tests
                 var bytes = session.Export("Read only meshes", "Tests", blinkOptions: new BlinkExportOptions { Mode = BlinkExportMode.None });
                 imported = await Vrm10.LoadBytesAsync(bytes, canLoadVrm0X: false, awaitCaller: new ImmediateCaller());
                 Assert.That(imported, Is.Not.Null);
-                if (recordFace) Assert.That(imported.Vrm.Expression.CustomClips.Any(face => face.name == "Read only face"), Is.True);
+                if (recordFace) Assert.That(imported.Vrm.Expression.CustomClips.Any(face => face.name == "VRChat / 記録 / Read only face"), Is.True);
                 Assert.That(meshes.All(mesh => !mesh.isReadable), Is.True);
                 Assert.That(ExportSourceFingerprint.Compute(fixture.Source), Is.EqualTo(sourceBefore));
             }
