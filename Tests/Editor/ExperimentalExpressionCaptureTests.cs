@@ -16,6 +16,90 @@ namespace VRVlog.LilToonExporter.Tests
 {
     public sealed class ExperimentalExpressionCaptureTests
     {
+        [TestCase(false, "2nd")]
+        [TestCase(true, "2nd")]
+        [TestCase(false, "3rd")]
+        [TestCase(true, "3rd")]
+        public void PrimaryWindowOffersMaterialRecoveryAndSavesRetryWithoutChangingSource(bool recordFace, string layer)
+        {
+            using var fixture = new AttachmentConnectionTests.Fixture();
+            var material = new Material(Shader.Find("lilToon"));
+            var texture = new RenderTexture(16, 16, 0);
+            var clip = new AnimationClip { name = "Recovery face" };
+            var window = ScriptableObject.CreateInstance<ExperimentalExpressionCaptureWindow>();
+            var flags = System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic;
+            var type = typeof(ExperimentalExpressionCaptureWindow);
+            var path = Path.Combine(Path.GetTempPath(), "vrvlog-primary-recovery-" + Guid.NewGuid().ToString("N") + ".vrm");
+            var property = "_UseMain" + layer + "Tex"; var slot = "_Main" + layer + "Tex";
+            try
+            {
+                material.SetFloat(property, 1); material.SetTexture(slot, texture);
+                foreach (var skin in fixture.Source.GetComponentsInChildren<SkinnedMeshRenderer>()) skin.sharedMaterial = material;
+                var stamp = ExportSourceFingerprint.Compute(fixture.Source);
+                type.GetField("source", flags).SetValue(window, fixture.Source); type.GetField("author", flags).SetValue(window, "Tests");
+                type.GetField("automaticBlink", flags).SetValue(window, false);
+                type.GetMethod("Prepare", flags).Invoke(window, null);
+                if (recordFace)
+                {
+                    AnimationUtility.SetEditorCurve(clip, EditorCurveBinding.FloatCurve("Front", typeof(SkinnedMeshRenderer), "blendShape.Hair detail"), AnimationCurve.Constant(0, 1, 65));
+                    type.GetMethod("AddClip", flags).Invoke(window, new object[] { clip });
+                }
+                var recovery = window.SaveVrm(path);
+                Assert.That(recovery, Is.Not.Null); Assert.That(File.Exists(path), Is.False);
+                Assert.That(Resources.FindObjectsOfTypeAll<ExportFailureWindow>().Any(), Is.True, "Primary UI opens the existing recovery dialog.");
+                var kind = layer == "2nd" ? ExportRecoveryActionKind.OmitSecondLayer : ExportRecoveryActionKind.OmitThirdLayer;
+                var diagnostic = recovery.Report.Diagnostics.Single(item => item.Action?.Kind == kind);
+                Assert.That(diagnostic.Action.Material, Is.SameAs(material));
+                var options = new ExportRecoveryOptions(); options.Actions.Add(diagnostic.Action);
+                Assert.That(recovery.Attempt(options), Is.True, recovery.Failure?.ToString());
+                Assert.DoesNotThrow(() => recovery.SavePending());
+                Assert.DoesNotThrow(() => LilToonGlbExtension.Validate(File.ReadAllBytes(path)));
+                Assert.That(ExportSourceFingerprint.Compute(fixture.Source), Is.EqualTo(stamp));
+                Assert.That(material.GetFloat(property), Is.EqualTo(1)); Assert.That(material.GetTexture(slot), Is.SameAs(texture));
+            }
+            finally
+            {
+                foreach (var failure in Resources.FindObjectsOfTypeAll<ExportFailureWindow>()) failure.Close();
+                window.Close(); Object.DestroyImmediate(clip); Object.DestroyImmediate(material); Object.DestroyImmediate(texture);
+                if (File.Exists(path)) File.Delete(path);
+            }
+        }
+
+        [TestCase(false)]
+        [TestCase(true)]
+        public void ChildAnimatorClipTargetsItsOwnMeshEvenWithAnIdenticalRootMesh(bool competingRoot)
+        {
+            using var fixture = new AttachmentConnectionTests.Fixture();
+            var child = new GameObject("Accessory"); child.transform.SetParent(fixture.Source.transform, false);
+            var face = fixture.Source.transform.Find("Front"); face.SetParent(child.transform, false);
+            SkinnedMeshRenderer competing = null;
+            if (competingRoot)
+            {
+                var duplicate = Object.Instantiate(face.gameObject, fixture.Source.transform); duplicate.name = "Front";
+                competing = duplicate.GetComponent<SkinnedMeshRenderer>();
+            }
+            var clip = new AnimationClip { name = "Relative face" }; var controller = new AnimatorController(); var machine = new AnimatorStateMachine();
+            try
+            {
+                AnimationUtility.SetEditorCurve(clip, EditorCurveBinding.FloatCurve("Front", typeof(SkinnedMeshRenderer), "blendShape.Hair detail"), AnimationCurve.Constant(0, 1, 75));
+                var state = machine.AddState("Face"); state.motion = clip; machine.defaultState = state;
+                controller.layers = new[] { new AnimatorControllerLayer { name = "Face", defaultWeight = 1, stateMachine = machine } };
+                child.AddComponent<Animator>().runtimeAnimatorController = controller;
+                var stamp = ExportSourceFingerprint.Compute(fixture.Source);
+                using var session = new ExperimentalExpressionCaptureSession(fixture.Source, false);
+                Assert.That(session.RecommendClips().Any(item => item.Clip == clip), Is.True);
+                Assert.That(session.ClipError(clip, clip.length), Is.Null);
+                session.PreviewClip(clip, clip.length);
+                Assert.That(session.Channels.Single(channel => channel.Path == "Accessory/Front").Renderer.GetBlendShapeWeight(0), Is.EqualTo(75));
+                if (competingRoot) Assert.That(session.Channels.Single(channel => channel.Path == "Front").Renderer.GetBlendShapeWeight(0), Is.EqualTo(35));
+                session.ImportClips(new[] { new ExperimentalExpressionCaptureSession.ClipInput { Clip = clip, Name = "Relative face", Time = clip.length } });
+                Assert.That(session.Expressions.Single().Rows.Single(row => row.Path == "Accessory/Front").Weights[0], Is.EqualTo(75));
+                Assert.That(AnimationUtility.GetCurveBindings(clip).Single().path, Is.EqualTo("Front"));
+                Assert.That(ExportSourceFingerprint.Compute(fixture.Source), Is.EqualTo(stamp));
+            }
+            finally { Object.DestroyImmediate(clip); Object.DestroyImmediate(controller); Object.DestroyImmediate(machine); }
+        }
+
         [TestCase(false, "APL", false)]
         [TestCase(true, "APL", false)]
         [TestCase(false, "menu", false)]

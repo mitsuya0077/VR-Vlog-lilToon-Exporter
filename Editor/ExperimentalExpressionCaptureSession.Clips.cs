@@ -35,6 +35,57 @@ namespace VRVlog.LilToonExporter
         [Serializable]
         internal sealed class PoseNameReference { public string Id, Name; }
 
+        readonly Dictionary<AnimationClip, HashSet<string>> clipRoots = new Dictionary<AnimationClip, HashSet<string>>();
+
+        void CaptureClipRoots()
+        {
+            void Add(RuntimeAnimatorController controller, string root)
+            {
+                if (controller == null) return;
+                foreach (var clip in controller.animationClips.Where(clip => clip != null))
+                {
+                    if (!clipRoots.TryGetValue(clip, out var roots)) clipRoots.Add(clip, roots = new HashSet<string>(StringComparer.Ordinal));
+                    roots.Add(root);
+                }
+            }
+            var metadata = VrChatExpressionMenu.Read(Source, new VrChatMenuImportPolicy { SkipAll = true });
+            foreach (var controller in metadata.OtherControllers.Concat(new[] { metadata.Controller })) Add(controller, "");
+            foreach (var animator in Source.GetComponentsInChildren<Animator>(true))
+                Add(animator.runtimeAnimatorController, AnimationUtility.CalculateTransformPath(animator.transform, Source.transform));
+            foreach (var component in Source.GetComponentsInChildren<Component>(true).Where(component => component != null && !(component is Animator)))
+            {
+                using var serialized = new SerializedObject(component);
+                var property = serialized.GetIterator();
+                while (property.Next(true))
+                {
+                    if (property.propertyType != SerializedPropertyType.ObjectReference || !(property.objectReferenceValue is RuntimeAnimatorController controller)) continue;
+                    if (component.GetType().FullName == "VRC.SDK3.Avatars.Components.VRCAvatarDescriptor") continue;
+                    var root = (string)null;
+                    if (component.GetType().FullName == "nadena.dev.modular_avatar.core.ModularAvatarMergeAnimator")
+                    {
+                        var mode = component.GetType().GetField("pathMode").GetValue(component).ToString();
+                        if (mode == "Absolute") root = "";
+                        else
+                        {
+                            var reference = component.GetType().GetField("relativePathRoot").GetValue(component);
+                            var owner = reference?.GetType().GetMethod("Get", new[] { typeof(Component) })?.Invoke(reference, new object[] { Source.transform }) as GameObject;
+                            root = AnimationUtility.CalculateTransformPath((owner != null ? owner : component.gameObject).transform, Source.transform);
+                        }
+                    }
+                    // Unknown plugin semantics are not safely avatar-relative.
+                    Add(controller, root);
+                }
+            }
+        }
+
+        string ClipRoot(AnimationClip clip)
+        {
+            if (!clipRoots.TryGetValue(clip, out var roots)) return ""; // Explicit, unregistered .anim uses avatar-relative paths.
+            if (roots.Count != 1 || roots.Contains(null))
+                throw new InvalidOperationException(ExporterLocalization.T("表情クリップの適用元を一意に確定できません。Controllerの登録先と相対パスを確認してください: ") + clip.name);
+            return roots.Single();
+        }
+
         internal List<ClipRecommendation> RecommendClips()
         {
             RequireValid();
@@ -107,16 +158,18 @@ namespace VRVlog.LilToonExporter
                 throw new InvalidOperationException(ExporterLocalization.T("顔の変形以外の変更を含みます。材質・ボーン・表示切替は追加対応が必要です: ") +
                     unsupported[0].path + " / " + unsupported[0].propertyName);
             if (bindings.Length == 0) throw new InvalidOperationException(ExporterLocalization.T("このクリップにはBlendShapeの表情がありません。全身ポーズはポーズ欄へ追加してください。"));
+            var root = ClipRoot(clip);
             var pose = ClonePose(Baseline); pose.Name = ValidateName(name);
             var used = new HashSet<string>(StringComparer.Ordinal);
             foreach (var binding in bindings)
             {
-                if (!authoringRenderers.TryGetValue(binding.path, out var original))
-                    throw new InvalidOperationException(ExporterLocalization.T("元のアバターに対象メッシュがないか、同じ階層に複数あります: ") + binding.path);
+                var path = string.IsNullOrEmpty(root) ? binding.path : string.IsNullOrEmpty(binding.path) ? root : root + "/" + binding.path;
+                if (!authoringRenderers.TryGetValue(path, out var original))
+                    throw new InvalidOperationException(ExporterLocalization.T("元のアバターに対象メッシュがないか、同じ階層に複数あります: ") + path);
                 var renderer = preparation.PreparedRendererFor(original);
                 var channels = Channels.Where(channel => channel.Renderer == renderer).ToArray();
                 if (channels.Length != 1)
-                    throw new InvalidOperationException(ExporterLocalization.T("表示中の書き出し対象にメッシュがありません。統合・分割の対応が必要です: ") + binding.path);
+                    throw new InvalidOperationException(ExporterLocalization.T("表示中の書き出し対象にメッシュがありません。統合・分割の対応が必要です: ") + path);
                 var channel = channels[0]; var shape = binding.propertyName.Substring("blendShape.".Length);
                 if (!used.Add(channel.Path + "\n" + shape)) throw new InvalidOperationException(ExporterLocalization.T("変形の参照が重複しています: ") + shape);
                 var nativeCurve = AnimationUtility.GetEditorCurve(clip, binding);
@@ -190,14 +243,14 @@ namespace VRVlog.LilToonExporter
             return new ManualPose { Clip = clip, Name = reference.Name, Category = reference.Category, Time = reference.Time };
         }
 
-        byte[] InjectSourcePoses(byte[] bytes, ICollection<string> warnings)
+        byte[] InjectSourcePoses(byte[] bytes, ICollection<string> warnings, PoseExportOptions poseOptions)
         {
             // APL definitions still belong to the original avatar; generated
             // menu poses belong to the prepared copy. Collect both before
             // binding the data to the final VRM's Humanoid nodes.
-            using var poses = new PoseExportSession(Source, PoseOptions.Copy(), exclusions.Contains);
+            using var poses = new PoseExportSession(Source, poseOptions.Copy(), exclusions.Contains);
             poses.CollectPrepared(Copy, warnings);
-            var failed = poses.Entries.FirstOrDefault(entry => entry.Source.Contains("手動") && entry.Error != null && !PoseOptions.Excluded.Contains(entry.Id));
+            var failed = poses.Entries.FirstOrDefault(entry => entry.Source.Contains("手動") && entry.Error != null && !poseOptions.Excluded.Contains(entry.Id));
             if (failed != null) throw new InvalidOperationException(ExporterLocalization.T("ポーズを書き出せません: ") + failed.Name + " / " + failed.Error);
             var document = GlbDocument.Read(bytes);
             var extensions = (Dictionary<string, object>)document.Json["extensions"];

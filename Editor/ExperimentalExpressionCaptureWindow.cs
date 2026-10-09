@@ -394,20 +394,34 @@ namespace VRVlog.LilToonExporter
             SaveVrm(path);
         }
 
-        internal void SaveVrm(string path)
+        internal ExportRecoverySession SaveVrm(string path)
         {
             RecordSelectedClips();
-            var warnings = new System.Collections.Generic.List<string>(session.Warnings);
-            var bytes = session.Export(AvatarName(), author, warnings,
-                automaticBlink ? configuredBlink?.Copy() : new BlinkExportOptions { Mode = BlinkExportMode.None }, licenseOptions.Copy());
-            AtomicWrite(path, bytes);
-            var extensions = (System.Collections.Generic.Dictionary<string, object>)GlbDocument.Read(bytes).Json["extensions"];
-            var poseCount = extensions.TryGetValue(VRVlog.Poses.HumanoidPoseData.Extension, out var poses)
-                ? VRVlog.Poses.HumanoidPoseData.Read(poses).Count : 0;
-            if (extensions.TryGetValue(VRVlog.Poses.HumanoidAnimationData.Extension, out var animations))
-                poseCount += VRVlog.Poses.HumanoidAnimationData.Read(animations).Count;
-            saved = new SavedExpressionVrm(path, bytes, session.Expressions.Count, poseCount);
-            status = ExporterLocalization.T("VRMを保存しました。") + (warnings.Count == 0 ? "" : "\n" + string.Join("\n", warnings));
+            var target = session;
+            var name = AvatarName(); var targetAuthor = author;
+            var blink = automaticBlink ? configuredBlink?.Copy() : new BlinkExportOptions { Mode = BlinkExportMode.None };
+            var license = licenseOptions.Copy();
+            var expressions = target.Expressions.Select(ExperimentalExpressionCaptureSession.ClonePose).ToArray();
+            var poses = target.PoseOptions.Copy();
+            var expressionCount = expressions.Length;
+            void Completed(byte[] bytes, System.Collections.Generic.IEnumerable<string> warnings)
+            {
+                var extensions = (System.Collections.Generic.Dictionary<string, object>)GlbDocument.Read(bytes).Json["extensions"];
+                var poseCount = extensions.TryGetValue(VRVlog.Poses.HumanoidPoseData.Extension, out var poses)
+                    ? VRVlog.Poses.HumanoidPoseData.Read(poses).Count : 0;
+                if (extensions.TryGetValue(VRVlog.Poses.HumanoidAnimationData.Extension, out var animations))
+                    poseCount += VRVlog.Poses.HumanoidAnimationData.Read(animations).Count;
+                saved = new SavedExpressionVrm(path, bytes, expressionCount, poseCount);
+                status = ExporterLocalization.T("VRMを保存しました。") + (warnings.Any() ? "\n" + string.Join("\n", warnings) : "");
+                Repaint();
+            }
+            var recovery = LilToonExporterWindow.ExportAndSaveNormally(target.Source, path, (options, report, warnings) => {
+                foreach (var warning in target.Warnings) warnings.Add(warning);
+                return target.Export(name, targetAuthor, warnings, blink?.Copy(), license.Copy(), options, report, expressions, poses);
+            }, Completed, previewGimmicks: new ExportGimmickOptions());
+            if (recovery != null)
+                ExportFailureWindow.Show(recovery, () => Completed(recovery.LastSuccess.Bytes, recovery.LastSuccess.Warnings));
+            return recovery;
         }
 
         internal void OpenSavedTransfer()

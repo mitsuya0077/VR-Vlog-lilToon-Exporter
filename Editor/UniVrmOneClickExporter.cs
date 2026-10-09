@@ -16,10 +16,15 @@ namespace VRVlog.LilToonExporter
         public static byte[] Export(GameObject source, string avatarName, string author, ICollection<string> warnings = null, bool suppressSharedTextureEmission = false,
             string exporterVersion = null, string lilToonVersion = null, bool suppressHdrTextureEmission = false,
             IEnumerable<GameObject> excludedObjects = null, MaterialBakeOptions bakeOptions = null, ExportGimmickOptions gimmickOptions = null, BlinkExportOptions blinkOptions = null, PoseExportOptions poseOptions = null,
-            ExportRecoveryOptions recoveryOptions = null, ExportRecoveryReport recoveryReport = null, AvatarLicenseOptions licenseOptions = null, bool disableAudioLink = false)
+            ExportRecoveryOptions recoveryOptions = null, ExportRecoveryReport recoveryReport = null, AvatarLicenseOptions licenseOptions = null, bool disableAudioLink = false,
+            GameObject recoverySource = null, Func<Material, Material> recoveryMaterialSource = null)
         {
             var report = recoveryReport ?? new ExportRecoveryReport();
             report.Begin();
+            report.DiagnosticSource = recoverySource;
+            if (recoveryMaterialSource != null)
+                foreach (var material in source.GetComponentsInChildren<Renderer>(true).SelectMany(renderer => renderer.sharedMaterials).Where(material => material != null).Distinct())
+                    report.Track(material, recoveryMaterialSource(material));
             try
             {
                 var bytes = ExportCore(source, avatarName, author, warnings, suppressSharedTextureEmission, exporterVersion, lilToonVersion,
