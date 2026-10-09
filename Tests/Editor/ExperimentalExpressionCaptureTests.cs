@@ -16,6 +16,96 @@ namespace VRVlog.LilToonExporter.Tests
 {
     public sealed class ExperimentalExpressionCaptureTests
     {
+        [TestCase(false, "APL", false)]
+        [TestCase(true, "APL", false)]
+        [TestCase(false, "menu", false)]
+        [TestCase(true, "menu", false)]
+        [TestCase(false, "APL", true)]
+        [TestCase(true, "APL", true)]
+        public async Task RegisteredAndManualBodyPosesSurviveWithOrWithoutRecordedFaces(bool recordFace, string registration, bool sameClip)
+        {
+            using var fixture = new AttachmentConnectionTests.Fixture();
+            foreach (var skin in fixture.Source.GetComponentsInChildren<SkinnedMeshRenderer>()) skin.sharedMaterial.shader = Shader.Find("lilToon");
+            var registeredClip = HumanoidPoseTests.Clip(fixture.Source, 30); registeredClip.name = "Registered clip";
+            var manualClip = sameClip ? registeredClip : HumanoidPoseTests.Clip(fixture.Source, 60);
+            var assets = new System.Collections.Generic.List<Object>();
+            Vrm10Instance imported = null;
+            try
+            {
+                if (registration == "APL")
+                {
+                    var type = Sdk(PoseExportSession.AplType); Assert.That(type, Is.Not.Null, "Installed APL is required.");
+                    var child = new GameObject("Registered library"); child.transform.SetParent(fixture.Source.transform, false);
+                    var component = child.AddComponent(type);
+                    var data = Activator.CreateInstance(type.GetField("data").FieldType); SetPoseMember(component, "data", data);
+                    var category = AddPoseListItem((IList)PoseMenuResolver.Member(data, "categories")); SetPoseMember(category, "name", "Body");
+                    var entry = AddPoseListItem((IList)PoseMenuResolver.Member(category, "poses")); SetPoseMember(entry, "name", "Registered body"); SetPoseMember(entry, "animationClip", registeredClip);
+                }
+                else ConfigureRegisteredMenuPose(fixture.Source, registeredClip, assets);
+                var sourceBefore = ExportSourceFingerprint.Compute(fixture.Source);
+                using var session = new ExperimentalExpressionCaptureSession(fixture.Source, false);
+                session.PoseOptions.Manual.Add(new ManualPose { Clip = manualClip, Name = "Manual body" });
+                if (recordFace) { session.SetWeight(0, 0, 65); session.Capture("Selected face"); }
+                var bytes = session.Export("Registered poses", "Tests", blinkOptions: new BlinkExportOptions { Mode = BlinkExportMode.None });
+                var document = GlbDocument.Read(bytes);
+                var extensions = (System.Collections.Generic.Dictionary<string, object>)document.Json["extensions"];
+                var poses = VRVlog.Poses.HumanoidPoseData.Read(extensions[VRVlog.Poses.HumanoidPoseData.Extension]);
+                Assert.That(poses.Count, Is.EqualTo(sameClip ? 1 : 2));
+                Assert.That(poses.Any(pose => pose.Name == "Registered body"), Is.True);
+                if (!sameClip) Assert.That(poses.Any(pose => pose.Name == "Manual body"), Is.True);
+                Assert.That(poses.All(pose => pose.Bones.Any(bone => bone.Name == "leftUpperArm")), Is.True);
+                VRVlog.Poses.HumanoidPoseData.ValidateReferences(poses, document.Json);
+                imported = await Vrm10.LoadBytesAsync(bytes, canLoadVrm0X: false, awaitCaller: new ImmediateCaller());
+                Assert.That(imported.GetComponent<Animator>().isHuman, Is.True);
+                Assert.That(ExportSourceFingerprint.Compute(fixture.Source), Is.EqualTo(sourceBefore));
+            }
+            finally
+            {
+                if (imported != null) Object.DestroyImmediate(imported.gameObject);
+                foreach (var asset in assets) Object.DestroyImmediate(asset);
+                if (manualClip != registeredClip) Object.DestroyImmediate(manualClip); Object.DestroyImmediate(registeredClip);
+            }
+        }
+
+        static void SetPoseMember(object target, string name, object value)
+        {
+            var field = target.GetType().GetField(name); field.SetValue(target, field.FieldType.IsEnum ? Enum.Parse(field.FieldType, value.ToString()) : value);
+        }
+        static object AddPoseListItem(IList list)
+        {
+            var value = Activator.CreateInstance(list.GetType().GetGenericArguments()[0]); list.Add(value); return value;
+        }
+        static void ConfigureRegisteredMenuPose(GameObject source, AnimationClip clip, System.Collections.Generic.List<Object> assets)
+        {
+            var flags = System.Reflection.BindingFlags.Static | System.Reflection.BindingFlags.NonPublic;
+            var descriptor = (Component)typeof(PoseRegistrationTests).GetMethod("Descriptor", flags).Invoke(null, new object[] { source });
+            var controller = new AnimatorController(); assets.Add(controller);
+            controller.AddParameter("Pose", AnimatorControllerParameterType.Int);
+            var machine = new AnimatorStateMachine(); assets.Add(machine);
+            var idle = machine.AddState("Idle"); idle.writeDefaultValues = false; machine.defaultState = idle;
+            var state = machine.AddState("Selected"); state.writeDefaultValues = false; state.motion = clip;
+            var tracking = state.AddStateMachineBehaviour(Sdk("VRC.SDK3.Avatars.Components.VRCAnimatorTrackingControl"));
+            foreach (var part in new[] { "trackingLeftHand", "trackingRightHand", "trackingHip", "trackingLeftFoot", "trackingRightFoot", "trackingLeftFingers", "trackingRightFingers" }) SetPoseMember(tracking, part, "Animation");
+            var transition = machine.AddAnyStateTransition(state); transition.canTransitionToSelf = false; transition.hasExitTime = false; transition.duration = 0; transition.AddCondition(AnimatorConditionMode.Equals, 1, "Pose");
+            controller.layers = new[] { new AnimatorControllerLayer { name = "Body pose", defaultWeight = 1, stateMachine = machine } };
+            foreach (var key in new[] { "baseAnimationLayers", "specialAnimationLayers" })
+            {
+                var field = descriptor.GetType().GetField(key); var layers = (Array)field.GetValue(descriptor);
+                for (var i = 0; i < layers.Length; i++)
+                {
+                    var layer = layers.GetValue(i); var empty = new AnimatorController(); assets.Add(empty);
+                    SetPoseMember(layer, "isDefault", false); SetPoseMember(layer, "animatorController", PoseMenuResolver.Member(layer, "type").ToString() == "Gesture" ? controller : empty); layers.SetValue(layer, i);
+                }
+                field.SetValue(descriptor, layers);
+            }
+            var menu = ScriptableObject.CreateInstance(Sdk("VRC.SDK3.Avatars.ScriptableObjects.VRCExpressionsMenu")); assets.Add(menu);
+            var control = AddPoseListItem((IList)PoseMenuResolver.Member(menu, "controls")); SetPoseMember(control, "name", "Registered body"); SetPoseMember(control, "type", "Toggle"); SetPoseMember(control, "value", 1f);
+            var parameter = Activator.CreateInstance(control.GetType().GetField("parameter").FieldType); SetPoseMember(parameter, "name", "Pose"); SetPoseMember(control, "parameter", parameter); SetPoseMember(descriptor, "expressionsMenu", menu);
+            var parameters = ScriptableObject.CreateInstance(Sdk("VRC.SDK3.Avatars.ScriptableObjects.VRCExpressionParameters")); assets.Add(parameters);
+            var parametersField = parameters.GetType().GetField("parameters"); var element = parametersField.FieldType.GetElementType(); var definition = Activator.CreateInstance(element); SetPoseMember(definition, "name", "Pose"); SetPoseMember(definition, "valueType", "Int");
+            var definitions = Array.CreateInstance(element, 1); definitions.SetValue(definition, 0); parametersField.SetValue(parameters, definitions); SetPoseMember(descriptor, "expressionParameters", parameters);
+        }
+
         [TestCase(false)]
         [TestCase(true)]
         public async Task ReenablingBlinkAfterNoneRestoresAutomaticBlinkInSavedVrm(bool recordFace)

@@ -190,13 +190,14 @@ namespace VRVlog.LilToonExporter
             return new ManualPose { Clip = clip, Name = reference.Name, Category = reference.Category, Time = reference.Time };
         }
 
-        byte[] InjectManualPoses(byte[] bytes)
+        byte[] InjectSourcePoses(byte[] bytes, ICollection<string> warnings)
         {
-            if (PoseOptions.Manual.Count == 0) return bytes;
-            using var poses = new PoseExportSession(Source, PoseOptions.Copy(), menuPolicy: new VrChatMenuImportPolicy { SkipAll = true });
-            poses.Entries.RemoveAll(entry => entry.Source != "手動");
-            poses.CollectPrepared(Copy, preparedMenuPolicy: new VrChatMenuImportPolicy { SkipAll = true });
-            var failed = poses.Entries.FirstOrDefault(entry => entry.Error != null && !PoseOptions.Excluded.Contains(entry.Id));
+            // APL definitions still belong to the original avatar; generated
+            // menu poses belong to the prepared copy. Collect both before
+            // binding the data to the final VRM's Humanoid nodes.
+            using var poses = new PoseExportSession(Source, PoseOptions.Copy(), exclusions.Contains);
+            poses.CollectPrepared(Copy, warnings);
+            var failed = poses.Entries.FirstOrDefault(entry => entry.Source.Contains("手動") && entry.Error != null && !PoseOptions.Excluded.Contains(entry.Id));
             if (failed != null) throw new InvalidOperationException(ExporterLocalization.T("ポーズを書き出せません: ") + failed.Name + " / " + failed.Error);
             var document = GlbDocument.Read(bytes);
             var extensions = (Dictionary<string, object>)document.Json["extensions"];
