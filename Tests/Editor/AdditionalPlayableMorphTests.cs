@@ -204,7 +204,7 @@ namespace VRVlog.LilToonExporter.Tests
                 new HashSet<EditorCurveBinding> { Binding("Mouth"), Binding("Companion") }, null, source, fixedContext: context,
                 preserveCommittedMorphs: true));
             Assert.That(error.DependencyMorphs, Does.Contain(Binding("Independent")), "Keep the complete execution closure.");
-            Assert.That(error.CoupledMorphs, Does.Not.Contain(Binding("Independent")), "WD-only support is not an explicit parameter component.");
+            Assert.That(error.CoupledMorphs.Contains(Binding("Independent")), Is.False, "WD-only support is not an explicit parameter component.");
             var before = Capture(); var warnings = new List<string>();
             var values = NeutralShapeSampler.Sample(avatar, warnings: warnings);
             Assert.That(values.Select(value => value.Shape), Is.EqualTo(new[] { "Independent" }));
