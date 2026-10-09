@@ -11,18 +11,13 @@ namespace VRVlog.LilToonExporter.Tests
     public class DependencyStartupTests
     {
         [Test]
-        public void ToolbarContainsOnlyTheVrmExportEntry()
+        public void MenuResolvesBackendWithoutInitializationRegistration()
         {
             var entries = TypeCache.GetMethodsWithAttribute<MenuItem>()
                 .SelectMany(method => method.GetCustomAttributes(typeof(MenuItem), false).Cast<MenuItem>())
                 .Where(item => item.menuItem.StartsWith("VR Vlog/", StringComparison.Ordinal))
                 .Select(item => item.menuItem).ToArray();
             Assert.That(entries, Is.EqualTo(new[] { "VR Vlog/VRMを書き出す" }));
-        }
-
-        [Test]
-        public void MenuResolvesBackendWithoutInitializationRegistration()
-        {
             var expected = Environment.GetEnvironmentVariable("VRVLOG_TEST_UNIVRM");
             if (string.IsNullOrEmpty(expected)) Assert.Ignore("Requires an explicit compatibility environment.");
             var supported = DependencyPolicy.SupportsUniVrm(expected);

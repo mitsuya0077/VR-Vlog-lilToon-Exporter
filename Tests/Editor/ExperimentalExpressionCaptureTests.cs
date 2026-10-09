@@ -79,7 +79,7 @@ namespace VRVlog.LilToonExporter.Tests
                 using var session = new ExperimentalExpressionCaptureSession(fixture.Source, replayInstalledDefaults: false);
                 session.SetWeight(0, 0, 90); session.Capture("Smile");
                 var warnings = new System.Collections.Generic.List<string>();
-                var bytes = session.Export("Test", "Tests", warnings);
+                var bytes = session.Export("Test", "Tests", warnings, new BlinkExportOptions { Mode = BlinkExportMode.None });
                 Assert.That(warnings.Any(warning => warning.IndexOf("AudioLink", StringComparison.OrdinalIgnoreCase) >= 0), Is.False);
                 Assert.That(session.Channels.All(channel => channel.Renderer.sharedMaterial.GetFloat("_UseAudioLink") == 1), Is.True);
                 Assert.That(skins.All(skin => skin.sharedMaterial.GetFloat("_UseAudioLink") == 1), Is.True);
