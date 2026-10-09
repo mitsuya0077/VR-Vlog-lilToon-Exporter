@@ -344,9 +344,24 @@ namespace VRVlog.LilToonExporter.Tests
                     lilToonVersion: fullLilToon ? "2.3.4" : null);
                 imported = await Vrm10.LoadBytesAsync(bytes, canLoadVrm0X: false, awaitCaller: new ImmediateCaller());
                 imported.Runtime.Process();
-                Assert.That(imported.Vrm.Expression.Blink, Is.Null);
+                Assert.That(imported.Vrm.Expression.Blink, Is.Not.Null,
+                    "No-blink exports retain the inert preset that prevents runtime fallback inference.");
                 foreach (var skin in imported.GetComponentsInChildren<SkinnedMeshRenderer>())
+                {
                     Assert.That(skin.sharedMesh.vertices[0].y, Is.EqualTo(fixture.Mesh.vertices[0].y - .03f).Within(.00001f));
+                    var baked = new Mesh();
+                    try
+                    {
+                        skin.BakeMesh(baked, false); var closed = baked.vertices;
+                        foreach (var weight in new[] { 0f, 1f, 0f })
+                        {
+                            imported.Runtime.Expression.SetWeight(ExpressionKey.Blink, weight); imported.Runtime.Process();
+                            skin.BakeMesh(baked, false);
+                            Assert.That(baked.vertices, Is.EqualTo(closed), "No-blink must neither open the prepared closed eyes nor add closure.");
+                        }
+                    }
+                    finally { Object.DestroyImmediate(baked); }
+                }
                 Assert.That(sourceSkins.All(skin => skin.sharedMesh == fixture.Mesh && skin.GetBlendShapeWeight(0) == 100), Is.True);
                 Assert.That(clip, Is.SameAs(controller.layers[0].stateMachine.defaultState.motion));
             }
