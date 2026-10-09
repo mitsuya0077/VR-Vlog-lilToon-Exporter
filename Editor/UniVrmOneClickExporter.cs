@@ -16,14 +16,14 @@ namespace VRVlog.LilToonExporter
         public static byte[] Export(GameObject source, string avatarName, string author, ICollection<string> warnings = null, bool suppressSharedTextureEmission = false,
             string exporterVersion = null, string lilToonVersion = null, bool suppressHdrTextureEmission = false,
             IEnumerable<GameObject> excludedObjects = null, MaterialBakeOptions bakeOptions = null, ExportGimmickOptions gimmickOptions = null, BlinkExportOptions blinkOptions = null, PoseExportOptions poseOptions = null,
-            ExportRecoveryOptions recoveryOptions = null, ExportRecoveryReport recoveryReport = null, AvatarLicenseOptions licenseOptions = null)
+            ExportRecoveryOptions recoveryOptions = null, ExportRecoveryReport recoveryReport = null, AvatarLicenseOptions licenseOptions = null, bool disableAudioLink = false)
         {
             var report = recoveryReport ?? new ExportRecoveryReport();
             report.Begin();
             try
             {
                 var bytes = ExportCore(source, avatarName, author, warnings, suppressSharedTextureEmission, exporterVersion, lilToonVersion,
-                    suppressHdrTextureEmission, excludedObjects, bakeOptions, gimmickOptions, blinkOptions, poseOptions, recoveryOptions, report, licenseOptions?.Copy());
+                    suppressHdrTextureEmission, excludedObjects, bakeOptions, gimmickOptions, blinkOptions, poseOptions, recoveryOptions, report, licenseOptions?.Copy(), disableAudioLink);
                 report.Stage = "完了";
                 report.Succeeded = true;
                 return bytes;
@@ -40,7 +40,7 @@ namespace VRVlog.LilToonExporter
         static byte[] ExportCore(GameObject source, string avatarName, string author, ICollection<string> warnings, bool suppressSharedTextureEmission,
             string exporterVersion, string lilToonVersion, bool suppressHdrTextureEmission, IEnumerable<GameObject> excludedObjects,
             MaterialBakeOptions bakeOptions, ExportGimmickOptions gimmickOptions, BlinkExportOptions blinkOptions, PoseExportOptions poseOptions,
-            ExportRecoveryOptions recoveryOptions, ExportRecoveryReport recoveryReport, AvatarLicenseOptions licenseOptions)
+            ExportRecoveryOptions recoveryOptions, ExportRecoveryReport recoveryReport, AvatarLicenseOptions licenseOptions, bool disableAudioLink)
         {
             if (source == null) throw new ArgumentNullException(nameof(source));
             // Cloning detaches the avatar from its parents. Reject an inactive
@@ -100,6 +100,7 @@ namespace VRVlog.LilToonExporter
                 MaAppearanceSnapshot.Apply(source, clone, temporaryMeshes, exclusions, warnings);
                 PoseExportSession.RemoveAplFromCopy(source, clone);
                 recovery?.Apply(warnings);
+                if (disableAudioLink) DisableAudioLinkOnCopy(clone, temporaryMaterials, (copy, original) => recoveryReport.Track(copy, original));
                 gimmicks.Apply(null, menu, warnings);
                 if (exporterVersion == null) LilToonMainTextureBaker.ValidateAvatar(clone, options: bakeOptions);
                 // Omission consent follows source identity before plugins clone
@@ -193,6 +194,9 @@ namespace VRVlog.LilToonExporter
                 // Authoring passes may restore source material references. Reapply
                 // only the selected, source-identity recipe to the owned copy.
                 recovery?.Apply();
+                // NDMF/authoring passes can introduce materials or restore source
+                // references. Disable external audio on the final owned copy too.
+                if (disableAudioLink) DisableAudioLinkOnCopy(clone, temporaryMaterials, (copy, original) => recoveryReport.Track(copy, original));
                 if(exporterVersion!=null) PreserveExtraMaterialSlots(clone,temporaryMeshes);
                 recoveryReport.Stage = "材質保存";
                 var fullSnapshot = exporterVersion != null ? LilToonFullSnapshot.Capture(clone,suppressSharedTextureEmission,suppressHdrTextureEmission, warnings, animationSource: source) : null;
@@ -259,6 +263,39 @@ namespace VRVlog.LilToonExporter
                 foreach (var material in temporaryMaterials) UnityEngine.Object.DestroyImmediate(material);
                 foreach (var mesh in temporaryMeshes) UnityEngine.Object.DestroyImmediate(mesh);
                 foreach (var texture in temporaryTextures) UnityEngine.Object.DestroyImmediate(texture);
+            }
+        }
+
+        internal static void DisableAudioLinkOnCopy(GameObject copy, ICollection<Material> owned,
+            Action<Material, Material> copyObserver = null)
+        {
+            if (copy == null || UnityEditor.EditorUtility.IsPersistent(copy))
+                throw new ArgumentException("An independent export copy is required.", nameof(copy));
+            if (owned == null) throw new ArgumentNullException(nameof(owned));
+            var controls = new[] { "_UseAudioLink", "_AudioLinkAsLocal", "_AudioLink2Main2nd", "_AudioLink2Main3rd",
+                "_AudioLink2Emission", "_AudioLink2EmissionGrad", "_AudioLink2Emission2nd", "_AudioLink2Emission2ndGrad", "_AudioLink2Vertex" };
+            var replacements = new Dictionary<Material, Material>();
+            foreach (var renderer in copy.GetComponentsInChildren<Renderer>(true))
+            {
+                var slots = renderer.sharedMaterials;
+                var changed = false;
+                for (var i = 0; i < slots.Length; i++)
+                {
+                    var original = slots[i];
+                    if (original == null || !controls.Any(property => original.HasProperty(property) && original.GetFloat(property) != 0)) continue;
+                    if (!replacements.TryGetValue(original, out var material))
+                    {
+                        material = new Material(original) { name = original.name };
+                        owned.Add(material);
+                        replacements.Add(original, material);
+                        foreach (var property in controls)
+                            if (material.HasProperty(property)) material.SetFloat(property, 0);
+                        copyObserver?.Invoke(material, original);
+                    }
+                    slots[i] = material;
+                    changed = true;
+                }
+                if (changed) renderer.sharedMaterials = slots;
             }
         }
 

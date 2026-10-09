@@ -17,10 +17,10 @@ public static class ExporterStartupProbe
             Debug.Log("PROBE graph="+assembly.name+" defines="+string.Join(",",assembly.defines.Where(d=>d.StartsWith("VRVLOG"))));
         foreach (var assembly in AppDomain.CurrentDomain.GetAssemblies().Where(a=>a.GetName().Name.StartsWith("VRVlog")))
             Debug.Log("PROBE loaded="+assembly.FullName);
-        if (!EditorApplication.ExecuteMenuItem("VR Vlog/lilToon VRM 1.0を書き出す")) throw new Exception("Menu missing");
+        if (!EditorApplication.ExecuteMenuItem("VR Vlog/VRMを書き出す")) throw new Exception("Menu missing");
         var windows=Resources.FindObjectsOfTypeAll<EditorWindow>().Where(w=>w.GetType().FullName.StartsWith("VRVlog")).ToArray();
         Debug.Log("PROBE windows="+string.Join(",", windows.Select(w=>w.GetType().FullName)));
-        bool success=windows.Any(w=>w.GetType().Name=="LilToonExporterWindow");
+        bool success=windows.Any(w=>w.GetType().Name=="ExperimentalExpressionCaptureWindow" && w.titleContent.text=="VRM書き出し");
         foreach(var w in windows) w.Close();
         if(!success) throw new Exception("Exporter did not open");
         DependencyDiagnostics.RefreshBackend();

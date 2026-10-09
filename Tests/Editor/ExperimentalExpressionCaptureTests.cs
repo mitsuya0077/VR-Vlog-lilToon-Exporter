@@ -17,6 +17,87 @@ namespace VRVlog.LilToonExporter.Tests
     public sealed class ExperimentalExpressionCaptureTests
     {
         [Test]
+        public void AudioLinkSuppressionCoversSharedInactiveAndNewMaterialsWithoutEditingTheSource()
+        {
+            using var fixture = new AttachmentConnectionTests.Fixture();
+            var materials = new System.Collections.Generic.List<Material>();
+            var first = new Material(Shader.Find("lilToon"));
+            var generated = new Material(first);
+            try
+            {
+                first.SetFloat("_UseAudioLink", 1); first.SetFloat("_AudioLink2Vertex", 1);
+                generated.SetFloat("_UseAudioLink", 1); generated.SetFloat("_AudioLink2Emission", 1);
+                foreach (var skin in fixture.Source.GetComponentsInChildren<SkinnedMeshRenderer>()) skin.sharedMaterial = first;
+                foreach (var skin in fixture.Skins) skin.sharedMaterials = new[] { first, first, null };
+                fixture.Skins[1].gameObject.SetActive(false);
+                UniVrmOneClickExporter.DisableAudioLinkOnCopy(fixture.Copy, materials);
+                Assert.That(materials.Count, Is.EqualTo(1));
+                foreach (var skin in fixture.Skins)
+                {
+                    Assert.That(skin.sharedMaterials[0], Is.SameAs(materials[0]));
+                    Assert.That(skin.sharedMaterials[1], Is.SameAs(materials[0]));
+                    Assert.That(skin.sharedMaterials[2], Is.Null);
+                    Assert.That(skin.sharedMaterial.GetFloat("_UseAudioLink"), Is.Zero);
+                    Assert.That(skin.sharedMaterial.GetFloat("_AudioLink2Vertex"), Is.Zero);
+                }
+                // Simulate an authoring pass assigning a fresh material, and
+                // another renderer restoring its source material reference.
+                fixture.Skins[0].sharedMaterial = generated;
+                fixture.Skins[1].sharedMaterial = first;
+                UniVrmOneClickExporter.DisableAudioLinkOnCopy(fixture.Copy, materials);
+                Assert.That(materials.Count, Is.EqualTo(3));
+                Assert.That(fixture.Skins.All(skin => skin.sharedMaterial.GetFloat("_UseAudioLink") == 0), Is.True);
+                Assert.That(fixture.Skins[0].sharedMaterial.GetFloat("_AudioLink2Emission"), Is.Zero);
+                UniVrmOneClickExporter.DisableAudioLinkOnCopy(fixture.Copy, materials);
+                Assert.That(materials.Count, Is.EqualTo(3), "Repeated passes must not create extra material copies.");
+                Assert.That(first.GetFloat("_UseAudioLink"), Is.EqualTo(1));
+                Assert.That(first.GetFloat("_AudioLink2Vertex"), Is.EqualTo(1));
+                Assert.That(generated.GetFloat("_UseAudioLink"), Is.EqualTo(1));
+                Assert.That(fixture.Source.GetComponentsInChildren<SkinnedMeshRenderer>().All(skin => skin.sharedMaterial == first), Is.True);
+            }
+            finally
+            {
+                foreach (var material in materials) Object.DestroyImmediate(material);
+                Object.DestroyImmediate(first); Object.DestroyImmediate(generated);
+            }
+        }
+
+        [Test]
+        public async Task ExplicitExportWithAudioLinkEnabledReimportsWithoutChangingThePreviewOrWarning()
+        {
+            using var fixture = new AttachmentConnectionTests.Fixture();
+            var skins = fixture.Source.GetComponentsInChildren<SkinnedMeshRenderer>();
+            var extra = new Material(Shader.Find("lilToon"));
+            Vrm10Instance imported = null;
+            try
+            {
+                skins[0].sharedMaterial.shader = Shader.Find("lilToon");
+                skins[0].sharedMaterial.SetFloat("_UseAudioLink", 1);
+                skins[0].sharedMaterial.SetFloat("_AudioLink2Vertex", 1);
+                extra.SetFloat("_UseAudioLink", 1); extra.SetFloat("_AudioLink2Emission", 1);
+                skins[1].sharedMaterial = extra;
+                using var session = new ExperimentalExpressionCaptureSession(fixture.Source, replayInstalledDefaults: false);
+                session.SetWeight(0, 0, 90); session.Capture("Smile");
+                var warnings = new System.Collections.Generic.List<string>();
+                var bytes = session.Export("Test", "Tests", warnings);
+                Assert.That(warnings.Any(warning => warning.IndexOf("AudioLink", StringComparison.OrdinalIgnoreCase) >= 0), Is.False);
+                Assert.That(session.Channels.All(channel => channel.Renderer.sharedMaterial.GetFloat("_UseAudioLink") == 1), Is.True);
+                Assert.That(skins.All(skin => skin.sharedMaterial.GetFloat("_UseAudioLink") == 1), Is.True);
+                Assert.That(session.Channels[0].Renderer.GetBlendShapeWeight(0), Is.EqualTo(90));
+                using (var data = new GlbBinaryParser(bytes, "audiolink-copy.vrm").Parse())
+                    Assert.That(data.Json.Contains("_UseAudioLink"), Is.False, "External audio controls must not be emitted into the lilToon payload.");
+                imported = await Vrm10.LoadBytesAsync(bytes, canLoadVrm0X: false, awaitCaller: new ImmediateCaller());
+                Assert.That(imported, Is.Not.Null);
+                Assert.That(imported.Vrm.Expression.CustomClips.Any(clip => clip.name == "Smile"), Is.True);
+            }
+            finally
+            {
+                if (imported != null) Object.DestroyImmediate(imported.gameObject);
+                Object.DestroyImmediate(extra);
+            }
+        }
+
+        [Test]
         public void RecordingAndSettingsRoundTripKeepIndependentMeshesAndSourceUntouched()
         {
             using var fixture = new AttachmentConnectionTests.Fixture();

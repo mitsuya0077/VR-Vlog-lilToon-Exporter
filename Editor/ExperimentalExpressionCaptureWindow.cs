@@ -38,11 +38,10 @@ namespace VRVlog.LilToonExporter
         System.Collections.Generic.List<ExperimentalExpressionCaptureSession.ClipRecommendation> recommendations;
         [SerializeField] AvatarLicenseOptions licenseOptions = new AvatarLicenseOptions();
 
-        [MenuItem("VR Vlog/表情・ポーズを指定して書き出す", false, 110)]
-        internal static void Open()
+        public static void Open()
         {
             var window = GetWindow<ExperimentalExpressionCaptureWindow>();
-            window.titleContent = new GUIContent("表情・ポーズ書き出し");
+            window.titleContent = new GUIContent("VRM書き出し");
             window.minSize = new Vector2(600, 760);
         }
 
@@ -65,7 +64,7 @@ namespace VRVlog.LilToonExporter
         {
             using (new EditorGUILayout.VerticalScope(new GUIStyle { padding = new RectOffset(16, 16, 12, 12) }))
             {
-                EditorGUILayout.LabelField("表情・ポーズを書き出す", EditorStyles.boldLabel);
+                EditorGUILayout.LabelField("VRMを書き出す", EditorStyles.boldLabel);
                 EditorGUILayout.Space(8);
                 var blocked = pending != null || EditorApplication.isPlayingOrWillChangePlaymode;
                 if (EditorApplication.isPlayingOrWillChangePlaymode)

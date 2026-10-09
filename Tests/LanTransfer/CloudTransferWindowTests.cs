@@ -16,16 +16,16 @@ namespace VRVlog.LilToonExporter.LanTransfer.Tests
         private const BindingFlags Instance = BindingFlags.NonPublic | BindingFlags.Instance;
 
         [Test]
-        public void DevelopmentAvailabilityAndMenuRequireTheExplicitDefineWhileLanStaysDisabled()
+        public void TransferAvailabilityRemainsEnabledWithoutAddingAnotherToolbarMenu()
         {
             Assert.That(LanTransferAvailability.Enabled, Is.False);
             var menu = typeof(CloudVrmTransferWindow).GetMethod("OpenDevelopmentTransfer", BindingFlags.NonPublic | BindingFlags.Static);
 #if UNITY_EDITOR
             Assert.That(menu, Is.Not.Null);
-            Assert.That(menu.GetCustomAttributes(typeof(MenuItem), false).Length, Is.EqualTo(1));
+            Assert.That(menu.GetCustomAttributes(typeof(MenuItem), false).Length, Is.EqualTo(0));
             var validation = typeof(CloudVrmTransferWindow).GetMethod("CanOpenDevelopmentTransfer", BindingFlags.NonPublic | BindingFlags.Static);
             Assert.That(validation, Is.Not.Null);
-            Assert.That(validation.GetCustomAttributes(typeof(MenuItem), false).Length, Is.EqualTo(1));
+            Assert.That(validation.GetCustomAttributes(typeof(MenuItem), false).Length, Is.EqualTo(0));
             Assert.That(validation.Invoke(null, null), Is.EqualTo(CloudTransferAvailability.Enabled));
             Assert.That(CloudVrmTransferWindow.IsAvailable, Is.EqualTo(CloudTransferAvailability.Enabled));
 #else

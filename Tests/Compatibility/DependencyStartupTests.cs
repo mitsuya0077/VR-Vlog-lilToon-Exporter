@@ -11,6 +11,16 @@ namespace VRVlog.LilToonExporter.Tests
     public class DependencyStartupTests
     {
         [Test]
+        public void ToolbarContainsOnlyTheVrmExportEntry()
+        {
+            var entries = TypeCache.GetMethodsWithAttribute<MenuItem>()
+                .SelectMany(method => method.GetCustomAttributes(typeof(MenuItem), false).Cast<MenuItem>())
+                .Where(item => item.menuItem.StartsWith("VR Vlog/", StringComparison.Ordinal))
+                .Select(item => item.menuItem).ToArray();
+            Assert.That(entries, Is.EqualTo(new[] { "VR Vlog/VRMを書き出す" }));
+        }
+
+        [Test]
         public void MenuResolvesBackendWithoutInitializationRegistration()
         {
             var expected = Environment.GetEnvironmentVariable("VRVLOG_TEST_UNIVRM");
@@ -31,11 +41,12 @@ namespace VRVlog.LilToonExporter.Tests
                     refresh.Invoke(null, null);
                 }
                 legacyField?.SetValue(null, null);
-                Assert.That(EditorApplication.ExecuteMenuItem("VR Vlog/lilToon VRM 1.0を書き出す"), Is.True);
+                Assert.That(EditorApplication.ExecuteMenuItem("VR Vlog/VRMを書き出す"), Is.True);
                 var exporter = Resources.FindObjectsOfTypeAll<EditorWindow>()
-                    .SingleOrDefault(w => w.GetType().FullName == "VRVlog.LilToonExporter.LilToonExporterWindow");
+                    .SingleOrDefault(w => w.GetType().FullName == "VRVlog.LilToonExporter.ExperimentalExpressionCaptureWindow");
                 var diagnostics = Resources.FindObjectsOfTypeAll<DependencyDiagnosticsWindow>();
                 Assert.That(exporter != null, Is.EqualTo(supported));
+                if (exporter != null) Assert.That(exporter.titleContent.text, Is.EqualTo("VRM書き出し"));
                 Assert.That(diagnostics.Length, Is.EqualTo(supported ? 0 : 1));
             }
             finally

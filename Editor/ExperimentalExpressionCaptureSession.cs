@@ -472,7 +472,7 @@ namespace VRVlog.LilToonExporter
                 var bytes = UniVrmOneClickExporter.Export(exportCopy, avatarName, author, warnings,
                     exporterVersion: UnityEditor.PackageManager.PackageInfo.FindForAssembly(typeof(UniVrmOneClickExporter).Assembly)?.version ?? "0.11.14",
                     lilToonVersion: "2.3.4", gimmickOptions: new ExportGimmickOptions { AutoExclude = false }, blinkOptions: blinkOptions,
-                    licenseOptions: licenseOptions ?? new AvatarLicenseOptions());
+                    licenseOptions: licenseOptions ?? new AvatarLicenseOptions(), disableAudioLink: true);
                 return InjectManualPoses(bytes);
             }
             finally

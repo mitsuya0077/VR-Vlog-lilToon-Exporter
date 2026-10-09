@@ -14,7 +14,7 @@ namespace VRVlog.LilToonExporter.Compatibility
     public static class DependencyDiagnostics
     {
         const string BackendAssembly = "VRVlog.LilToonExporter.Editor";
-        const string BackendType = "VRVlog.LilToonExporter.LilToonExporterWindow";
+        const string BackendType = "VRVlog.LilToonExporter.ExperimentalExpressionCaptureWindow";
         const string BackendDefinition = "Packages/com.vrvlog.liltoon-vrm-exporter/Editor/VRVlog.LilToonExporter.Editor.asmdef";
         static Action openExporter;
         static string backendError;
@@ -124,14 +124,13 @@ namespace VRVlog.LilToonExporter.Compatibility
             return text.ToString();
         }
 
-        [MenuItem("VR Vlog/lilToon VRM 1.0を書き出す")]
+        [MenuItem("VR Vlog/VRMを書き出す")]
         public static void Open()
         {
             if (StartupError(Installed()) == null) OpenExporter();
             else OpenDiagnostics();
         }
 
-        [MenuItem("VR Vlog/動作環境を確認")]
         public static void OpenDiagnostics() => EditorWindow.GetWindow<DependencyDiagnosticsWindow>(true, T("VR Vlog 動作環境"));
     }
 

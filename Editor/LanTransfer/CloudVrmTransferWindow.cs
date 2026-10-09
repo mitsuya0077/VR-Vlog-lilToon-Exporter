@@ -24,7 +24,6 @@ namespace VRVlog.LilToonExporter.LanTransfer
         private Vector2 scroll;
 
 #if UNITY_EDITOR
-        [MenuItem("VR Vlog/スマホに送る...")]
         private static void OpenDevelopmentTransfer()
         {
             CloudTransferAvailability.RequireEnabled();
@@ -37,7 +36,6 @@ namespace VRVlog.LilToonExporter.LanTransfer
             }
         }
 
-        [MenuItem("VR Vlog/スマホに送る...", true)]
         private static bool CanOpenDevelopmentTransfer() => IsAvailable;
 #endif
         public static void OpenSavedVrmForDevelopment(string savedVrmPath)
