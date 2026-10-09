@@ -307,6 +307,10 @@ namespace VRVlog.LilToonExporter
             private readonly Func<string, bool> originalExcludedPath;
             internal Func<string, bool> PreparedExcludedPath { get; }
             internal bool DeferPermanentOverrides { get; }
+            // Opt-in completed-face capture supplies its native playback path.
+            // Ordinary exports retain their existing proof-based evaluation.
+            internal Func<GameObject, VrChatExpressionMenu.Source, AnimatorState, int,
+                List<VrChatExpressionMenu.MorphValue>> CompletedFacePlayer;
             private readonly Dictionary<VrChatExpressionMenu.Entry, PlayerSelection> deferredEntries =
                 new Dictionary<VrChatExpressionMenu.Entry, PlayerSelection>();
             private object objectRegistry;
@@ -384,7 +388,13 @@ namespace VRVlog.LilToonExporter
                                 EffectiveClip(captured.Runtime, captured.State) != captured.Motion ||
                                 !captured.MotionProof.Matches(captured.Motion)))
                             throw new InvalidOperationException("FaceEmoの表情FXレイヤーが評価前に変わりました。");
-                        VrChatExpressionSampler.ApplyPermanentOverrides(prepared, captured.Runtime, entry,
+                        if (CompletedFacePlayer != null && captured.State != null && captured.Layer.HasValue)
+                        {
+                            var completed = CompletedFacePlayer(prepared, source, captured.State, captured.Layer.Value);
+                            entry.Values.Clear(); entry.Values.AddRange(completed);
+                            entry.Animation.Clear(); entry.Duration = 0;
+                        }
+                        else VrChatExpressionSampler.ApplyPermanentOverrides(prepared, captured.Runtime, entry,
                             captured.Layer, captured.WriteDefaults, PreparedExcludedPath, metadata: source, sourceState: captured.State);
                     }
                     catch (InvalidOperationException error) { entry.Error = error.Message; }

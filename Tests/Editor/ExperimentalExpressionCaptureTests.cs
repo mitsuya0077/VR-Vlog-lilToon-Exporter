@@ -152,8 +152,15 @@ namespace VRVlog.LilToonExporter.Tests
             finally { if (imported != null) Object.DestroyImmediate(imported.gameObject); }
         }
 
-        [Test]
-        public void ExistingMenuCandidateCanBeDiscoveredPreviewedAndCapturedWithoutChangingItsController()
+        [TestCase("none")]
+        [TestCase("synced")]
+        [TestCase("neutral")]
+        [TestCase("display")]
+        [TestCase("delayed")]
+        [TestCase("audio")]
+        [TestCase("audio-reactive")]
+        [TestCase("unknown")]
+        public void ExistingMenuCandidateCanBeDiscoveredPreviewedAndCapturedWithoutChangingItsController(string callback)
         {
             var descriptorType = Sdk("VRC.SDK3.Avatars.Components.VRCAvatarDescriptor");
             Assert.That(descriptorType, Is.Not.Null, "This experiment is tested with the real VRChat SDK.");
@@ -167,11 +174,26 @@ namespace VRVlog.LilToonExporter.Tests
                 var machine = controller.layers[0].stateMachine;
                 var neutral = machine.AddState("Neutral"); neutral.writeDefaultValues = false;
                 var smile = machine.AddState("Smile"); smile.writeDefaultValues = false;
+                if (callback.StartsWith("audio", StringComparison.Ordinal)) smile.AddStateMachineBehaviour(Sdk("VRC.SDK3.Avatars.Components.VRCAnimatorPlayAudio"));
+                if (callback == "unknown") Assert.That(smile.AddStateMachineBehaviour<UnknownStateCallbackProbe>(), Is.Not.Null);
                 var clip = new AnimationClip();
-                AnimationUtility.SetEditorCurve(clip, EditorCurveBinding.FloatCurve("Front", typeof(SkinnedMeshRenderer), "blendShape.Hair detail"), AnimationCurve.Constant(0, 1, 75));
+                var expectedWeight = callback == "neutral" ? 35f : callback == "synced" ? 85f : 75f;
+                AnimationUtility.SetEditorCurve(clip, EditorCurveBinding.FloatCurve("Front", typeof(SkinnedMeshRenderer), "blendShape.Hair detail"), AnimationCurve.Constant(0, 1, callback == "neutral" ? 35 : 75));
+                if (callback == "display") AnimationUtility.SetEditorCurve(clip, EditorCurveBinding.FloatCurve("Front", typeof(SkinnedMeshRenderer), "m_Enabled"), AnimationCurve.Constant(0, 1, 0));
+                if (callback == "delayed") AnimationUtility.SetEditorCurve(clip, EditorCurveBinding.FloatCurve("Front", typeof(SkinnedMeshRenderer), "blendShape.Hair detail"),
+                    new AnimationCurve(new Keyframe(0, 75), new Keyframe(10, 75), new Keyframe(11, 95)));
                 AssetDatabase.AddObjectToAsset(clip, controller); smile.motion = clip; machine.defaultState = neutral;
                 var transition = neutral.AddTransition(smile); transition.hasExitTime = false; transition.duration = 0;
                 transition.AddCondition(AnimatorConditionMode.Equals, 1, "Face");
+                if (callback == "synced")
+                {
+                    controller.AddLayer("Synced"); var synced = controller.layers;
+                    synced[1].syncedLayerIndex = 0; synced[1].defaultWeight = .5f; controller.layers = synced;
+                    var overrideClip = new AnimationClip();
+                    AnimationUtility.SetEditorCurve(overrideClip, EditorCurveBinding.FloatCurve("Front", typeof(SkinnedMeshRenderer), "blendShape.Hair detail"), AnimationCurve.Constant(0, 1, 95));
+                    AssetDatabase.AddObjectToAsset(overrideClip, controller);
+                    controller.SetStateEffectiveMotion(smile, overrideClip, 1);
+                }
                 var menu = ScriptableObject.CreateInstance(Sdk("VRC.SDK3.Avatars.ScriptableObjects.VRCExpressionsMenu"));
                 AssetDatabase.CreateAsset(menu, folder + "/Menu.asset");
                 using (var data = new SerializedObject(menu))
@@ -194,12 +216,38 @@ namespace VRVlog.LilToonExporter.Tests
                     layer.FindPropertyRelative("animatorController").objectReferenceValue = controller;
                     data.ApplyModifiedPropertiesWithoutUndo();
                 }
+                if (callback == "audio-reactive")
+                {
+                    var material = fixture.Source.transform.Find("Front").GetComponent<SkinnedMeshRenderer>().sharedMaterial;
+                    material.shader = Shader.Find("lilToon"); material.SetFloat("_UseAudioLink", 1);
+                    Assert.Throws<InvalidOperationException>(() => new ExperimentalExpressionCaptureSession(fixture.Source));
+                    Assert.That(smile.behaviours.Length, Is.EqualTo(1), "Refusing an audio-reactive face cannot remove the source callback.");
+                    return;
+                }
                 using var session = new ExperimentalExpressionCaptureSession(fixture.Source);
                 session.DiscoverCandidates();
                 var candidate = session.Candidates.Entries.First(entry => entry.Name == "Smile");
+                Assert.That(smile.behaviours.Length, Is.EqualTo(callback == "audio" || callback == "unknown" ? 1 : 0), "Source callbacks remain on their original asset.");
+                if (callback == "unknown" || callback == "display" || callback == "delayed")
+                {
+                    Assert.That(candidate.Error, Is.Not.Null, "Unknown callbacks must not be silently omitted.");
+                    Assert.Throws<InvalidOperationException>(() => session.PreviewCandidate(candidate));
+                    return;
+                }
                 Assert.That(candidate.Error, Is.Null);
-                session.PreviewCandidate(candidate); session.Capture("from menu");
-                Assert.That(session.Channels.First(channel => channel.Path == "Front").Renderer.GetBlendShapeWeight(0), Is.EqualTo(75));
+                session.RestoreBaseline();
+                Assert.Throws<InvalidOperationException>(() => session.ImportCandidates(new[] { candidate, new VrChatExpressionMenu.Entry { Name = "foreign" } }));
+                Assert.That(session.Expressions.Count, Is.Zero, "Failed imports never publish partially captured faces.");
+                Assert.That(session.Channels.First(channel => channel.Path == "Front").Renderer.GetBlendShapeWeight(0), Is.EqualTo(35));
+                var imported = session.ImportCandidates(new[] { candidate });
+                Assert.That(imported.Imported, Is.EqualTo(new[] { "Smile" }));
+                Assert.That(session.ImportCandidates(new[] { candidate }).Imported, Is.Empty, "Retrying import cannot duplicate a face.");
+                Assert.That(session.Expressions.Single().Name, Is.EqualTo("Smile"));
+                Assert.That(session.Channels.First(channel => channel.Path == "Front").Renderer.GetBlendShapeWeight(0), Is.EqualTo(35));
+                session.PreviewCandidate(candidate);
+                if (callback == "neutral") Assert.Throws<InvalidOperationException>(() => session.Capture("manual neutral"));
+                else session.Capture("from menu");
+                Assert.That(session.Channels.First(channel => channel.Path == "Front").Renderer.GetBlendShapeWeight(0), Is.EqualTo(expectedWeight));
                 Assert.That(controller.layers[0].stateMachine.states.Length, Is.EqualTo(2));
                 Assert.That(fixture.Source.transform.Find("Front").GetComponent<SkinnedMeshRenderer>().GetBlendShapeWeight(0), Is.EqualTo(35));
             }
@@ -223,4 +271,5 @@ namespace VRVlog.LilToonExporter.Tests
 
         static Type Sdk(string name) => AppDomain.CurrentDomain.GetAssemblies().Select(assembly => assembly.GetType(name)).FirstOrDefault(type => type != null);
     }
+
 }

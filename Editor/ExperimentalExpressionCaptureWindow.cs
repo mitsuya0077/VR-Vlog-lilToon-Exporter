@@ -20,6 +20,9 @@ namespace VRVlog.LilToonExporter
         int rendererIndex, candidateIndex;
         bool automaticBlink = true;
         bool showLicenseSettings;
+        readonly System.Collections.Generic.Dictionary<VrChatExpressionMenu.Entry, bool> selectedCandidates =
+            new System.Collections.Generic.Dictionary<VrChatExpressionMenu.Entry, bool>();
+        Vector2 candidateScroll;
         [SerializeField] AvatarLicenseOptions licenseOptions = new AvatarLicenseOptions();
 
         [MenuItem("VR Vlog/実験/表情を記録して書き出す", false, 150)]
@@ -48,7 +51,7 @@ namespace VRVlog.LilToonExporter
         void OnGUI()
         {
             pageScroll = EditorGUILayout.BeginScrollView(pageScroll);
-            EditorGUILayout.HelpBox("実験用の固定表情記録です。コピーのBlendShapeを調整し、完成した顔を保存します。基準は準備後の現在の顔です。", MessageType.Info);
+            EditorGUILayout.HelpBox("導入済みの表情をコピー上で読み込み、元の名前で収録します。読み込んだ顔を確認してからVRMへ書き出せます。", MessageType.Info);
             using (new EditorGUI.DisabledScope(pending != null || EditorApplication.isPlayingOrWillChangePlaymode))
             {
                 using (new EditorGUI.DisabledScope(session != null))
@@ -126,9 +129,12 @@ namespace VRVlog.LilToonExporter
             if (GUILayout.Button("基準の顔に戻す")) Queue(session.RestoreBaseline);
             EditorGUILayout.EndHorizontal();
 
-            if (GUILayout.Button("既存の表情候補を読み込む")) Queue(() => {
+            if (GUILayout.Button("既存の表情を読み込む")) Queue(() => {
                 session.DiscoverCandidates(); candidateIndex = 0; candidateTime = 0;
-                status = "候補 " + session.Candidates.Entries.Count + "件を取得しました。選んでプレビューし、必要なものを記録してください。";
+                selectedCandidates.Clear();
+                foreach (var candidate in session.Candidates.Entries)
+                    selectedCandidates[candidate] = session.SelectCandidateByDefault(candidate);
+                status = "候補 " + session.Candidates.Entries.Count + "件を取得しました。取り込む表情を確認してください。";
             });
             var entries = session.Candidates?.Entries;
             if (entries != null && entries.Count > 0)
@@ -142,6 +148,21 @@ namespace VRVlog.LilToonExporter
                 if (!string.IsNullOrEmpty(entry.Error)) EditorGUILayout.HelpBox(entry.Error, MessageType.Warning);
                 using (new EditorGUI.DisabledScope(entry.Error != null))
                     if (GUILayout.Button("候補の顔をプレビュー")) Queue(() => { session.PreviewCandidate(entry, candidateTime); expressionName = entry.Name; });
+                candidateScroll = EditorGUILayout.BeginScrollView(candidateScroll, GUILayout.Height(155));
+                foreach (var candidate in entries)
+                {
+                    using (new EditorGUI.DisabledScope(candidate.Error != null || candidate.Unevaluated.Count != 0 || candidate.Animation.Count != 0))
+                    {
+                        selectedCandidates.TryGetValue(candidate, out var selectedValue);
+                        selectedCandidates[candidate] = EditorGUILayout.ToggleLeft(candidate.Name, selectedValue);
+                    }
+                }
+                EditorGUILayout.EndScrollView();
+                if (GUILayout.Button("選んだ表情をまとめて取り込む")) Queue(() => {
+                    var result = session.ImportCandidates(entries.Where(candidate => selectedCandidates.TryGetValue(candidate, out var selectedValue) && selectedValue));
+                    status = "取り込み " + result.Imported.Count + "件、省略 " + result.Skipped.Count + "件。記録した表情の「確認」で顔を確認できます。" +
+                        (result.Skipped.Count == 0 ? "" : "\n" + string.Join("\n", result.Skipped));
+                });
             }
 
             rendererIndex = EditorGUILayout.Popup("調整するメッシュ", rendererIndex, session.Channels.Select(channel => channel.Path.Length == 0 ? "(root)" : channel.Path).ToArray());
@@ -228,6 +249,7 @@ namespace VRVlog.LilToonExporter
             // PreviewRenderUtility owns the preview scene; session owns prepared assets.
             preview?.Cleanup(); preview = null;
             session?.Dispose(); session = null;
+            selectedCandidates.Clear();
         }
     }
 }

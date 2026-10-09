@@ -23,6 +23,7 @@ namespace VRVlog.LilToonExporter
         internal sealed class Pose
         {
             public string Name;
+            public string InstalledSourceId;
             public List<Row> Rows = new List<Row>();
         }
 
@@ -53,6 +54,8 @@ namespace VRVlog.LilToonExporter
         internal Pose Baseline { get; private set; }
         readonly List<Mesh> ownedMeshes = new List<Mesh>();
         NdmfExportPreparation preparation;
+        ExperimentalExpressionControllerScope controllers;
+        FaceEmoExpressions.BindingSnapshot faceEmoBindings;
         Hash128 sourceStamp;
         Pose preparedRest;
         bool disposed;
@@ -72,8 +75,15 @@ namespace VRVlog.LilToonExporter
                 PoseExportSession.RemoveAplFromCopy(source, Copy);
                 // As with the blink preview, keep Transforming's committed meshes and FX.
                 // Optimizing is deliberately deferred until generated expression targets exist.
+                faceEmoBindings = FaceEmoExpressions.Capture(source, Copy, deferPermanentOverrides: true);
+                faceEmoBindings.CompletedFacePlayer = (avatar, metadata, state, layer) =>
+                    ExperimentalInstalledExpressionPlayer.Sample(avatar, metadata, new Dictionary<string, float>(), state, layer);
                 preparation = NdmfExportPreparation.Prepare(source, Copy, Warnings);
+                faceEmoBindings.RebindPrepared(preparation.PreparedRendererFor, preparation.ObjectRegistry, preparation.IsolatedCopyOf);
+                controllers = new ExperimentalExpressionControllerScope(Copy, Warnings);
                 foreach (var behaviour in Copy.GetComponentsInChildren<Behaviour>(true)) behaviour.enabled = false;
+                foreach (var skin in Copy.GetComponentsInChildren<SkinnedMeshRenderer>(true))
+                { skin.updateWhenOffscreen = true; skin.forceMatrixRecalculationPerRender = true; }
                 foreach (var renderer in ExportRendererSelection.Enumerate(Copy).OfType<SkinnedMeshRenderer>())
                 {
                     var mesh = renderer.sharedMesh;
@@ -87,6 +97,19 @@ namespace VRVlog.LilToonExporter
                         MeshHash = MeshStamp(mesh) });
                 }
                 if (Channels.Count == 0) throw new InvalidOperationException("表示中のメッシュにBlendShapeがありません。");
+                var installed = VrChatExpressionMenu.Read(Copy);
+                if (installed.Controller != null)
+                {
+                    NeutralInputProof.Read(Copy, installed);
+                    try
+                    {
+                        var neutral = Snapshot("FXの基準表情");
+                        foreach (var value in ExperimentalInstalledExpressionPlayer.Sample(Copy, installed, new Dictionary<string, float>()))
+                            Set(neutral, value.Path, value.Shape, value.Weight);
+                        ValidatePose(neutral); ApplyUnchecked(neutral);
+                    }
+                    catch (InvalidOperationException error) { Warnings.Add("FXの基準表情を収録できませんでした: " + error.Message); }
+                }
                 preparedRest = Snapshot("準備後の顔");
                 Baseline = Snapshot("基準の顔");
                 // Settle source read caches before guarding subsequent edits.
@@ -113,10 +136,24 @@ namespace VRVlog.LilToonExporter
             try
             {
                 ApplyUnchecked(preparedRest);
-                var result = VrChatExpressionSampler.Analyze(Copy);
+                var result = VrChatExpressionMenu.Read(Copy);
+                NeutralInputProof.Read(Copy, result);
+                foreach (var entry in result.Entries)
+                {
+                    if (entry.Error != null) continue;
+                    if (EditorUtility.DisplayCancelableProgressBar("導入済みの表情を収録中", entry.Name,
+                        (float)result.Entries.IndexOf(entry) / Mathf.Max(1, result.Entries.Count))) throw new OperationCanceledException();
+                    try { entry.Values.AddRange(ExperimentalInstalledExpressionPlayer.Sample(Copy, result, entry.Parameters)); }
+                    catch (InvalidOperationException error) { entry.Error = error.Message; }
+                }
+                // Registered FaceEmo branches can exist outside the avatar root,
+                // including gesture variants not exposed by a generated menu.
+                FaceEmoExpressions.Add(Copy, result, authoringSource: Source, bindings: faceEmoBindings);
+                using (var bindings = new PreparedExpressionBindings(Copy, result))
+                    FaceEmoExpressions.ApplyPreparedDefaultFace(Copy, result, bindings, registeredBindings: faceEmoBindings);
                 Candidates = result;
             }
-            finally { ApplyUnchecked(current); }
+            finally { ApplyUnchecked(current); EditorUtility.ClearProgressBar(); }
         }
 
         internal void PreviewCandidate(VrChatExpressionMenu.Entry entry, double time = 0)
@@ -134,6 +171,64 @@ namespace VRVlog.LilToonExporter
             foreach (var value in entry.Animation) Set(pose, value.Path, value.Shape, (float)value.Curve.Evaluate(time));
             ValidatePose(pose);
             ApplyUnchecked(pose);
+        }
+
+        internal sealed class ImportResult
+        {
+            internal readonly List<string> Imported = new List<string>();
+            internal readonly List<string> Skipped = new List<string>();
+        }
+
+        internal bool SelectCandidateByDefault(VrChatExpressionMenu.Entry entry)
+        {
+            if (entry.Error != null || entry.Unevaluated.Count != 0 || entry.Animation.Count != 0) return false;
+            foreach (var value in entry.Values)
+            {
+                var row = Baseline.Rows.SingleOrDefault(item => item.Path == value.Path);
+                var shape = row == null ? -1 : Array.IndexOf(row.Shapes, value.Shape);
+                if (shape >= 0 && Mathf.Abs(row.Weights[shape] - value.Weight) > .001f) return true;
+            }
+            // A named authored neutral face still belongs in the expression
+            // catalog; unchanged settings toggles remain unchecked by default.
+            var label = entry.Name.Split('/').Last().Trim();
+            return entry.Id?.StartsWith("faceemo/", StringComparison.Ordinal) == true ||
+                Candidates.Controller != null && Candidates.Controller.animationClips.Any(clip => clip.name == label &&
+                    AnimationUtility.GetCurveBindings(clip).Any(binding => binding.type == typeof(SkinnedMeshRenderer) &&
+                        binding.propertyName.StartsWith("blendShape.", StringComparison.Ordinal)));
+        }
+
+        internal ImportResult ImportCandidates(IEnumerable<VrChatExpressionMenu.Entry> entries)
+        {
+            RequireValid();
+            if (Candidates == null) throw new InvalidOperationException("既存の表情を先に読み込んでください。");
+            var result = new ImportResult();
+            var current = Snapshot("現在の顔");
+            var staged = new List<Pose>();
+            var names = new HashSet<string>(Expressions.Select(pose => pose.Name), StringComparer.Ordinal);
+            try
+            {
+                foreach (var entry in entries)
+                {
+                    if (!Candidates.Entries.Contains(entry)) throw new InvalidOperationException("別のコピーの表情が選択されています。");
+                    if (entry.Error != null || entry.Unevaluated.Count > 0)
+                    { result.Skipped.Add(entry.Name + ": " + (entry.Error ?? "未解決の変形")); continue; }
+                    if (entry.Animation.Count != 0)
+                    { result.Skipped.Add(entry.Name + ": 動く表情はプレビューで収録時刻を指定してください。"); continue; }
+                    PreviewCandidate(entry);
+                    var name = ValidateName(entry.Name);
+                    var pose = Snapshot(name);
+                    pose.InstalledSourceId = entry.Id;
+                    if (names.Contains(name))
+                    { result.Skipped.Add(name + ": 同名の表情を登録済みです。"); continue; }
+                    if (Expressions.Count + staged.Count >= MaximumExpressions)
+                        throw new InvalidOperationException("記録できる表情は64件までです。取り込む候補を絞ってください。");
+                    names.Add(name); staged.Add(pose); result.Imported.Add(name);
+                }
+                // A failure never publishes half an import or changes the preview.
+                Expressions.AddRange(staged);
+                return result;
+            }
+            finally { ApplyUnchecked(current); }
         }
 
         static void Set(Pose pose, string path, string shape, float weight)
@@ -278,7 +373,8 @@ namespace VRVlog.LilToonExporter
             foreach (var pose in Expressions)
             {
                 ValidatePose(pose);
-                if (!HasGeometryChange(pose)) throw new InvalidOperationException(pose.Name + ": 基準の顔と形状が同じです。");
+                if (!HasGeometryChange(pose) && string.IsNullOrEmpty(pose.InstalledSourceId))
+                    throw new InvalidOperationException(pose.Name + ": 基準の顔と形状が同じです。");
             }
             var exportCopy = Object.Instantiate(Copy);
             exportCopy.name = Copy.name;
@@ -332,6 +428,20 @@ namespace VRVlog.LilToonExporter
                         renderer.SetBlendShapeWeight(renderer.sharedMesh.blendShapeCount - 1, 0);
                         bindings.Add(new MorphTargetBinding(Channels[i].Path, renderer.sharedMesh.blendShapeCount - 1, 1f));
                     }
+                    if (bindings.Count == 0)
+                    {
+                        // Preserve a named installed neutral face. A zero-delta
+                        // target also keeps existing VRM/app morph-based catalogs
+                        // aware of the entry and its override/reset semantics.
+                        var renderer = VrChatExpressionSampler.FindRenderer(exportCopy, Channels[0].Path);
+                        var target = targetPrefix + serial++;
+                        addedBytes += Channels[0].Mesh.vertexCount * 36L;
+                        if (addedBytes > 128L * 1024 * 1024) throw new InvalidOperationException("追加表情の形状データが128 MiBを超えます。");
+                        AvatarBaseShape.AppendExpression(Channels[0].Mesh, renderer.sharedMesh, target,
+                            Baseline.Rows[0].Weights, Baseline.Rows[0].Weights, PlayerSettings.legacyClampBlendShapeWeights);
+                        renderer.SetBlendShapeWeight(renderer.sharedMesh.blendShapeCount - 1, 0);
+                        bindings.Add(new MorphTargetBinding(Channels[0].Path, renderer.sharedMesh.blendShapeCount - 1, 1f));
+                    }
                     expression.MorphTargetBindings = bindings.ToArray();
                     settings.Expression.CustomClips.Add(expression);
                 }
@@ -356,7 +466,7 @@ namespace VRVlog.LilToonExporter
             return name;
         }
 
-        static Pose ClonePose(Pose pose) => new Pose { Name = pose.Name, Rows = pose.Rows.Select(row => new Row {
+        static Pose ClonePose(Pose pose) => new Pose { Name = pose.Name, InstalledSourceId = pose.InstalledSourceId, Rows = pose.Rows.Select(row => new Row {
             Path = row.Path, Shapes = (string[])row.Shapes.Clone(), Weights = (float[])row.Weights.Clone() }).ToList() };
 
         static string MeshStamp(Mesh mesh)
@@ -396,6 +506,7 @@ namespace VRVlog.LilToonExporter
             disposed = true;
             if (Copy != null) Object.DestroyImmediate(Copy);
             Copy = null;
+            controllers?.Dispose(); controllers = null;
             preparation?.Dispose(); preparation = null;
             foreach (var mesh in ownedMeshes) if (mesh != null) Object.DestroyImmediate(mesh);
             ownedMeshes.Clear();
