@@ -1442,7 +1442,9 @@ namespace VRVlog.LilToonExporter.Tests
             var beforeMesh = EditorJsonUtility.ToJson(fixture.Mesh);
             var beforeController = EditorJsonUtility.ToJson(fx);
             var beforeDescriptor = EditorJsonUtility.ToJson(menus.Descriptor);
-            var expectedNeutral = NativePose(fixture.Source, fx, "Front", new Dictionary<string, int> { ["Face"] = 0, ["GestureRight"] = 0 });
+            var expectedNeutral = (Weights: Enumerable.Range(0, sourceFront.sharedMesh.blendShapeCount)
+                .ToDictionary(index => sourceFront.sharedMesh.GetBlendShapeName(index), sourceFront.GetBlendShapeWeight),
+                Vertices: WorldVertices(sourceFront));
             var expectedMenu = NativePose(fixture.Source, fx, "Front", new Dictionary<string, int> { ["Face"] = 1, ["GestureRight"] = 0 });
             var expectedGesture = NativePose(fixture.Source, fx, "Front", new Dictionary<string, int> { ["Face"] = 0, ["GestureRight"] = 2 });
             var sampledNeutral = NeutralShapeSampler.Sample(fixture.Source);

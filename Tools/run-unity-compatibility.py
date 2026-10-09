@@ -557,7 +557,7 @@ BEHAVIOR_CASES = {
         'IndependentLoopOnTheInfluencingSkinBoneKeepsPreparedGeometryAndAuthoredEndpoints': 1,
         'OneClickManualBlinkPreservesCoupledPreparedAppearanceAndAbsoluteClosure': 1,
         'OneClickKeepsSourceTrackingEndpointsAndPreparedRestAfterMarkerRemoval': 1,
-        'AutomaticBlinkUsesFxOpenNeutralWhenSerializedUnifiedClosureIsFullyClosed': 2,
+        'ClosedPreparedEyesRequireAdjustmentWhenInitialFxIsSkipped': 2,
         'NdmfGeneratedShapeAndReboundFxUsePreparedMeshAndRendererPathInRealVrm': 8,
     },
     'NeutralShapePipelineTests': {

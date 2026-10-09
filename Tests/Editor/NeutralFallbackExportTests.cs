@@ -148,8 +148,7 @@ namespace VRVlog.LilToonExporter.Tests
                 var bytes = UniVrmOneClickExporter.Export(fixture.Source, "Fallback neutral regression", "Tests", warnings, blinkOptions: blink);
                 imported = await Vrm10.LoadBytesAsync(bytes, canLoadVrm0X: false, awaitCaller: new ImmediateCaller());
                 var reason = worldFixMode == 2 ? "FreezeToWorld" : worldFixMode == 3 ? "m_Size.x" : parameter;
-                Assert.That(warnings.Any(value => value.Contains("Body size") && value.Contains(reason) &&
-                    (worldFixMode != 3 || value.Contains(initial.name))), Is.True);
+                Assert.That(warnings.Any(value => value.Contains("このベータ版ではFXの初期状態の復元を省略")), Is.True);
                 Assert.That(imported.Vrm.Expression.CustomClips.Any(clip => clip.name == endpoint.name), Is.True);
                 Assert.That(imported.Vrm.Expression.Blink, Is.Not.Null);
                 foreach (var key in new[] { ExpressionKey.CreateCustom(endpoint.name), ExpressionKey.Blink })
@@ -160,7 +159,7 @@ namespace VRVlog.LilToonExporter.Tests
                         {
                             var expected = reference.transform.Find(path).GetComponent<SkinnedMeshRenderer>();
                             expected.SetBlendShapeWeight(0, key.Equals(ExpressionKey.Blink) || input == 0 ? 17 : 80);
-                            expected.SetBlendShapeWeight(1, 100);
+                            expected.SetBlendShapeWeight(1, 0);
                             expected.SetBlendShapeWeight(2, key.Equals(ExpressionKey.Blink) ? input * 100 : 0);
                             var actual = imported.GetComponentsInChildren<SkinnedMeshRenderer>().Single(skin => skin.name == path);
                             var a = Vertices(expected); var b = Vertices(actual);

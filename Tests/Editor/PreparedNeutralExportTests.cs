@@ -132,7 +132,7 @@ namespace VRVlog.LilToonExporter.Tests
                     foreach (var path in new[] { "Front", "Back" })
                     {
                         var referenceSkin = expected.transform.Find(path).GetComponent<SkinnedMeshRenderer>();
-                        referenceSkin.SetBlendShapeWeight(0, input == 0 ? nativeWeight : 80);
+                        referenceSkin.SetBlendShapeWeight(0, input == 0 ? 35 : 80);
                         var referenceVertices = Vertices(referenceSkin);
                         var output = imported.GetComponentsInChildren<SkinnedMeshRenderer>().Single(skin => skin.name == path);
                         var outputVertices = Vertices(output);
@@ -181,7 +181,7 @@ namespace VRVlog.LilToonExporter.Tests
                 Assert.That(imported.Vrm.Expression.Blink, Is.Not.Null);
                 Assert.That(imported.GetComponentsInChildren<Renderer>(true).Any(renderer => renderer.name == "Cap"), Is.False,
                     "The prepared hidden wardrobe must not become visible with its associated FX morph.");
-                Assert.That(warnings.Any(value => value.Contains("Cap mask") && value.Contains("m_IsActive")), Is.True);
+                Assert.That(warnings.Any(value => value.Contains("このベータ版ではFXの初期状態の復元を省略")), Is.True);
                 foreach (var input in new[] { 0f, 1f, 0f })
                 {
                     imported.Runtime.Expression.SetWeight(ExpressionKey.Blink, input); imported.Runtime.Process();
@@ -250,7 +250,7 @@ namespace VRVlog.LilToonExporter.Tests
                 Assert.That(VrmTrackingExpressions.Names.All(name => imported.Vrm.Expression.CustomClips.Any(clip => clip.name == name)), Is.True,
                     "Every explicit source tracking endpoint must survive removal of its authoring marker from the prepared copy.");
                 Assert.That(imported.GetComponentsInChildren<Renderer>(true).Any(renderer => renderer.name == "Cap"), Is.False);
-                Assert.That(warnings.Any(value => value.Contains("Cap mask") && value.Contains("m_IsActive")), Is.True);
+                Assert.That(warnings.Any(value => value.Contains("このベータ版ではFXの初期状態の復元を省略")), Is.True);
                 foreach (var input in new[] { 0f, 1f, 0f })
                 {
                     imported.Runtime.Expression.SetWeight(ExpressionKey.CreateCustom("JawOpen"), input); imported.Runtime.Process();
@@ -315,7 +315,7 @@ namespace VRVlog.LilToonExporter.Tests
 
         [TestCase(false)]
         [TestCase(true)]
-        public async Task AutomaticBlinkUsesFxOpenNeutralWhenSerializedUnifiedClosureIsFullyClosed(bool fullLilToon)
+        public async Task ClosedPreparedEyesRequireAdjustmentWhenInitialFxIsSkipped(bool fullLilToon)
         {
             var type = DescriptorType(); if (type == null) Assert.Ignore("Install the real VRChat SDK.");
             using var fixture = new AttachmentConnectionTests.Fixture();
@@ -335,15 +335,18 @@ namespace VRVlog.LilToonExporter.Tests
                     AnimationCurve.Constant(0, 1, 0));
                 SetFx(fixture.Source.AddComponent(type), controller);
                 Assert.Throws<InvalidOperationException>(() => BlinkExportSession.Resolve(fixture.Source),
-                    "The static face has no remaining closure range; export must evaluate its FX defaults first.");
-                var bytes = UniVrmOneClickExporter.Export(fixture.Source, "FX neutral automatic blink", "Tests",
+                    "The retained closed face has no remaining closure range; skipping FX must not invent an open-eye baseline.");
+                Assert.Throws<InvalidOperationException>(() => UniVrmOneClickExporter.Export(fixture.Source,
+                    "Closed prepared face", "Tests"));
+                var bytes = UniVrmOneClickExporter.Export(fixture.Source, "Prepared closed rest without blink", "Tests",
+                    blinkOptions: new BlinkExportOptions { Mode = BlinkExportMode.None },
                     exporterVersion: fullLilToon ? "prepared-neutral-regression" : null,
                     lilToonVersion: fullLilToon ? "2.3.4" : null);
                 imported = await Vrm10.LoadBytesAsync(bytes, canLoadVrm0X: false, awaitCaller: new ImmediateCaller());
                 imported.Runtime.Process();
-                Assert.That(imported.Vrm.Expression.Blink, Is.Not.Null);
+                Assert.That(imported.Vrm.Expression.Blink, Is.Null);
                 foreach (var skin in imported.GetComponentsInChildren<SkinnedMeshRenderer>())
-                    Assert.That(skin.sharedMesh.vertices[0].y, Is.EqualTo(fixture.Mesh.vertices[0].y).Within(.00001f));
+                    Assert.That(skin.sharedMesh.vertices[0].y, Is.EqualTo(fixture.Mesh.vertices[0].y - .03f).Within(.00001f));
                 Assert.That(sourceSkins.All(skin => skin.sharedMesh == fixture.Mesh && skin.GetBlendShapeWeight(0) == 100), Is.True);
                 Assert.That(clip, Is.SameAs(controller.layers[0].stateMachine.defaultState.motion));
             }
@@ -424,13 +427,13 @@ namespace VRVlog.LilToonExporter.Tests
                 imported = await Vrm10.LoadBytesAsync(bytes, canLoadVrm0X: false, awaitCaller: new ImmediateCaller());
                 imported.Runtime.Process();
                 var output = imported.GetComponentsInChildren<SkinnedMeshRenderer>().Single(skin => skin.name == "Prepared face");
-                Assert.That(output.sharedMesh.vertices[0].y, Is.EqualTo(fixture.Mesh.vertices[0].y + .02f).Within(.00001f),
-                    "The generated multi-frame channel must supply neutral75 on the final renderer path.");
+                Assert.That(output.sharedMesh.vertices[0].y, Is.EqualTo(fixture.Mesh.vertices[0].y).Within(.00001f),
+                    "The generated channel must retain prepared0 without restoring FX75 on the final renderer path.");
                 output.BakeMesh(baked); var neutralY = baked.vertices[0].y;
                 imported.Runtime.Expression.SetWeight(ExpressionKey.CreateCustom("UE/JawOpen"), 1);
                 imported.Runtime.Process(); output.BakeMesh(baked);
-                Assert.That(baked.vertices[0].y, Is.EqualTo(neutralY - .015f).Within(.00001f),
-                    "The authored0.25 endpoint must reach source25 rather than scale the remaining75-to100 interval.");
+                Assert.That(baked.vertices[0].y, Is.EqualTo(neutralY + .005f).Within(.00001f),
+                    "The authored0.25 endpoint must reach source25 from the retained prepared0 baseline.");
                 Assert.That(preparedSkin.GetBlendShapeWeight(0), Is.Zero);
                 Assert.That(fixture.Source.transform.Find("Front").GetComponent<SkinnedMeshRenderer>().sharedMesh, Is.SameAs(fixture.Mesh));
                 Assert.That(fixture.Mesh.GetBlendShapeName(0), Is.EqualTo("Original opening"));

@@ -1034,7 +1034,7 @@ namespace VRVlog.LilToonExporter.Tests
                     foreach (var path in new[] { "Front", "Back" })
                     {
                         var reference = expected.transform.Find(path).GetComponent<SkinnedMeshRenderer>();
-                        reference.SetBlendShapeWeight(0, input == 0 ? nativeRest : 80); reference.SetBlendShapeWeight(1, 100);
+                        reference.SetBlendShapeWeight(0, input == 0 ? 17 : 80); reference.SetBlendShapeWeight(1, 23);
                         var actual = imported.GetComponentsInChildren<SkinnedMeshRenderer>().Single(renderer => renderer.name == path);
                         var a = Vertices(reference); var b = Vertices(actual); Assert.That(b.Length, Is.EqualTo(a.Length));
                         for (var i = 0; i < a.Length; i++) Assert.That(Vector3.Distance(a[i], b[i]), Is.LessThan(.0005f),

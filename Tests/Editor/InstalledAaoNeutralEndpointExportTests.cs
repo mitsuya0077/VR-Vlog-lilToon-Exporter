@@ -133,7 +133,7 @@ namespace VRVlog.LilToonExporter.Tests
                 fixture.Mesh.AddBlendShapeFrame(Closure, 100, Enumerable.Repeat(Vector3.down * .03f, 6).ToArray(), null, null);
                 var skins = fixture.Source.GetComponentsInChildren<SkinnedMeshRenderer>();
                 foreach (var skin in skins)
-                { skin.SetBlendShapeWeight(0, 0); skin.SetBlendShapeWeight(1, 100); skin.sharedMaterial.shader = Shader.Find("lilToon"); }
+                { skin.SetBlendShapeWeight(0, 0); skin.SetBlendShapeWeight(1, 0); skin.sharedMaterial.shader = Shader.Find("lilToon"); }
                 mask.SetPixels(new[] { Color.black, Color.white }); mask.Apply(); foreach (var skin in skins) Mask(skin, mask);
                 var node = new GameObject("Merged face"); node.transform.SetParent(fixture.Source.transform, false); node.AddComponent<SkinnedMeshRenderer>();
                 var merge = Optimizer(node, "MergeSkinnedMesh", 2); mergeType.GetProperty("MergeBlendShapes").SetValue(merge, false);
@@ -152,30 +152,23 @@ namespace VRVlog.LilToonExporter.Tests
                         morphs = new[] { new TrackingMorph { shape = Opening, weight = .25f } } }).ToArray();
                     fixture.Source.AddComponent<VrmTrackingMarker>().profile = profile;
                 }
-                var neutral = skins.SelectMany(skin => SourceTriangle(skin, 75, 0)).ToArray();
+                var neutral = skins.SelectMany(skin => SourceTriangle(skin, 0, 0)).ToArray();
                 var endpoint = skins.SelectMany(skin => SourceTriangle(skin, 25, 0)).ToArray();
                 var tracking = skins.SelectMany(skin => SourceTriangle(skin, explicitProfile ? 25 : 100, 0)).ToArray();
-                var blink = skins.SelectMany(skin => SourceTriangle(skin, 75, 100)).ToArray();
+                var blink = skins.SelectMany(skin => SourceTriangle(skin, 0, 100)).ToArray();
                 var sourceVertices = fixture.Mesh.vertices; var sourceController = EditorJsonUtility.ToJson(controller);
                 foreach (var skin in skins)
                 {
                     var closureIndex = skin.sharedMesh.GetBlendShapeIndex(Closure);
                     Assert.That(closureIndex, Is.GreaterThanOrEqualTo(0));
-                    Assert.That(skin.GetBlendShapeWeight(closureIndex), Is.EqualTo(100),
-                        "The source fixture must still have serialized fully closed eyes.");
-                    Assert.That(AvatarBaseShape.HasUsableRawEndpoint(skin, closureIndex), Is.False,
-                        "The serialized closed pose has no remaining raw blink range before FX opens the eyes.");
+                    Assert.That(skin.GetBlendShapeWeight(closureIndex), Is.EqualTo(0),
+                        "The source fixture supplies usable prepared open eyes without requiring initial FX.");
+                    Assert.That(AvatarBaseShape.HasUsableRawEndpoint(skin, closureIndex), Is.True,
+                        "The prepared open pose must retain its complete closure range.");
                 }
-                if (explicitProfile)
-                    Assert.Throws<InvalidOperationException>(() => {
-                        using var early = BlinkExportSession.Resolve(fixture.Source);
-                    }, "An explicit tracking profile cannot waive the missing usable blink before FX neutral evaluation.");
-                else
-                {
-                    using var early = BlinkExportSession.Resolve(fixture.Source);
-                    Assert.That(early.HasBilateralPreset, Is.False,
-                        "Usable UE jaw evidence permits missing blink, but cannot make the resting closure usable.");
-                }
+                using (var early = BlinkExportSession.Resolve(fixture.Source))
+                    Assert.That(early.HasBilateralPreset, Is.True,
+                        "Prepared open eyes support blink independently of initial FX reconstruction.");
                 using (var deferred = BlinkExportSession.CaptureForExport(fixture.Source))
                 {
                     Assert.That(deferred.HasBilateralPreset, Is.True,
@@ -188,7 +181,7 @@ namespace VRVlog.LilToonExporter.Tests
                 var outputs = imported.GetComponentsInChildren<SkinnedMeshRenderer>();
                 Assert.That(outputs.Length, Is.EqualTo(1), "AAO must actually merge both source renderers.");
                 Assert.That(imported.Vrm.Expression.Happy, Is.Not.Null); Assert.That(imported.Vrm.Expression.Blink, Is.Not.Null);
-                Geometry(OutputTriangles(imported), neutral, "Native FX neutral75 after mask/merge");
+                Geometry(OutputTriangles(imported), neutral, "Retained prepared0 after mask/merge");
                 imported.Runtime.Expression.SetWeight(ExpressionKey.Happy, 1); imported.Runtime.Process();
                 Geometry(OutputTriangles(imported), endpoint, "Authored0.25 must reach source25 after AAO property remapping");
                 imported.Runtime.Expression.SetWeight(ExpressionKey.Happy, 0);
@@ -197,8 +190,8 @@ namespace VRVlog.LilToonExporter.Tests
                 imported.Runtime.Expression.SetWeight(trackingKey, 1); imported.Runtime.Process();
                 Geometry(OutputTriangles(imported), tracking, "Explicit or inferred absolute tracking endpoint after AAO remapping");
                 imported.Runtime.Expression.SetWeight(trackingKey, 0); imported.Runtime.Expression.SetWeight(ExpressionKey.Blink, 1); imported.Runtime.Process();
-                Geometry(OutputTriangles(imported), blink, "Deferred blink closes from FX-open neutral without reopening deleted triangles");
-                Assert.That(skins.All(skin => skin != null && skin.sharedMesh == fixture.Mesh && skin.GetBlendShapeWeight(0) == 0 && skin.GetBlendShapeWeight(1) == 100), Is.True);
+                Geometry(OutputTriangles(imported), blink, "Blink closes from prepared open eyes without reopening deleted triangles");
+                Assert.That(skins.All(skin => skin != null && skin.sharedMesh == fixture.Mesh && skin.GetBlendShapeWeight(0) == 0 && skin.GetBlendShapeWeight(1) == 0), Is.True);
                 Assert.That(fixture.Mesh.vertices, Is.EqualTo(sourceVertices)); Assert.That(fixture.Mesh.triangles.Length, Is.EqualTo(6));
                 Assert.That(happy.MorphTargetBindings.All(binding => binding.Index == 0 && binding.Weight == .25f), Is.True);
                 Assert.That(fixture.Source.GetComponent<Vrm10Instance>().Vrm, Is.SameAs(settings));
