@@ -94,6 +94,13 @@ namespace VRVlog.LilToonExporter.Tests
                 // complete prepared controller supplies the expected geometry;
                 // neither the export sampler nor a reconstructed overlay is used.
                 Dictionary<string, Vector3[]> nativeNeutral = null, nativeSelected = null, nativeBlink = null;
+                var preparedNeutral = sourceSkins.ToDictionary(skin => skin.name, WorldVertices);
+                var preparedBlink = sourceSkins.ToDictionary(skin => skin.name, skin => {
+                    var index = skin.sharedMesh.GetBlendShapeIndex("Blink");
+                    skin.SetBlendShapeWeight(index, 100);
+                    try { return WorldVertices(skin); }
+                    finally { skin.SetBlendShapeWeight(index, 0); }
+                });
                 prepared = Object.Instantiate(fixture.Source); prepared.name = fixture.Source.name;
                 using (NdmfExportPreparation.Prepare(fixture.Source, prepared, afterTransforming: lease =>
                 {
@@ -143,7 +150,7 @@ namespace VRVlog.LilToonExporter.Tests
                     {
                         var output = imported.GetComponentsInChildren<SkinnedMeshRenderer>().Single(skin => skin.name == path);
                         var vertices = WorldVertices(output);
-                        var endpoint = route.Menu > 0 ? nativeSelected[path] : nativeBlink[path];
+                        var endpoint = route.Menu > 0 ? nativeSelected[path] : preparedBlink[path];
                         // UniVRM's binary expression merger selects the endpoint
                         // above .5; precisely .5 remains neutral. The manual
                         // blink route must still interpolate continuously.
@@ -152,9 +159,10 @@ namespace VRVlog.LilToonExporter.Tests
                             : route.Blink;
                         Assert.That(vertices.Length, Is.EqualTo(nativeNeutral[path].Length));
                         for (var vertex = 0; vertex < vertices.Length; vertex++)
-                            Assert.That(Vector3.Distance(vertices[vertex], Vector3.LerpUnclamped(nativeNeutral[path][vertex], endpoint[vertex], coefficient)),
+                            Assert.That(Vector3.Distance(vertices[vertex], Vector3.LerpUnclamped(preparedNeutral[path][vertex], endpoint[vertex], coefficient)),
                                 Is.LessThan(.0005f), path + " / menu " + route.Menu + " / blink " + route.Blink + " / vertex " + vertex);
-                        Assert.That(TriangleArea(vertices, 0), Is.LessThan(1e-8f), "Runtime expressions must never reveal the pupil.");
+                        Assert.That(TriangleArea(vertices, 0), coefficient == 1f && route.Menu > 0 ? Is.LessThan(1e-8f) : Is.GreaterThan(1e-5f),
+                            "Only the selected FX expression applies the permanent pupil hide; prepared rest retains the saved visible pupil.");
                         Assert.That(TriangleArea(vertices, 3), Is.GreaterThan(1e-5f), "The retained face must remain visible.");
                     }
                 }

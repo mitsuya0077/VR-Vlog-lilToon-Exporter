@@ -364,8 +364,8 @@ namespace VRVlog.LilToonExporter.Tests
                         foreach (var path in new[] { "Front", "Back" })
                         {
                             var reference = expected.transform.Find(path).GetComponent<SkinnedMeshRenderer>();
-                            reference.SetBlendShapeWeight(0, input == 0 ? dominatedBlink ? 0 : 17 : key.Equals(ExpressionKey.Blink) ? 100 : 80);
-                            reference.SetBlendShapeWeight(1, 50);
+                            reference.SetBlendShapeWeight(0, input == 0 ? dominatedBlink ? 100 : 17 : key.Equals(ExpressionKey.Blink) ? 100 : 80);
+                            reference.SetBlendShapeWeight(1, 35);
                             var output = imported.GetComponentsInChildren<SkinnedMeshRenderer>().Single(renderer => renderer.name == path);
                             var a = Vertices(reference); var b = Vertices(output); Assert.That(b.Length, Is.EqualTo(a.Length));
                             for (var vertex = 0; vertex < a.Length; vertex++) Assert.That(Vector3.Distance(a[vertex], b[vertex]), Is.LessThan(.0005f),
@@ -385,7 +385,7 @@ namespace VRVlog.LilToonExporter.Tests
                         foreach (var time in new[] { 0d, 10d, 10.5d, 12d })
                             Assert.That(channel.Curve.Evaluate(time), Is.EqualTo(Varying("Delayed").Evaluate((float)time)).Within(.001));
                     }
-                    Assert.That(warnings.Any(warning => warning.Contains("時間で変わる")), Is.True);
+                    Assert.That(warnings.Any(warning => warning.Contains("このベータ版ではFXの初期状態の復元を省略")), Is.True);
                 }
                 Assert.That(fixture.Source.GetComponentsInChildren<SkinnedMeshRenderer>().All(renderer => renderer.sharedMesh == fixture.Mesh &&
                     renderer.GetBlendShapeWeight(0) == (dominatedBlink ? 100 : 17) && renderer.GetBlendShapeWeight(1) == 35), Is.True);

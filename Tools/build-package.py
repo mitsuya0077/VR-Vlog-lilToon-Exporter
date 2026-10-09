@@ -106,7 +106,11 @@ def verify_no_transfer_dependencies(contents):
 
 def build(root, output):
     root = root.resolve()
-    transfer = prerelease(json.loads((root / "package.json").read_text(encoding="utf-8-sig"))["version"])
+    manifest = json.loads((root / "package.json").read_text(encoding="utf-8-sig"))
+    cloud_transfer = manifest.get("vrvlogCloudTransfer", True)
+    if type(cloud_transfer) is not bool:
+        raise ValueError("vrvlogCloudTransfer must be a boolean")
+    transfer = prerelease(manifest["version"]) and cloud_transfer
     names = [name for name in tracked_files(root) if included(name, transfer)]
     required = ROOT_FILES | LOCALE_FILES | DEPENDENCY_PATCH_FILES
     if transfer:

@@ -97,6 +97,7 @@ namespace VRVlog.LilToonExporter
             if (GUILayout.Button(ExporterLocalization.T("閉じる"))) closure = 1;
             EditorGUILayout.EndHorizontal();
             closure = EditorGUILayout.Slider(ExporterLocalization.T("閉じる量"), closure, 0, 1);
+            EditorGUILayout.HelpBox(ExporterLocalization.T("「閉じる量」を0にした状態で目が閉じている場合は、Unity側で目の状態を調整してください。「瞬きなし」を選んでも目は開きません。"), MessageType.Info);
             ApplyPose();
             var rect = GUILayoutUtility.GetRect(100, 100, GUILayout.ExpandHeight(true), GUILayout.ExpandWidth(true));
             if (Event.current.type == EventType.Repaint)

@@ -19,7 +19,7 @@ namespace VRVlog.LilToonExporter.Tests
         [TestCase(true, true, false)]
         [TestCase(false, false, true)]
         [TestCase(true, false, true)]
-        public async Task FxDefaultOpeningShapeSurvivesExportWithoutAnExpressionMenu(bool fullLilToon, bool independentBlink, bool resetClosingShape)
+        public async Task PreparedRestSurvivesExportWithoutRestoringInitialFx(bool fullLilToon, bool independentBlink, bool resetClosingShape)
         {
             var descriptorType = AppDomain.CurrentDomain.GetAssemblies()
                 .Select(assembly => assembly.GetType("VRC.SDK3.Avatars.Components.VRCAvatarDescriptor"))
@@ -94,9 +94,10 @@ namespace VRVlog.LilToonExporter.Tests
                     blinkOptions: independentBlink || resetClosingShape ? null : new BlinkExportOptions { Mode = BlinkExportMode.None });
                 imported = await Vrm10.LoadBytesAsync(bytes, canLoadVrm0X: false, awaitCaller: new ImmediateCaller());
                 imported.Runtime.Process();
+                var preparedWeight = resetClosingShape ? 100f : 0f;
                 foreach (var skin in imported.GetComponentsInChildren<SkinnedMeshRenderer>())
-                    Assert.That(skin.sharedMesh.vertices[0].y, Is.EqualTo(vertices[0].y + .03f * neutralWeight / 100).Within(.00001),
-                        "Default display must preserve the FX opening pose even with no expression menu.");
+                    Assert.That(skin.sharedMesh.vertices[0].y, Is.EqualTo(vertices[0].y + .03f * preparedWeight / 100).Within(.00001),
+                        "This beta must retain prepared rest rather than reconstruct the different FX startup pose.");
                 Assert.That(sourceSkins.All(skin => skin.sharedMesh == fixture.Mesh && skin.GetBlendShapeWeight(0) == (resetClosingShape ? 100 : 0)), Is.True);
                 Assert.That(fixture.Mesh.vertices, Is.EqualTo(vertices));
                 Assert.That(state.motion, Is.SameAs(clip));
