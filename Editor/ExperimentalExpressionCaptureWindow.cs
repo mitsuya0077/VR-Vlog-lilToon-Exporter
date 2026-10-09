@@ -66,6 +66,11 @@ namespace VRVlog.LilToonExporter
 
         void Queue(Action action) { pending = action; error = null; Repaint(); }
 
+        internal static void AnimationAssetsReimported()
+        {
+            foreach (var window in Resources.FindObjectsOfTypeAll<ExperimentalExpressionCaptureWindow>()) window.CandidateAssetsChanged();
+        }
+
         void CandidateAssetsChanged() { candidateValidationPending = true; Repaint(); }
 
         void RefreshCandidateValidation()
@@ -517,4 +522,18 @@ namespace VRVlog.LilToonExporter
             selectedClips.Clear(); clipErrors.Clear(); candidateRects.Clear(); candidateToggleRects.Clear(); clipInputs.Clear(); fileRecords.Clear(); recommendations = null; saved = null;
         }
     }
+#if UNITY_5_3_OR_NEWER
+    // projectChanged does not fire for every in-place .anim reimport.
+    internal sealed class ExpressionCaptureAssetPostprocessor : AssetPostprocessor
+    {
+        static void OnPostprocessAllAssets(string[] imported, string[] deleted, string[] moved, string[] previousPaths)
+        {
+            if (imported.Concat(deleted).Concat(moved).Concat(previousPaths).Any(path =>
+                path.EndsWith(".anim", StringComparison.OrdinalIgnoreCase) || path.EndsWith(".controller", StringComparison.OrdinalIgnoreCase) ||
+                path.EndsWith(".overrideController", StringComparison.OrdinalIgnoreCase)))
+                ExperimentalExpressionCaptureWindow.AnimationAssetsReimported();
+        }
+    }
+#endif
+
 }
