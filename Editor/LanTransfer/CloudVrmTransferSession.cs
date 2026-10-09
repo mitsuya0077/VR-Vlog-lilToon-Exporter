@@ -232,7 +232,7 @@ namespace VRVlog.LilToonExporter.LanTransfer
             CheckExpiry();
             using (var linked = CancellationTokenSource.CreateLinkedTokenSource(stop.Token, cancellation))
             {
-                var fields = await Send("GET", Path, uploadToken, null, null, linked.Token).ConfigureAwait(false);
+                var fields = await Send("GET", Path, uploadToken, null, null, linked.Token, diagnose: false).ConfigureAwait(false);
                 var remote = fields.Text("state");
                 lock (gate)
                 {
@@ -267,10 +267,12 @@ namespace VRVlog.LilToonExporter.LanTransfer
             ExpireIfDue();
             if (State == CloudTransferState.Expired) throw new InvalidOperationException(Message);
         }
-        private async Task<CloudTransferProtocol.Fields> Send(string method, string path, string token, byte[] body, string type, CancellationToken ct, bool parse = true)
+        private async Task<CloudTransferProtocol.Fields> Send(string method, string path, string token, byte[] body, string type, CancellationToken ct, bool parse = true, bool diagnose = true)
         {
             var response = await transport.SendAsync(method, path, token, body, type, ct).ConfigureAwait(false);
             if (response.StatusCode < 200 || response.StatusCode >= 300)
+            {
+                if (!diagnose) throw CloudTransferProtocol.Invalid();
                 throw new SafeTransferFailure(response.StatusCode == 429
                     ? "転送サービスの利用上限または混雑により送信できません（HTTP 429）。時間を置いて試してください。"
                     : response.StatusCode == 413
@@ -278,11 +280,12 @@ namespace VRVlog.LilToonExporter.LanTransfer
                     : response.StatusCode == 401 || response.StatusCode == 403
                     ? "転送の認証が拒否されました（HTTP " + response.StatusCode + "）。新しいQRを作成してください。"
                     : "転送サービスが応答できませんでした（HTTP " + response.StatusCode + "）。時間を置いて新しいQRを作成してください。");
+            }
             return parse ? CloudTransferProtocol.Fields.Read(response.Body) : null;
         }
         // Only controlled text and a status code reach the UI. Exception messages,
         // paths, server bodies, QR contents and credentials never do.
-        private sealed class SafeTransferFailure : InvalidDataException
+        private sealed class SafeTransferFailure : Exception
         { internal SafeTransferFailure(string message) : base(message) { } }
         private static string SafeFailureMessage(Exception exception, string stage)
         {
