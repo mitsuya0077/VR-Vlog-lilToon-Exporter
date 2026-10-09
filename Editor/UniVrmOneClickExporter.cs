@@ -274,6 +274,8 @@ namespace VRVlog.LilToonExporter
             if (owned == null) throw new ArgumentNullException(nameof(owned));
             var controls = new[] { "_UseAudioLink", "_AudioLinkAsLocal", "_AudioLink2Main2nd", "_AudioLink2Main3rd",
                 "_AudioLink2Emission", "_AudioLink2EmissionGrad", "_AudioLink2Emission2nd", "_AudioLink2Emission2ndGrad", "_AudioLink2Vertex" };
+            // Official lilToon Multi uses these keywords exclusively for AudioLink.
+            var audioKeywords = new[] { "_MAPPING_6_FRAMES_LAYOUT", "_SUNDISK_HIGH_QUALITY" };
             var replacements = new Dictionary<Material, Material>();
             foreach (var renderer in copy.GetComponentsInChildren<Renderer>(true))
             {
@@ -282,7 +284,10 @@ namespace VRVlog.LilToonExporter
                 for (var i = 0; i < slots.Length; i++)
                 {
                     var original = slots[i];
-                    if (original == null || !controls.Any(property => original.HasProperty(property) && original.GetFloat(property) != 0)) continue;
+                    if (original == null) continue;
+                    var official = ExportRecoveryReport.Official(original);
+                    if (!controls.Any(property => original.HasProperty(property) && original.GetFloat(property) != 0) &&
+                        !(official && original.HasProperty("_UseAudioLink") && audioKeywords.Any(original.IsKeywordEnabled))) continue;
                     if (!replacements.TryGetValue(original, out var material))
                     {
                         material = new Material(original) { name = original.name };
@@ -290,6 +295,7 @@ namespace VRVlog.LilToonExporter
                         replacements.Add(original, material);
                         foreach (var property in controls)
                             if (material.HasProperty(property)) material.SetFloat(property, 0);
+                        if (official) foreach (var keyword in audioKeywords) material.DisableKeyword(keyword);
                         copyObserver?.Invoke(material, original);
                     }
                     slots[i] = material;

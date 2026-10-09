@@ -26,7 +26,9 @@ namespace VRVlog.LilToonExporter.Tests
             try
             {
                 first.SetFloat("_UseAudioLink", 1); first.SetFloat("_AudioLink2Vertex", 1);
+                generated.shader = Shader.Find("_lil/lilToonMulti"); Assert.That(generated.shader, Is.Not.Null);
                 generated.SetFloat("_UseAudioLink", 1); generated.SetFloat("_AudioLink2Emission", 1);
+                generated.EnableKeyword("_MAPPING_6_FRAMES_LAYOUT"); generated.EnableKeyword("_SUNDISK_HIGH_QUALITY");
                 foreach (var skin in fixture.Source.GetComponentsInChildren<SkinnedMeshRenderer>()) skin.sharedMaterial = first;
                 foreach (var skin in fixture.Skins) skin.sharedMaterials = new[] { first, first, null };
                 fixture.Skins[1].gameObject.SetActive(false);
@@ -48,11 +50,22 @@ namespace VRVlog.LilToonExporter.Tests
                 Assert.That(materials.Count, Is.EqualTo(3));
                 Assert.That(fixture.Skins.All(skin => skin.sharedMaterial.GetFloat("_UseAudioLink") == 0), Is.True);
                 Assert.That(fixture.Skins[0].sharedMaterial.GetFloat("_AudioLink2Emission"), Is.Zero);
+                Assert.That(fixture.Skins[0].sharedMaterial.IsKeywordEnabled("_MAPPING_6_FRAMES_LAYOUT"), Is.False);
+                Assert.That(fixture.Skins[0].sharedMaterial.IsKeywordEnabled("_SUNDISK_HIGH_QUALITY"), Is.False);
                 UniVrmOneClickExporter.DisableAudioLinkOnCopy(fixture.Copy, materials);
                 Assert.That(materials.Count, Is.EqualTo(3), "Repeated passes must not create extra material copies.");
                 Assert.That(first.GetFloat("_UseAudioLink"), Is.EqualTo(1));
                 Assert.That(first.GetFloat("_AudioLink2Vertex"), Is.EqualTo(1));
                 Assert.That(generated.GetFloat("_UseAudioLink"), Is.EqualTo(1));
+                Assert.That(generated.IsKeywordEnabled("_MAPPING_6_FRAMES_LAYOUT"), Is.True);
+                // A stale Multi keyword must also be disabled when all toggles
+                // already say off; the original still retains its keyword.
+                generated.SetFloat("_UseAudioLink", 0); generated.SetFloat("_AudioLink2Emission", 0);
+                fixture.Skins[0].sharedMaterial = generated;
+                UniVrmOneClickExporter.DisableAudioLinkOnCopy(fixture.Copy, materials);
+                Assert.That(materials.Count, Is.EqualTo(4));
+                Assert.That(fixture.Skins[0].sharedMaterial.IsKeywordEnabled("_MAPPING_6_FRAMES_LAYOUT"), Is.False);
+                Assert.That(generated.IsKeywordEnabled("_MAPPING_6_FRAMES_LAYOUT"), Is.True);
                 Assert.That(fixture.Source.GetComponentsInChildren<SkinnedMeshRenderer>().All(skin => skin.sharedMaterial == first), Is.True);
             }
             finally
@@ -62,19 +75,25 @@ namespace VRVlog.LilToonExporter.Tests
             }
         }
 
-        [Test]
-        public async Task ExplicitExportWithAudioLinkEnabledReimportsWithoutChangingThePreviewOrWarning()
+        [TestCase("lilToon")]
+        [TestCase("_lil/lilToonMulti")]
+        public async Task ExplicitExportWithAudioLinkEnabledReimportsWithoutChangingThePreviewOrWarning(string shaderName)
         {
             using var fixture = new AttachmentConnectionTests.Fixture();
             var skins = fixture.Source.GetComponentsInChildren<SkinnedMeshRenderer>();
-            var extra = new Material(Shader.Find("lilToon"));
+            var extra = new Material(Shader.Find(shaderName));
             Vrm10Instance imported = null;
             try
             {
-                skins[0].sharedMaterial.shader = Shader.Find("lilToon");
+                skins[0].sharedMaterial.shader = Shader.Find(shaderName);
                 skins[0].sharedMaterial.SetFloat("_UseAudioLink", 1);
                 skins[0].sharedMaterial.SetFloat("_AudioLink2Vertex", 1);
                 extra.SetFloat("_UseAudioLink", 1); extra.SetFloat("_AudioLink2Emission", 1);
+                if (shaderName == "_lil/lilToonMulti")
+                    foreach (var material in new[] { skins[0].sharedMaterial, extra })
+                    {
+                        material.EnableKeyword("_MAPPING_6_FRAMES_LAYOUT"); material.EnableKeyword("_SUNDISK_HIGH_QUALITY");
+                    }
                 skins[1].sharedMaterial = extra;
                 using var session = new ExperimentalExpressionCaptureSession(fixture.Source, replayInstalledDefaults: false);
                 session.SetWeight(0, 0, 90); session.SetWeight(1, 0, 0); session.Capture("Smile");
@@ -85,7 +104,11 @@ namespace VRVlog.LilToonExporter.Tests
                 Assert.That(skins.All(skin => skin.sharedMaterial.GetFloat("_UseAudioLink") == 1), Is.True);
                 Assert.That(session.Channels[0].Renderer.GetBlendShapeWeight(0), Is.EqualTo(90));
                 using (var data = new GlbBinaryParser(bytes, "audiolink-copy.vrm").Parse())
+                {
                     Assert.That(data.Json.Contains("_UseAudioLink"), Is.False, "External audio controls must not be emitted into the lilToon payload.");
+                    Assert.That(data.Json.Contains("_MAPPING_6_FRAMES_LAYOUT"), Is.False);
+                    Assert.That(data.Json.Contains("_SUNDISK_HIGH_QUALITY"), Is.False);
+                }
                 imported = await Vrm10.LoadBytesAsync(bytes, canLoadVrm0X: false, awaitCaller: new ImmediateCaller());
                 Assert.That(imported, Is.Not.Null);
                 var expression = imported.Vrm.Expression.CustomClips.Single(clip => clip.name == "VRChat / 記録 / Smile");
