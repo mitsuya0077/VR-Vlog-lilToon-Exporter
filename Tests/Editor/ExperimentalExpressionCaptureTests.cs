@@ -362,6 +362,53 @@ namespace VRVlog.LilToonExporter.Tests
             finally { AssetDatabase.DeleteAsset(folder); }
         }
 
+        [UnityTest]
+        public IEnumerator CandidateSelectionBulkAddAndNamePreviewUseTheAutomaticFinalFrame()
+        {
+            using var fixture = new AttachmentConnectionTests.Fixture();
+            var flags = System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic;
+            var type = typeof(ExperimentalExpressionCaptureWindow);
+            var window = ScriptableObject.CreateInstance<ExperimentalExpressionCaptureWindow>();
+            var clips = Enumerable.Range(0, 3).Select(index => new AnimationClip { name = "Candidate " + index }).ToArray();
+            for (var index = 0; index < clips.Length; index++) AnimationUtility.SetEditorCurve(clips[index],
+                EditorCurveBinding.FloatCurve("Front", typeof(SkinnedMeshRenderer), "blendShape.Hair detail"), AnimationCurve.Linear(0, 10, 1, 70 + index));
+            try
+            {
+                window.position = new Rect(40, 40, 700, 1100); window.Show();
+                type.GetField("source", flags).SetValue(window, fixture.Source);
+                type.GetMethod("Prepare", flags).Invoke(window, null);
+                type.GetField("recommendations", flags).SetValue(window, clips.Select(clip => new ExperimentalExpressionCaptureSession.ClipRecommendation { Clip = clip, Source = "Fixture" }).ToList());
+                var errors = (System.Collections.Generic.Dictionary<AnimationClip, string>)type.GetField("clipErrors", flags).GetValue(window);
+                foreach (var clip in clips) errors[clip] = null;
+                for (var frame = 0; frame < 8; frame++) { window.Repaint(); yield return null; }
+                var names = (System.Collections.Generic.Dictionary<AnimationClip, Rect>)type.GetField("candidateRects", flags).GetValue(window);
+                Click(window, names[clips[0]]);
+                for (var frame = 0; frame < 8; frame++) { window.Repaint(); yield return null; }
+                var session = (ExperimentalExpressionCaptureSession)type.GetField("session", flags).GetValue(window);
+                Assert.That(session.Channels.First(channel => channel.Path == "Front").Renderer.GetBlendShapeWeight(0), Is.EqualTo(70));
+                var toggles = (System.Collections.Generic.Dictionary<AnimationClip, Rect>)type.GetField("candidateToggleRects", flags).GetValue(window);
+                Click(window, toggles[clips[0]]); Click(window, toggles[clips[2]]);
+                for (var frame = 0; frame < 8; frame++) { window.Repaint(); yield return null; }
+                Click(window, (Rect)type.GetField("addSelectedRect", flags).GetValue(window));
+                for (var frame = 0; frame < 8; frame++) { window.Repaint(); yield return null; }
+                var inputs = (System.Collections.Generic.List<ExperimentalExpressionCaptureSession.ClipInput>)type.GetField("clipInputs", flags).GetValue(window);
+                Assert.That(inputs.Select(input => input.Clip), Is.EqualTo(new[] { clips[0], clips[2] }));
+                Assert.That(inputs.All(input => input.Selected && input.Time == 1), Is.True);
+                type.GetMethod("RecordSelectedClips", flags).Invoke(window, null);
+                Assert.That(session.Expressions.Count, Is.EqualTo(2));
+                Assert.That(session.Expressions.Select(pose => pose.Rows.First(row => row.Path == "Front").Weights[0]), Is.EqualTo(new[] { 70f, 72f }));
+                Assert.That(fixture.Source.transform.Find("Front").GetComponent<SkinnedMeshRenderer>().GetBlendShapeWeight(0), Is.EqualTo(35));
+            }
+            finally { window.Close(); foreach (var clip in clips) Object.DestroyImmediate(clip); }
+        }
+
+        static void Click(EditorWindow window, Rect rect)
+        {
+            Assert.That(rect.width, Is.GreaterThan(0));
+            window.SendEvent(new Event { type = EventType.MouseDown, button = 0, mousePosition = rect.center });
+            window.SendEvent(new Event { type = EventType.MouseUp, button = 0, mousePosition = rect.center });
+        }
+
         [UnityTest] public IEnumerator OneExplicitClipCanBeDroppedAndPreviewed() => VerifyExplicitDrop(1);
         [UnityTest] public IEnumerator FourExplicitClipsCanBeDroppedAndRecorded() => VerifyExplicitDrop(4);
 

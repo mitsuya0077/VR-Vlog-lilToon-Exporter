@@ -114,6 +114,7 @@ namespace VRVlog.LilToonExporter
         void OnGUI()
         {
             if (options == null) return;
+            if (manualOnly) { DrawSimple(); return; }
             EditorGUILayout.HelpBox(ExporterLocalization.T("静止ポーズと手動追加した動くポーズを含めます。動くポーズは開始秒から再生し、頭・首はクリップに指定がある場合だけ含めます。"), MessageType.Info);
             using (new EditorGUI.DisabledScope(IsBusy))
                 if (GUILayout.Button(ExporterLocalization.T("登録情報を再取得"))) RequestRebuild();
@@ -211,6 +212,40 @@ namespace VRVlog.LilToonExporter
             preview.camera.transform.position = center + Quaternion.Euler(0, yaw, 0) * Vector3.forward * distance;
             preview.camera.transform.LookAt(center); preview.Render(); GUI.DrawTexture(rect, preview.EndPreview(), ScaleMode.ScaleToFit, false);
         }
+        void DrawSimple()
+        {
+            using (new EditorGUILayout.VerticalScope(new GUIStyle { padding = new RectOffset(16, 16, 12, 12) }))
+            {
+                EditorGUILayout.LabelField("ポーズを確認", EditorStyles.boldLabel);
+                EditorGUILayout.Space(8);
+                EditorGUILayout.LabelField("動くポーズは先頭から最後まで再生します。", EditorStyles.wordWrappedLabel);
+                if (error != null) EditorGUILayout.HelpBox(error, MessageType.Warning);
+                if (IsBusy) EditorGUILayout.LabelField("確認中…", EditorStyles.miniLabel);
+                scroll = EditorGUILayout.BeginScrollView(scroll, GUILayout.Height(150));
+                if (session != null)
+                    foreach (var row in session.Entries)
+                    {
+                        using (new EditorGUILayout.HorizontalScope(GUILayout.Height(28)))
+                        {
+                            EditorGUILayout.LabelField(row.Name);
+                            using (new EditorGUI.DisabledScope(IsBusy || row.Error != null || row.Data == null && row.Animation == null))
+                                if (GUILayout.Button("確認", GUILayout.Width(60))) ApplyPreview(row);
+                        }
+                        if (row.Error != null) EditorGUILayout.HelpBox(row.Error, MessageType.Warning);
+                    }
+                EditorGUILayout.EndScrollView();
+                if (preview == null) return;
+                EditorGUILayout.Space(12);
+                yaw = EditorGUILayout.Slider("向き", yaw, -180, 180);
+                var rect = GUILayoutUtility.GetRect(100, 120, GUILayout.ExpandHeight(true), GUILayout.ExpandWidth(true));
+                if (Event.current.type != EventType.Repaint || rect.width <= 0 || rect.height <= 0) return;
+                preview.BeginPreview(rect, GUIStyle.none);
+                preview.camera.transform.position = hipsRest + Quaternion.Euler(0, yaw, 0) * Vector3.forward * Mathf.Max(1, hipsRest.y * 3.8f);
+                preview.camera.transform.LookAt(hipsRest); preview.Render();
+                GUI.DrawTexture(rect, preview.EndPreview(), ScaleMode.ScaleToFit, false);
+            }
+        }
+
         void ApplyPreview(PoseCandidate row)
         {
             playing = null;

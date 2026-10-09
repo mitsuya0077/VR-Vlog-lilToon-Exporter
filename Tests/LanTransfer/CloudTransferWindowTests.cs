@@ -330,6 +330,26 @@ namespace VRVlog.LilToonExporter.LanTransfer.Tests
             finally { Object.DestroyImmediate(window); }
         }
 
+        [Test]
+        public void SessionFailureIsDisplayedOnceWhileDistinctWindowErrorsRemainVisible()
+        {
+            var window = ScriptableObject.CreateInstance<CloudVrmTransferWindow>();
+            var path = Path.Combine(Path.GetTempPath(), "vrvlog-message-test-" + Guid.NewGuid().ToString("N") + ".vrm");
+            File.WriteAllBytes(path, new byte[] { 1 });
+            using (var source = new CloudVrmTransferSource(path, "fixture.vrm"))
+            using (var session = new CloudVrmTransferSession(source))
+            {
+                try
+                {
+                    Set(window, "session", session); Set(window, "error", session.Message);
+                    Assert.That(window.ExtraMessage, Is.Null);
+                    Set(window, "error", "Distinct QR rendering failure");
+                    Assert.That(window.ExtraMessage, Is.EqualTo("Distinct QR rendering failure"));
+                }
+                finally { window.Close(); }
+            }
+        }
+
         private static object Get(CloudVrmTransferWindow window, string name) => typeof(CloudVrmTransferWindow).GetField(name, Instance).GetValue(window);
         private static void Set(CloudVrmTransferWindow window, string name, object value) => typeof(CloudVrmTransferWindow).GetField(name, Instance).SetValue(window, value);
     }

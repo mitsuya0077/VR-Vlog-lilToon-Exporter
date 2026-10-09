@@ -144,7 +144,7 @@ namespace VRVlog.LilToonExporter.LanTransfer
             session?.ExpireIfDue();
             if (uploading?.IsCompleted == true)
             {
-                if (uploading.IsFaulted) { _ = uploading.Exception; error = session?.Message; }
+                if (uploading.IsFaulted) { _ = uploading.Exception; error = null; }
                 uploading = null;
                 if (session?.State == CloudTransferState.Ready)
                 {
@@ -195,7 +195,7 @@ namespace VRVlog.LilToonExporter.LanTransfer
                 EditorGUILayout.HelpBox(ExporterLocalization.T("アバターをPCで暗号化してからクラウドに一時保存し、スマホで復号します。復号鍵はQRにだけ含まれ、転送サービスには送りません。受取期限は転送作成時から3分です。アップロード中も期限が進みます。完了・中止・期限切れで暗号化コピーを削除します。"), MessageType.Info);
                 EditorGUILayout.LabelField(source?.Name ?? ExporterLocalization.T("メニューから書き出し済みVRMを選択してください。"), EditorStyles.wordWrappedLabel);
                 EditorGUILayout.HelpBox(ExporterLocalization.T("PCとスマホにインターネット接続が必要です。同じWi-Fiは不要です。QRを持つ人はアバターを受け取れるため、共有・撮影しないでください。スマホではVR Vlog内のカメラで読み取ります。"), MessageType.None);
-                if (!string.IsNullOrEmpty(error)) EditorGUILayout.HelpBox(ExporterLocalization.T(error), MessageType.Error);
+                if (ExtraMessage != null) EditorGUILayout.HelpBox(ExporterLocalization.T(ExtraMessage), MessageType.Error);
                 using (new EditorGUI.DisabledScope(source == null || uploading != null || session != null && !session.Terminal))
                     if (GUILayout.Button(ExporterLocalization.T(session == null ? "アップロードしてQRを表示" : "新しいQRを作成"), GUILayout.Height(32))) Begin();
                 if (session != null)
@@ -224,6 +224,8 @@ namespace VRVlog.LilToonExporter.LanTransfer
                 }
             }
         }
+        // Session failures already have one message below the retry button.
+        internal string ExtraMessage => string.IsNullOrEmpty(error) || error == session?.Message ? null : error;
         private void ClearQr() { if (qrTexture != null) DestroyImmediate(qrTexture); qrTexture = null; }
         private void StopAndClean()
         {

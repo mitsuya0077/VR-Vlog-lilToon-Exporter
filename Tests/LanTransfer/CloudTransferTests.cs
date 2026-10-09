@@ -480,6 +480,41 @@ namespace VRVlog.LilToonExporter.LanTransfer.Tests
         }
 
         [Test]
+        public async Task EncryptedSnapshotSupportsConcurrentReadersWhileRejectingExternalWriters()
+        {
+            using (var fixture = new Fixture(101))
+            using (var encrypted = await CloudEncryptedSnapshot.CreateAsync(fixture.Source, CancellationToken.None))
+            using (var first = encrypted.OpenRead())
+            using (var second = encrypted.OpenRead())
+            {
+                Assert.That(first.Length, Is.EqualTo(encrypted.Size));
+                Assert.That(first.ReadByte(), Is.EqualTo(second.ReadByte()));
+                using (var digest = SHA256.Create())
+                { second.Position = 0; Assert.That(LanTransferProtocol.Hex(digest.ComputeHash(second)), Is.EqualTo(encrypted.FileHash)); }
+                Assert.Throws<IOException>(() => { using (var writer = new FileStream(encrypted.SnapshotPath, FileMode.Open, FileAccess.Write, FileShare.ReadWrite)) { } });
+            }
+        }
+
+        [TestCase("quota", "HTTP 429", "転送の作成")]
+        [TestCase("part-failure", "HTTP 500", "アップロード")]
+        [TestCase("io-failure", "一時ファイル", "転送の作成")]
+        [TestCase("network-failure", "接続", "転送の作成")]
+        public async Task SafeFailureMessagesIdentifyCauseAndStageWithoutPrivateDetails(string kind, string reason, string stage)
+        {
+            using (var fixture = new Fixture(17))
+            using (var session = new CloudVrmTransferSession(fixture.Source, fixture.Transport))
+            {
+                fixture.Transport.Failure = kind;
+                try { await session.UploadAsync(); Assert.Fail("Must fail"); }
+                catch (InvalidOperationException exception) { Assert.That(exception.Message, Is.EqualTo(session.Message)); }
+                Assert.That(session.Message, Does.Contain(reason).And.Contain(stage));
+                Assert.That(session.Message, Does.Not.Contain("SECRET").And.Not.Contain(fixture.Path).And.Not.Contain(fixture.Transport.UploadToken).And.Not.Contain("private service failure"));
+                Assert.That(session.Qr, Is.Null);
+                Assert.That(session.HasEncryptionKey, Is.False);
+            }
+        }
+
+        [Test]
         public async Task EncryptedTemporaryFileIsReleasedAndCekForgottenOnDisposal()
         {
             using (var fixture = new Fixture(101))
@@ -661,6 +696,8 @@ namespace VRVlog.LilToonExporter.LanTransfer.Tests
                 if (path == "/v3/transfers")
                 {
                     Assert.That(method, Is.EqualTo("POST")); Assert.That(token == null, Is.True);
+                    if (Failure == "io-failure") throw new IOException("SECRET private path");
+                    if (Failure == "network-failure") throw new System.Net.Http.HttpRequestException("SECRET token");
                     if (Failure == "quota") return new CloudTransferResponse(429, "{}");
                     if (Failure == "redirect") return new CloudTransferResponse(302, "{}");
                     Metadata = Encoding.UTF8.GetString(body);

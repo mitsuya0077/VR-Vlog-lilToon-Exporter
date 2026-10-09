@@ -121,7 +121,7 @@ namespace VRVlog.LilToonExporter.LanTransfer
         private FileStream activeReader;
         private CloudEncryptedSnapshot encrypted;
         private CloudTransferState state = CloudTransferState.Preparing;
-        private string qr;
+        private string qr, failureMessage;
         private long transferred, expiresAt, uploadSize;
         private bool started, disposed;
         internal CloudTransferState State { get { lock (gate) return state; } }
@@ -137,7 +137,8 @@ namespace VRVlog.LilToonExporter.LanTransfer
             : State == CloudTransferState.Completed ? "スマホへの保存が完了しました。クラウドの転送用コピーは削除対象になりました。"
             : State == CloudTransferState.Canceled ? "転送を中止しました。"
             : State == CloudTransferState.Expired ? "受取期限が切れました。新しいQRを作成できます。"
-            : "転送を続けられませんでした。接続を確認して新しいQRを作成してください。混雑時は時間を置いて試してください。";
+            : FailureMessage;
+        private string FailureMessage { get { lock (gate) return failureMessage ?? "転送サービスでエラーが発生しました。新しいQRを作成してください。"; } }
 
         internal CloudVrmTransferSession(CloudVrmTransferSource source, ICloudTransferTransport transport = null, Func<long> now = null)
         {
@@ -152,6 +153,7 @@ namespace VRVlog.LilToonExporter.LanTransfer
             using (var linked = CancellationTokenSource.CreateLinkedTokenSource(stop.Token, cancellation))
             {
                 var ct = linked.Token;
+                var stage = "暗号化の準備";
                 try
                 {
                     var protectedSnapshot = await CloudEncryptedSnapshot.CreateAsync(source, ct).ConfigureAwait(false);
@@ -160,6 +162,7 @@ namespace VRVlog.LilToonExporter.LanTransfer
                         if (ct.IsCancellationRequested || disposed) { protectedSnapshot.Dispose(); ct.ThrowIfCancellationRequested(); throw new ObjectDisposedException(nameof(CloudVrmTransferSession)); }
                         encrypted = protectedSnapshot; uploadSize = protectedSnapshot.Size;
                     }
+                    stage = "転送の作成";
                     var fields = await Send("POST", "/v3/transfers", null, Encoding.UTF8.GetBytes(CloudTransferProtocol.CreateBody(CloudEncryptedSnapshot.WireName, protectedSnapshot.Size, protectedSnapshot.FileHash)), "application/json", ct).ConfigureAwait(false);
                     fields.Exact("v", "id", "token", "uploadToken", "expiresAt", "partSize");
                     var newId = fields.Text("id"); var token = fields.Text("token"); var owner = fields.Text("uploadToken"); var expiry = fields.Number("expiresAt");
@@ -170,9 +173,10 @@ namespace VRVlog.LilToonExporter.LanTransfer
                     // lifetime is rejected before any VRM bytes are uploaded.
                     lock (gate) { id = newId; uploadToken = owner; }
                     if (fields.Number("v") != 3 || !CloudTransferProtocol.IsToken(token) || token == owner || fields.Number("partSize") != CloudTransferProtocol.PartSize) throw CloudTransferProtocol.Invalid();
-                    if (expiry <= currentTime || expiry > currentTime + (CloudTransferProtocol.LifetimeMinutes + 1) * 60) throw CloudTransferProtocol.Invalid();
+                    if (expiry <= currentTime || expiry > currentTime + (CloudTransferProtocol.LifetimeMinutes + 1) * 60) throw new SafeTransferFailure("PCの日時が転送サービスと合っていません。OSの日時の自動設定を確認してください。");
                     lock (gate) { readToken = token; expiresAt = expiry; if (!disposed && state != CloudTransferState.Canceled) state = CloudTransferState.Uploading; }
                     ct.ThrowIfCancellationRequested();
+                    stage = "暗号化ファイルの読み取り";
                     using (var reader = protectedSnapshot.OpenRead())
                     using (var hash = SHA256.Create())
                     {
@@ -188,6 +192,7 @@ namespace VRVlog.LilToonExporter.LanTransfer
                                 if (count == 0) throw CloudTransferProtocol.Invalid(); offset += count;
                             }
                             hash.TransformBlock(part, 0, part.Length, null, 0);
+                            stage = "暗号化ファイルのアップロード";
                             await Send("PUT", Path + "/parts/" + partNumber.ToString(CultureInfo.InvariantCulture), uploadToken, part, "application/octet-stream", ct, false).ConfigureAwait(false);
                             lock (gate) transferred += part.Length;
                             remaining -= part.Length; partNumber++;
@@ -197,6 +202,7 @@ namespace VRVlog.LilToonExporter.LanTransfer
                     }
                     lock (gate) activeReader = null;
                     CheckExpiry();
+                    stage = "QRの発行";
                     var published = await Send("POST", Path + "/publish", uploadToken, Array.Empty<byte>(), "application/octet-stream", ct).ConfigureAwait(false);
                     published.Exact("v", "id", "token", "name", "size", "sha256", "expiresAt");
                     if (published.Number("v") != 3 || published.Text("id") != id || published.Text("token") != readToken || published.Text("name") != CloudEncryptedSnapshot.WireName
@@ -210,8 +216,9 @@ namespace VRVlog.LilToonExporter.LanTransfer
                         protectedSnapshot.ReleaseFile();
                     }
                 }
-                catch (Exception)
+                catch (Exception exception)
                 {
+                    lock (gate) failureMessage = SafeFailureMessage(exception, stage);
                     lock (gate) { activeReader = null; qr = null; encrypted?.Dispose(); encrypted = null; if (state != CloudTransferState.Canceled && state != CloudTransferState.Expired) state = CloudTransferState.Failed; }
                     await DeleteRemote().ConfigureAwait(false);
                     throw new InvalidOperationException(Message); // Never disclose service bodies, credentials or paths.
@@ -263,9 +270,31 @@ namespace VRVlog.LilToonExporter.LanTransfer
         private async Task<CloudTransferProtocol.Fields> Send(string method, string path, string token, byte[] body, string type, CancellationToken ct, bool parse = true)
         {
             var response = await transport.SendAsync(method, path, token, body, type, ct).ConfigureAwait(false);
-            if (response.StatusCode < 200 || response.StatusCode >= 300) throw CloudTransferProtocol.Invalid();
+            if (response.StatusCode < 200 || response.StatusCode >= 300)
+                throw new SafeTransferFailure(response.StatusCode == 429
+                    ? "転送サービスの利用上限または混雑により送信できません（HTTP 429）。時間を置いて試してください。"
+                    : response.StatusCode == 413
+                    ? "転送サイズがサービスの上限を超えています（HTTP 413）。サイズを減らしてください。"
+                    : response.StatusCode == 401 || response.StatusCode == 403
+                    ? "転送の認証が拒否されました（HTTP " + response.StatusCode + "）。新しいQRを作成してください。"
+                    : "転送サービスが応答できませんでした（HTTP " + response.StatusCode + "）。時間を置いて新しいQRを作成してください。");
             return parse ? CloudTransferProtocol.Fields.Read(response.Body) : null;
         }
+        // Only controlled text and a status code reach the UI. Exception messages,
+        // paths, server bodies, QR contents and credentials never do.
+        private sealed class SafeTransferFailure : Exception
+        { internal SafeTransferFailure(string message) : base(message) { } }
+        private static string SafeFailureMessage(Exception exception, string stage)
+        {
+            var reason = exception is SafeTransferFailure ? exception.Message
+                : exception is UnauthorizedAccessException ? "一時ファイルへのアクセスが拒否されました。OSのアクセス権を確認してください。"
+                : exception is IOException ? "一時ファイルを読み書きできませんでした。空き容量やファイルを使用中のソフトを確認してください。"
+                : exception is HttpRequestException ? "転送サービスに接続できません。インターネット接続・VPN・プロキシを確認してください。"
+                : exception is OperationCanceledException ? "通信が中断または時間切れになりました。接続を確認して新しいQRを作成してください。"
+                : "転送データを確認できませんでした。最新版の試験用パッケージで再試行してください。";
+            return stage + "で停止しました。\n" + reason;
+        }
+
         private async Task DeleteRemote()
         {
             string transferId, owner;

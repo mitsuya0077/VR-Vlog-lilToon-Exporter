@@ -131,7 +131,10 @@ namespace VRVlog.LilToonExporter.LanTransfer
             lock (gate)
             {
                 if (master == null) throw new ObjectDisposedException(nameof(CloudEncryptedSnapshot));
-                var reader = new FileStream(SnapshotPath, FileMode.Open, FileAccess.Read, FileShare.Read, 64 * 1024, FileOptions.SequentialScan);
+                // The retained master has ReadWrite access. Windows requires a new
+                // reader to share that existing Write access as well. The master's
+                // FileShare.Read still forbids all other writers and deletes.
+                var reader = new FileStream(SnapshotPath, FileMode.Open, FileAccess.Read, FileShare.ReadWrite, 64 * 1024, FileOptions.SequentialScan);
                 readers.Add(reader); return reader;
             }
         }
