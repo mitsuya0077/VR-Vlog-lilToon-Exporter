@@ -55,13 +55,15 @@ The stable package exports VRM files without QR transfer code or transfer guides
 
 ## Quick start
 
-The labels below are the Japanese UI labels used by the Japanese guide.
+The steps below describe the adopted, undistributed main UI. Published ZIPs are unchanged. The UI follows the editor locale; the labels below match the Japanese guide.
 
 1. Open your avatar in Unity. Enable the avatar, its parents and the outfit you want to export.
-2. Select **VR Vlog → lilToon VRM 1.0を書き出す**.
-3. Assign the avatar's root object from the Hierarchy and enter the author name.
-4. If needed, open **ライセンス設定** to record the avatar's permissions and credits according to its original terms.
-5. Select **保存先を選んでVRMを書き出す** to save the VRM.
+2. Select **VR Vlog → VRMを書き出す**.
+3. Assign the avatar's root object from the Hierarchy and select **書き出しを準備**.
+4. Select and add expression files, or drop multiple .anim files from Project. Click a name or **確認** to preview. Expressions are optional; model-only export is supported.
+5. Add optional body poses, set the author and original license terms under **ライセンス設定**, then select **VRMを保存**.
+
+See the [VRM export guide](Documentation~/ExperimentalExpressionCapture.md) for file support and capture ranges. A beta package containing the QR module can transfer the saved VRM from the result section.
 
 Textures retain their aspect ratio and are reduced to fit within 1024 × 1024. Smaller textures are not enlarged. The original avatar and textures remain unchanged.
 
@@ -84,7 +86,7 @@ Most detailed user guides are currently in Japanese. The compatibility guide and
 
 Report vulnerabilities using the [private reporting instructions](SECURITY.md). Keep vulnerability reproduction details and exploit conditions out of public issues and pull requests.
 
-Use **VR Vlog → 動作環境を確認** to inspect installed package versions. Export details explain unsupported items and possible next steps.
+Use **VR Vlog → VRMを書き出す** to inspect installed package versions. Export details explain unsupported items and possible next steps.
 
 [Report a bug or propose an improvement](https://github.com/mitsuya0077/VR-Vlog-lilToon-Exporter/issues/new/choose) with the relevant versions, reproduction steps and a short sanitized error excerpt. Please keep private avatar assets, credentials and full logs out of public reports. Documentation fixes and pull requests are welcome; see [CONTRIBUTING.md](CONTRIBUTING.md).
 

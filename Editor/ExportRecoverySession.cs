@@ -40,6 +40,26 @@ namespace VRVlog.LilToonExporter
             }
         }
 
+        IDisposable retainedInput;
+        int inputOwners;
+        sealed class InputOwnership : IDisposable
+        {
+            ExportRecoverySession owner;
+            internal InputOwnership(ExportRecoverySession owner) { this.owner = owner; owner.inputOwners++; }
+            public void Dispose()
+            {
+                var current = owner; owner = null;
+                if (current != null && --current.inputOwners == 0) current.ReleaseInput();
+            }
+        }
+        internal IDisposable AcquireInputOwnership() => new InputOwnership(this);
+        internal void RetainInput(IDisposable input)
+        {
+            if (retainedInput != null) throw new InvalidOperationException("Recovery input is already owned.");
+            retainedInput = input;
+        }
+        internal void ReleaseInput() { var input = retainedInput; retainedInput = null; input?.Dispose(); }
+
         private readonly Func<ExportRecoveryOptions, ExportRecoveryReport, ICollection<string>, byte[]> create;
         private readonly GameObject[] previewExcludedObjects;
         private readonly ExportGimmickOptions previewGimmicks;

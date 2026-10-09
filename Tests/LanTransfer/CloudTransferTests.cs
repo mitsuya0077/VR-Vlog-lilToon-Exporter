@@ -480,6 +480,78 @@ namespace VRVlog.LilToonExporter.LanTransfer.Tests
         }
 
         [Test]
+        public async Task EncryptedSnapshotSupportsConcurrentReadersAndWindowsWriterExclusion()
+        {
+            using (var fixture = new Fixture(101))
+            using (var encrypted = await CloudEncryptedSnapshot.CreateAsync(fixture.Source, CancellationToken.None))
+            using (var first = encrypted.OpenRead())
+            using (var second = encrypted.OpenRead())
+            {
+                Assert.That(first.Length, Is.EqualTo(encrypted.Size));
+                Assert.That(first.ReadByte(), Is.EqualTo(second.ReadByte()));
+                using (var digest = SHA256.Create())
+                { second.Position = 0; Assert.That(LanTransferProtocol.Hex(digest.ComputeHash(second)), Is.EqualTo(encrypted.FileHash)); }
+                // .NET on Unix does not enforce Windows FileShare exclusions.
+                // Keep the required writer exclusion assertion on Windows CI.
+                if (Environment.OSVersion.Platform == PlatformID.Win32NT)
+                    Assert.Throws<IOException>(() => { using (var writer = new FileStream(encrypted.SnapshotPath, FileMode.Open, FileAccess.Write, FileShare.ReadWrite)) { } });
+            }
+        }
+
+        [TestCase("quota", "HTTP 429", "転送の作成")]
+        [TestCase("part-failure", "HTTP 500", "アップロード")]
+        [TestCase("io-failure", "一時ファイル", "転送の作成")]
+        [TestCase("network-failure", "接続", "転送の作成")]
+        public async Task SafeFailureMessagesIdentifyCauseAndStageWithoutPrivateDetails(string kind, string reason, string stage)
+        {
+            using (var fixture = new Fixture(17))
+            using (var session = new CloudVrmTransferSession(fixture.Source, fixture.Transport))
+            {
+                fixture.Transport.Failure = kind;
+                try { await session.UploadAsync(); Assert.That(false, Is.True, "Must fail"); }
+                catch (InvalidOperationException exception) { Assert.That(exception.Message, Is.EqualTo(session.Message)); }
+                Assert.That(session.Message.Contains(reason) && session.Message.Contains(stage), Is.True);
+                Assert.That(new[] { "SECRET", fixture.Path, fixture.Transport.UploadToken, "private service failure" }.Any(value => session.Message.Contains(value)), Is.False);
+                Assert.That(session.Qr == null, Is.True);
+                Assert.That(session.HasEncryptionKey, Is.False);
+            }
+        }
+
+#if UNITY_EDITOR && !VRVLOG_LAN_TRANSFER_CLI
+        [TestCase("en", "quota")][TestCase("en", "part-failure")][TestCase("en", "io-failure")][TestCase("en", "network-failure")]
+        [TestCase("ko", "quota")][TestCase("ko", "part-failure")][TestCase("ko", "io-failure")][TestCase("ko", "network-failure")]
+        [TestCase("zh-Hans", "quota")][TestCase("zh-Hans", "part-failure")][TestCase("zh-Hans", "io-failure")][TestCase("zh-Hans", "network-failure")]
+        [TestCase("zh-Hant", "quota")][TestCase("zh-Hant", "part-failure")][TestCase("zh-Hant", "io-failure")][TestCase("zh-Hant", "network-failure")]
+        public async Task FailureDisplayUsesInstalledLocaleTablesWithoutPrivateDetails(string locale, string kind)
+        {
+            var flags = System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Static;
+            var localization = Type.GetType("VRVlog.LilToonExporter.ExporterLocalization, VRVlog.LilToonExporter.Compatibility", true);
+            var translate = (Func<string, string>)Delegate.CreateDelegate(typeof(Func<string, string>), localization.GetMethod("T"));
+            var localeField = localization.GetField("_locale", flags);
+            var messagesField = localization.GetField("_messages", flags);
+            var previousLocale = localeField.GetValue(null); var previousMessages = messagesField.GetValue(null);
+            try
+            {
+                localeField.SetValue(null, locale); messagesField.SetValue(null, null);
+                using (var fixture = new Fixture(17))
+                using (var session = new CloudVrmTransferSession(fixture.Source, fixture.Transport))
+                {
+                    fixture.Transport.Failure = kind;
+                    try { await session.UploadAsync(); Assert.That(false, Is.True, "Must fail"); }
+                    catch (InvalidOperationException) { }
+                    var displayed = session.DisplayMessage(translate);
+                    Assert.That(displayed != session.Message && !displayed.Contains("で停止しました"), Is.True);
+                    Assert.That(Regex.IsMatch(displayed, @"[ぁ-ゟァ-ヿ]"), Is.False, "Every controlled reason and stage must be translated.");
+                    if (kind == "quota") Assert.That(displayed.Contains("HTTP 429"), Is.True);
+                    if (kind == "part-failure") Assert.That(displayed.Contains("HTTP 500"), Is.True);
+                    Assert.That(new[] { "SECRET", fixture.Path, fixture.Transport.UploadToken, "private service failure" }.Any(value => displayed.Contains(value)), Is.False);
+                }
+            }
+            finally { localeField.SetValue(null, previousLocale); messagesField.SetValue(null, previousMessages); }
+        }
+#endif
+
+        [Test]
         public async Task EncryptedTemporaryFileIsReleasedAndCekForgottenOnDisposal()
         {
             using (var fixture = new Fixture(101))
@@ -661,6 +733,8 @@ namespace VRVlog.LilToonExporter.LanTransfer.Tests
                 if (path == "/v3/transfers")
                 {
                     Assert.That(method, Is.EqualTo("POST")); Assert.That(token == null, Is.True);
+                    if (Failure == "io-failure") throw new IOException("SECRET private path");
+                    if (Failure == "network-failure") throw new System.Net.Http.HttpRequestException("SECRET token");
                     if (Failure == "quota") return new CloudTransferResponse(429, "{}");
                     if (Failure == "redirect") return new CloudTransferResponse(302, "{}");
                     Metadata = Encoding.UTF8.GetString(body);

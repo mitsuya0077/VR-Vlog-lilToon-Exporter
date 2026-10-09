@@ -49,6 +49,7 @@ namespace VRVlog.LilToonExporter
 
     internal sealed class ExportRecoveryReport
     {
+        internal GameObject DiagnosticSource;
         internal string Stage = "環境確認";
         internal bool Succeeded;
         internal readonly List<ExportRecoveryDiagnostic> Diagnostics = new List<ExportRecoveryDiagnostic>();
@@ -90,6 +91,7 @@ namespace VRVlog.LilToonExporter
 
         internal void Fail(GameObject source, Exception error)
         {
+            source = DiagnosticSource != null ? DiagnosticSource : source;
             Succeeded = false;
             Diagnostics.Clear();
             errorType = error is MaterialBakeException ? nameof(MaterialBakeException) :

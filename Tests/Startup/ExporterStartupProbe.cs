@@ -12,15 +12,19 @@ public static class ExporterStartupProbe
             throw new Exception("Production startup must run without exporter test assemblies");
         var manifest=System.IO.File.ReadAllText("Packages/manifest.json");
         if(manifest.Contains("\"testables\"")) throw new Exception("Production startup must run without testables");
+        var menuEntries=TypeCache.GetMethodsWithAttribute<MenuItem>()
+            .SelectMany(m=>m.GetCustomAttributes(typeof(MenuItem), false).Cast<MenuItem>())
+            .Where(m=>m.menuItem.StartsWith("VR Vlog/", StringComparison.Ordinal)).Select(m=>m.menuItem).ToArray();
+        if(menuEntries.Length!=1 || menuEntries[0]!="VR Vlog/VRMを書き出す") throw new Exception("Exporter menu must contain exactly one entry");
         Debug.Log("PROBE startup registered=" + (DependencyDiagnostics.OpenExporter != null) + " errors=" + EditorUtility.scriptCompilationFailed);
         foreach (var assembly in CompilationPipeline.GetAssemblies(AssembliesType.Editor).Where(a => a.name.StartsWith("VRVlog")))
             Debug.Log("PROBE graph="+assembly.name+" defines="+string.Join(",",assembly.defines.Where(d=>d.StartsWith("VRVLOG"))));
         foreach (var assembly in AppDomain.CurrentDomain.GetAssemblies().Where(a=>a.GetName().Name.StartsWith("VRVlog")))
             Debug.Log("PROBE loaded="+assembly.FullName);
-        if (!EditorApplication.ExecuteMenuItem("VR Vlog/lilToon VRM 1.0を書き出す")) throw new Exception("Menu missing");
+        if (!EditorApplication.ExecuteMenuItem("VR Vlog/VRMを書き出す")) throw new Exception("Menu missing");
         var windows=Resources.FindObjectsOfTypeAll<EditorWindow>().Where(w=>w.GetType().FullName.StartsWith("VRVlog")).ToArray();
         Debug.Log("PROBE windows="+string.Join(",", windows.Select(w=>w.GetType().FullName)));
-        bool success=windows.Any(w=>w.GetType().Name=="LilToonExporterWindow");
+        bool success=windows.Any(w=>w.GetType().Name=="ExperimentalExpressionCaptureWindow" && w.titleContent.text==VRVlog.LilToonExporter.ExporterLocalization.T("VRM書き出し"));
         foreach(var w in windows) w.Close();
         if(!success) throw new Exception("Exporter did not open");
         DependencyDiagnostics.RefreshBackend();

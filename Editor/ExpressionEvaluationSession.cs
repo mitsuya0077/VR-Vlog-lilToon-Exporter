@@ -21,6 +21,7 @@ namespace VRVlog.LilToonExporter
         private readonly ExpressionDependencies dependencies;
         private readonly bool defaultLocal;
         private readonly ISet<string> suppliedInputs;
+        private readonly bool preserveSyncedOverrides;
         private InvalidOperationException failure;
         private int entries;
         private bool neutralFxObserved;
@@ -29,11 +30,12 @@ namespace VRVlog.LilToonExporter
         internal AnimatorController Controller { get; private set; }
 
         internal ExpressionEvaluationSession(RuntimeAnimatorController runtime, ExpressionDependencies dependencies,
-            ISet<string> expressionParameters, bool defaultLocal = true, FixedExpressionContext fixedContext = null)
+            ISet<string> expressionParameters, bool defaultLocal = true, FixedExpressionContext fixedContext = null, bool preserveSyncedOverrides = false)
         {
             this.dependencies = dependencies;
             this.expressionParameters = expressionParameters ?? new HashSet<string>();
             this.defaultLocal = defaultLocal;
+            this.preserveSyncedOverrides = preserveSyncedOverrides;
             suppliedInputs = fixedContext == null ? null : new HashSet<string>(fixedContext.Values.Keys, StringComparer.Ordinal);
             // The fixed export environment explicitly starts with FX enabled.
             // Every potentially reachable non-unit command is still rejected.
@@ -173,6 +175,8 @@ namespace VRVlog.LilToonExporter
                 }
             }
             root.layers = layers;
+            if (preserveSyncedOverrides)
+                ExperimentalExpressionControllerScope.RemapSyncedOverrides(root, original, State, Motion, Behaviours);
             return root;
         }
 

@@ -198,7 +198,7 @@ namespace VRVlog.LilToonExporter
             value.GetType().FullName == "VRC.SDK3.Dynamics.Constraint.Components.VRCRotationConstraint";
         static bool IsPrefabBookkeeping(string path) => path == "m_CorrespondingSourceObject" || path == "m_PrefabInstance" || path == "m_PrefabAsset";
 
-        static void MeshData(Digest hash, Mesh mesh)
+        internal static void MeshData(Digest hash, Mesh mesh)
         {
             hash.Integer(mesh.vertexCount); hash.Integer((int)mesh.indexFormat); hash.Boolean(mesh.isReadable); hash.Bounds(mesh.bounds);
             var attributes = mesh.GetVertexAttributes(); hash.Integer(attributes.Length);

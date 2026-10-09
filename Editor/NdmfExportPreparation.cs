@@ -19,9 +19,9 @@ namespace VRVlog.LilToonExporter
         // Provenance only for copies made by our own isolation pass. Assets
         // created or replaced by NDMF plugins never enter this identity map.
         private readonly Dictionary<Object, Object> isolatedAssets = new Dictionary<Object, Object>();
-        private readonly Dictionary<SkinnedMeshRenderer, SkinnedMeshRenderer> rendererReplacements =
-            new Dictionary<SkinnedMeshRenderer, SkinnedMeshRenderer>();
-        private readonly HashSet<SkinnedMeshRenderer> ambiguousRendererReplacements = new HashSet<SkinnedMeshRenderer>();
+        private readonly Dictionary<Renderer, Renderer> rendererReplacements =
+            new Dictionary<Renderer, Renderer>();
+        private readonly HashSet<Renderer> ambiguousRendererReplacements = new HashSet<Renderer>();
         private string temporaryAssetPath, temporaryAssetGuid;
         // NDMF tracks asset replacements made by authoring/optimization passes.
         // Keep the optional public registry available to the preparation callback.
@@ -36,12 +36,56 @@ namespace VRVlog.LilToonExporter
         private const string CompatibilityMessage =
             "アバターの準備に必要な NDMF API を利用できません。NDMF " + DependencyPolicy.NdmfMinimum + " 以降の 1.x が必要です。確認済み構成: MA " + DependencyPolicy.ModularAvatarReference + " / NDMF " + DependencyPolicy.NdmfReference + "。" + DependencyPolicy.Recovery;
 
+#if UNITY_5_3_OR_NEWER
+        // The host protocol shim cannot clone Unity hierarchies; native tests
+        // exercise staging, callback suppression and authored enabled states.
+        internal static bool PreservesExportBehaviour(Behaviour behaviour) =>
+            behaviour.GetType().GetInterfaces().Any(contract => contract.FullName == "UniVRM10.IVrm10Constraint") ||
+            behaviour.GetType().FullName == PhysBoneSpringExport.PhysBoneType ||
+            behaviour.GetType().FullName == "VRC.SDK3.Dynamics.PhysBone.Components.VRCPhysBoneCollider";
+
+        internal static GameObject InstantiateOwnedCopy(GameObject source)
+        {
+            var host = new GameObject("VRVlog inactive copy staging") { hideFlags = HideFlags.HideAndDontSave };
+            host.SetActive(false);
+            GameObject copy = null;
+            try
+            {
+                copy = Object.Instantiate(source, host.transform, true);
+                copy.name = source.name; copy.hideFlags = HideFlags.HideAndDontSave;
+                foreach (var behaviour in copy.GetComponentsInChildren<Behaviour>(true))
+                {
+                    if (behaviour == null) continue;
+                    var type = behaviour.GetType();
+                    var authoring = IsAuthoringTag(type) || type.GetInterfaces().Any(contract => contract.FullName == "VRC.SDKBase.IEditorOnly");
+                    if (authoring || PreservesExportBehaviour(behaviour)) continue;
+                    var editorCallbacks = false;
+                    for (var current = type; current != null; current = current.BaseType)
+                        editorCallbacks |= current.GetCustomAttributesData().Any(attribute => attribute.AttributeType.FullName == "UnityEngine.ExecuteAlways" ||
+                            attribute.AttributeType.FullName == "UnityEngine.ExecuteInEditMode");
+                    // Disabled editor scripts can still receive Awake on activation.
+                    // Remove editor scripts outside export/authoring contracts
+                    // before activation. Preserve inert runtime/metadata enabled
+                    // states: PhysBones and constraints use them during export.
+                    if (behaviour is MonoBehaviour && editorCallbacks) Object.DestroyImmediate(behaviour);
+                    else if (behaviour is Animator) behaviour.enabled = false;
+                }
+                copy.transform.SetParent(null, true);
+                return copy;
+            }
+            catch { if (copy != null) Object.DestroyImmediate(copy); throw; }
+            finally { Object.DestroyImmediate(host); }
+        }
+#endif
+
         internal static bool NeedsProcessing(GameObject avatar) => avatar != null && RelevantAuthoring(avatar).Count != 0;
 
         internal Object IsolatedCopyOf(Object original) => original != null && isolatedAssets.TryGetValue(original, out var copy)
             ? copy : original;
 
-        internal SkinnedMeshRenderer PreparedRendererFor(SkinnedMeshRenderer original)
+        internal SkinnedMeshRenderer PreparedRendererFor(SkinnedMeshRenderer original) => PreparedRendererFor((Renderer)original) as SkinnedMeshRenderer;
+
+        internal Renderer PreparedRendererFor(Renderer original)
         {
             if (ReferenceEquals(original, null)) return null;
             if (ambiguousRendererReplacements.Contains(original)) return null;
@@ -58,11 +102,11 @@ namespace VRVlog.LilToonExporter
             var contract = registry?.GetType().GetInterfaces().FirstOrDefault(type => type.FullName == "nadena.dev.ndmf.IObjectRegistry");
             var getReference = contract?.GetMethod("GetReference", new[] { typeof(Object), typeof(bool) });
             if (getReference == null) return;
-            foreach (var current in clone.GetComponentsInChildren<SkinnedMeshRenderer>(true))
+            foreach (var current in clone.GetComponentsInChildren<Renderer>(true))
             {
                 var reference = getReference.Invoke(registry, new object[] { current, false });
                 var original = reference?.GetType().GetProperty("Object", BindingFlags.Public | BindingFlags.Instance)?.GetValue(reference)
-                    as SkinnedMeshRenderer;
+                    as Renderer;
                 if (ReferenceEquals(original, null)) continue;
                 // A build can retain the original disabled component. Its own
                 // diagnostic reference is not a competing replacement.

@@ -48,7 +48,7 @@ namespace VRVlog.LilToonExporter
             var automatic = ExportGimmickDetection.AutomaticRoots(findings, gimmickOptions ?? new ExportGimmickOptions());
             using var exclusions = new ExportObjectExclusions(source, (excluded ?? Array.Empty<GameObject>()).Concat(automatic));
             var resolved = BlinkExportSession.Resolve(source, options, exclusions.Contains);
-            copy = Object.Instantiate(source);
+            copy = NdmfExportPreparation.InstantiateOwnedCopy(source);
             blink = resolved.ForClone(source, copy);
             copy.hideFlags = HideFlags.HideAndDontSave;
             var warnings = new List<string>();
