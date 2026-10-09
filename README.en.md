@@ -1,3 +1,5 @@
+> **0.11.15-beta.1** temporarily skips initial FX reconstruction. Enable **Show pre-release packages** in ALCOM. The prepared MA/NDMF copy supplies the neutral face and body, which may differ from VRChat. Individual expressions, blink and tracking endpoints remain evaluated. This beta includes file export only, without QR transfer.
+
 # VR Vlog lilToon VRM Exporter
 
 [日本語](README.md) · [English](README.en.md)

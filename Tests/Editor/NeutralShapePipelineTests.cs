@@ -159,7 +159,7 @@ namespace VRVlog.LilToonExporter.Tests
                 foreach (var input in new[] { 0f, 1f, 0f })
                 {
                     imported.Runtime.Expression.SetWeight(key, input); imported.Runtime.Process();
-                    var open = input == 0 ? .03f : endpoint <= 50 ? endpoint * .0004f : .02f + (endpoint - 50) * .0002f;
+                    var open = input == 0 ? 0f : endpoint <= 50 ? endpoint * .0004f : .02f + (endpoint - 50) * .0002f;
                     foreach (var skin in imported.GetComponentsInChildren<SkinnedMeshRenderer>())
                     {
                         Assert.That(skin.sharedMesh.blendShapeCount, Is.GreaterThan(220));
@@ -169,7 +169,7 @@ namespace VRVlog.LilToonExporter.Tests
                             skin.BakeMesh(baked);
                             Assert.That(baked.vertices[0].y, Is.EqualTo(1.7f + open).Within(.00002));
                             Assert.That(baked.vertices[0].x, Is.EqualTo(-.1f + (skin.name == "Front" ? .01f : .02f)).Within(.00002));
-                            var normalDelta = input == 0 ? new Vector3(.06f, .02f, 0) : endpoint <= 50
+                            var normalDelta = input == 0 ? Vector3.zero : endpoint <= 50
                                 ? new Vector3(.02f, .01f, 0) * (endpoint / 50)
                                 : Vector3.LerpUnclamped(new Vector3(.02f, .01f, 0), new Vector3(.06f, .02f, 0), (endpoint - 50) / 50);
                             var expectedNormal = (Vector3.forward + normalDelta).normalized;

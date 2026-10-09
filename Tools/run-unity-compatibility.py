@@ -564,7 +564,7 @@ BEHAVIOR_CASES = {
         'NeutralAndAbsoluteEndpointRoundTripWithLargeSharedMeshes': 4,
     },
     'NeutralShapeExportTests': {
-        'FxDefaultOpeningShapeSurvivesExportWithoutAnExpressionMenu': 6,
+        'PreparedRestSurvivesExportWithoutRestoringInitialFx': 6,
     },
     'UnifiedExpressionExportTests': {
         'MissingBlinkRequiresUsableUnifiedRoute': 26,
