@@ -51,7 +51,15 @@ namespace VRVlog.LilToonExporter.Tests
                 dialog.Options.SelectMode(BlinkExportMode.None); dialog.ApplySettings();
                 window.SaveVrm(path);
                 imported = await Vrm10.LoadBytesAsync(File.ReadAllBytes(path), canLoadVrm0X: false, awaitCaller: new ImmediateCaller());
-                Assert.That(imported.Vrm.Expression.Blink == null || imported.Vrm.Expression.Blink.MorphTargetBindings.Length == 0, Is.True);
+                // No-blink exports intentionally retain an inert standard clip.
+                // Verify visible behavior rather than requiring absent metadata.
+                var disabledSkin = VrChatExpressionSampler.FindRenderer(imported.gameObject, imported.Vrm.Expression.Blink.MorphTargetBindings[0].RelativePath);
+                using (var disabledBaked = new BlinkTestMesh())
+                {
+                    imported.Runtime.Expression.SetWeight(ExpressionKey.Blink, 0); imported.Runtime.Process(); disabledSkin.BakeMesh(disabledBaked.Mesh); var rest = disabledBaked.Mesh.vertices;
+                    imported.Runtime.Expression.SetWeight(ExpressionKey.Blink, 1); imported.Runtime.Process(); disabledSkin.BakeMesh(disabledBaked.Mesh);
+                    Assert.That(disabledBaked.Mesh.vertices.Zip(rest, (a,b) => (a-b).sqrMagnitude).Max(), Is.LessThan(1e-8f));
+                }
                 Object.DestroyImmediate(imported.gameObject); imported = null;
                 // The primary IMGUI checkbox writes this same bool directly.
                 type.GetField("automaticBlink", flags).SetValue(window, true);
