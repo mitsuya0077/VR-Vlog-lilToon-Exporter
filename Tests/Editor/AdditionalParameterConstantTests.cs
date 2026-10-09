@@ -624,7 +624,13 @@ namespace VRVlog.LilToonExporter.Tests
             else AnimationUtility.SetAnimationEvents((AnimationClip)idle.motion,
                 new[] { new AnimationEvent { time = 0, functionName = "LiveUnknownProducer" } });
             Assert.Throws<InvalidOperationException>(() => Selected());
-            Assert.Throws<InvalidOperationException>(() => NeutralShapeSampler.Sample(avatar));
+            if (kind == "morph")
+            {
+                var warnings = new List<string>();
+                Assert.That(NeutralShapeSampler.Sample(avatar, warnings: warnings), Is.Empty);
+                Assert.That(warnings.Any(value => value.Contains("FX以外") && value.Contains("blendShape.Open")), Is.True);
+            }
+            else Assert.Throws<InvalidOperationException>(() => NeutralShapeSampler.Sample(avatar));
             Assert.That(skin.GetBlendShapeWeight(0), Is.EqualTo(35));
         }
 

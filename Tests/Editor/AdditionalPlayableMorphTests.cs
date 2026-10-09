@@ -183,6 +183,29 @@ namespace VRVlog.LilToonExporter.Tests
         }
 
         [Test]
+        public void ImplicitDefaultClosureRetainsPreparedComponentAndPreservesProvenIndependentTop()
+        {
+            var support = State(Layer(fx, "Implicit default support"), Clip(fx, "WD companion", ("Companion", 40)));
+            support.writeDefaultValues = true;
+            State(Layer(fx, "Proven independent final override"), Clip(fx, "Independent final constant", ("Independent", 100)));
+            var source = VrChatExpressionMenu.Read(avatar, new VrChatMenuImportPolicy { SkipAll = true });
+            var context = FixedExpressionContext.Create(fx, source.Defaults, source);
+            var error = Assert.Throws<NeutralShapeSamplingException>(() => ExpressionDependencies.AnalyzeNeutral(fx,
+                new HashSet<EditorCurveBinding> { Binding("Mouth"), Binding("Companion") }, null, source, fixedContext: context,
+                preserveCommittedMorphs: true));
+            Assert.That(error.DependencyMorphs, Does.Contain(Binding("Independent")), "Keep the complete execution closure.");
+            Assert.That(error.CoupledMorphs, Does.Not.Contain(Binding("Independent")), "WD-only support is not an explicit parameter component.");
+            var before = Capture(); var warnings = new List<string>();
+            var values = NeutralShapeSampler.Sample(avatar, warnings: warnings);
+            Assert.That(values.Select(value => value.Shape), Is.EqualTo(new[] { "Independent" }));
+            Assert.That(values.Single().Weight, Is.EqualTo(100).Within(.01));
+            Assert.That(warnings.Any(value => value.Contains("Mouth") && value.Contains("FX以外")), Is.True);
+            Assert.That(warnings.Any(value => value.Contains("Independent")), Is.False,
+                "Diagnostics must describe the retained component without claiming the independently sampled output was preserved.");
+            Unchanged(before);
+        }
+
+        [Test]
         public void AdditionalMorphCannotHideContradictoryEvaluatedFxLayerCommands()
         {
             var type = SdkType("VRCAnimatorLayerControl");
@@ -229,13 +252,37 @@ namespace VRVlog.LilToonExporter.Tests
             { AnimationUtility.SetAnimationEvents(clip, new[] { new AnimationEvent { functionName = "UnsupportedEvent", time = .5f } }); diagnostic = "AnimationEvent"; }
             else if (damage == "NaN")
             {
-                AnimationUtility.SetEditorCurve(clip, EditorCurveBinding.FloatCurve("Body", typeof(Transform), "m_LocalPosition.x"),
-                    new AnimationCurve(new Keyframe(0, float.NaN), new Keyframe(1, 0))); diagnostic = "m_LocalPosition.x";
+                var binding = EditorCurveBinding.FloatCurve("Body", typeof(Transform), "m_LocalPosition.x");
+                // Unity drops nonfinite key values. An active malformed
+                // tangent survives the actual native curve serialization.
+                AnimationUtility.SetEditorCurve(clip, binding,
+                    new AnimationCurve(new Keyframe(0, 0, 0, float.NaN), new Keyframe(1, 1, 1, 0)));
+                var persisted = AnimationUtility.GetEditorCurve(clip, binding);
+                Assert.That(persisted, Is.Not.Null); Assert.That(persisted.length, Is.EqualTo(2));
+                Assert.That(float.IsNaN(persisted.keys[0].outTangent), Is.True, "The actual clip must contain malformed active interpolation data.");
+                diagnostic = "m_LocalPosition.x";
             }
             else if (damage == "ObjectTime")
             {
-                AnimationUtility.SetObjectReferenceCurve(clip, EditorCurveBinding.PPtrCurve("Body", typeof(SkinnedMeshRenderer), "m_Materials.Array.data[0]"),
-                    new[] { new ObjectReferenceKeyframe { time = float.NaN, value = null } }); diagnostic = "m_Materials";
+                var reference = Object.Instantiate(mesh); AssetDatabase.CreateAsset(reference, folder + "/ReferencedMesh.asset");
+                var binding = EditorCurveBinding.PPtrCurve("Body", typeof(SkinnedMeshRenderer), "m_Mesh");
+                AnimationUtility.SetObjectReferenceCurve(clip, binding,
+                    new[] { new ObjectReferenceKeyframe { time = 0, value = reference }, new ObjectReferenceKeyframe { time = 1, value = reference } });
+                // The public setter drops invalid times. Modify a real,
+                // persistent clip key after it has a valid native binding.
+                using (var data = new SerializedObject(clip))
+                {
+                    var curves = data.FindProperty("m_PPtrCurves");
+                    Assert.That(curves, Is.Not.Null); Assert.That(curves.arraySize, Is.EqualTo(1));
+                    var keys = curves.GetArrayElementAtIndex(0).FindPropertyRelative("curve");
+                    Assert.That(keys, Is.Not.Null); Assert.That(keys.arraySize, Is.EqualTo(2));
+                    keys.GetArrayElementAtIndex(0).FindPropertyRelative("time").floatValue = float.NaN;
+                    data.ApplyModifiedPropertiesWithoutUndo();
+                }
+                var persisted = AnimationUtility.GetObjectReferenceCurve(clip, binding);
+                Assert.That(persisted.Length, Is.EqualTo(2));
+                Assert.That(persisted.Any(key => float.IsNaN(key.time)), Is.True, "The actual clip must retain the invalid object reference key time.");
+                diagnostic = "m_Mesh";
             }
             else
             {

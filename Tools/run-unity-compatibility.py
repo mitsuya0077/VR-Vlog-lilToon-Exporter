@@ -133,6 +133,7 @@ BEHAVIOR_CASES = {
         'UnprovedTypedGateInputsDoNotHideCommands': 2,
     },
     'AdditionalPlayableMorphTests': {
+        'ImplicitDefaultClosureRetainsPreparedComponentAndPreservesProvenIndependentTop': 1,
         'KnownAdditionalMorphKeepsCoupledPreparedRestAndSamplesIndependentNeutral': 6,
         'AdditionalMorphCannotBeSilentlyDroppedFromFixedExpressionEndpoints': 1,
         'LaterOverlapDiscardsEarlierSamplesForTheCompleteParameterDependencyComponent': 1,

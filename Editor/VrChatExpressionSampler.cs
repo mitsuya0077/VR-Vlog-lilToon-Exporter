@@ -1129,7 +1129,7 @@ namespace VRVlog.LilToonExporter
             {
                 // An automatic rest has no fixed random phase. Keep the entire
                 // dependent prepared component; manual probes still reject it.
-                throw new NeutralShapeSamplingException(error.Message, error, dependencies.NeutralDependencyMorphs);
+                throw new NeutralShapeSamplingException(error.Message, error, dependencies.NeutralDependencyMorphs, dependencies.NeutralCoupledMorphs);
             }
             finally
             {
