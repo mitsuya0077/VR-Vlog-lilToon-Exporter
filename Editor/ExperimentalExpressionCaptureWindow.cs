@@ -79,7 +79,7 @@ namespace VRVlog.LilToonExporter
                         source = (GameObject)EditorGUILayout.ObjectField(ExporterLocalization.T("アバター"), source, typeof(GameObject), true);
                     if (session != null && GUILayout.Button(ExporterLocalization.T("変更"), GUILayout.Width(50)) &&
                         (clipInputs.Count == 0 && session.PoseOptions.Manual.Count == 0 || EditorUtility.DisplayDialog(ExporterLocalization.T("アバターを変更"), ExporterLocalization.T("追加した表情・ポーズの一覧をリセットします。保存済みVRMは残ります。"), ExporterLocalization.T("変更する"), ExporterLocalization.T("戻る"))))
-                        Queue(() => { Cleanup(); status = null; });
+                        Queue(ChangeAvatar);
                     EditorGUILayout.EndHorizontal();
                     if (session == null)
                     {
@@ -389,7 +389,7 @@ namespace VRVlog.LilToonExporter
 
         void Export()
         {
-            var path = EditorUtility.SaveFilePanel(ExporterLocalization.T("VRMの保存先"), "", source.name + "-expressions", "vrm");
+            var path = EditorUtility.SaveFilePanel(ExporterLocalization.T("VRMの保存先"), "", AvatarName() + "-expressions", "vrm");
             if (string.IsNullOrEmpty(path)) return;
             SaveVrm(path);
         }
@@ -398,7 +398,7 @@ namespace VRVlog.LilToonExporter
         {
             RecordSelectedClips();
             var warnings = new System.Collections.Generic.List<string>(session.Warnings);
-            var bytes = session.Export(source.name, author, warnings,
+            var bytes = session.Export(AvatarName(), author, warnings,
                 automaticBlink ? configuredBlink?.Copy() : new BlinkExportOptions { Mode = BlinkExportMode.None }, licenseOptions.Copy());
             AtomicWrite(path, bytes);
             var extensions = (System.Collections.Generic.Dictionary<string, object>)GlbDocument.Read(bytes).Json["extensions"];
@@ -441,6 +441,15 @@ namespace VRVlog.LilToonExporter
                 else File.Move(temporary, path);
             }
             finally { if (File.Exists(temporary)) File.Delete(temporary); }
+        }
+
+        string AvatarName() => source != null && !string.IsNullOrWhiteSpace(source.name) ? source.name.Trim() : "avatar";
+
+        void ChangeAvatar()
+        {
+            Cleanup();
+            licenseOptions = new AvatarLicenseOptions();
+            status = null;
         }
 
         void Cleanup()

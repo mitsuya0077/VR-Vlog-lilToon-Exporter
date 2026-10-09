@@ -18,6 +18,103 @@ namespace VRVlog.LilToonExporter.Tests
     {
         [TestCase(false)]
         [TestCase(true)]
+        public void ChangingAvatarDoesNotCarryLicenseSelectionsIntoTheNextSavedVrm(bool recordFace)
+        {
+            using var first = new AttachmentConnectionTests.Fixture();
+            using var second = new AttachmentConnectionTests.Fixture();
+            foreach (var skin in first.Source.GetComponentsInChildren<SkinnedMeshRenderer>().Concat(second.Source.GetComponentsInChildren<SkinnedMeshRenderer>()))
+                skin.sharedMaterial.shader = Shader.Find("lilToon");
+            var flags = System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic;
+            var type = typeof(ExperimentalExpressionCaptureWindow);
+            var window = ScriptableObject.CreateInstance<ExperimentalExpressionCaptureWindow>();
+            var clip = new AnimationClip { name = "Selected face" };
+            var path = Path.Combine(Path.GetTempPath(), "vrvlog-avatar-license-" + Guid.NewGuid().ToString("N") + ".vrm");
+            try
+            {
+                type.GetField("source", flags).SetValue(window, first.Source);
+                type.GetField("author", flags).SetValue(window, "Tests");
+                type.GetField("automaticBlink", flags).SetValue(window, false);
+                type.GetMethod("Prepare", flags).Invoke(window, null);
+                var selected = new AvatarLicenseOptions {
+                    AvatarPermission = UniGLTF.Extensions.VRMC_vrm.AvatarPermissionType.everyone,
+                    CommercialUsage = UniGLTF.Extensions.VRMC_vrm.CommercialUsageType.corporation,
+                    CreditNotation = UniGLTF.Extensions.VRMC_vrm.CreditNotationType.unnecessary,
+                    Modification = UniGLTF.Extensions.VRMC_vrm.ModificationType.allowModificationRedistribution,
+                    AllowExcessivelyViolentUsage = true, AllowExcessivelySexualUsage = true,
+                    AllowPoliticalOrReligiousUsage = true, AllowAntisocialOrHateUsage = true, AllowRedistribution = true,
+                    CopyrightInformation = "First avatar copyright", OtherLicenseUrl = "https://example.invalid/first-avatar", ThirdPartyLicenses = "First avatar licenses"
+                };
+                type.GetField("licenseOptions", flags).SetValue(window, selected);
+                if (recordFace)
+                {
+                    AnimationUtility.SetEditorCurve(clip, EditorCurveBinding.FloatCurve("Front", typeof(SkinnedMeshRenderer), "blendShape.Hair detail"), AnimationCurve.Constant(0, 1, 65));
+                    type.GetMethod("AddClip", flags).Invoke(window, new object[] { clip });
+                }
+                window.SaveVrm(path);
+                var initial = SavedMeta(path);
+                Assert.That(initial["avatarPermission"], Is.EqualTo("everyone"));
+                Assert.That(initial["thirdPartyLicenses"], Is.EqualTo(selected.ThirdPartyLicenses));
+                type.GetMethod("ChangeAvatar", flags).Invoke(window, null);
+                type.GetField("source", flags).SetValue(window, second.Source);
+                type.GetMethod("Prepare", flags).Invoke(window, null);
+                window.SaveVrm(path);
+                var next = SavedMeta(path);
+                Assert.That(next["avatarPermission"], Is.EqualTo("onlyAuthor"));
+                Assert.That(next["commercialUsage"], Is.EqualTo("personalNonProfit"));
+                Assert.That(next["creditNotation"], Is.EqualTo("required"));
+                Assert.That(next["modification"], Is.EqualTo("prohibited"));
+                foreach (var key in new[] { "allowExcessivelyViolentUsage", "allowExcessivelySexualUsage", "allowPoliticalOrReligiousUsage", "allowAntisocialOrHateUsage", "allowRedistribution" })
+                    Assert.That(next[key], Is.EqualTo(false), key);
+                foreach (var key in new[] { "copyrightInformation", "otherLicenseUrl", "thirdPartyLicenses" })
+                    Assert.That(!next.TryGetValue(key, out var value) || value == null || string.IsNullOrEmpty(value.ToString()), Is.True, key);
+            }
+            finally { Object.DestroyImmediate(window); Object.DestroyImmediate(clip); if (File.Exists(path)) File.Delete(path); }
+        }
+
+        [TestCase(false, "", "avatar")]
+        [TestCase(true, "", "avatar")]
+        [TestCase(false, " \t ", "avatar")]
+        [TestCase(true, " \t ", "avatar")]
+        [TestCase(false, "  Named avatar  ", "Named avatar")]
+        [TestCase(true, "  Named avatar  ", "Named avatar")]
+        public void PrimaryWindowSavesBlankOrPaddedAvatarNames(bool recordFace, string rootName, string expectedName)
+        {
+            using var fixture = new AttachmentConnectionTests.Fixture();
+            foreach (var skin in fixture.Source.GetComponentsInChildren<SkinnedMeshRenderer>()) skin.sharedMaterial.shader = Shader.Find("lilToon");
+            fixture.Source.name = rootName;
+            var sourceBefore = ExportSourceFingerprint.Compute(fixture.Source);
+            var flags = System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic;
+            var type = typeof(ExperimentalExpressionCaptureWindow);
+            var window = ScriptableObject.CreateInstance<ExperimentalExpressionCaptureWindow>();
+            var clip = new AnimationClip { name = "Selected face" };
+            var path = Path.Combine(Path.GetTempPath(), "vrvlog-avatar-name-" + Guid.NewGuid().ToString("N") + ".vrm");
+            try
+            {
+                type.GetField("source", flags).SetValue(window, fixture.Source);
+                type.GetField("author", flags).SetValue(window, "Tests");
+                type.GetField("automaticBlink", flags).SetValue(window, false);
+                type.GetMethod("Prepare", flags).Invoke(window, null);
+                if (recordFace)
+                {
+                    AnimationUtility.SetEditorCurve(clip, EditorCurveBinding.FloatCurve("Front", typeof(SkinnedMeshRenderer), "blendShape.Hair detail"), AnimationCurve.Constant(0, 1, 65));
+                    type.GetMethod("AddClip", flags).Invoke(window, new object[] { clip });
+                }
+                window.SaveVrm(path);
+                Assert.That(SavedMeta(path)["name"], Is.EqualTo(expectedName));
+                Assert.That(ExportSourceFingerprint.Compute(fixture.Source), Is.EqualTo(sourceBefore));
+            }
+            finally { Object.DestroyImmediate(window); Object.DestroyImmediate(clip); if (File.Exists(path)) File.Delete(path); }
+        }
+
+        static System.Collections.Generic.Dictionary<string, object> SavedMeta(string path)
+        {
+            var extensions = (System.Collections.Generic.Dictionary<string, object>)GlbDocument.Read(File.ReadAllBytes(path)).Json["extensions"];
+            var vrm = (System.Collections.Generic.Dictionary<string, object>)extensions["VRMC_vrm"];
+            return (System.Collections.Generic.Dictionary<string, object>)vrm["meta"];
+        }
+
+        [TestCase(false)]
+        [TestCase(true)]
         public async Task RecordedFacesRetainAuthoredMouthAndGazePresetsAfterReload(bool moveRendererWithMa)
         {
             using var fixture = new AttachmentConnectionTests.Fixture();
