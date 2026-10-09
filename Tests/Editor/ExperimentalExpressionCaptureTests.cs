@@ -16,6 +16,66 @@ namespace VRVlog.LilToonExporter.Tests
 {
     public sealed class ExperimentalExpressionCaptureTests
     {
+        [TestCase(true)]
+        [TestCase(false)]
+        public void ReimportRefreshesExplicitRowsAndRestoresTheirPreviousSelection(bool selected)
+        {
+            using var fixture = new AttachmentConnectionTests.Fixture();
+            var window = ScriptableObject.CreateInstance<ExperimentalExpressionCaptureWindow>(); var clip = new AnimationClip { name = "Explicit edited face" };
+            var type = typeof(ExperimentalExpressionCaptureWindow); var flags = System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic;
+            var binding = EditorCurveBinding.FloatCurve("Front", typeof(SkinnedMeshRenderer), "blendShape.Hair detail");
+            var unsupported = EditorCurveBinding.FloatCurve("", typeof(Transform), "m_LocalPosition.x");
+            try
+            {
+                AnimationUtility.SetEditorCurve(clip, binding, AnimationCurve.Constant(0, 1, 60));
+                type.GetField("source", flags).SetValue(window, fixture.Source); type.GetMethod("Prepare", flags).Invoke(window, null);
+                type.GetMethod("AddClip", flags).Invoke(window, new object[] { clip });
+                var inputs = (System.Collections.Generic.List<ExperimentalExpressionCaptureSession.ClipInput>)type.GetField("clipInputs", flags).GetValue(window);
+                var input = inputs.Single(); input.Selected = selected;
+                AnimationUtility.SetEditorCurve(clip, unsupported, AnimationCurve.Constant(0, 1, 0));
+                type.GetMethod("RefreshCandidateValidation", flags).Invoke(window, null);
+                Assert.That(input.Error, Is.Not.Null); Assert.That(input.Selected, Is.False);
+                AnimationUtility.SetEditorCurve(clip, unsupported, null); AnimationUtility.SetEditorCurve(clip, binding, AnimationCurve.Constant(0, 2, 90));
+                type.GetMethod("RefreshCandidateValidation", flags).Invoke(window, null);
+                Assert.That(input.Error, Is.Null); Assert.That(input.Selected, Is.EqualTo(selected)); Assert.That(input.Time, Is.EqualTo(2));
+                if (selected)
+                {
+                    type.GetMethod("RecordSelectedClips", flags).Invoke(window, null);
+                    var session = (ExperimentalExpressionCaptureSession)type.GetField("session", flags).GetValue(window);
+                    Assert.That(session.Expressions.Single().Rows.Single(row => row.Path == "Front").Weights[0], Is.EqualTo(90));
+                }
+            }
+            finally { Object.DestroyImmediate(window); Object.DestroyImmediate(clip); }
+        }
+
+        [Test]
+        public void MeshRendererRecoveryMapsTheOriginalRendererToThePreparedExportCopy()
+        {
+            using var fixture = new AttachmentConnectionTests.Fixture();
+            foreach (var skin in fixture.Source.GetComponentsInChildren<SkinnedMeshRenderer>()) skin.sharedMaterial.shader = Shader.Find("lilToon");
+            var child = new GameObject("Aux plain mesh"); child.transform.SetParent(fixture.Source.transform, false);
+            child.AddComponent<MeshFilter>().sharedMesh = fixture.Mesh;
+            var original = child.AddComponent<MeshRenderer>(); original.sharedMaterial = fixture.Source.transform.Find("Front").GetComponent<SkinnedMeshRenderer>().sharedMaterial;
+            var hidden = new Material(Shader.Find("VRVlogTests/UnsupportedHiddenFallback")); var clip = new AnimationClip { name = "Mesh recovery face" };
+            try
+            {
+                var stamp = ExportSourceFingerprint.Compute(fixture.Source);
+                using var session = new ExperimentalExpressionCaptureSession(fixture.Source, false);
+                var prepared = session.Copy.transform.Find("Aux plain mesh").GetComponent<MeshRenderer>();
+                // Simulate a later authoring material assignment on the owned copy.
+                prepared.sharedMaterial = hidden;
+                AnimationUtility.SetEditorCurve(clip, EditorCurveBinding.FloatCurve("Front", typeof(SkinnedMeshRenderer), "blendShape.Hair detail"), AnimationCurve.Constant(0, 1, 80));
+                session.ImportClips(new[] { new ExperimentalExpressionCaptureSession.ClipInput { Clip = clip, Name = clip.name, Time = clip.length } });
+                var options = new ExportRecoveryOptions(); options.Actions.Add(new ExportRecoveryAction { Id = "mesh-recovery", Kind = ExportRecoveryActionKind.ExcludeHiddenRenderer, Renderer = original });
+                var bytes = session.Export("Mesh recovery", "Tests", blinkOptions: new BlinkExportOptions { Mode = BlinkExportMode.None }, recoveryOptions: options);
+                Assert.DoesNotThrow(() => LilToonGlbExtension.Validate(bytes));
+                var nodes = (System.Collections.Generic.List<object>)GlbDocument.Read(bytes).Json["nodes"];
+                Assert.That(nodes.Cast<System.Collections.Generic.Dictionary<string, object>>().Any(node => node.TryGetValue("name", out var name) && (string)name == "Aux plain mesh" && node.ContainsKey("mesh")), Is.False);
+                Assert.That(ExportSourceFingerprint.Compute(fixture.Source), Is.EqualTo(stamp)); Assert.That(original.enabled, Is.True);
+            }
+            finally { Object.DestroyImmediate(hidden); Object.DestroyImmediate(clip); }
+        }
+
         [Test]
         public async Task RetrySnapshotReplacesTheSourceCatalogAfterLiveRowsWereRemoved()
         {

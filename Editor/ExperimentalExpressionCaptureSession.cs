@@ -55,6 +55,7 @@ namespace VRVlog.LilToonExporter
         internal readonly List<Pose> Expressions = new List<Pose>();
         internal readonly PoseExportOptions PoseOptions = new PoseExportOptions();
         readonly Dictionary<string, SkinnedMeshRenderer> authoringRenderers = new Dictionary<string, SkinnedMeshRenderer>(StringComparer.Ordinal);
+        readonly Dictionary<Renderer, Renderer> authoringRecoveryRenderers = new Dictionary<Renderer, Renderer>();
         internal VrChatExpressionMenu.Source Candidates { get; private set; }
         internal Pose Baseline { get; private set; }
         readonly List<Mesh> ownedMeshes = new List<Mesh>();
@@ -82,6 +83,12 @@ namespace VRVlog.LilToonExporter
                 Copy = Object.Instantiate(source);
                 Copy.name = source.name;
                 Copy.hideFlags = HideFlags.HideAndDontSave;
+                foreach (var renderer in source.GetComponentsInChildren<Renderer>(true))
+                {
+                    var mapped = ExportRecoveryCopySession.Resolve(renderer.transform, source.transform, Copy.transform);
+                    var index = Array.IndexOf(renderer.GetComponents<Renderer>().Where(item => item.GetType() == renderer.GetType()).ToArray(), renderer);
+                    authoringRecoveryRenderers.Add(renderer, mapped.GetComponents<Renderer>().Where(item => item.GetType() == renderer.GetType()).ElementAt(index));
+                }
                 var gimmickOptions = new ExportGimmickOptions();
                 var findings = ExportGimmickDetection.Analyze(source);
                 var automaticRoots = ExportGimmickDetection.AutomaticRoots(findings, gimmickOptions).ToArray();
@@ -557,11 +564,15 @@ namespace VRVlog.LilToonExporter
                     Renderer renderer = null;
                     if (action.Renderer != null)
                     {
-                        var path = AnimationUtility.CalculateTransformPath(action.Renderer.transform, Source.transform);
-                        if (authoringRenderers.TryGetValue(path, out var original))
+                        if (authoringRecoveryRenderers.TryGetValue(action.Renderer, out var original))
                         {
                             var prepared = preparation.PreparedRendererFor(original);
-                            if (prepared != null) renderer = ExportRecoveryCopySession.Resolve(prepared.transform, Copy.transform, exportCopy.transform).GetComponent<Renderer>();
+                            if (prepared != null)
+                            {
+                                var mapped = ExportRecoveryCopySession.Resolve(prepared.transform, Copy.transform, exportCopy.transform);
+                                var index = Array.IndexOf(prepared.GetComponents<Renderer>().Where(item => item.GetType() == prepared.GetType()).ToArray(), prepared);
+                                renderer = mapped.GetComponents<Renderer>().Where(item => item.GetType() == prepared.GetType()).ElementAt(index);
+                            }
                         }
                     }
                     mappedRecovery.Actions.Add(new ExportRecoveryAction { Id = action.Id, Kind = action.Kind, Material = material,

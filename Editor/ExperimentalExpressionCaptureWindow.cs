@@ -93,8 +93,19 @@ namespace VRVlog.LilToonExporter
                 configuredBlink = blink; saved = previousSaved;
             }
             clipErrors.Clear();
-            foreach (var pair in session.ClipErrors((recommendations ?? new System.Collections.Generic.List<ExperimentalExpressionCaptureSession.ClipRecommendation>()).Select(item => item.Clip)))
-                clipErrors[pair.Key] = pair.Value;
+            foreach (var pair in session.ClipErrors((recommendations ?? new System.Collections.Generic.List<ExperimentalExpressionCaptureSession.ClipRecommendation>())
+                .Select(item => item.Clip).Concat(clipInputs.Select(input => input.Clip)))) clipErrors[pair.Key] = pair.Value;
+            foreach (var input in clipInputs)
+            {
+                var reason = input.Clip == null ? ExporterLocalization.T("UnityのProjectからAnimationClipを指定してください。") : clipErrors[input.Clip];
+                if (reason != null)
+                {
+                    if (input.Error == null) input.SelectionBeforeError = input.Selected;
+                    input.Selected = false;
+                }
+                else if (input.Error != null) input.Selected = input.SelectionBeforeError;
+                input.Time = DefaultTime(input.Clip); input.Error = reason;
+            }
             selectedClips.RemoveWhere(clip => clip == null || !clipErrors.TryGetValue(clip, out var reason) || reason != null);
             Repaint();
         }

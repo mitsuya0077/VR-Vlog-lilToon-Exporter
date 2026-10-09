@@ -19,9 +19,9 @@ namespace VRVlog.LilToonExporter
         // Provenance only for copies made by our own isolation pass. Assets
         // created or replaced by NDMF plugins never enter this identity map.
         private readonly Dictionary<Object, Object> isolatedAssets = new Dictionary<Object, Object>();
-        private readonly Dictionary<SkinnedMeshRenderer, SkinnedMeshRenderer> rendererReplacements =
-            new Dictionary<SkinnedMeshRenderer, SkinnedMeshRenderer>();
-        private readonly HashSet<SkinnedMeshRenderer> ambiguousRendererReplacements = new HashSet<SkinnedMeshRenderer>();
+        private readonly Dictionary<Renderer, Renderer> rendererReplacements =
+            new Dictionary<Renderer, Renderer>();
+        private readonly HashSet<Renderer> ambiguousRendererReplacements = new HashSet<Renderer>();
         private string temporaryAssetPath, temporaryAssetGuid;
         // NDMF tracks asset replacements made by authoring/optimization passes.
         // Keep the optional public registry available to the preparation callback.
@@ -41,7 +41,9 @@ namespace VRVlog.LilToonExporter
         internal Object IsolatedCopyOf(Object original) => original != null && isolatedAssets.TryGetValue(original, out var copy)
             ? copy : original;
 
-        internal SkinnedMeshRenderer PreparedRendererFor(SkinnedMeshRenderer original)
+        internal SkinnedMeshRenderer PreparedRendererFor(SkinnedMeshRenderer original) => PreparedRendererFor((Renderer)original) as SkinnedMeshRenderer;
+
+        internal Renderer PreparedRendererFor(Renderer original)
         {
             if (ReferenceEquals(original, null)) return null;
             if (ambiguousRendererReplacements.Contains(original)) return null;
@@ -58,11 +60,11 @@ namespace VRVlog.LilToonExporter
             var contract = registry?.GetType().GetInterfaces().FirstOrDefault(type => type.FullName == "nadena.dev.ndmf.IObjectRegistry");
             var getReference = contract?.GetMethod("GetReference", new[] { typeof(Object), typeof(bool) });
             if (getReference == null) return;
-            foreach (var current in clone.GetComponentsInChildren<SkinnedMeshRenderer>(true))
+            foreach (var current in clone.GetComponentsInChildren<Renderer>(true))
             {
                 var reference = getReference.Invoke(registry, new object[] { current, false });
                 var original = reference?.GetType().GetProperty("Object", BindingFlags.Public | BindingFlags.Instance)?.GetValue(reference)
-                    as SkinnedMeshRenderer;
+                    as Renderer;
                 if (ReferenceEquals(original, null)) continue;
                 // A build can retain the original disabled component. Its own
                 // diagnostic reference is not a competing replacement.

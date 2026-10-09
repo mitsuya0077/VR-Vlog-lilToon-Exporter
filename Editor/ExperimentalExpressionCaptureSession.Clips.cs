@@ -15,6 +15,7 @@ namespace VRVlog.LilToonExporter
             internal string Name;
             internal float Time;
             internal bool Selected = true;
+            internal bool SelectionBeforeError = true;
             internal string Error;
         }
 
