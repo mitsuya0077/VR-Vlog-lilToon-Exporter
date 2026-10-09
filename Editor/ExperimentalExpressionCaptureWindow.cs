@@ -97,13 +97,19 @@ namespace VRVlog.LilToonExporter
                         DrawPoseInputs();
                         EditorGUILayout.Space(16);
                         DrawSave();
+                        DrawFeedback();
                         EditorGUILayout.EndScrollView();
                     }
                 }
                 if (pending != null) EditorGUILayout.LabelField("処理しています…", EditorStyles.miniLabel);
-                if (!string.IsNullOrEmpty(error)) EditorGUILayout.HelpBox(error, MessageType.Error);
-                else if (!string.IsNullOrEmpty(status)) EditorGUILayout.LabelField(status, EditorStyles.wordWrappedMiniLabel);
+                if (session == null) DrawFeedback();
             }
+        }
+
+        void DrawFeedback()
+        {
+            if (!string.IsNullOrEmpty(error)) EditorGUILayout.HelpBox(error, MessageType.Error);
+            else if (!string.IsNullOrEmpty(status)) EditorGUILayout.LabelField(status, EditorStyles.wordWrappedMiniLabel);
         }
 
         void Prepare()

@@ -288,6 +288,7 @@ namespace VRVlog.LilToonExporter.LanTransfer
         {
             var reason = exception is SafeTransferFailure ? exception.Message
                 : exception is UnauthorizedAccessException ? "一時ファイルへのアクセスが拒否されました。OSのアクセス権を確認してください。"
+                : exception is InvalidDataException ? "転送サービスの応答を確認できませんでした。最新版の試験用パッケージで再試行してください。"
                 : exception is IOException ? "一時ファイルを読み書きできませんでした。空き容量やファイルを使用中のソフトを確認してください。"
                 : exception is HttpRequestException ? "転送サービスに接続できません。インターネット接続・VPN・プロキシを確認してください。"
                 : exception is OperationCanceledException ? "通信が中断または時間切れになりました。接続を確認して新しいQRを作成してください。"
