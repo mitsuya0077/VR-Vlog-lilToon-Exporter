@@ -505,7 +505,7 @@ namespace VRVlog.LilToonExporter.LanTransfer.Tests
             using (var session = new CloudVrmTransferSession(fixture.Source, fixture.Transport))
             {
                 fixture.Transport.Failure = kind;
-                try { await session.UploadAsync(); Assert.Fail("Must fail"); }
+                try { await session.UploadAsync(); Assert.That(false, Is.True, "Must fail"); }
                 catch (InvalidOperationException exception) { Assert.That(exception.Message, Is.EqualTo(session.Message)); }
                 Assert.That(session.Message, Does.Contain(reason).And.Contain(stage));
                 Assert.That(session.Message, Does.Not.Contain("SECRET").And.Not.Contain(fixture.Path).And.Not.Contain(fixture.Transport.UploadToken).And.Not.Contain("private service failure"));

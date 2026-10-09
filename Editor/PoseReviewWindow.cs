@@ -216,11 +216,11 @@ namespace VRVlog.LilToonExporter
         {
             using (new EditorGUILayout.VerticalScope(new GUIStyle { padding = new RectOffset(16, 16, 12, 12) }))
             {
-                EditorGUILayout.LabelField("ポーズを確認", EditorStyles.boldLabel);
+                EditorGUILayout.LabelField(ExporterLocalization.T("ポーズを確認"), EditorStyles.boldLabel);
                 EditorGUILayout.Space(8);
-                EditorGUILayout.LabelField("動くポーズは先頭から最後まで再生します。", EditorStyles.wordWrappedLabel);
+                EditorGUILayout.LabelField(ExporterLocalization.T("動くポーズは先頭から最後まで再生します。"), EditorStyles.wordWrappedLabel);
                 if (error != null) EditorGUILayout.HelpBox(error, MessageType.Warning);
-                if (IsBusy) EditorGUILayout.LabelField("確認中…", EditorStyles.miniLabel);
+                if (IsBusy) EditorGUILayout.LabelField(ExporterLocalization.T("確認中…"), EditorStyles.miniLabel);
                 scroll = EditorGUILayout.BeginScrollView(scroll, GUILayout.Height(150));
                 if (session != null)
                     foreach (var row in session.Entries)
@@ -229,14 +229,14 @@ namespace VRVlog.LilToonExporter
                         {
                             EditorGUILayout.LabelField(row.Name);
                             using (new EditorGUI.DisabledScope(IsBusy || row.Error != null || row.Data == null && row.Animation == null))
-                                if (GUILayout.Button("確認", GUILayout.Width(60))) ApplyPreview(row);
+                                if (GUILayout.Button(ExporterLocalization.T("確認"), GUILayout.Width(60))) ApplyPreview(row);
                         }
                         if (row.Error != null) EditorGUILayout.HelpBox(row.Error, MessageType.Warning);
                     }
                 EditorGUILayout.EndScrollView();
                 if (preview == null) return;
                 EditorGUILayout.Space(12);
-                yaw = EditorGUILayout.Slider("向き", yaw, -180, 180);
+                yaw = EditorGUILayout.Slider(ExporterLocalization.T("向き"), yaw, -180, 180);
                 var rect = GUILayoutUtility.GetRect(100, 120, GUILayout.ExpandHeight(true), GUILayout.ExpandWidth(true));
                 if (Event.current.type != EventType.Repaint || rect.width <= 0 || rect.height <= 0) return;
                 preview.BeginPreview(rect, GUIStyle.none);

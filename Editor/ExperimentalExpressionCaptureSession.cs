@@ -100,13 +100,12 @@ namespace VRVlog.LilToonExporter
                     if (mesh == null || mesh.blendShapeCount == 0) continue;
                     var path = AnimationUtility.CalculateTransformPath(renderer.transform, Copy.transform);
                     if (VrChatExpressionSampler.FindRenderer(Copy, path) != renderer)
-                        throw new InvalidOperationException("表情のメッシュを一意に特定できません。");
+                        throw new InvalidOperationException(ExporterLocalization.T("表情のメッシュを一意に特定できません。"));
                     renderer.forceMatrixRecalculationPerRender = true;
                     Channels.Add(new Channel { Renderer = renderer, Mesh = mesh, Path = path,
                         Shapes = Enumerable.Range(0, mesh.blendShapeCount).Select(mesh.GetBlendShapeName).ToArray(),
                         MeshHash = MeshStamp(mesh) });
                 }
-                if (Channels.Count == 0) throw new InvalidOperationException("表示中のメッシュにBlendShapeがありません。");
                 var installed = VrChatExpressionMenu.Read(Copy);
                 if (replayInstalledDefaults && installed.Controller != null)
                 {
@@ -118,7 +117,7 @@ namespace VRVlog.LilToonExporter
                             Set(neutral, value.Path, value.Shape, value.Weight);
                         ValidatePose(neutral); ApplyUnchecked(neutral);
                     }
-                    catch (InvalidOperationException error) { Warnings.Add("FXの基準表情を収録できませんでした: " + error.Message); }
+                    catch (InvalidOperationException error) { Warnings.Add(ExporterLocalization.T("FXの基準表情を収録できませんでした: ") + error.Message); }
                 }
                 preparedRest = Snapshot("準備後の顔");
                 Baseline = Snapshot("基準の顔");
@@ -130,13 +129,13 @@ namespace VRVlog.LilToonExporter
 
         void RequireValid()
         {
-            if (disposed || Copy == null) throw new InvalidOperationException("表情記録のコピーがありません。");
+            if (disposed || Copy == null) throw new InvalidOperationException(ExporterLocalization.T("表情記録のコピーがありません。"));
             if (Source == null || ExportSourceFingerprint.Compute(Source) != sourceStamp)
-                throw new InvalidOperationException("元のアバターが変更されました。設定を保存し、コピーを作り直してください。");
+                throw new InvalidOperationException(ExporterLocalization.T("元のアバターが変更されました。「変更」からアバターを指定し直してください。"));
             foreach (var channel in Channels)
                 if (channel.Renderer == null || !channel.Renderer.enabled || !channel.Renderer.gameObject.activeInHierarchy ||
                     channel.Renderer.sharedMesh != channel.Mesh || MeshStamp(channel.Mesh) != channel.MeshHash)
-                    throw new InvalidOperationException("記録用メッシュが変更されました。コピーを作り直してください。");
+                    throw new InvalidOperationException(ExporterLocalization.T("書き出し用メッシュが変更されました。「変更」からアバターを指定し直してください。"));
         }
 
         internal void DiscoverCandidates()
@@ -171,11 +170,11 @@ namespace VRVlog.LilToonExporter
         {
             RequireValid();
             if (Candidates == null || !Candidates.Entries.Contains(entry))
-                throw new InvalidOperationException("このコピーから取得した表情候補を選んでください。");
+                throw new InvalidOperationException(ExporterLocalization.T("このコピーから取得した表情候補を選んでください。"));
             if (entry.Error != null) throw new InvalidOperationException(entry.Error);
-            if (entry.Unevaluated.Count != 0) throw new InvalidOperationException("未解決の変形がある候補は記録できません。");
+            if (entry.Unevaluated.Count != 0) throw new InvalidOperationException(ExporterLocalization.T("未解決の変形がある候補は記録できません。"));
             if (double.IsNaN(time) || double.IsInfinity(time) || time < 0 || time > entry.Duration)
-                throw new InvalidOperationException("表情の時刻が範囲外です。");
+                throw new InvalidOperationException(ExporterLocalization.T("表情の時刻が範囲外です。"));
             // Build and validate first. A missing channel must not partially change the preview.
             var pose = ClonePose(preparedRest);
             foreach (var value in entry.Values) Set(pose, value.Path, value.Shape, value.Weight);
@@ -211,7 +210,7 @@ namespace VRVlog.LilToonExporter
         internal ImportResult ImportCandidates(IEnumerable<VrChatExpressionMenu.Entry> entries)
         {
             RequireValid();
-            if (Candidates == null) throw new InvalidOperationException("既存の表情を先に読み込んでください。");
+            if (Candidates == null) throw new InvalidOperationException(ExporterLocalization.T("既存の表情を先に読み込んでください。"));
             var result = new ImportResult();
             var current = Snapshot("現在の顔");
             var staged = new List<Pose>();
@@ -220,7 +219,7 @@ namespace VRVlog.LilToonExporter
             {
                 foreach (var entry in entries)
                 {
-                    if (!Candidates.Entries.Contains(entry)) throw new InvalidOperationException("別のコピーの表情が選択されています。");
+                    if (!Candidates.Entries.Contains(entry)) throw new InvalidOperationException(ExporterLocalization.T("別のコピーの表情が選択されています。"));
                     if (entry.Error != null || entry.Unevaluated.Count > 0)
                     { result.Skipped.Add(entry.Name + ": " + (entry.Error ?? "未解決の変形")); continue; }
                     if (entry.Animation.Count != 0)
@@ -232,7 +231,7 @@ namespace VRVlog.LilToonExporter
                     if (names.Contains(name))
                     { result.Skipped.Add(name + ": 同名の表情を登録済みです。"); continue; }
                     if (Expressions.Count + staged.Count >= MaximumExpressions)
-                        throw new InvalidOperationException("記録できる表情は64件までです。取り込む候補を絞ってください。");
+                        throw new InvalidOperationException(ExporterLocalization.T("記録できる表情は64件までです。取り込む候補を絞ってください。"));
                     names.Add(name); staged.Add(pose); result.Imported.Add(name);
                 }
                 // A failure never publishes half an import or changes the preview.
@@ -246,16 +245,16 @@ namespace VRVlog.LilToonExporter
         {
             var row = pose.Rows.SingleOrDefault(value => value.Path == path);
             var index = row == null ? -1 : Array.IndexOf(row.Shapes, shape);
-            if (index < 0) throw new InvalidOperationException("候補のBlendShapeが表示中のメッシュにありません: " + path + " / " + shape);
+            if (index < 0) throw new InvalidOperationException(ExporterLocalization.T("候補のBlendShapeが表示中のメッシュにありません: ") + path + " / " + shape);
             row.Weights[index] = weight;
         }
 
         internal void SetWeight(int channel, int shape, float value)
         {
-            if (!Finite(value)) throw new InvalidOperationException("変形量に有限の数値を入力してください。");
+            if (!Finite(value)) throw new InvalidOperationException(ExporterLocalization.T("変形量に有限の数値を入力してください。"));
             var target = Channels[channel];
             if (disposed || target.Renderer == null || target.Renderer.sharedMesh != target.Mesh)
-                throw new InvalidOperationException("記録用メッシュがありません。");
+                throw new InvalidOperationException(ExporterLocalization.T("記録用メッシュがありません。"));
             target.Renderer.SetBlendShapeWeight(shape, value);
         }
 
@@ -275,10 +274,10 @@ namespace VRVlog.LilToonExporter
         {
             RequireValid();
             name = ValidateName(name);
-            if (Expressions.Count >= MaximumExpressions) throw new InvalidOperationException("記録できる表情は64件までです。");
-            if (Expressions.Any(pose => pose.Name == name)) throw new InvalidOperationException("同じ名前の表情があります。別の名前を入力してください。");
+            if (Expressions.Count >= MaximumExpressions) throw new InvalidOperationException(ExporterLocalization.T("記録できる表情は64件までです。"));
+            if (Expressions.Any(pose => pose.Name == name)) throw new InvalidOperationException(ExporterLocalization.T("同じ名前の表情があります。別の名前を入力してください。"));
             var pose = Snapshot(name);
-            if (!HasGeometryChange(pose)) throw new InvalidOperationException("基準の顔と形状が同じです。変形を調整してから記録してください。");
+            if (!HasGeometryChange(pose)) throw new InvalidOperationException(ExporterLocalization.T("基準の顔と形状が同じです。変形を調整してから記録してください。"));
             Expressions.Add(pose);
             return pose;
         }
@@ -286,7 +285,7 @@ namespace VRVlog.LilToonExporter
         internal void PreviewRecorded(Pose pose)
         {
             RequireValid();
-            if (!Expressions.Contains(pose)) throw new InvalidOperationException("記録した表情を選んでください。");
+            if (!Expressions.Contains(pose)) throw new InvalidOperationException(ExporterLocalization.T("記録した表情を選んでください。"));
             ValidatePose(pose);
             ApplyUnchecked(pose);
         }
@@ -297,7 +296,7 @@ namespace VRVlog.LilToonExporter
             foreach (var channel in Channels)
             {
                 var weights = Enumerable.Range(0, channel.Shapes.Length).Select(channel.Renderer.GetBlendShapeWeight).ToArray();
-                if (weights.Any(weight => !Finite(weight))) throw new InvalidOperationException("BlendShapeに不正な変形量があります。");
+                if (weights.Any(weight => !Finite(weight))) throw new InvalidOperationException(ExporterLocalization.T("BlendShapeに不正な変形量があります。"));
                 pose.Rows.Add(new Row { Path = channel.Path, Shapes = (string[])channel.Shapes.Clone(), Weights = weights });
             }
             return pose;
@@ -306,13 +305,13 @@ namespace VRVlog.LilToonExporter
         void ValidatePose(Pose pose)
         {
             if (pose == null || pose.Rows == null || pose.Rows.Count != Channels.Count)
-                throw new InvalidOperationException("記録設定のメッシュ数が一致しません。");
+                throw new InvalidOperationException(ExporterLocalization.T("記録設定のメッシュ数が一致しません。"));
             for (var i = 0; i < Channels.Count; i++)
             {
                 var row = pose.Rows[i]; var channel = Channels[i];
                 if (row == null || row.Path != channel.Path || row.Shapes == null || !row.Shapes.SequenceEqual(channel.Shapes) ||
                     row.Weights == null || row.Weights.Length != channel.Shapes.Length || row.Weights.Any(weight => !Finite(weight)))
-                    throw new InvalidOperationException("記録設定の参照・変形量が一致しません。");
+                    throw new InvalidOperationException(ExporterLocalization.T("記録設定の参照・変形量が一致しません。"));
             }
         }
 
@@ -345,7 +344,7 @@ namespace VRVlog.LilToonExporter
         {
             // Recorded arrays remain useful recovery data after source edits.
             // Applying or exporting them still requires all identity checks.
-            if (disposed) throw new InvalidOperationException("表情記録のコピーがありません。");
+            if (disposed) throw new InvalidOperationException(ExporterLocalization.T("表情記録のコピーがありません。"));
             return JsonUtility.ToJson(new Settings { MeshHashes = Channels.Select(channel => channel.MeshHash).ToArray(),
                 Baseline = ClonePose(Baseline), Expressions = Expressions.Select(ClonePose).ToList(),
                 ManualPoses = PoseOptions.Manual.Select(SavePoseReference).ToList(), ExcludedPoses = PoseOptions.Excluded.ToArray(),
@@ -355,28 +354,28 @@ namespace VRVlog.LilToonExporter
         internal void LoadSettings(string json)
         {
             RequireValid();
-            if (json == null || json.Length > 8 * 1024 * 1024) throw new InvalidOperationException("記録設定のサイズが不正です。");
+            if (json == null || json.Length > 8 * 1024 * 1024) throw new InvalidOperationException(ExporterLocalization.T("記録設定のサイズが不正です。"));
             Settings settings;
             try { settings = JsonUtility.FromJson<Settings>(json); }
-            catch (Exception error) { throw new InvalidOperationException("記録設定を読み込めません。", error); }
+            catch (Exception error) { throw new InvalidOperationException(ExporterLocalization.T("記録設定を読み込めません。"), error); }
             if (settings == null || settings.Version != 1 || settings.MeshHashes == null ||
                 !settings.MeshHashes.SequenceEqual(Channels.Select(channel => channel.MeshHash)) || settings.Expressions == null ||
                 settings.Expressions.Count > MaximumExpressions)
-                throw new InvalidOperationException("記録設定の形式またはメッシュが一致しません。");
+                throw new InvalidOperationException(ExporterLocalization.T("記録設定の形式またはメッシュが一致しません。"));
             ValidatePose(settings.Baseline);
             var names = new HashSet<string>(StringComparer.Ordinal);
             foreach (var pose in settings.Expressions)
             {
                 ValidatePose(pose);
                 if (ValidateName(pose.Name) != pose.Name || !names.Add(pose.Name))
-                    throw new InvalidOperationException("記録設定の表情名が重複または不正です。");
+                    throw new InvalidOperationException(ExporterLocalization.T("記録設定の表情名が重複または不正です。"));
             }
             var manualPoses = (settings.ManualPoses ?? new List<PoseReference>()).Select(LoadPoseReference).ToList();
-            if (manualPoses.Count > 128) throw new InvalidOperationException("同梱ポーズは128件までです。");
+            if (manualPoses.Count > 128) throw new InvalidOperationException(ExporterLocalization.T("同梱ポーズは128件までです。"));
             var poseNames = new Dictionary<string, string>(StringComparer.Ordinal);
             foreach (var reference in settings.PoseNames ?? new List<PoseNameReference>())
                 if (reference == null || string.IsNullOrEmpty(reference.Id) || poseNames.ContainsKey(reference.Id))
-                    throw new InvalidOperationException("ポーズの表示名設定が不正です。");
+                    throw new InvalidOperationException(ExporterLocalization.T("ポーズの表示名設定が不正です。"));
                 else poseNames.Add(reference.Id, ValidateName(reference.Name));
             // Publish only after validating every row and expression.
             Baseline = ClonePose(settings.Baseline);
@@ -392,13 +391,12 @@ namespace VRVlog.LilToonExporter
             AvatarLicenseOptions licenseOptions = null)
         {
             RequireValid();
-            if (Expressions.Count == 0) throw new InvalidOperationException("表情を一つ以上記録してください。");
             ValidatePose(Baseline);
             foreach (var pose in Expressions)
             {
                 ValidatePose(pose);
                 if (!HasGeometryChange(pose) && string.IsNullOrEmpty(pose.InstalledSourceId))
-                    throw new InvalidOperationException(pose.Name + ": 基準の顔と形状が同じです。");
+                    throw new InvalidOperationException(pose.Name + ExporterLocalization.T(": 基準の顔と形状が同じです。"));
             }
             var exportCopy = Object.Instantiate(Copy);
             exportCopy.name = Copy.name;
@@ -421,7 +419,9 @@ namespace VRVlog.LilToonExporter
                 var settings = instance.Vrm != null ? Object.Instantiate(instance.Vrm) : ScriptableObject.CreateInstance<VRM10Object>();
                 assets.Add(settings);
                 settings.Prefab = null;
-                settings.Expression = new VRM10ObjectExpression();
+                // A model-only export retains existing authored VRM expressions.
+                // Explicit faces replace the catalog with the selected records.
+                if (Expressions.Count > 0 || settings.Expression == null) settings.Expression = new VRM10ObjectExpression();
                 instance.Vrm = settings;
                 var targetPrefix = "__VRVlog_Capture_" + Guid.NewGuid().ToString("N") + "_";
                 var serial = 0;
@@ -446,7 +446,7 @@ namespace VRVlog.LilToonExporter
                         var renderer = VrChatExpressionSampler.FindRenderer(exportCopy, Channels[i].Path);
                         var target = targetPrefix + serial++;
                         addedBytes += Channels[i].Mesh.vertexCount * 36L;
-                        if (addedBytes > 128L * 1024 * 1024) throw new InvalidOperationException("追加表情の形状データが128 MiBを超えます。");
+                        if (addedBytes > 128L * 1024 * 1024) throw new InvalidOperationException(ExporterLocalization.T("追加表情の形状データが128 MiBを超えます。"));
                         AvatarBaseShape.AppendExpression(Channels[i].Mesh, renderer.sharedMesh, target,
                             Baseline.Rows[i].Weights, pose.Rows[i].Weights, PlayerSettings.legacyClampBlendShapeWeights);
                         renderer.SetBlendShapeWeight(renderer.sharedMesh.blendShapeCount - 1, 0);
@@ -460,7 +460,7 @@ namespace VRVlog.LilToonExporter
                         var renderer = VrChatExpressionSampler.FindRenderer(exportCopy, Channels[0].Path);
                         var target = targetPrefix + serial++;
                         addedBytes += Channels[0].Mesh.vertexCount * 36L;
-                        if (addedBytes > 128L * 1024 * 1024) throw new InvalidOperationException("追加表情の形状データが128 MiBを超えます。");
+                        if (addedBytes > 128L * 1024 * 1024) throw new InvalidOperationException(ExporterLocalization.T("追加表情の形状データが128 MiBを超えます。"));
                         AvatarBaseShape.AppendExpression(Channels[0].Mesh, renderer.sharedMesh, target,
                             Baseline.Rows[0].Weights, Baseline.Rows[0].Weights, PlayerSettings.legacyClampBlendShapeWeights);
                         renderer.SetBlendShapeWeight(renderer.sharedMesh.blendShapeCount - 1, 0);
@@ -487,7 +487,7 @@ namespace VRVlog.LilToonExporter
         {
             name = name?.Trim();
             if (string.IsNullOrEmpty(name) || name.Length > 128 || name.Any(char.IsControl))
-                throw new InvalidOperationException("表情名は制御文字を含まない1〜128文字で入力してください。");
+                throw new InvalidOperationException(ExporterLocalization.T("表情名は制御文字を含まない1〜128文字で入力してください。"));
             return name;
         }
 

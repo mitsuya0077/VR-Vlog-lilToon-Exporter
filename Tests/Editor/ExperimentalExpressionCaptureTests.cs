@@ -16,6 +16,89 @@ namespace VRVlog.LilToonExporter.Tests
 {
     public sealed class ExperimentalExpressionCaptureTests
     {
+        [TestCase(false)]
+        [TestCase(true)]
+        public async Task ModelOnlyExportReimportsWithoutRequiringFacialFiles(bool withAuthoredExpression)
+        {
+            using var fixture = new AttachmentConnectionTests.Fixture();
+            foreach (var skin in fixture.Source.GetComponentsInChildren<SkinnedMeshRenderer>())
+            {
+                skin.sharedMaterial.shader = Shader.Find("lilToon");
+                skin.sharedMaterial.SetFloat("_UseAudioLink", 1);
+            }
+            var authored = ScriptableObject.CreateInstance<VRM10Object>();
+            var face = ScriptableObject.CreateInstance<VRM10Expression>();
+            Vrm10Instance imported = null;
+            try
+            {
+                if (withAuthoredExpression)
+                {
+                    face.name = "Authored face";
+                    face.MorphTargetBindings = new[] { new MorphTargetBinding("Front", 0, .8f) };
+                    authored.Expression.CustomClips.Add(face);
+                    fixture.Source.AddComponent<Vrm10Instance>().Vrm = authored;
+                }
+                else fixture.Mesh.ClearBlendShapes();
+                using var session = new ExperimentalExpressionCaptureSession(fixture.Source, replayInstalledDefaults: false);
+                Assert.That(session.Expressions, Is.Empty);
+                var before = ExportSourceFingerprint.Compute(fixture.Source);
+                var bytes = session.Export("Model only", "Tests", blinkOptions: new BlinkExportOptions { Mode = BlinkExportMode.None });
+                imported = await Vrm10.LoadBytesAsync(bytes, canLoadVrm0X: false, awaitCaller: new ImmediateCaller());
+                Assert.That(imported, Is.Not.Null);
+                Assert.That(imported.Vrm.Meta.Authors, Does.Contain("Tests"));
+                Assert.That(imported.Vrm.Expression.CustomClips.Any(clip => clip.name == "Authored face"), Is.EqualTo(withAuthoredExpression));
+                Assert.That(imported.GetComponentsInChildren<Renderer>(true).SelectMany(renderer => renderer.sharedMaterials)
+                    .Where(material => material != null && material.HasProperty("_UseAudioLink"))
+                    .All(material => material.GetFloat("_UseAudioLink") == 0), Is.True);
+                Assert.That(ExportSourceFingerprint.Compute(fixture.Source), Is.EqualTo(before));
+            }
+            finally { if (imported != null) Object.DestroyImmediate(imported.gameObject); Object.DestroyImmediate(face); Object.DestroyImmediate(authored); }
+        }
+
+        [Test]
+        public void BatchClipValidationKeepsPerFileErrorsAndRejectsChangedSource()
+        {
+            using var fixture = new AttachmentConnectionTests.Fixture();
+            var face = new AnimationClip(); var wrong = new AnimationClip();
+            try
+            {
+                AnimationUtility.SetEditorCurve(face, EditorCurveBinding.FloatCurve("Front", typeof(SkinnedMeshRenderer), "blendShape.Hair detail"), AnimationCurve.Constant(0, 1, 75));
+                AnimationUtility.SetEditorCurve(wrong, EditorCurveBinding.FloatCurve("Front", typeof(Transform), "m_LocalPosition.x"), AnimationCurve.Constant(0, 1, 1));
+                using var session = new ExperimentalExpressionCaptureSession(fixture.Source, replayInstalledDefaults: false);
+                var weights = session.Channels.Select(channel => channel.Renderer.GetBlendShapeWeight(0)).ToArray();
+                var errors = session.ClipErrors(new[] { face, wrong, face });
+                Assert.That(errors.Count, Is.EqualTo(2)); Assert.That(errors[face], Is.Null); Assert.That(errors[wrong], Is.Not.Null);
+                Assert.That(session.Channels.Select(channel => channel.Renderer.GetBlendShapeWeight(0)).ToArray(), Is.EqualTo(weights));
+                var vertices = fixture.Mesh.vertices; vertices[0].x += .1f; fixture.Mesh.vertices = vertices;
+                Assert.Throws<InvalidOperationException>(() => session.ClipErrors(new[] { face, wrong }));
+            }
+            finally { Object.DestroyImmediate(face); Object.DestroyImmediate(wrong); }
+        }
+
+        [TestCase("ja", "VRM書き出し", "VRMを保存")]
+        [TestCase("en", "VRM Export", "Save VRM")]
+        [TestCase("ko", "VRM 내보내기", "VRM 저장")]
+        [TestCase("zh-Hans", "VRM 导出", "保存 VRM")]
+        [TestCase("zh-Hant", "VRM 匯出", "儲存 VRM")]
+        public void PrimaryWindowUsesInstalledLocaleTables(string locale, string title, string save)
+        {
+            var flags = System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Static;
+            var localeField = typeof(ExporterLocalization).GetField("_locale", flags);
+            var messagesField = typeof(ExporterLocalization).GetField("_messages", flags);
+            var previousLocale = localeField.GetValue(null); var previousMessages = messagesField.GetValue(null);
+            ExperimentalExpressionCaptureWindow window = null;
+            try
+            {
+                localeField.SetValue(null, locale); messagesField.SetValue(null, null);
+                ExperimentalExpressionCaptureWindow.Open(); window = Resources.FindObjectsOfTypeAll<ExperimentalExpressionCaptureWindow>().Single();
+                Assert.That(window.titleContent.text, Is.EqualTo(title));
+                Assert.That(ExporterLocalization.T("VRMを保存"), Is.EqualTo(save));
+                Assert.That(ExporterLocalization.T("候補ファイル"), Is.Not.Empty);
+                if (locale != "ja") Assert.That(ExporterLocalization.T("候補ファイル"), Is.Not.EqualTo("候補ファイル"));
+            }
+            finally { window?.Close(); localeField.SetValue(null, previousLocale); messagesField.SetValue(null, previousMessages); }
+        }
+
         [Test]
         public void AudioLinkSuppressionCoversSharedInactiveAndNewMaterialsWithoutEditingTheSource()
         {
