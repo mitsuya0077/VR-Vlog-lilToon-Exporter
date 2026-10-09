@@ -88,7 +88,12 @@ namespace VRVlog.LilToonExporter.Tests
                     Assert.That(data.Json.Contains("_UseAudioLink"), Is.False, "External audio controls must not be emitted into the lilToon payload.");
                 imported = await Vrm10.LoadBytesAsync(bytes, canLoadVrm0X: false, awaitCaller: new ImmediateCaller());
                 Assert.That(imported, Is.Not.Null);
-                Assert.That(imported.Vrm.Expression.CustomClips.Any(clip => clip.name == "Smile"), Is.True);
+                var expression = imported.Vrm.Expression.CustomClips.Single(clip => clip.name == "VRChat / 記録 / Smile");
+                Assert.That(expression.MorphTargetBindings.Length, Is.EqualTo(2));
+                imported.Runtime.Expression.SetWeight(ExpressionKey.CreateCustom(expression.name), 1);
+                imported.Runtime.Process();
+                Assert.That(imported.GetComponentsInChildren<SkinnedMeshRenderer>().Any(skin =>
+                    Enumerable.Range(0, skin.sharedMesh.blendShapeCount).Any(index => skin.GetBlendShapeWeight(index) > 0)), Is.True);
             }
             finally
             {
