@@ -66,7 +66,7 @@ namespace VRVlog.LilToonExporter
         }
 
         private void OnEnable() => EditorApplication.update += CheckSource;
-        private void OnDisable() => EditorApplication.update -= CheckSource;
+        private void OnDisable() { EditorApplication.update -= CheckSource; session?.ReleaseInput(); }
 
         private void CheckSource()
         {

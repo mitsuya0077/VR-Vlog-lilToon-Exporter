@@ -456,6 +456,7 @@ namespace VRVlog.LilToonExporter
             var expressionCount = expressions.Length;
             void Completed(byte[] bytes, System.Collections.Generic.IEnumerable<string> warnings)
             {
+                if (this == null || !ReferenceEquals(session, target)) return;
                 var extensions = (System.Collections.Generic.Dictionary<string, object>)GlbDocument.Read(bytes).Json["extensions"];
                 var poseCount = extensions.TryGetValue(VRVlog.Poses.HumanoidPoseData.Extension, out var poses)
                     ? VRVlog.Poses.HumanoidPoseData.Read(poses).Count : 0;
@@ -470,7 +471,11 @@ namespace VRVlog.LilToonExporter
                 return target.Export(name, targetAuthor, warnings, blink?.Copy(), license.Copy(), options, report, expressions, poses);
             }, Completed, previewGimmicks: new ExportGimmickOptions());
             if (recovery != null)
-                ExportFailureWindow.Show(recovery, () => Completed(recovery.LastSuccess.Bytes, recovery.LastSuccess.Warnings));
+            {
+                recovery.RetainInput(target.RetainForRecovery());
+                try { ExportFailureWindow.Show(recovery, () => Completed(recovery.LastSuccess.Bytes, recovery.LastSuccess.Warnings)); }
+                catch { recovery.ReleaseInput(); throw; }
+            }
             return recovery;
         }
 
@@ -527,6 +532,7 @@ namespace VRVlog.LilToonExporter
         {
             blinkConfiguration?.Close(); blinkConfiguration = null; configuredBlink = null;
             // PreviewRenderUtility owns the preview scene; session owns prepared assets.
+            session?.DetachForRecovery();
             preview?.Cleanup(); preview = null;
             session?.Dispose(); session = null;
             poseReview?.Close(); poseReview = null;

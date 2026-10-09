@@ -68,7 +68,35 @@ namespace VRVlog.LilToonExporter
         FaceEmoExpressions.BindingSnapshot faceEmoBindings;
         Hash128 sourceStamp;
         Pose preparedRest;
-        bool disposed;
+        bool disposed, ownerReleased;
+        int recoveryUsers;
+#if UNITY_5_3_OR_NEWER
+        UnityEngine.SceneManagement.Scene retainedScene;
+#endif
+        sealed class RecoveryLease : IDisposable
+        {
+            ExperimentalExpressionCaptureSession owner;
+            internal RecoveryLease(ExperimentalExpressionCaptureSession owner) { this.owner = owner; }
+            public void Dispose()
+            {
+                if (owner == null) return;
+                var current = owner; owner = null; current.recoveryUsers--;
+                if (current.ownerReleased && current.recoveryUsers == 0) current.DisposeCore();
+            }
+        }
+        internal IDisposable RetainForRecovery()
+        {
+            if (disposed) throw new ObjectDisposedException(nameof(ExperimentalExpressionCaptureSession));
+            recoveryUsers++; return new RecoveryLease(this);
+        }
+        internal void DetachForRecovery()
+        {
+#if UNITY_5_3_OR_NEWER
+            if (recoveryUsers == 0 || Copy == null || retainedScene.IsValid()) return;
+            retainedScene = UnityEditor.SceneManagement.EditorSceneManager.NewPreviewScene();
+            UnityEngine.SceneManagement.SceneManager.MoveGameObjectToScene(Copy, retainedScene);
+#endif
+        }
         internal const int MaximumExpressions = 64;
 
         internal ExperimentalExpressionCaptureSession(GameObject source) : this(source, true) { }
@@ -80,7 +108,7 @@ namespace VRVlog.LilToonExporter
             {
                 ExportRendererSelection.RequireActiveRoot(source);
                 CaptureClipRoots();
-                Copy = Object.Instantiate(source);
+                Copy = NdmfExportPreparation.InstantiateOwnedCopy(source);
                 Copy.name = source.name;
                 Copy.hideFlags = HideFlags.HideAndDontSave;
                 foreach (var renderer in source.GetComponentsInChildren<Renderer>(true))
@@ -448,7 +476,7 @@ namespace VRVlog.LilToonExporter
                 if (!HasGeometryChange(pose) && string.IsNullOrEmpty(pose.InstalledSourceId))
                     throw new InvalidOperationException(pose.Name + ExporterLocalization.T(": 基準の顔と形状が同じです。"));
             }
-            var exportCopy = Object.Instantiate(Copy);
+            var exportCopy = NdmfExportPreparation.InstantiateOwnedCopy(Copy);
             exportCopy.name = Copy.name;
             exportCopy.hideFlags = HideFlags.HideAndDontSave;
             var meshes = new List<Mesh>();
@@ -616,10 +644,21 @@ namespace VRVlog.LilToonExporter
 
         public void Dispose()
         {
+            if (ownerReleased) return;
+            ownerReleased = true;
+            if (recoveryUsers == 0) DisposeCore();
+        }
+
+        void DisposeCore()
+        {
             if (disposed) return;
             disposed = true;
             if (Copy != null) Object.DestroyImmediate(Copy);
             Copy = null;
+#if UNITY_5_3_OR_NEWER
+            if (retainedScene.IsValid()) UnityEditor.SceneManagement.EditorSceneManager.ClosePreviewScene(retainedScene);
+            retainedScene = default;
+#endif
             controllers?.Dispose(); controllers = null;
             descriptorBlink?.Dispose(); descriptorBlink = null;
             preparation?.Dispose(); preparation = null;

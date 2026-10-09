@@ -36,6 +36,38 @@ namespace VRVlog.LilToonExporter
         private const string CompatibilityMessage =
             "アバターの準備に必要な NDMF API を利用できません。NDMF " + DependencyPolicy.NdmfMinimum + " 以降の 1.x が必要です。確認済み構成: MA " + DependencyPolicy.ModularAvatarReference + " / NDMF " + DependencyPolicy.NdmfReference + "。" + DependencyPolicy.Recovery;
 
+        internal static GameObject InstantiateOwnedCopy(GameObject source)
+        {
+            var host = new GameObject("VRVlog inactive copy staging") { hideFlags = HideFlags.HideAndDontSave };
+            host.SetActive(false);
+            GameObject copy = null;
+            try
+            {
+                copy = Object.Instantiate(source, host.transform, true);
+                copy.name = source.name; copy.hideFlags = HideFlags.HideAndDontSave;
+                foreach (var behaviour in copy.GetComponentsInChildren<Behaviour>(true))
+                {
+                    if (behaviour == null) continue;
+                    var type = behaviour.GetType();
+                    var authoring = IsAuthoringTag(type) || type.GetInterfaces().Any(contract => contract.FullName == "VRC.SDKBase.IEditorOnly");
+                    if (authoring) continue;
+                    var editorCallbacks = false;
+                    for (var current = type; current != null; current = current.BaseType)
+                        editorCallbacks |= current.GetCustomAttributesData().Any(attribute => attribute.AttributeType.FullName == "UnityEngine.ExecuteAlways" ||
+                            attribute.AttributeType.FullName == "UnityEngine.ExecuteInEditMode");
+                    // Disabled editor scripts can still receive Awake on activation.
+                    // Keep inert runtime/metadata components, but remove editor scripts
+                    // outside the authoring contracts before the owned copy is active.
+                    if (behaviour is MonoBehaviour && editorCallbacks) Object.DestroyImmediate(behaviour);
+                    else behaviour.enabled = false;
+                }
+                copy.transform.SetParent(null, true);
+                return copy;
+            }
+            catch { if (copy != null) Object.DestroyImmediate(copy); throw; }
+            finally { Object.DestroyImmediate(host); }
+        }
+
         internal static bool NeedsProcessing(GameObject avatar) => avatar != null && RelevantAuthoring(avatar).Count != 0;
 
         internal Object IsolatedCopyOf(Object original) => original != null && isolatedAssets.TryGetValue(original, out var copy)

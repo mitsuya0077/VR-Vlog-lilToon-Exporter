@@ -40,6 +40,14 @@ namespace VRVlog.LilToonExporter
             }
         }
 
+        IDisposable retainedInput;
+        internal void RetainInput(IDisposable input)
+        {
+            if (retainedInput != null) throw new InvalidOperationException("Recovery input is already owned.");
+            retainedInput = input;
+        }
+        internal void ReleaseInput() { var input = retainedInput; retainedInput = null; input?.Dispose(); }
+
         private readonly Func<ExportRecoveryOptions, ExportRecoveryReport, ICollection<string>, byte[]> create;
         private readonly GameObject[] previewExcludedObjects;
         private readonly ExportGimmickOptions previewGimmicks;

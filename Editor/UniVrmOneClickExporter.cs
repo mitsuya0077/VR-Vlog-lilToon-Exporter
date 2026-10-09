@@ -82,7 +82,7 @@ namespace VRVlog.LilToonExporter
             var sourceBlink = BlinkExportSession.CaptureForExport(source, blinkOptions, exclusions.Contains, suppressSharedTextureEmission, suppressHdrTextureEmission);
             using var poses = new PoseExportSession(source, poseOptions, exclusions.Contains, menuPolicy);
             recoveryReport.Stage = "コピー作成";
-            var clone = UnityEngine.Object.Instantiate(source);
+            var clone = NdmfExportPreparation.InstantiateOwnedCopy(source);
             clone.name = source.name;
             var temporaryMaterials = new List<Material>();
             var temporaryMeshes = new List<Mesh>();

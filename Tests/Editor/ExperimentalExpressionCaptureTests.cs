@@ -16,6 +16,33 @@ namespace VRVlog.LilToonExporter.Tests
 {
     public sealed class ExperimentalExpressionCaptureTests
     {
+        [TestCase(false)]
+        [TestCase(true)]
+        public void PreparingAndExportingDoNotInvokeAvatarEditorCallbacks(bool recordFace)
+        {
+            using var fixture = new AttachmentConnectionTests.Fixture();
+            foreach (var skin in fixture.Source.GetComponentsInChildren<SkinnedMeshRenderer>()) skin.sharedMaterial.shader = Shader.Find("lilToon");
+            var material = fixture.Source.transform.Find("Front").GetComponent<SkinnedMeshRenderer>().sharedMaterial;
+            var probe = fixture.Source.AddComponent<RecoveryCallbackProbe>(); probe.SharedMaterial = material;
+            var clip = new AnimationClip { name = "Callback-safe face" };
+            try
+            {
+                var stamp = ExportSourceFingerprint.Compute(fixture.Source); var color = material.GetColor("_Color");
+                RecoveryCallbackProbe.ResetCounters(); RecoveryCallbackProbe.Armed = true;
+                using var session = new ExperimentalExpressionCaptureSession(fixture.Source, false);
+                if (recordFace)
+                {
+                    AnimationUtility.SetEditorCurve(clip, EditorCurveBinding.FloatCurve("Front", typeof(SkinnedMeshRenderer), "blendShape.Hair detail"), AnimationCurve.Constant(0, 1, 80));
+                    session.ImportClips(new[] { new ExperimentalExpressionCaptureSession.ClipInput { Clip = clip, Name = clip.name, Time = clip.length } });
+                }
+                var bytes = session.Export("Callback-safe export", "Tests", blinkOptions: new BlinkExportOptions { Mode = BlinkExportMode.None });
+                Assert.DoesNotThrow(() => LilToonGlbExtension.Validate(bytes));
+                Assert.That(RecoveryCallbackProbe.AwakeCalls, Is.Zero); Assert.That(RecoveryCallbackProbe.EnableCalls, Is.Zero);
+                Assert.That(material.GetColor("_Color"), Is.EqualTo(color)); Assert.That(ExportSourceFingerprint.Compute(fixture.Source), Is.EqualTo(stamp));
+            }
+            finally { RecoveryCallbackProbe.ResetCounters(); Object.DestroyImmediate(clip); }
+        }
+
         [TestCase(true)]
         [TestCase(false)]
         public void ReimportRefreshesExplicitRowsAndRestoresTheirPreviousSelection(bool selected)
@@ -142,11 +169,15 @@ namespace VRVlog.LilToonExporter.Tests
             finally { Object.DestroyImmediate(window); AssetDatabase.DeleteAsset(folder); Object.DestroyImmediate(retained); Object.DestroyImmediate(controller); Object.DestroyImmediate(machine); }
         }
 
-        [TestCase(false, "2nd")]
-        [TestCase(true, "2nd")]
-        [TestCase(false, "3rd")]
-        [TestCase(true, "3rd")]
-        public void PrimaryWindowOffersMaterialRecoveryAndSavesRetryWithoutChangingSource(bool recordFace, string layer)
+        [TestCase(false, "2nd", "stay")]
+        [TestCase(false, "2nd", "close")]
+        [TestCase(true, "2nd", "close")]
+        [TestCase(false, "2nd", "change")]
+        [TestCase(true, "2nd", "change")]
+        [TestCase(true, "2nd", "stay")]
+        [TestCase(false, "3rd", "stay")]
+        [TestCase(true, "3rd", "stay")]
+        public void PrimaryWindowOffersMaterialRecoveryAndSavesRetryWithoutChangingSource(bool recordFace, string layer, string ownerAction)
         {
             using var fixture = new AttachmentConnectionTests.Fixture();
             var material = new Material(Shader.Find("lilToon"));
@@ -176,17 +207,23 @@ namespace VRVlog.LilToonExporter.Tests
                 var kind = layer == "2nd" ? ExportRecoveryActionKind.OmitSecondLayer : ExportRecoveryActionKind.OmitThirdLayer;
                 var diagnostic = recovery.Report.Diagnostics.Single(item => item.Action?.Kind == kind);
                 Assert.That(diagnostic.Action.Material, Is.SameAs(material));
+                var target = (ExperimentalExpressionCaptureSession)type.GetField("session", flags).GetValue(window);
+                if (ownerAction == "close") { Object.DestroyImmediate(window); window = null; }
+                if (ownerAction == "change") type.GetMethod("ChangeAvatar", flags).Invoke(window, null);
+                Assert.That(target.Copy, Is.Not.Null, "The recovery dialog retains the prepared copy after its owner closes.");
                 var options = new ExportRecoveryOptions(); options.Actions.Add(diagnostic.Action);
                 Assert.That(recovery.Attempt(options), Is.True, recovery.Failure?.ToString());
                 Assert.DoesNotThrow(() => recovery.SavePending());
                 Assert.DoesNotThrow(() => LilToonGlbExtension.Validate(File.ReadAllBytes(path)));
                 Assert.That(ExportSourceFingerprint.Compute(fixture.Source), Is.EqualTo(stamp));
                 Assert.That(material.GetFloat(property), Is.EqualTo(1)); Assert.That(material.GetTexture(slot), Is.SameAs(texture));
+                foreach (var failure in Resources.FindObjectsOfTypeAll<ExportFailureWindow>()) Object.DestroyImmediate(failure);
+                if (ownerAction != "stay") Assert.That(target.Copy, Is.Null, "Closing recovery releases its private preview scene and capture assets.");
             }
             finally
             {
                 foreach (var failure in Resources.FindObjectsOfTypeAll<ExportFailureWindow>()) Object.DestroyImmediate(failure);
-                Object.DestroyImmediate(window); Object.DestroyImmediate(clip); Object.DestroyImmediate(material); Object.DestroyImmediate(texture);
+                if (window != null) Object.DestroyImmediate(window); Object.DestroyImmediate(clip); Object.DestroyImmediate(material); Object.DestroyImmediate(texture);
                 if (File.Exists(path)) File.Delete(path);
             }
         }
