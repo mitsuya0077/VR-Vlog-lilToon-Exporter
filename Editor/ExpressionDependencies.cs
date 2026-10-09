@@ -516,11 +516,41 @@ namespace VRVlog.LilToonExporter
             {
                 var writes = other.Layers.SelectMany(l => l.Writes).Where(name => result.Parameters.Contains(name) &&
                     !preservedParameterWrites.ContainsKey(name)).Distinct().ToArray();
-                var otherMorphs = neutralMorphs == null && fixedContext == null ? Array.Empty<string>() : other.Layers.SelectMany(layer => layer.Morphs)
-                    .Where(result.Morphs.Contains).Select(binding => binding.path + "/" + binding.propertyName).Distinct().ToArray();
-                if (writes.Length > 0 || other.Unknown.Count > 0 || otherMorphs.Length > 0)
+                // Validate every controller's unbounded effects before a known
+                // morph writer can retain prepared rest. A later callback or
+                // parameter writer must not be hidden by an earlier refusal.
+                if (writes.Length > 0 || other.Unknown.Count > 0)
                     throw new InvalidOperationException("FX以外のPlayable Layerからの変更を再現できません: " + other.Runtime.name + " / " +
-                        string.Join(", ", writes.Concat(other.Unknown).Concat(otherMorphs)));
+                        string.Join(", ", writes.Concat(other.Unknown)));
+            }
+            var otherMorphs = neutralMorphs == null && fixedContext == null ? Array.Empty<string>() : otherControllers
+                .Select(other => (other.Runtime, Bindings: other.Layers.SelectMany(layer => layer.Morphs).Where(result.Morphs.Contains).Distinct().ToArray()))
+                .Where(other => other.Bindings.Length > 0).Select(other => other.Runtime.name + " / " +
+                    string.Join(", ", other.Bindings.Select(binding => binding.path + "/" + binding.propertyName))).ToArray();
+            var evaluatedWeights = weightCommands.Where(item => !item.Control.AnimatorLayer || relevantWeights.Contains(item.Behaviour)).ToArray();
+            void ValidateWeightConflicts()
+            {
+                foreach (var target in evaluatedWeights.Where(item => item.Control.AnimatorLayer).GroupBy(item => item.Control.LayerIndex))
+                    if (target.Select(item => item.Control.GoalWeight).Distinct().Count() > 1 &&
+                        (target.Select(item => item.SourceLayer).Distinct().Count() > 1 ||
+                         target.GroupBy(item => item.Control.SourceState).Any(state => state.Select(item => item.Control.GoalWeight).Distinct().Count() > 1)))
+                        throw new InvalidOperationException("複数のFXレイヤー制御が競合するため、固定表情の重みを確定できません: " +
+                            target.First().Control.Location + " / VRCAnimatorLayerControl");
+            }
+            // A known additional morph effect must not conceal contradictory
+            // commands in a relay that otherwise requests native evaluation.
+            // Other paths retain their existing capability precedence below.
+            if (evaluateLayerWeights && neutralMorphs != null && otherMorphs.Length > 0) ValidateWeightConflicts();
+            if (otherMorphs.Length > 0)
+            {
+                var message = "FX以外のPlayable Layerからの変更を再現できません: " + string.Join("; ", otherMorphs);
+                // VRChat's cross-playable masks, weights and ordering are not
+                // part of the FX-only native probe. Preserve the complete
+                // prepared neutral component rather than choosing an FX value
+                // while silently discarding a locomotion/action contribution.
+                // Explicit selected endpoints still require a faithful result.
+                if (neutralMorphs != null) throw new NeutralShapeSamplingException(message, dependencyMorphs: result.NeutralDependencyMorphs);
+                throw new InvalidOperationException(message);
             }
             if (unsafeFxCommands.Count > 0)
             {
@@ -538,15 +568,10 @@ namespace VRVlog.LilToonExporter
             // invalidate that proof even when their goal happens to be one.
             if (evaluateLayerWeights)
             {
-                var relevant = weightCommands.Where(item => !item.Control.AnimatorLayer || relevantWeights.Contains(item.Behaviour)).ToArray();
+                var relevant = evaluatedWeights;
                 var unsupported = relevant.FirstOrDefault(item => !item.Control.AnimatorLayer || item.Control.BlendDuration != 0 || item.Control.SourceState == null);
                 if (unsupported.Control != null) throw WeightControlCapability(unsupported.Control, false, result.NeutralDependencyMorphs);
-                foreach (var target in relevant.GroupBy(item => item.Control.LayerIndex))
-                    if (target.Select(item => item.Control.GoalWeight).Distinct().Count() > 1 &&
-                        (target.Select(item => item.SourceLayer).Distinct().Count() > 1 ||
-                         target.GroupBy(item => item.Control.SourceState).Any(state => state.Select(item => item.Control.GoalWeight).Distinct().Count() > 1)))
-                        throw new InvalidOperationException("複数のFXレイヤー制御が競合するため、固定表情の重みを確定できません: " +
-                            target.First().Control.Location + " / VRCAnimatorLayerControl");
+                ValidateWeightConflicts();
                 if (additionalWeights.Length > 0) throw WeightControlCapability(additionalWeights[0], false, result.NeutralDependencyMorphs);
                 foreach (var command in relevant) result.EvaluatedWeightControls.Add(command.Behaviour, command.Control);
                 if (relevant.Any(item => item.Control.LayerIndex >= result.IndependentTopOverrideLayer)) result.IndependentTopOverrideLayer = -1;

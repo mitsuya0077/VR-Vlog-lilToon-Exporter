@@ -444,9 +444,12 @@ namespace VRVlog.LilToonExporter.Tests
         {
             reset.motion = Clip("Additional face", 0);
             Assert.That(AdditionalParameterConstants.Prove(fx, source, Context()).ContainsKey(Axis), Is.True);
-            Assert.That(Assert.Throws<InvalidOperationException>(() => Dependencies()).Message, Does.Contain("blendShape.Open"));
+            Assert.That(Assert.Throws<NeutralShapeSamplingException>(() => Dependencies()).Message, Does.Contain("blendShape.Open"));
             Assert.That(Assert.Throws<InvalidOperationException>(() => Selected()).Message, Does.Contain("blendShape.Open"));
-            Assert.That(Assert.Throws<InvalidOperationException>(() => NeutralShapeSampler.Sample(avatar)).Message, Does.Contain("blendShape.Open"));
+            var warnings = new List<string>();
+            Assert.That(NeutralShapeSampler.Sample(avatar, warnings: warnings), Is.Empty);
+            Assert.That(warnings.Any(value => value.Contains("blendShape.Open") && value.Contains("FX以外")), Is.True);
+            Assert.That(skin.GetBlendShapeWeight(0), Is.EqualTo(35));
         }
 
         [TestCase("source", false)]

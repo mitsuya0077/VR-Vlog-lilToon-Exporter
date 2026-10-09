@@ -39,6 +39,7 @@ namespace VRVlog.LilToonExporter
             void Preserve(IEnumerable<EditorCurveBinding> bindings, NeutralShapeSamplingException error)
             {
                 var targets = new HashSet<EditorCurveBinding>(bindings);
+                if (error.DependencyMorphs != null) targets.UnionWith(error.DependencyMorphs);
                 preserved.UnionWith(targets);
                 var message = string.Format(ExporterLocalization.T(
                     "FXの初期状態を固定できなかったため、書き出し用コピーの設定を保持しました（対象: {0}）。FXによる通常時の見た目と異なる場合があります。理由: {1}"),
@@ -99,6 +100,18 @@ namespace VRVlog.LilToonExporter
             var randomRestMorphs = new HashSet<EditorCurveBinding>(plan.TemporalMorphs);
             foreach (var roots in groups)
             {
+                // Appearance ownership may remove every captured channel in a
+                // group. Still report its known neutral capability after all
+                // data checks, and retain coupled companions from earlier or
+                // later groups instead of silently accepting partial rest.
+                var owned = new HashSet<EditorCurveBinding>(roots.Where(plan.PreservedMorphs.Contains));
+                if (owned.Count > 0)
+                {
+                    try { ExpressionDependencies.AnalyzeNeutral(metadata.Controller, owned, excludedPath, metadata, automatic, fixedContext,
+                        preserveCommittedMorphs: true); }
+                    catch (NeutralShapeSamplingException error) { Preserve(owned, error); }
+                    catch (InvalidOperationException error) { throw WithAffected(error, owned); }
+                }
                 roots.IntersectWith(plan.CommittedMorphs);
                 roots.ExceptWith(randomRestMorphs);
                 if (roots.Count == 0) continue;

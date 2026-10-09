@@ -1549,7 +1549,7 @@ namespace VRVlog.LilToonExporter.Tests
 
         [TestCase(false)]
         [TestCase(true)]
-        public void ReachableActionMorphOrParameterWriterIsStillRejected(bool driver)
+        public void ReachableActionMorphKeepsPreparedRestButParameterWriterIsStillRejected(bool driver)
         {
             controller.AddParameter("AFK_Step", AnimatorControllerParameterType.Int);
             var idle = Open(75);
@@ -1557,8 +1557,16 @@ namespace VRVlog.LilToonExporter.Tests
             var transition = idle.AddTransition(changed); transition.hasExitTime = false; transition.duration = 0;
             transition.AddCondition(AnimatorConditionMode.Equals, 1, "AFK_Step");
             AfkAction(true, driver);
-            Assert.That(Assert.Throws<InvalidOperationException>(() => NeutralShapeSampler.Sample(avatar)).Message,
-                Does.Contain("FX以外").And.Contain(driver ? "AFK_Step" : "Body/blendShape.Open"));
+            if (driver)
+                Assert.That(Assert.Throws<InvalidOperationException>(() => NeutralShapeSampler.Sample(avatar)).Message,
+                    Does.Contain("FX以外").And.Contain("AFK_Step"));
+            else
+            {
+                var warnings = new List<string>(); var before = ExportSourceFingerprint.Compute(avatar);
+                Assert.That(NeutralShapeSampler.Sample(avatar, warnings: warnings), Is.Empty);
+                Assert.That(warnings.Any(value => value.Contains("FX以外") && value.Contains("Body/blendShape.Open")), Is.True);
+                Assert.That(ExportSourceFingerprint.Compute(avatar), Is.EqualTo(before));
+            }
         }
 
         [Test]
@@ -1582,8 +1590,10 @@ namespace VRVlog.LilToonExporter.Tests
             var active = State(machine, Clip("Open", AnimationCurve.Constant(0, 1, 0)));
             var transition = rest.AddTransition(active); transition.hasExitTime = false; transition.duration = 0;
             transition.AddCondition(AnimatorConditionMode.Greater, .25f, "Pet"); SetAction(other);
-            Assert.That(Assert.Throws<InvalidOperationException>(() => NeutralShapeSampler.Sample(avatar)).Message,
-                Does.Contain("FX以外").And.Contain("Body/blendShape.Open"));
+            var warnings = new List<string>(); var before = ExportSourceFingerprint.Compute(avatar);
+            Assert.That(NeutralShapeSampler.Sample(avatar, warnings: warnings), Is.Empty);
+            Assert.That(warnings.Any(value => value.Contains("FX以外") && value.Contains("Body/blendShape.Open")), Is.True);
+            Assert.That(ExportSourceFingerprint.Compute(avatar), Is.EqualTo(before));
         }
 
         [TestCase("EyeHeightAsMeters")]
@@ -1607,7 +1617,7 @@ namespace VRVlog.LilToonExporter.Tests
         [TestCase("UnknownAction")]
         [TestCase("ActionMorph")]
         [TestCase("FxWeight")]
-        public void RecoverableExternalInputRetainsKnownFxWeightButRejectsUnknownOrOtherMorphWriters(string kind)
+        public void RecoverableExternalInputRetainsKnownFxWeightAndOtherMorphButRejectsUnknownCallbacks(string kind)
         {
             controller.AddParameter("EyeHeightAsMeters", AnimatorControllerParameterType.Float);
             var idle = Open(75);
@@ -1637,7 +1647,7 @@ namespace VRVlog.LilToonExporter.Tests
             var before = EditorJsonUtility.ToJson(controller); var beforeMesh = EditorJsonUtility.ToJson(mesh);
             var beforeClip = EditorJsonUtility.ToJson(idle.motion);
             var warnings = new List<string>();
-            if (kind == "FxWeight")
+            if (kind != "UnknownAction")
             {
                 Assert.That(NeutralShapeSampler.Sample(avatar, warnings: warnings), Is.Empty);
                 Assert.That(warnings.Any(value => value.Contains("Open") && value.Contains(diagnostic)), Is.True, string.Join("\n", warnings));
