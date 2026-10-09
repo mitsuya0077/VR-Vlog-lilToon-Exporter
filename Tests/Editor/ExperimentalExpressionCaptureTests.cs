@@ -77,7 +77,7 @@ namespace VRVlog.LilToonExporter.Tests
                 extra.SetFloat("_UseAudioLink", 1); extra.SetFloat("_AudioLink2Emission", 1);
                 skins[1].sharedMaterial = extra;
                 using var session = new ExperimentalExpressionCaptureSession(fixture.Source, replayInstalledDefaults: false);
-                session.SetWeight(0, 0, 90); session.Capture("Smile");
+                session.SetWeight(0, 0, 90); session.SetWeight(1, 0, 0); session.Capture("Smile");
                 var warnings = new System.Collections.Generic.List<string>();
                 var bytes = session.Export("Test", "Tests", warnings, new BlinkExportOptions { Mode = BlinkExportMode.None });
                 Assert.That(warnings.Any(warning => warning.IndexOf("AudioLink", StringComparison.OrdinalIgnoreCase) >= 0), Is.False);
