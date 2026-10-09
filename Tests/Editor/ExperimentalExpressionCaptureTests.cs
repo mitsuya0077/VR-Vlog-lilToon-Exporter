@@ -59,8 +59,8 @@ namespace VRVlog.LilToonExporter.Tests
             }
             finally
             {
-                foreach (var failure in Resources.FindObjectsOfTypeAll<ExportFailureWindow>()) failure.Close();
-                window.Close(); Object.DestroyImmediate(clip); Object.DestroyImmediate(material); Object.DestroyImmediate(texture);
+                foreach (var failure in Resources.FindObjectsOfTypeAll<ExportFailureWindow>()) Object.DestroyImmediate(failure);
+                Object.DestroyImmediate(window); Object.DestroyImmediate(clip); Object.DestroyImmediate(material); Object.DestroyImmediate(texture);
                 if (File.Exists(path)) File.Delete(path);
             }
         }
