@@ -28,7 +28,8 @@ namespace VRVlog.LilToonExporter
         readonly System.Collections.Generic.Dictionary<AnimationClip, Rect> candidateRects = new System.Collections.Generic.Dictionary<AnimationClip, Rect>();
         readonly System.Collections.Generic.Dictionary<AnimationClip, Rect> candidateToggleRects = new System.Collections.Generic.Dictionary<AnimationClip, Rect>();
         Rect addSelectedRect;
-        string previewName = ExporterLocalization.T("基準の顔"), clipFilter = "";
+        // AssetDatabase-backed localization must run after ScriptableObject construction.
+        string previewName = "基準の顔", clipFilter = "";
         Vector2 clipScroll, recommendationScroll;
         AnimationClip clipToAdd;
         PoseReviewWindow poseReview;
