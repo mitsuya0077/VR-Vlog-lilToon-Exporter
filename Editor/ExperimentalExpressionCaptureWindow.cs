@@ -532,7 +532,7 @@ namespace VRVlog.LilToonExporter
         {
             blinkConfiguration?.Close(); blinkConfiguration = null; configuredBlink = null;
             // PreviewRenderUtility owns the preview scene; session owns prepared assets.
-            session?.DetachForRecovery();
+            if (session?.RetainPreviewForRecovery(preview) == true) preview = null;
             preview?.Cleanup(); preview = null;
             session?.Dispose(); session = null;
             poseReview?.Close(); poseReview = null;

@@ -70,9 +70,7 @@ namespace VRVlog.LilToonExporter
         Pose preparedRest;
         bool disposed, ownerReleased;
         int recoveryUsers;
-#if UNITY_5_3_OR_NEWER
-        UnityEngine.SceneManagement.Scene retainedScene;
-#endif
+        PreviewRenderUtility retainedPreview;
         sealed class RecoveryLease : IDisposable
         {
             ExperimentalExpressionCaptureSession owner;
@@ -89,13 +87,12 @@ namespace VRVlog.LilToonExporter
             if (disposed) throw new ObjectDisposedException(nameof(ExperimentalExpressionCaptureSession));
             recoveryUsers++; return new RecoveryLease(this);
         }
-        internal void DetachForRecovery()
+        internal bool RetainPreviewForRecovery(PreviewRenderUtility preview)
         {
-#if UNITY_5_3_OR_NEWER
-            if (recoveryUsers == 0 || Copy == null || retainedScene.IsValid()) return;
-            retainedScene = UnityEditor.SceneManagement.EditorSceneManager.NewPreviewScene();
-            UnityEngine.SceneManagement.SceneManager.MoveGameObjectToScene(Copy, retainedScene);
-#endif
+            if (recoveryUsers == 0) return false;
+            // PreviewRenderUtility also owns its registered GameObjects, so a
+            // scene move cannot detach their lifetime from Cleanup().
+            retainedPreview = preview; return true;
         }
         internal const int MaximumExpressions = 64;
 
@@ -653,12 +650,9 @@ namespace VRVlog.LilToonExporter
         {
             if (disposed) return;
             disposed = true;
+            retainedPreview?.Cleanup(); retainedPreview = null;
             if (Copy != null) Object.DestroyImmediate(Copy);
             Copy = null;
-#if UNITY_5_3_OR_NEWER
-            if (retainedScene.IsValid()) UnityEditor.SceneManagement.EditorSceneManager.ClosePreviewScene(retainedScene);
-            retainedScene = default;
-#endif
             controllers?.Dispose(); controllers = null;
             descriptorBlink?.Dispose(); descriptorBlink = null;
             preparation?.Dispose(); preparation = null;
