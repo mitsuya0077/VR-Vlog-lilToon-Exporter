@@ -377,12 +377,16 @@ namespace VRVlog.LilToonExporter.Tests
         }
 
         [Test]
-        public void ReachableAdditionalMorphWriterRemainsHardDespiteKnownWeightCommand()
+        public void ReachableAdditionalMorphWriterKeepsPreparedNeutralDespiteKnownWeightCommand()
         {
             AddControl(command); command.motion = Morph(0); action.layers[0].stateMachine.defaultState = command;
             var before = EditorJsonUtility.ToJson(skin);
-            Assert.That(Assert.Throws<InvalidOperationException>(() => Analyze()).Message, Does.Contain("FX以外").And.Contain("blendShape.Open"));
-            Assert.That(Assert.Throws<InvalidOperationException>(() => NeutralShapeSampler.Sample(avatar)).Message, Does.Contain("FX以外"));
+            Assert.That(Assert.Throws<NeutralShapeSamplingException>(() => Analyze()).Message, Does.Contain("FX以外").And.Contain("blendShape.Open"));
+            var warnings = new List<string>();
+            Assert.That(NeutralShapeSampler.Sample(avatar, warnings: warnings), Is.Empty);
+            Assert.That(warnings.Any(value => value.Contains("FX以外") && value.Contains("blendShape.Open")), Is.True);
+            Assert.That(Assert.Throws<InvalidOperationException>(() => Analyze(new Dictionary<string, float> { ["Menu"] = 1 })).Message,
+                Does.Contain("FX以外").And.Contain("blendShape.Open"));
             Assert.That(EditorJsonUtility.ToJson(skin), Is.EqualTo(before));
             Assert.That(skin.GetBlendShapeWeight(0), Is.EqualTo(35));
         }

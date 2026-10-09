@@ -83,6 +83,11 @@ namespace VRVlog.LilToonExporter
         // a coupled automatic writer must not become independent just because
         // its companion channels are outside this particular capture group.
         internal readonly HashSet<EditorCurveBinding> NeutralDependencyMorphs = new HashSet<EditorCurveBinding>();
+        // Explicit morph/parameter connections form one prepared component.
+        // Keep those distinct from implicit WD/additive execution support: a
+        // separately proved final scalar override may make support-only output
+        // independent, but must not split a parameter-connected configuration.
+        internal readonly HashSet<EditorCurveBinding> NeutralCoupledMorphs = new HashSet<EditorCurveBinding>();
         internal readonly Dictionary<StateMachineBehaviour, VrChatParameterDriver.Program> Drivers = new Dictionary<StateMachineBehaviour, VrChatParameterDriver.Program>();
         internal readonly Dictionary<string, float> NeutralFixedValues = new Dictionary<string, float>(StringComparer.Ordinal);
 
@@ -483,7 +488,33 @@ namespace VRVlog.LilToonExporter
                         result.WeightControlLayers.Add(command.SourceLayer);
                     }
             } while (modified);
-            if (neutralMorphs != null) result.NeutralDependencyMorphs.UnionWith(result.Morphs);
+            if (neutralMorphs != null)
+            {
+                result.NeutralDependencyMorphs.UnionWith(result.Morphs);
+                result.NeutralCoupledMorphs.UnionWith(requiredMorphs);
+                var coupledLayers = new HashSet<int>();
+                var coupledReads = new HashSet<string>(StringComparer.Ordinal);
+                var coupledWrites = new HashSet<string>(StringComparer.Ordinal);
+                var coupledChanged = new HashSet<string>(selected, StringComparer.Ordinal);
+                bool connected;
+                do
+                {
+                    connected = false;
+                    for (var index = 0; index < info.Length; index++)
+                    {
+                        var layer = info[index];
+                        var selectedInput = layer.Reads.Overlaps(coupledChanged);
+                        if (coupledLayers.Contains(index) || !selectedInput && !layer.Writes.Overlaps(coupledReads) &&
+                            !layer.Reads.Overlaps(coupledWrites) &&
+                            !layer.Morphs.Overlaps(result.NeutralCoupledMorphs)) continue;
+                        connected |= coupledLayers.Add(index);
+                        result.NeutralCoupledMorphs.UnionWith(layer.Morphs);
+                        coupledReads.UnionWith(layer.Reads);
+                        coupledWrites.UnionWith(layer.Writes);
+                        if (selectedInput) coupledChanged.UnionWith(layer.Writes);
+                    }
+                } while (connected);
+            }
             if (preserveCommittedMorphs)
             {
                 // A neutral plan owns its explicit morph roots. WD, drivers
@@ -516,16 +547,46 @@ namespace VRVlog.LilToonExporter
             {
                 var writes = other.Layers.SelectMany(l => l.Writes).Where(name => result.Parameters.Contains(name) &&
                     !preservedParameterWrites.ContainsKey(name)).Distinct().ToArray();
-                var otherMorphs = neutralMorphs == null && fixedContext == null ? Array.Empty<string>() : other.Layers.SelectMany(layer => layer.Morphs)
-                    .Where(result.Morphs.Contains).Select(binding => binding.path + "/" + binding.propertyName).Distinct().ToArray();
-                if (writes.Length > 0 || other.Unknown.Count > 0 || otherMorphs.Length > 0)
+                // Validate every controller's unbounded effects before a known
+                // morph writer can retain prepared rest. A later callback or
+                // parameter writer must not be hidden by an earlier refusal.
+                if (writes.Length > 0 || other.Unknown.Count > 0)
                     throw new InvalidOperationException("FX以外のPlayable Layerからの変更を再現できません: " + other.Runtime.name + " / " +
-                        string.Join(", ", writes.Concat(other.Unknown).Concat(otherMorphs)));
+                        string.Join(", ", writes.Concat(other.Unknown)));
+            }
+            var otherMorphs = neutralMorphs == null && fixedContext == null ? Array.Empty<string>() : otherControllers
+                .Select(other => (other.Runtime, Bindings: other.Layers.SelectMany(layer => layer.Morphs).Where(result.Morphs.Contains).Distinct().ToArray()))
+                .Where(other => other.Bindings.Length > 0).Select(other => other.Runtime.name + " / " +
+                    string.Join(", ", other.Bindings.Select(binding => binding.path + "/" + binding.propertyName))).ToArray();
+            var evaluatedWeights = weightCommands.Where(item => !item.Control.AnimatorLayer || relevantWeights.Contains(item.Behaviour)).ToArray();
+            void ValidateWeightConflicts()
+            {
+                foreach (var target in evaluatedWeights.Where(item => item.Control.AnimatorLayer).GroupBy(item => item.Control.LayerIndex))
+                    if (target.Select(item => item.Control.GoalWeight).Distinct().Count() > 1 &&
+                        (target.Select(item => item.SourceLayer).Distinct().Count() > 1 ||
+                         target.GroupBy(item => item.Control.SourceState).Any(state => state.Select(item => item.Control.GoalWeight).Distinct().Count() > 1)))
+                        throw new InvalidOperationException("複数のFXレイヤー制御が競合するため、固定表情の重みを確定できません: " +
+                            target.First().Control.Location + " / VRCAnimatorLayerControl");
+            }
+            // A known additional morph effect must not conceal contradictory
+            // commands in a relay that otherwise requests native evaluation.
+            // Other paths retain their existing capability precedence below.
+            if (evaluateLayerWeights && neutralMorphs != null && otherMorphs.Length > 0) ValidateWeightConflicts();
+            if (otherMorphs.Length > 0)
+            {
+                var message = "FX以外のPlayable Layerからの変更を再現できません: " + string.Join("; ", otherMorphs);
+                // VRChat's cross-playable masks, weights and ordering are not
+                // part of the FX-only native probe. Preserve the complete
+                // prepared neutral component rather than choosing an FX value
+                // while silently discarding a locomotion/action contribution.
+                // Explicit selected endpoints still require a faithful result.
+                if (neutralMorphs != null) throw new NeutralShapeSamplingException(message, dependencyMorphs: result.NeutralDependencyMorphs, coupledMorphs: result.NeutralCoupledMorphs);
+                throw new InvalidOperationException(message);
             }
             if (unsafeFxCommands.Count > 0)
             {
                 var message = unsafeFxCommands[0].Location + " / VRCPlayableLayerControl: FXの重みを変更する状態は固定表情に変換できません。";
-                if (neutralMorphs != null) throw new NeutralShapeSamplingException(message, dependencyMorphs: result.NeutralDependencyMorphs);
+                if (neutralMorphs != null) throw new NeutralShapeSamplingException(message, dependencyMorphs: result.NeutralDependencyMorphs, coupledMorphs: result.NeutralCoupledMorphs);
                 throw new InvalidOperationException(message);
             }
             var additionalWeights = otherControllers.SelectMany(other => other.Layers).SelectMany(layer => layer.WeightControls.Values)
@@ -538,16 +599,11 @@ namespace VRVlog.LilToonExporter
             // invalidate that proof even when their goal happens to be one.
             if (evaluateLayerWeights)
             {
-                var relevant = weightCommands.Where(item => !item.Control.AnimatorLayer || relevantWeights.Contains(item.Behaviour)).ToArray();
+                var relevant = evaluatedWeights;
                 var unsupported = relevant.FirstOrDefault(item => !item.Control.AnimatorLayer || item.Control.BlendDuration != 0 || item.Control.SourceState == null);
-                if (unsupported.Control != null) throw WeightControlCapability(unsupported.Control, false, result.NeutralDependencyMorphs);
-                foreach (var target in relevant.GroupBy(item => item.Control.LayerIndex))
-                    if (target.Select(item => item.Control.GoalWeight).Distinct().Count() > 1 &&
-                        (target.Select(item => item.SourceLayer).Distinct().Count() > 1 ||
-                         target.GroupBy(item => item.Control.SourceState).Any(state => state.Select(item => item.Control.GoalWeight).Distinct().Count() > 1)))
-                        throw new InvalidOperationException("複数のFXレイヤー制御が競合するため、固定表情の重みを確定できません: " +
-                            target.First().Control.Location + " / VRCAnimatorLayerControl");
-                if (additionalWeights.Length > 0) throw WeightControlCapability(additionalWeights[0], false, result.NeutralDependencyMorphs);
+                if (unsupported.Control != null) throw WeightControlCapability(unsupported.Control, false, result.NeutralDependencyMorphs, result.NeutralCoupledMorphs);
+                ValidateWeightConflicts();
+                if (additionalWeights.Length > 0) throw WeightControlCapability(additionalWeights[0], false, result.NeutralDependencyMorphs, result.NeutralCoupledMorphs);
                 foreach (var command in relevant) result.EvaluatedWeightControls.Add(command.Behaviour, command.Control);
                 if (relevant.Any(item => item.Control.LayerIndex >= result.IndependentTopOverrideLayer)) result.IndependentTopOverrideLayer = -1;
             }
@@ -567,7 +623,7 @@ namespace VRVlog.LilToonExporter
                 var unresolvedWeight = weightControls.FirstOrDefault(control => !control.AnimatorLayer ||
                     !idempotentTargets.Contains(control.LayerIndex) && (result.IndependentTopOverrideLayer < 0 ||
                     control.LayerIndex >= result.IndependentTopOverrideLayer));
-                if (unresolvedWeight != null) throw WeightControlCapability(unresolvedWeight, true, result.NeutralDependencyMorphs);
+                if (unresolvedWeight != null) throw WeightControlCapability(unresolvedWeight, true, result.NeutralDependencyMorphs, result.NeutralCoupledMorphs);
             }
             // The controller copy retains every state, including states proven
             // unreachable from fixed inputs. These exact validated identities
@@ -581,7 +637,7 @@ namespace VRVlog.LilToonExporter
             if (external.Length > 0 && result.IndependentTopOverrideLayer < 0)
             {
                 var message = "外部入力に依存する表情の値を確定できません: " + string.Join(", ", external);
-                throw new NeutralShapeSamplingException(message, dependencyMorphs: result.NeutralDependencyMorphs);
+                throw new NeutralShapeSamplingException(message, dependencyMorphs: result.NeutralDependencyMorphs, coupledMorphs: result.NeutralCoupledMorphs);
             }
             return result;
         }
@@ -716,14 +772,14 @@ namespace VRVlog.LilToonExporter
         }
 
         private static InvalidOperationException WeightControlCapability(SdkLayerWeightControl control, bool neutral,
-            IEnumerable<EditorCurveBinding> morphs = null)
+            IEnumerable<EditorCurveBinding> morphs = null, IEnumerable<EditorCurveBinding> coupledMorphs = null)
         {
             var message = ExporterLocalization.T("FXのレイヤー重み制御の影響範囲を固定表情として再現できません: ") +
                 control.Location + " / " + (control.AnimatorLayer ? "VRCAnimatorLayerControl" : "VRCPlayableLayerControl") +
                 " / " + control.Playable + (control.AnimatorLayer ? " layer " + control.LayerIndex : "") +
                 " / goalWeight=" + control.GoalWeight.ToString(System.Globalization.CultureInfo.InvariantCulture) +
                 " / blendDuration=" + control.BlendDuration.ToString(System.Globalization.CultureInfo.InvariantCulture);
-            return neutral ? new NeutralShapeSamplingException(message, dependencyMorphs: morphs) : new InvalidOperationException(message);
+            return neutral ? new NeutralShapeSamplingException(message, dependencyMorphs: morphs, coupledMorphs: coupledMorphs) : new InvalidOperationException(message);
         }
 
         // A permanent override does not read a menu parameter, so parameter-

@@ -1115,7 +1115,7 @@ namespace VRVlog.LilToonExporter.Tests
             metadata.OtherControllers.Add(other);
             if (otherTouchesCommittedMorph)
             {
-                var error = Assert.Throws<InvalidOperationException>(() =>
+                var error = Assert.Throws<NeutralShapeSamplingException>(() =>
                     ExpressionDependencies.AnalyzeNeutral(controller, roots, null, metadata, preserveCommittedMorphs: true));
                 StringAssert.Contains("FX以外のPlayable Layer", error.Message);
                 return;

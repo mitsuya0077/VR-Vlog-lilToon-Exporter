@@ -513,7 +513,7 @@ namespace VRVlog.LilToonExporter
         private static string PackageVersion()
         {
             var info = PackageManagerPackageInfo.FindForAssembly(typeof(LilToonExporterWindow).Assembly);
-            return info != null && !string.IsNullOrWhiteSpace(info.version) ? info.version : "0.11.13";
+            return info != null && !string.IsNullOrWhiteSpace(info.version) ? info.version : "0.11.14";
         }
 
         // Stable packages omit this assembly. Resolve only its public optional

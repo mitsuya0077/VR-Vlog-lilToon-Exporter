@@ -15,8 +15,15 @@ namespace VRVlog.LilToonExporter
     internal sealed class NeutralShapeSamplingException : InvalidOperationException
     {
         internal readonly HashSet<EditorCurveBinding> DependencyMorphs;
-        internal NeutralShapeSamplingException(string message, Exception inner = null, IEnumerable<EditorCurveBinding> dependencyMorphs = null) : base(message, inner)
-        { DependencyMorphs = dependencyMorphs == null ? null : new HashSet<EditorCurveBinding>(dependencyMorphs); }
+        internal readonly HashSet<EditorCurveBinding> CoupledMorphs;
+        internal NeutralShapeSamplingException(string message, Exception inner = null, IEnumerable<EditorCurveBinding> dependencyMorphs = null,
+            IEnumerable<EditorCurveBinding> coupledMorphs = null) : base(message, inner)
+        {
+            DependencyMorphs = dependencyMorphs == null ? null : new HashSet<EditorCurveBinding>(dependencyMorphs);
+            // Missing coupling metadata grants no new independence exception.
+            var connected = coupledMorphs ?? dependencyMorphs;
+            CoupledMorphs = connected == null ? null : new HashSet<EditorCurveBinding>(connected);
+        }
     }
 
     internal static class NeutralShapeSampler
@@ -36,14 +43,18 @@ namespace VRVlog.LilToonExporter
             var values = new Dictionary<(string Path, string Shape), VrChatExpressionMenu.MorphValue>();
             var preserved = new HashSet<EditorCurveBinding>();
             var reported = new HashSet<string>(StringComparer.Ordinal);
+            var coupledPreserved = new HashSet<EditorCurveBinding>();
+            var independent = new HashSet<EditorCurveBinding>();
+            var refusals = new List<(HashSet<EditorCurveBinding> Roots, NeutralShapeSamplingException Error)>();
             void Preserve(IEnumerable<EditorCurveBinding> bindings, NeutralShapeSamplingException error)
             {
-                var targets = new HashSet<EditorCurveBinding>(bindings);
-                preserved.UnionWith(targets);
-                var message = string.Format(ExporterLocalization.T(
-                    "FXの初期状態を固定できなかったため、書き出し用コピーの設定を保持しました（対象: {0}）。FXによる通常時の見た目と異なる場合があります。理由: {1}"),
-                    Describe(targets), error.Message);
-                if (reported.Add(message)) warnings?.Add(message);
+                var roots = new HashSet<EditorCurveBinding>(bindings);
+                coupledPreserved.UnionWith(roots);
+                if (error.CoupledMorphs != null) coupledPreserved.UnionWith(error.CoupledMorphs);
+                preserved.UnionWith(roots);
+                if (error.DependencyMorphs != null) preserved.UnionWith(error.DependencyMorphs);
+                if (error.CoupledMorphs != null) preserved.UnionWith(error.CoupledMorphs);
+                refusals.Add((roots, error));
             }
             HashSet<EditorCurveBinding>[] groups;
             try { groups = ExpressionDependencies.NeutralRoots(metadata.Controller, excludedPath, metadata, automatic, fixedContext).ToArray(); }
@@ -99,6 +110,18 @@ namespace VRVlog.LilToonExporter
             var randomRestMorphs = new HashSet<EditorCurveBinding>(plan.TemporalMorphs);
             foreach (var roots in groups)
             {
+                // Appearance ownership may remove every captured channel in a
+                // group. Still report its known neutral capability after all
+                // data checks, and retain coupled companions from earlier or
+                // later groups instead of silently accepting partial rest.
+                var owned = new HashSet<EditorCurveBinding>(roots.Where(plan.PreservedMorphs.Contains));
+                if (owned.Count > 0)
+                {
+                    try { ExpressionDependencies.AnalyzeNeutral(metadata.Controller, owned, excludedPath, metadata, automatic, fixedContext,
+                        preserveCommittedMorphs: true); }
+                    catch (NeutralShapeSamplingException error) { Preserve(owned, error); }
+                    catch (InvalidOperationException error) { throw WithAffected(error, owned); }
+                }
                 roots.IntersectWith(plan.CommittedMorphs);
                 roots.ExceptWith(randomRestMorphs);
                 if (roots.Count == 0) continue;
@@ -117,12 +140,29 @@ namespace VRVlog.LilToonExporter
                 List<VrChatExpressionMenu.MorphValue> sampled;
                 try { sampled = VrChatExpressionSampler.SampleNeutral(prepared, metadata.Controller, dependencies, metadata, excludedPath,
                     fixedContext, plan, preserveTemporalRest: true); }
-                catch (NeutralShapeSamplingException error) { Preserve(dependencies.Morphs, error); continue; }
+                catch (NeutralShapeSamplingException error)
+                {
+                    // Native capability refusals can lack a dependency payload.
+                    // Keep explicit error metadata and add the known typed
+                    // component, without changing the hard data-error catch.
+                    var dependencyMorphs = new HashSet<EditorCurveBinding>(dependencies.NeutralDependencyMorphs);
+                    var coupledMorphs = new HashSet<EditorCurveBinding>(dependencies.NeutralCoupledMorphs);
+                    if (error.DependencyMorphs != null) dependencyMorphs.UnionWith(error.DependencyMorphs);
+                    if (error.CoupledMorphs != null) coupledMorphs.UnionWith(error.CoupledMorphs);
+                    Preserve(dependencies.Morphs, new NeutralShapeSamplingException(error.Message, error, dependencyMorphs, coupledMorphs));
+                    continue;
+                }
                 catch (InvalidOperationException error) { throw WithAffected(error, dependencies.Morphs); }
+                // Static proof alone is insufficient. Only a complete native
+                // sample can release support-only outputs from propagation;
+                // explicit clip/parameter companions remain co-retained.
+                if (dependencies.IndependentTopOverrideLayer >= 0)
+                    independent.UnionWith(sampled.Select(value => EditorCurveBinding.FloatCurve(value.Path,
+                        typeof(SkinnedMeshRenderer), "blendShape." + value.Shape)));
                 foreach (var value in sampled)
                 {
-                    if (preserved.Contains(EditorCurveBinding.FloatCurve(value.Path,
-                            typeof(SkinnedMeshRenderer), "blendShape." + value.Shape))) continue;
+                    var binding = EditorCurveBinding.FloatCurve(value.Path, typeof(SkinnedMeshRenderer), "blendShape." + value.Shape);
+                    if (coupledPreserved.Contains(binding) || preserved.Contains(binding) && !independent.Contains(binding)) continue;
                     var key = (value.Path, value.Shape);
                     if (values.TryGetValue(key, out var previous) && Math.Abs(previous.Weight - value.Weight) > .01f)
                         throw new InvalidOperationException("FXの初期表情を一意に確定できません: " + value.Path + " / " + value.Shape);
@@ -135,6 +175,21 @@ namespace VRVlog.LilToonExporter
             // samples for that output too; never combine a partial FX result
             // with the authored rest selected by the fallback.
             preserved.UnionWith(plan.TemporalMorphs);
+            coupledPreserved.UnionWith(plan.TemporalMorphs);
+            var released = new HashSet<EditorCurveBinding>(independent);
+            released.ExceptWith(coupledPreserved);
+            preserved.ExceptWith(released);
+            foreach (var refusal in refusals)
+            {
+                var targets = new HashSet<EditorCurveBinding>(refusal.Roots);
+                if (refusal.Error.DependencyMorphs != null) targets.UnionWith(refusal.Error.DependencyMorphs);
+                if (refusal.Error.CoupledMorphs != null) targets.UnionWith(refusal.Error.CoupledMorphs);
+                targets.ExceptWith(released);
+                var message = string.Format(ExporterLocalization.T(
+                    "FXの初期状態を固定できなかったため、書き出し用コピーの設定を保持しました（対象: {0}）。FXによる通常時の見た目と異なる場合があります。理由: {1}"),
+                    Describe(targets), refusal.Error.Message);
+                if (reported.Add(message)) warnings?.Add(message);
+            }
             return values.Values.Where(value => !preserved.Contains(EditorCurveBinding.FloatCurve(value.Path,
                     typeof(SkinnedMeshRenderer), "blendShape." + value.Shape))).OrderBy(value => value.Path, StringComparer.Ordinal)
                 .ThenBy(value => value.Shape, StringComparer.Ordinal).ToList();
@@ -143,7 +198,7 @@ namespace VRVlog.LilToonExporter
         private static InvalidOperationException WithAffected(InvalidOperationException error, IEnumerable<EditorCurveBinding> bindings)
         {
             var message = "FXの初期表情を確定できません（対象: " + Describe(bindings) + "）: " + error.Message;
-            return error is NeutralShapeSamplingException neutral ? new NeutralShapeSamplingException(message, error, neutral.DependencyMorphs) :
+            return error is NeutralShapeSamplingException neutral ? new NeutralShapeSamplingException(message, error, neutral.DependencyMorphs, neutral.CoupledMorphs) :
                 new InvalidOperationException(message, error);
         }
 
