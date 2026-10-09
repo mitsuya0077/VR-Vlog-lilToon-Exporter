@@ -514,7 +514,7 @@ namespace VRVlog.LilToonExporter.LanTransfer.Tests
             }
         }
 
-#if UNITY_EDITOR
+#if UNITY_EDITOR && !VRVLOG_LAN_TRANSFER_CLI
         [TestCase("en", "quota")][TestCase("en", "part-failure")][TestCase("en", "io-failure")][TestCase("en", "network-failure")]
         [TestCase("ko", "quota")][TestCase("ko", "part-failure")][TestCase("ko", "io-failure")][TestCase("ko", "network-failure")]
         [TestCase("zh-Hans", "quota")][TestCase("zh-Hans", "part-failure")][TestCase("zh-Hans", "io-failure")][TestCase("zh-Hans", "network-failure")]
@@ -522,8 +522,10 @@ namespace VRVlog.LilToonExporter.LanTransfer.Tests
         public async Task FailureDisplayUsesInstalledLocaleTablesWithoutPrivateDetails(string locale, string kind)
         {
             var flags = System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Static;
-            var localeField = typeof(ExporterLocalization).GetField("_locale", flags);
-            var messagesField = typeof(ExporterLocalization).GetField("_messages", flags);
+            var localization = Type.GetType("VRVlog.LilToonExporter.ExporterLocalization, VRVlog.LilToonExporter.Compatibility", true);
+            var translate = (Func<string, string>)Delegate.CreateDelegate(typeof(Func<string, string>), localization.GetMethod("T"));
+            var localeField = localization.GetField("_locale", flags);
+            var messagesField = localization.GetField("_messages", flags);
             var previousLocale = localeField.GetValue(null); var previousMessages = messagesField.GetValue(null);
             try
             {
@@ -534,7 +536,7 @@ namespace VRVlog.LilToonExporter.LanTransfer.Tests
                     fixture.Transport.Failure = kind;
                     try { await session.UploadAsync(); Assert.That(false, Is.True, "Must fail"); }
                     catch (InvalidOperationException) { }
-                    var displayed = session.DisplayMessage(ExporterLocalization.T);
+                    var displayed = session.DisplayMessage(translate);
                     Assert.That(displayed != session.Message && !displayed.Contains("で停止しました"), Is.True);
                     Assert.That(Regex.IsMatch(displayed, @"[ぁ-ゟァ-ヿ]"), Is.False, "Every controlled reason and stage must be translated.");
                     if (kind == "quota") Assert.That(displayed.Contains("HTTP 429"), Is.True);
