@@ -16,8 +16,9 @@ namespace VRVlog.LilToonExporter.Tests
 {
     public sealed class ExperimentalExpressionCaptureTests
     {
-        [Test]
-        public async Task RecordedFacesRetainAuthoredMouthAndGazePresetsAfterReload()
+        [TestCase(false)]
+        [TestCase(true)]
+        public async Task RecordedFacesRetainAuthoredMouthAndGazePresetsAfterReload(bool moveRendererWithMa)
         {
             using var fixture = new AttachmentConnectionTests.Fixture();
             foreach (var skin in fixture.Source.GetComponentsInChildren<SkinnedMeshRenderer>()) skin.sharedMaterial.shader = Shader.Find("lilToon");
@@ -34,6 +35,7 @@ namespace VRVlog.LilToonExporter.Tests
             try
             {
                 fixture.Source.AddComponent<Vrm10Instance>().Vrm = authored;
+                if (moveRendererWithMa) MoveFrontWithInstalledMa(fixture.Source);
                 var sourceBefore = ExportSourceFingerprint.Compute(fixture.Source);
                 using var session = new ExperimentalExpressionCaptureSession(fixture.Source, false);
                 session.SetWeight(0, 0, 65); session.Capture("Selected face");
@@ -45,7 +47,7 @@ namespace VRVlog.LilToonExporter.Tests
                     Assert.That(reloaded.ContainsKey(preset), Is.True, preset.ToString());
                     Assert.That(reloaded[preset].MorphTargetBindings, Is.Not.Empty);
                 }
-                var skin = imported.transform.Find("Front").GetComponent<SkinnedMeshRenderer>();
+                var skin = VrChatExpressionSampler.FindRenderer(imported.gameObject, reloaded[ExpressionPreset.aa].MorphTargetBindings[0].RelativePath);
                 using var baked = new BlinkTestMesh();
                 imported.Runtime.Expression.SetWeight(ExpressionKey.Aa, 0); imported.Runtime.Process(); skin.BakeMesh(baked.Mesh); var before = baked.Mesh.vertices;
                 imported.Runtime.Expression.SetWeight(ExpressionKey.Aa, 1); imported.Runtime.Process(); skin.BakeMesh(baked.Mesh);
@@ -57,13 +59,16 @@ namespace VRVlog.LilToonExporter.Tests
             finally { if (imported != null) Object.DestroyImmediate(imported.gameObject); foreach (var clip in clips) Object.DestroyImmediate(clip); Object.DestroyImmediate(authored); }
         }
 
-        [TestCase(false)]
-        [TestCase(true)]
-        public async Task ManualBlinkConfigurationFromPrimaryWindowSurvivesModelAndRecordedFaceSave(bool recordFace)
+        [TestCase(false, false)]
+        [TestCase(true, false)]
+        [TestCase(false, true)]
+        [TestCase(true, true)]
+        public async Task ManualBlinkConfigurationFromPrimaryWindowSurvivesModelAndRecordedFaceSave(bool recordFace, bool moveRendererWithMa)
         {
             using var fixture = new AttachmentConnectionTests.Fixture();
             foreach (var skin in fixture.Source.GetComponentsInChildren<SkinnedMeshRenderer>()) skin.sharedMaterial.shader = Shader.Find("lilToon");
             var sourceSkin = fixture.Source.transform.Find("Front").GetComponent<SkinnedMeshRenderer>(); sourceSkin.SetBlendShapeWeight(0, 0);
+            if (moveRendererWithMa) MoveFrontWithInstalledMa(fixture.Source);
             var sourceBefore = ExportSourceFingerprint.Compute(fixture.Source);
             var flags = System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic;
             var type = typeof(ExperimentalExpressionCaptureWindow);
@@ -88,7 +93,7 @@ namespace VRVlog.LilToonExporter.Tests
                 window.SaveVrm(path);
                 imported = await Vrm10.LoadBytesAsync(File.ReadAllBytes(path), canLoadVrm0X: false, awaitCaller: new ImmediateCaller());
                 Assert.That(imported.Vrm.Expression.Blink?.MorphTargetBindings, Is.Not.Empty);
-                var skin = imported.transform.Find("Front").GetComponent<SkinnedMeshRenderer>();
+                var skin = VrChatExpressionSampler.FindRenderer(imported.gameObject, imported.Vrm.Expression.Blink.MorphTargetBindings[0].RelativePath);
                 using var baked = new BlinkTestMesh();
                 imported.Runtime.Expression.SetWeight(ExpressionKey.Blink, 0); imported.Runtime.Process(); skin.BakeMesh(baked.Mesh); var before = baked.Mesh.vertices;
                 imported.Runtime.Expression.SetWeight(ExpressionKey.Blink, 1); imported.Runtime.Process(); skin.BakeMesh(baked.Mesh);
@@ -154,11 +159,15 @@ namespace VRVlog.LilToonExporter.Tests
             finally { Object.DestroyImmediate(window); Object.DestroyImmediate(clip); }
         }
 
-        [TestCase("descriptor", false)]
-        [TestCase("descriptor", true)]
-        [TestCase("vrm", false)]
-        [TestCase("vrm", true)]
-        public async Task ExplicitBlinkMetadataSurvivesModelAndRecordedFaceExport(string configuration, bool recordFace)
+        [TestCase("descriptor", false, false)]
+        [TestCase("descriptor", true, false)]
+        [TestCase("vrm", false, false)]
+        [TestCase("vrm", true, false)]
+        [TestCase("descriptor", false, true)]
+        [TestCase("descriptor", true, true)]
+        [TestCase("vrm", false, true)]
+        [TestCase("vrm", true, true)]
+        public async Task ExplicitBlinkMetadataSurvivesModelAndRecordedFaceExport(string configuration, bool recordFace, bool moveRendererWithMa)
         {
             using var fixture = new AttachmentConnectionTests.Fixture();
             foreach (var skin in fixture.Source.GetComponentsInChildren<SkinnedMeshRenderer>()) skin.sharedMaterial.shader = Shader.Find("lilToon");
@@ -187,6 +196,7 @@ namespace VRVlog.LilToonExporter.Tests
                     settings.GetType().GetField("eyelidsBlendshapes").SetValue(settings, new[] { 0, -1, -1 });
                     field.SetValue(descriptor, settings);
                 }
+                if (moveRendererWithMa) MoveFrontWithInstalledMa(fixture.Source);
                 var sourceBefore = ExportSourceFingerprint.Compute(fixture.Source);
                 using var session = new ExperimentalExpressionCaptureSession(fixture.Source, replayInstalledDefaults: false);
                 if (recordFace) { session.SetWeight(0, 0, 65); session.Capture("Selected face"); }
@@ -194,7 +204,7 @@ namespace VRVlog.LilToonExporter.Tests
                 imported = await Vrm10.LoadBytesAsync(bytes, canLoadVrm0X: false, awaitCaller: new ImmediateCaller());
                 Assert.That(imported.Vrm.Expression.Blink, Is.Not.Null);
                 Assert.That(imported.Vrm.Expression.Blink.MorphTargetBindings, Is.Not.Empty);
-                var outputSkin = imported.transform.Find("Front").GetComponent<SkinnedMeshRenderer>();
+                var outputSkin = VrChatExpressionSampler.FindRenderer(imported.gameObject, imported.Vrm.Expression.Blink.MorphTargetBindings[0].RelativePath);
                 var before = new Vector3[outputSkin.sharedMesh.vertexCount];
                 using (var baked = new BlinkTestMesh())
                 {
@@ -213,6 +223,17 @@ namespace VRVlog.LilToonExporter.Tests
         {
             internal readonly Mesh Mesh = new Mesh();
             public void Dispose() => Object.DestroyImmediate(Mesh);
+        }
+
+        static void MoveFrontWithInstalledMa(GameObject source)
+        {
+            var proxyType = AppDomain.CurrentDomain.GetAssemblies().Select(assembly => assembly.GetType("nadena.dev.modular_avatar.core.ModularAvatarBoneProxy")).FirstOrDefault(type => type != null);
+            var markerType = AppDomain.CurrentDomain.GetAssemblies().Select(assembly => assembly.GetType("nadena.dev.ndmf.runtime.components.NDMFAvatarRoot")).FirstOrDefault(type => type != null);
+            Assert.That(proxyType, Is.Not.Null); Assert.That(markerType, Is.Not.Null);
+            if (source.GetComponent(markerType) == null) source.AddComponent(markerType);
+            var proxy = source.transform.Find("Front").gameObject.AddComponent(proxyType);
+            proxyType.GetProperty("target").SetValue(proxy, source.GetComponent<Animator>().GetBoneTransform(HumanBodyBones.Head));
+            var mode = proxyType.GetField("attachmentMode"); mode.SetValue(proxy, Enum.Parse(mode.FieldType, "AsChildKeepWorldPose"));
         }
 
         [TestCase(false)]

@@ -59,6 +59,8 @@ namespace VRVlog.LilToonExporter
         internal Pose Baseline { get; private set; }
         readonly List<Mesh> ownedMeshes = new List<Mesh>();
         NdmfExportPreparation preparation;
+        PreparedExpressionBindings authoredBindings;
+        BlinkExportSession descriptorBlink;
         ExperimentalExpressionControllerScope controllers;
         FaceEmoExpressions.BindingSnapshot faceEmoBindings;
         Hash128 sourceStamp;
@@ -77,6 +79,16 @@ namespace VRVlog.LilToonExporter
                 Copy = Object.Instantiate(source);
                 Copy.name = source.name;
                 Copy.hideFlags = HideFlags.HideAndDontSave;
+                authoredBindings = new PreparedExpressionBindings(Copy, null, source);
+                // Preserve descriptor shape names/identity before MA can move
+                // the renderer or reorder its channels. Missing automatic
+                // configuration must still permit manual/no-blink exports.
+                try
+                {
+                    using var configured = BlinkExportSession.CaptureForExport(source, null);
+                    if (configured.ConfiguredByDescriptor) descriptorBlink = configured.ForClone(source, Copy);
+                }
+                catch (InvalidOperationException) { }
                 using (var exclusions = new ExportObjectExclusions(source, Array.Empty<GameObject>()))
                     MaAppearanceSnapshot.Apply(source, Copy, ownedMeshes, exclusions, Warnings);
                 PoseExportSession.RemoveAplFromCopy(source, Copy);
@@ -88,7 +100,12 @@ namespace VRVlog.LilToonExporter
                 foreach (var group in Copy.GetComponentsInChildren<SkinnedMeshRenderer>(true).GroupBy(renderer =>
                     AnimationUtility.CalculateTransformPath(renderer.transform, Copy.transform), StringComparer.Ordinal))
                     if (group.Count() == 1) authoringRenderers.Add(group.Key, group.Single());
-                preparation = NdmfExportPreparation.Prepare(source, Copy, Warnings);
+                authoredBindings.CaptureAuthoredExpressions();
+                preparation = NdmfExportPreparation.Prepare(source, Copy, Warnings, afterTransforming: transformed => {
+                    authoredBindings.RebindPrepared(transformed.PreparedRendererFor);
+                    authoredBindings.RebindAuthoredExpressions(transformed.IsolatedCopyOf);
+                    descriptorBlink?.RebindPrepared(transformed.PreparedRendererFor);
+                });
                 faceEmoBindings.RebindPrepared(preparation.PreparedRendererFor, preparation.ObjectRegistry, preparation.IsolatedCopyOf);
                 if (replayInstalledDefaults) controllers = new ExperimentalExpressionControllerScope(Copy, Warnings);
                 foreach (var behaviour in Copy.GetComponentsInChildren<Behaviour>(true)) behaviour.enabled = false;
@@ -431,8 +448,8 @@ namespace VRVlog.LilToonExporter
                 }
                 else if (blinkOptions == null || blinkOptions.Mode == BlinkExportMode.Auto)
                 {
-                    using var resolvedBlink = BlinkExportSession.CaptureForExport(exportCopy, blinkOptions);
-                    if (resolvedBlink.ConfiguredByDescriptor)
+                    using var resolvedBlink = descriptorBlink?.ForClone(Copy, exportCopy) ?? BlinkExportSession.CaptureForExport(exportCopy, blinkOptions);
+                    if (descriptorBlink != null || resolvedBlink.ConfiguredByDescriptor)
                     {
                         exportBlinkOptions = new BlinkExportOptions();
                         exportBlinkOptions.SelectMode(BlinkExportMode.Manual, resolvedBlink);
@@ -550,7 +567,9 @@ namespace VRVlog.LilToonExporter
             if (Copy != null) Object.DestroyImmediate(Copy);
             Copy = null;
             controllers?.Dispose(); controllers = null;
+            descriptorBlink?.Dispose(); descriptorBlink = null;
             preparation?.Dispose(); preparation = null;
+            authoredBindings?.Dispose(); authoredBindings = null;
             foreach (var mesh in ownedMeshes) if (mesh != null) Object.DestroyImmediate(mesh);
             ownedMeshes.Clear();
         }
