@@ -76,3 +76,9 @@ Aim・Rotation Constraintが有効かつロックされ、回転の全軸を完�
 アバター・衣装・テクスチャには各権利者の利用条件が適用されます。
 
 0.11.11 は MA の参照解決・生成された表情と、FaceEmo を使わず直接編集した FX の固定表情候補を扱います。更新後に元アバターから再出力してください。対応範囲と省略理由は [互換性の説明](https://github.com/mitsuya0077/VR-Vlog-lilToon-Exporter/blob/main/Compatibility/AvatarPreservation.md#modular-avatar-と直接編集した-fx-の表情) を確認してください。
+
+### メインカラー2nd／3rdの色空間
+
+lilToon専用表示のレイヤー合成には、書き出し元のUnityプロジェクトの色空間も必要です。Exporterは`asset.extras.VRVLOG_lilToonColorSpace`に`linear`または`gamma`を保存します。色・画像・alpha・マスク・UVの値は変更せず、既存のschema 2.0とMToon標準表示を維持します。
+
+対応するVR Vlogでは、Linearで作った2nd／3rdの重ね合わせをGammaのアプリでもLinearで計算します。出力元の情報がない旧VRMはVRChatのLinearワークフローを前提に読み込みます。旧ExporterでGammaプロジェクトから書き出したVRMは、対応版のExporterで書き出し直す必要があります。透明材質を背景に合成する工程や照明全体をLinearへ変更する修正ではありません。
