@@ -23,8 +23,9 @@ namespace VRVlog.LilToonExporter
 
     internal sealed class ExportAppearanceReportWindow : EditorWindow
     {
-        private string details;
-        private Vector2 scroll;
+        [SerializeField] private string details, feedback;
+        [SerializeField] private Vector2 scroll, feedbackScroll;
+        [SerializeField] private bool saveFailed;
         internal static void Open(IEnumerable<string> messages)
         {
             var window = CreateInstance<ExportAppearanceReportWindow>();
@@ -40,7 +41,7 @@ namespace VRVlog.LilToonExporter
                 scroll = view.scrollPosition;
                 EditorGUILayout.LabelField(details ?? "", EditorStyles.wordWrappedLabel);
             }
-            if (GUILayout.Button(ExporterLocalization.T("詳細をコピー"))) EditorGUIUtility.systemCopyBuffer = details;
+            ExportDetailsText.DrawActions(details, ref feedback, ref saveFailed, ref feedbackScroll);
         }
     }
 }
