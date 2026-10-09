@@ -41,7 +41,7 @@ python3 Tools/run-validation.py --report work/validation.json
 
 `run-actionlint.py` はLinux x64またはmacOS Apple Silicon向けの公式1.7.11を固定ハッシュで一時展開し、終了時に除去します。他のhostは同じ版のactionlintを別途用意し、そのhostの実行を記録してください。共有SDKやキャッシュは削除しません。
 
-PR・main・候補・公開のhost検証は同じ `run-validation.py` で実行します。schema・公開内容・パッケージ・依存互換性・配布方針・listing・AAOパッチの既存Python検証、既存PowerShell検証、転送の4つのdefine構成を含み、最初の失敗で停止します。記録はコミット、実行した相対コマンド、exit code、所要時間を含み、ログ全文や個人パスをartifactへ入れません。
+PR・main・候補・公開のhost検証は同じ `run-validation.py` で実行します。schema・公開内容・パッケージ・依存互換性・配布方針・listing・AAOパッチの既存Python検証、既存PowerShell検証、転送の4つのdefine構成を含み、最初の失敗で停止します。記録は開始時のコミット、作業コピーがcleanか、実行した相対コマンド、exit code、所要時間を含み、ログ全文や個人パスをartifactへ入れません。途中でHEADが変われば成功記録を出しません。未コミット変更のある参加者のhost検証は実行できますが、その記録を公開候補の証拠として使うことはできません。
 
 Unityが必要な変更は[既存の互換性・回帰profile](../Compatibility/README.md#exporter-behavior-and-integration-regression-profiles)に従います。Editorと依存パッケージの実版、検証コミット、コマンド・結果・skip・未確認範囲をPRへ記録します。必要な端末・画像検証、固定コマンドと承認条件をhostテストに置き換えません。
 

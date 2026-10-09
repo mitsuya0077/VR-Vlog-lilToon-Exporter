@@ -32,6 +32,7 @@ def validate_report(report, sha):
         raise ValueError("Invalid host validation checks")
     if (type(report.get("schema")) is not int or report["schema"] != 1 or report.get("commit") != sha
             or report.get("scope") != "host-only" or report.get("passed") is not True
+            or report.get("source_clean") is not True
             or not re.fullmatch(r"3\.12\.\d+", report.get("python", ""))
             or report.get("expected_checks") != len(expected)
             or [row.get("command") for row in checks] != expected
@@ -83,7 +84,7 @@ def build(root, output, report, expected_sha, run_id=None):
     sha = subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=root, text=True).strip()
     if not re.fullmatch(r"[0-9a-f]{40}", expected_sha) or sha != expected_sha:
         raise ValueError("Expected commit differs from checked-out source")
-    if subprocess.check_output(["git", "status", "--porcelain"], cwd=root):
+    if subprocess.check_output(["git", "status", "--porcelain", "--untracked-files=all"], cwd=root):
         raise ValueError("Candidate source must have no tracked or untracked changes")
     validate_report(report, sha)
     package = load_tool("build-package")

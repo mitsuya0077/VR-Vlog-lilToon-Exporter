@@ -32,6 +32,7 @@ SHA = "a" * 40
 def receipt():
     return {"schema": 1, "commit": SHA, "scope": "host-only", "passed": True,
             "python": "3.12.14",
+            "source_clean": True,
             "expected_checks": len(runner.plan()),
             "checks": [{"command": cmd[1:], "exit_code": 0, "seconds": 1} for cmd in runner.plan()]}
 
@@ -115,6 +116,13 @@ class WorkflowTrustTests(unittest.TestCase):
 
 
 class ValidationReceiptTests(unittest.TestCase):
+    def test_commit_changed_during_checks_cannot_receive_a_success_receipt(self):
+        state = mock.Mock(side_effect=[(SHA, True), ("b" * 40, True)])
+        execute = mock.Mock(return_value=subprocess.CompletedProcess([], 0))
+        result = runner.validation_receipt([["python", "one"]], ROOT, execute, state)
+        self.assertFalse(result["passed"])
+        self.assertEqual(SHA, result["commit"])
+
     def test_first_failure_or_missing_executable_stops_the_plan(self):
         execute = mock.Mock(side_effect=[subprocess.CompletedProcess([], 1)])
         results = runner.run_checks([["python", "one"], ["python", "two"]], ROOT, execute)
@@ -131,6 +139,7 @@ class ValidationReceiptTests(unittest.TestCase):
     def test_incomplete_failed_wrong_sha_and_fabricated_scope_fail(self):
         candidate.validate_report(receipt(), SHA)
         mutations = (lambda r: r.update({"commit": "b" * 40}),
+                     lambda r: r.update({"source_clean": False}),
                      lambda r: r.update({"python": "3.13.1"}),
                      lambda r: r.update({"schema": True}),
                      lambda r: r.update({"scope": "unity"}),

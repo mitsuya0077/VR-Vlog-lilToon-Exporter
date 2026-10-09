@@ -52,18 +52,30 @@ def run_checks(commands, root, execute=subprocess.run):
     return results
 
 
+def source_state(root):
+    sha = subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=root, text=True).strip()
+    dirty = subprocess.check_output(["git", "status", "--porcelain", "--untracked-files=all"], cwd=root)
+    return sha, not dirty
+
+
+def validation_receipt(commands, root, execute=subprocess.run, snapshot=source_state):
+    before_sha, before_clean = snapshot(root)
+    results = run_checks(commands, root, execute)
+    after_sha, after_clean = snapshot(root)
+    passed = (before_sha == after_sha and len(results) == len(commands)
+              and all(r["exit_code"] == 0 for r in results))
+    return {"schema": 1, "commit": before_sha, "scope": "host-only",
+            "python": sys.version.split()[0], "source_clean": before_clean and after_clean,
+            "passed": passed, "checks": results, "expected_checks": len(commands)}
+
+
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--pwsh", default="pwsh")
     parser.add_argument("--report", type=Path, required=True)
     args = parser.parse_args()
     commands = plan(pwsh=args.pwsh)
-    results = run_checks(commands, ROOT)
-    passed = len(results) == len(commands) and all(r["exit_code"] == 0 for r in results)
-    sha = subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=ROOT, text=True).strip()
-    report = {"schema": 1, "commit": sha, "scope": "host-only",
-              "python": sys.version.split()[0], "expected_checks": len(commands),
-              "passed": passed, "checks": results}
+    report = validation_receipt(commands, ROOT)
     args.report.parent.mkdir(parents=True, exist_ok=True)
     args.report.write_text(json.dumps(report, indent=2) + "\n", encoding="utf-8")
-    raise SystemExit(0 if passed else 1)
+    raise SystemExit(0 if report["passed"] else 1)
