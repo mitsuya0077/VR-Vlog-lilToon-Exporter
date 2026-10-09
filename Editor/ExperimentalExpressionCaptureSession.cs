@@ -8,7 +8,7 @@ using Object = UnityEngine.Object;
 
 namespace VRVlog.LilToonExporter
 {
-    // Experimental, opt-in window only. The ordinary exporter has no dependency on this session.
+    // Explicit expression capture used by the primary VRM export window.
     internal sealed partial class ExperimentalExpressionCaptureSession : IDisposable
     {
         [Serializable]
@@ -405,6 +405,19 @@ namespace VRVlog.LilToonExporter
             var assets = new List<Object>();
             try
             {
+                // Resolve configured eyelids while the disposable copy still has
+                // its descriptor. The normal exporter remaps these renderer
+                // references to its own copy before any preparation pass.
+                var exportBlinkOptions = blinkOptions;
+                if (blinkOptions == null || blinkOptions.Mode == BlinkExportMode.Auto)
+                {
+                    using var resolvedBlink = BlinkExportSession.CaptureForExport(exportCopy, blinkOptions);
+                    if (resolvedBlink.ConfiguredByDescriptor)
+                    {
+                        exportBlinkOptions = new BlinkExportOptions();
+                        exportBlinkOptions.SelectMode(BlinkExportMode.Manual, resolvedBlink);
+                    }
+                }
                 // Source controllers remain on the preview for candidate discovery.
                 // This private export copy already contains the selected completed faces.
                 // Prevent a second Animator evaluation from replacing the explicit baseline.
@@ -421,7 +434,11 @@ namespace VRVlog.LilToonExporter
                 settings.Prefab = null;
                 // A model-only export retains existing authored VRM expressions.
                 // Explicit faces replace the catalog with the selected records.
-                if (Expressions.Count > 0 || settings.Expression == null) settings.Expression = new VRM10ObjectExpression();
+                if (Expressions.Count > 0 || settings.Expression == null)
+                    settings.Expression = new VRM10ObjectExpression {
+                        Blink = settings.Expression?.Blink, BlinkLeft = settings.Expression?.BlinkLeft,
+                        BlinkRight = settings.Expression?.BlinkRight
+                    };
                 instance.Vrm = settings;
                 var targetPrefix = "__VRVlog_Capture_" + Guid.NewGuid().ToString("N") + "_";
                 var serial = 0;
@@ -471,7 +488,7 @@ namespace VRVlog.LilToonExporter
                 }
                 var bytes = UniVrmOneClickExporter.Export(exportCopy, avatarName, author, warnings,
                     exporterVersion: UnityEditor.PackageManager.PackageInfo.FindForAssembly(typeof(UniVrmOneClickExporter).Assembly)?.version ?? "0.11.14",
-                    lilToonVersion: "2.3.4", gimmickOptions: new ExportGimmickOptions { AutoExclude = false }, blinkOptions: blinkOptions,
+                    lilToonVersion: "2.3.4", gimmickOptions: new ExportGimmickOptions { AutoExclude = false }, blinkOptions: exportBlinkOptions,
                     licenseOptions: licenseOptions ?? new AvatarLicenseOptions(), disableAudioLink: true);
                 return InjectManualPoses(bytes);
             }

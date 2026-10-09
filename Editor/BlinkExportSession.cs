@@ -17,6 +17,7 @@ namespace VRVlog.LilToonExporter
         };
         internal string Description;
         internal bool PreserveAuthored;
+        internal bool ConfiguredByDescriptor;
         internal bool Disabled;
         bool allowMissingAutomaticBlink;
         bool deferredAutomatic;
@@ -89,6 +90,7 @@ namespace VRVlog.LilToonExporter
                 }
                 else if (TryDescriptor(source, excluded, out var descriptorBinding))
                 {
+                    result.ConfiguredByDescriptor = true;
                     result.Slots[0].Add(descriptorBinding);
                     result.Description = "VRChatの閉眼設定";
                 }

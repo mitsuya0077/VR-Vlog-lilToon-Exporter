@@ -16,6 +16,67 @@ namespace VRVlog.LilToonExporter.Tests
 {
     public sealed class ExperimentalExpressionCaptureTests
     {
+        [TestCase("descriptor", false)]
+        [TestCase("descriptor", true)]
+        [TestCase("vrm", false)]
+        [TestCase("vrm", true)]
+        public async Task ExplicitBlinkMetadataSurvivesModelAndRecordedFaceExport(string configuration, bool recordFace)
+        {
+            using var fixture = new AttachmentConnectionTests.Fixture();
+            foreach (var skin in fixture.Source.GetComponentsInChildren<SkinnedMeshRenderer>()) skin.sharedMaterial.shader = Shader.Find("lilToon");
+            var authored = ScriptableObject.CreateInstance<VRM10Object>();
+            var blink = ScriptableObject.CreateInstance<VRM10Expression>();
+            Vrm10Instance imported = null;
+            try
+            {
+                var sourceSkin = fixture.Source.transform.Find("Front").GetComponent<SkinnedMeshRenderer>();
+                sourceSkin.SetBlendShapeWeight(0, 0);
+                if (configuration == "vrm")
+                {
+                    blink.name = "Authored blink";
+                    blink.MorphTargetBindings = new[] { new MorphTargetBinding("Front", 0, 1f) };
+                    authored.Expression.Blink = blink; fixture.Source.AddComponent<Vrm10Instance>().Vrm = authored;
+                }
+                else
+                {
+                    var type = AppDomain.CurrentDomain.GetAssemblies().Select(assembly => assembly.GetType("VRC.SDK3.Avatars.Components.VRCAvatarDescriptor", false)).FirstOrDefault(value => value != null);
+                    Assert.That(type, Is.Not.Null, "Run with the pinned actual VRChat SDK.");
+                    var descriptor = fixture.Source.AddComponent(type);
+                    type.GetField("enableEyeLook").SetValue(descriptor, true);
+                    var field = type.GetField("customEyeLookSettings"); var settings = field.GetValue(descriptor);
+                    var lidType = settings.GetType().GetField("eyelidType"); lidType.SetValue(settings, Enum.Parse(lidType.FieldType, "Blendshapes"));
+                    settings.GetType().GetField("eyelidsSkinnedMesh").SetValue(settings, sourceSkin);
+                    settings.GetType().GetField("eyelidsBlendshapes").SetValue(settings, new[] { 0, -1, -1 });
+                    field.SetValue(descriptor, settings);
+                }
+                var sourceBefore = ExportSourceFingerprint.Compute(fixture.Source);
+                using var session = new ExperimentalExpressionCaptureSession(fixture.Source, replayInstalledDefaults: false);
+                if (recordFace) { session.SetWeight(0, 0, 65); session.Capture("Selected face"); }
+                var bytes = session.Export("Explicit blink", "Tests");
+                imported = await Vrm10.LoadBytesAsync(bytes, canLoadVrm0X: false, awaitCaller: new ImmediateCaller());
+                Assert.That(imported.Vrm.Expression.Blink, Is.Not.Null);
+                Assert.That(imported.Vrm.Expression.Blink.MorphTargetBindings, Is.Not.Empty);
+                var outputSkin = imported.transform.Find("Front").GetComponent<SkinnedMeshRenderer>();
+                var before = new Vector3[outputSkin.sharedMesh.vertexCount];
+                using (var baked = new BlinkTestMesh())
+                {
+                    imported.Runtime.Expression.SetWeight(ExpressionKey.Blink, 0); imported.Runtime.Process(); outputSkin.BakeMesh(baked.Mesh); before = baked.Mesh.vertices;
+                    imported.Runtime.Expression.SetWeight(ExpressionKey.Blink, 1); imported.Runtime.Process(); outputSkin.BakeMesh(baked.Mesh);
+                    Assert.That(baked.Mesh.vertices.Zip(before, (a,b) => (a-b).sqrMagnitude).Max(), Is.GreaterThan(1e-8f), "Configured eyelids must still deform after VRM reload.");
+                    imported.Runtime.Expression.SetWeight(ExpressionKey.Blink, 0); imported.Runtime.Process(); outputSkin.BakeMesh(baked.Mesh);
+                    Assert.That(baked.Mesh.vertices.Zip(before, (a,b) => (a-b).sqrMagnitude).Max(), Is.LessThan(1e-8f));
+                }
+                Assert.That(ExportSourceFingerprint.Compute(fixture.Source), Is.EqualTo(sourceBefore));
+            }
+            finally { if (imported != null) Object.DestroyImmediate(imported.gameObject); Object.DestroyImmediate(blink); Object.DestroyImmediate(authored); }
+        }
+
+        sealed class BlinkTestMesh : IDisposable
+        {
+            internal readonly Mesh Mesh = new Mesh();
+            public void Dispose() => Object.DestroyImmediate(Mesh);
+        }
+
         [TestCase(false)]
         [TestCase(true)]
         public async Task ModelOnlyExportReimportsWithoutRequiringFacialFiles(bool withAuthoredExpression)
