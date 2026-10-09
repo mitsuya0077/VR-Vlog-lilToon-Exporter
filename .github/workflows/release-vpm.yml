@@ -19,6 +19,9 @@ on:
       expected_package_sha256:
         description: SHA256 of the validated exporter ZIP
         required: true
+      candidate_run_id:
+        description: Successful Build release candidate run for this commit and ZIP
+        required: true
       univrm_version:
         description: Pinned UniVRM version
         required: true
@@ -26,15 +29,25 @@ on:
 
 permissions: {}
 
+concurrency:
+  group: release-vpm
+  cancel-in-progress: false
+
 jobs:
   release:
+    if: github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
+    timeout-minutes: 30
     permissions:
       contents: write
+      actions: read
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
           persist-credentials: false
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
+        with:
+          python-version: '3.12'
       - name: Verify versions
         env:
           EXPORTER_VERSION: ${{ inputs.version }}
@@ -43,40 +56,23 @@ jobs:
           EXPECTED_COMMIT: ${{ inputs.expected_commit }}
         run: |
           python3 Tools/release_policy.py > release-flags.txt
-      - name: Validate exporter before packaging
-        run: python3 Tools/validate.py
-      - name: Verify publication channels and listing integrity
+      - name: Install pinned workflow parser
+        run: 'python3 -m pip install --require-hashes --only-binary=:all: -r Tools/pipeline-requirements.txt'
+      - name: Lint workflows with a pinned binary
+        run: python3 Tools/run-actionlint.py
+      - name: Run complete host validation
+        run: python3 Tools/run-validation.py --report work/validation.json
+      - name: Verify authentic candidate receipt before publication
+        env:
+          GH_TOKEN: ${{ github.token }}
+          CANDIDATE_RUN_ID: ${{ inputs.candidate_run_id }}
+          EXPECTED_COMMIT: ${{ inputs.expected_commit }}
+          VERSION: ${{ inputs.version }}
+          EXPECTED_PACKAGE_SHA256: ${{ inputs.expected_package_sha256 }}
         run: |
-          python3 Tools/test-release-policy.py
-          python3 Tools/test-listing.py
-      - name: Check public contents and package isolation
-        run: |
-          python3 Tools/check-public-content.py
-          python3 Tools/test-package.py
-      - name: Verify explicit AAO source correction safety
-        run: python3 Tools/test-aao-vertex-buffer-patch.py
-      - name: Check dependency compatibility
-        run: |
-          python3 Tools/generate-compatibility.py
-          python3 Tools/test-compatibility-tooling.py
-      - name: Exercise dependency selection and unsupported environments
-        shell: pwsh
-        run: ./Tools/run-compatibility-tests.ps1
-      - name: Run exporter behavior checks
-        shell: pwsh
-        run: ./Tools/run-behavior-tests.ps1
-      - name: Run pinned TLS sender checks
-        shell: pwsh
-        run: ./Tools/run-lan-transfer-tests.ps1
-      - name: Validate optional humanoid pose contract
-        shell: pwsh
-        run: ./Tools/run-pose-contract-tests.ps1
-      - name: Run material bake preflight checks
-        shell: pwsh
-        run: ./Tools/run-bake-tests.ps1
-      - name: Run NDMF preparation ownership checks
-        shell: pwsh
-        run: ./Tools/run-ndmf-preparation-tests.ps1
+          python3 Tools/verify-release-candidate.py \
+            --run-id "$CANDIDATE_RUN_ID" --commit "$EXPECTED_COMMIT" \
+            --version "$VERSION" --package-sha256 "$EXPECTED_PACKAGE_SHA256"
       - name: Build exporter package
         env:
           VERSION: ${{ inputs.version }}
@@ -150,7 +146,9 @@ jobs:
             "${release_flags[@]}"
   dispatch-listing:
     needs: release
+    if: github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
+    timeout-minutes: 2
     permissions:
       contents: read
       actions: write

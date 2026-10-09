@@ -55,6 +55,8 @@ Host behavior checks also use PowerShell 7. The [Validate workflow](.github/work
 
 For implementation changes, run the relevant pinned Unity profiles from the [compatibility guide](Compatibility/README.md#exporter-behavior-and-integration-regression-profiles). Record the actual Editor and package versions, tested commit, results and any skips. Preserve the original avatar and its referenced assets. Do not use host adapters, relabeled dependencies or older test results as evidence of a successful Unity run.
 
+PR, main, release-candidate and publication host checks share `Tools/run-validation.py`. With Python 3.12 and PowerShell 7, install the hash-pinned parser using `python3 -m pip install --require-hashes --only-binary=:all: -r Tools/pipeline-requirements.txt`, then run `python3 Tools/run-validation.py --report work/validation.json`. This receipt covers host checks only. The [development pipeline](Documentation~/DevelopmentPipeline.md) explains triage, latest-head review, Unity acceptance, non-publishing candidates, publication approval, recovery and the Actions cost model.
+
 For documentation changes, verify relative links and examples and check that the documented behavior matches source. If a change is intended to preserve implementation, confirm that product source, dependency policy, version metadata and package tooling are unchanged.
 
 ## Reproducing a package ZIP
