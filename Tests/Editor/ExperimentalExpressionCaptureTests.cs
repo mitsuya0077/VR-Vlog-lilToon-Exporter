@@ -16,6 +16,43 @@ namespace VRVlog.LilToonExporter.Tests
 {
     public sealed class ExperimentalExpressionCaptureTests
     {
+        [TestCase(true)]
+        [TestCase(false)]
+        public void AuxiliaryPreviewsDoNotInvokeAvatarEditorCallbacks(bool blinkPreview)
+        {
+            using var fixture = new AttachmentConnectionTests.Fixture();
+            var material = fixture.Source.transform.Find("Front").GetComponent<SkinnedMeshRenderer>().sharedMaterial;
+            fixture.Source.AddComponent<RecoveryCallbackProbe>().SharedMaterial = material;
+            EditorWindow window = null;
+            try
+            {
+                var stamp = ExportSourceFingerprint.Compute(fixture.Source); var color = material.GetColor("_Color");
+                RecoveryCallbackProbe.ResetCounters(); RecoveryCallbackProbe.Armed = true;
+                if (blinkPreview)
+                {
+                    var preview = ScriptableObject.CreateInstance<BlinkPreviewWindow>(); window = preview;
+                    var options = new BlinkExportOptions { Mode = BlinkExportMode.Manual };
+                    options.Both.Add(new BlinkShapeBinding { Renderer = fixture.Source.transform.Find("Front").GetComponent<SkinnedMeshRenderer>(), Shape = "Hair detail", Weight = 80 });
+                    preview.Prepare(fixture.Source, options, Array.Empty<GameObject>(), new ExportGimmickOptions());
+                }
+                else
+                {
+                    var preview = ScriptableObject.CreateInstance<PoseReviewWindow>(); window = preview;
+                    var type = typeof(PoseReviewWindow); var flags = System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic;
+                    type.GetField("source", flags).SetValue(preview, fixture.Source);
+                    type.GetField("options", flags).SetValue(preview, new PoseExportOptions());
+                    type.GetField("excluded", flags).SetValue(preview, Array.Empty<GameObject>());
+                    type.GetField("gimmicks", flags).SetValue(preview, new ExportGimmickOptions());
+                    type.GetMethod("PreparePreview", flags).Invoke(preview, null);
+                    Assert.That(type.GetField("error", flags).GetValue(preview), Is.Null);
+                    Assert.That(type.GetField("copy", flags).GetValue(preview), Is.Not.Null);
+                }
+                Assert.That(RecoveryCallbackProbe.AwakeCalls, Is.Zero); Assert.That(RecoveryCallbackProbe.EnableCalls, Is.Zero);
+                Assert.That(material.GetColor("_Color"), Is.EqualTo(color)); Assert.That(ExportSourceFingerprint.Compute(fixture.Source), Is.EqualTo(stamp));
+            }
+            finally { if (window != null) Object.DestroyImmediate(window); RecoveryCallbackProbe.ResetCounters(); }
+        }
+
         [TestCase(false, false)]
         [TestCase(false, true)]
         [TestCase(true, false)]
