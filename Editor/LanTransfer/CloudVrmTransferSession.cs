@@ -121,7 +121,8 @@ namespace VRVlog.LilToonExporter.LanTransfer
         private FileStream activeReader;
         private CloudEncryptedSnapshot encrypted;
         private CloudTransferState state = CloudTransferState.Preparing;
-        private string qr, failureMessage;
+        private string qr, failureStage;
+        private SafeTransferFailure failure;
         private long transferred, expiresAt, uploadSize;
         private bool started, disposed;
         internal CloudTransferState State { get { lock (gate) return state; } }
@@ -138,7 +139,22 @@ namespace VRVlog.LilToonExporter.LanTransfer
             : State == CloudTransferState.Canceled ? "転送を中止しました。"
             : State == CloudTransferState.Expired ? "受取期限が切れました。新しいQRを作成できます。"
             : FailureMessage;
-        private string FailureMessage { get { lock (gate) return failureMessage ?? "転送サービスでエラーが発生しました。新しいQRを作成してください。"; } }
+        private string FailureMessage { get { lock (gate) return failure == null
+            ? "転送サービスでエラーが発生しました。新しいQRを作成してください。"
+            : failureStage + "で停止しました。\n" + failure.Message; } }
+
+        // Called by the window on the Editor thread. Upload tasks never access
+        // AssetDatabase-backed localization or expose uncontrolled exception text.
+        internal string DisplayMessage(Func<string, string> translate)
+        {
+            lock (gate)
+            {
+                if (state == CloudTransferState.Failed && failure != null)
+                    return string.Format(translate("{0}で停止しました。\n{1}"), translate(failureStage),
+                        string.Format(translate(failure.Reason), failure.StatusCode));
+                return translate(Message);
+            }
+        }
 
         internal CloudVrmTransferSession(CloudVrmTransferSource source, ICloudTransferTransport transport = null, Func<long> now = null)
         {
@@ -218,7 +234,7 @@ namespace VRVlog.LilToonExporter.LanTransfer
                 }
                 catch (Exception exception)
                 {
-                    lock (gate) failureMessage = SafeFailureMessage(exception, stage);
+                    lock (gate) { failureStage = stage; failure = SafeFailure(exception); }
                     lock (gate) { activeReader = null; qr = null; encrypted?.Dispose(); encrypted = null; if (state != CloudTransferState.Canceled && state != CloudTransferState.Expired) state = CloudTransferState.Failed; }
                     await DeleteRemote().ConfigureAwait(false);
                     throw new InvalidOperationException(Message); // Never disclose service bodies, credentials or paths.
@@ -278,25 +294,30 @@ namespace VRVlog.LilToonExporter.LanTransfer
                     : response.StatusCode == 413
                     ? "転送サイズがサービスの上限を超えています（HTTP 413）。サイズを減らしてください。"
                     : response.StatusCode == 401 || response.StatusCode == 403
-                    ? "転送の認証が拒否されました（HTTP " + response.StatusCode + "）。新しいQRを作成してください。"
-                    : "転送サービスが応答できませんでした（HTTP " + response.StatusCode + "）。時間を置いて新しいQRを作成してください。");
+                    ? "転送の認証が拒否されました（HTTP {0}）。新しいQRを作成してください。"
+                    : "転送サービスが応答できませんでした（HTTP {0}）。時間を置いて新しいQRを作成してください。", response.StatusCode);
             }
             return parse ? CloudTransferProtocol.Fields.Read(response.Body) : null;
         }
         // Only controlled text and a status code reach the UI. Exception messages,
         // paths, server bodies, QR contents and credentials never do.
         private sealed class SafeTransferFailure : Exception
-        { internal SafeTransferFailure(string message) : base(message) { } }
-        private static string SafeFailureMessage(Exception exception, string stage)
         {
-            var reason = exception is SafeTransferFailure ? exception.Message
-                : exception is UnauthorizedAccessException ? "一時ファイルへのアクセスが拒否されました。OSのアクセス権を確認してください。"
+            internal readonly string Reason;
+            internal readonly int StatusCode;
+            internal SafeTransferFailure(string reason, int statusCode = 0) : base(string.Format(reason, statusCode))
+            { Reason = reason; StatusCode = statusCode; }
+        }
+        private static SafeTransferFailure SafeFailure(Exception exception)
+        {
+            if (exception is SafeTransferFailure safe) return safe;
+            var reason = exception is UnauthorizedAccessException ? "一時ファイルへのアクセスが拒否されました。OSのアクセス権を確認してください。"
                 : exception is InvalidDataException ? "転送サービスの応答を確認できませんでした。最新版の試験用パッケージで再試行してください。"
                 : exception is IOException ? "一時ファイルを読み書きできませんでした。空き容量やファイルを使用中のソフトを確認してください。"
                 : exception is HttpRequestException ? "転送サービスに接続できません。インターネット接続・VPN・プロキシを確認してください。"
                 : exception is OperationCanceledException ? "通信が中断または時間切れになりました。接続を確認して新しいQRを作成してください。"
                 : "転送データを確認できませんでした。最新版の試験用パッケージで再試行してください。";
-            return stage + "で停止しました。\n" + reason;
+            return new SafeTransferFailure(reason);
         }
 
         private async Task DeleteRemote()

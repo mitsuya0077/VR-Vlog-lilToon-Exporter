@@ -521,29 +521,7 @@ namespace VRVlog.LilToonExporter
         static string MeshStamp(Mesh mesh)
         {
             using var hash = new ExportSourceFingerprint.Digest();
-            hash.Integer(mesh.vertexCount); hash.Integer(mesh.blendShapeCount);
-            hash.Integer(mesh.subMeshCount);
-            for (var submesh = 0; submesh < mesh.subMeshCount; submesh++)
-            {
-                hash.Integer((int)mesh.GetTopology(submesh));
-                var indices = mesh.GetIndices(submesh); hash.Integer(indices.Length);
-                foreach (var index in indices) hash.Integer(index);
-            }
-            foreach (var vertex in mesh.vertices) hash.Vector(vertex);
-            foreach (var normal in mesh.normals) hash.Vector(normal);
-            foreach (var tangent in mesh.tangents) hash.Vector(tangent);
-            var vertices = new Vector3[mesh.vertexCount]; var normals = new Vector3[mesh.vertexCount]; var tangents = new Vector3[mesh.vertexCount];
-            for (var shape = 0; shape < mesh.blendShapeCount; shape++)
-            {
-                hash.Text(mesh.GetBlendShapeName(shape)); hash.Integer(mesh.GetBlendShapeFrameCount(shape));
-                for (var frame = 0; frame < mesh.GetBlendShapeFrameCount(shape); frame++)
-                {
-                    hash.Float(mesh.GetBlendShapeFrameWeight(shape, frame));
-                    mesh.GetBlendShapeFrameVertices(shape, frame, vertices, normals, tangents);
-                    for (var vertex = 0; vertex < vertices.Length; vertex++)
-                    { hash.Vector(vertices[vertex]); hash.Vector(normals[vertex]); hash.Vector(tangents[vertex]); }
-                }
-            }
+            ExportSourceFingerprint.MeshData(hash, mesh);
             return hash.Finish().ToString();
         }
 

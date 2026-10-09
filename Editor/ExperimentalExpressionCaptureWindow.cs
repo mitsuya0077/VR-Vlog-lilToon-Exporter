@@ -196,6 +196,7 @@ namespace VRVlog.LilToonExporter
         void RecordSelectedClips()
         {
             var selected = clipInputs.Where(input => input.Selected).ToArray();
+            foreach (var input in selected) input.Time = DefaultTime(input.Clip);
             var poses = session.ReplaceClipRecords(selected, fileRecords.Values);
             fileRecords.Clear();
             for (var index = 0; index < selected.Length; index++) fileRecords.Add(selected[index], poses[index]);
@@ -291,7 +292,7 @@ namespace VRVlog.LilToonExporter
                         input.Selected = EditorGUILayout.Toggle(new GUIContent("", input.Error ?? ExporterLocalization.T("この表情を保存")), input.Selected, GUILayout.Width(20));
                     input.Name = EditorGUILayout.TextField(input.Name);
                     if (GUILayout.Button(new GUIContent(input.Error == null ? ExporterLocalization.T("確認") : ExporterLocalization.T("理由"), input.Error ?? input.Clip.name), GUILayout.Width(50)))
-                        Queue(() => { if (input.Error != null) throw new InvalidOperationException(input.Error); session.PreviewClip(input.Clip, input.Time); ShowFace(input.Name); });
+                        Queue(() => PreviewClipInput(input));
                     if (GUILayout.Button(new GUIContent("×", ExporterLocalization.T("一覧から削除")), GUILayout.Width(26))) Queue(() => {
                         if (fileRecords.TryGetValue(input, out var old)) session.Expressions.Remove(old);
                         fileRecords.Remove(input); clipInputs.Remove(input);
@@ -303,6 +304,15 @@ namespace VRVlog.LilToonExporter
 
         Rect ScreenRect(Rect rect) => new Rect(GUIUtility.GUIToScreenPoint(rect.position) - position.position, rect.size);
         internal static float DefaultTime(AnimationClip clip) => clip == null ? 0 : clip.length;
+
+        void PreviewClipInput(ExperimentalExpressionCaptureSession.ClipInput input)
+        {
+            input.Time = DefaultTime(input.Clip);
+            input.Error = session.ClipError(input.Clip, input.Time);
+            if (input.Error != null) throw new InvalidOperationException(input.Error);
+            session.PreviewClip(input.Clip, input.Time);
+            ShowFace(input.Name);
+        }
 
         void AddSelectedClips()
         {

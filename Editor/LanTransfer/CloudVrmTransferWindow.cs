@@ -199,7 +199,7 @@ namespace VRVlog.LilToonExporter.LanTransfer
                 if (session != null)
                 {
                     EditorGUILayout.Space();
-                    EditorGUILayout.HelpBox(ExporterLocalization.T(session.Message), session.State == CloudTransferState.Failed ? MessageType.Error : MessageType.Info);
+                    EditorGUILayout.HelpBox(session.DisplayMessage(ExporterLocalization.T), session.State == CloudTransferState.Failed ? MessageType.Error : MessageType.Info);
                     if (session.State == CloudTransferState.Uploading && source != null)
                     {
                         var rect = EditorGUILayout.GetControlRect(false, 20);

@@ -16,6 +16,60 @@ namespace VRVlog.LilToonExporter.Tests
 {
     public sealed class ExperimentalExpressionCaptureTests
     {
+        [TestCase(false)]
+        [TestCase(true)]
+        public async Task ReadWriteDisabledFaceMeshesCanBePreparedExportedAndReimported(bool recordFace)
+        {
+            using var fixture = new AttachmentConnectionTests.Fixture();
+            var meshes = fixture.Source.GetComponentsInChildren<SkinnedMeshRenderer>().Select(skin => skin.sharedMesh).Distinct().ToArray();
+            foreach (var skin in fixture.Source.GetComponentsInChildren<SkinnedMeshRenderer>()) skin.sharedMaterial.shader = Shader.Find("lilToon");
+            foreach (var mesh in meshes) mesh.UploadMeshData(true);
+            Assert.That(meshes.All(mesh => !mesh.isReadable), Is.True);
+            var sourceBefore = ExportSourceFingerprint.Compute(fixture.Source);
+            Vrm10Instance imported = null;
+            try
+            {
+                using var session = new ExperimentalExpressionCaptureSession(fixture.Source, replayInstalledDefaults: false);
+                if (recordFace) { session.SetWeight(0, 0, 65); session.Capture("Read only face"); }
+                var bytes = session.Export("Read only meshes", "Tests");
+                imported = await Vrm10.LoadBytesAsync(bytes, canLoadVrm0X: false, awaitCaller: new ImmediateCaller());
+                Assert.That(imported, Is.Not.Null);
+                if (recordFace) Assert.That(imported.Vrm.Expression.CustomClips.Any(face => face.name == "Read only face"), Is.True);
+                Assert.That(meshes.All(mesh => !mesh.isReadable), Is.True);
+                Assert.That(ExportSourceFingerprint.Compute(fixture.Source), Is.EqualTo(sourceBefore));
+            }
+            finally { if (imported != null) Object.DestroyImmediate(imported.gameObject); }
+        }
+
+        [TestCase(.25f)]
+        [TestCase(2f)]
+        public void EditedClipEndpointIsRefreshedForBothPreviewAndSaving(float newLength)
+        {
+            using var fixture = new AttachmentConnectionTests.Fixture();
+            var flags = System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic;
+            var type = typeof(ExperimentalExpressionCaptureWindow);
+            var window = ScriptableObject.CreateInstance<ExperimentalExpressionCaptureWindow>();
+            var clip = new AnimationClip { name = "Edited face" };
+            var binding = EditorCurveBinding.FloatCurve("Front", typeof(SkinnedMeshRenderer), "blendShape.Hair detail");
+            try
+            {
+                AnimationUtility.SetEditorCurve(clip, binding, AnimationCurve.Linear(0, 10, 1, 70));
+                type.GetField("source", flags).SetValue(window, fixture.Source);
+                type.GetMethod("Prepare", flags).Invoke(window, null);
+                type.GetMethod("AddClip", flags).Invoke(window, new object[] { clip });
+                var inputs = (System.Collections.Generic.List<ExperimentalExpressionCaptureSession.ClipInput>)type.GetField("clipInputs", flags).GetValue(window);
+                AnimationUtility.SetEditorCurve(clip, binding, AnimationCurve.Linear(0, 10, newLength, 95));
+                type.GetMethod("PreviewClipInput", flags).Invoke(window, new object[] { inputs.Single() });
+                var session = (ExperimentalExpressionCaptureSession)type.GetField("session", flags).GetValue(window);
+                Assert.That(session.Channels.First(channel => channel.Path == "Front").Renderer.GetBlendShapeWeight(0), Is.EqualTo(95));
+                inputs.Single().Time = 1; // Saving must refresh independently of preview.
+                type.GetMethod("RecordSelectedClips", flags).Invoke(window, null);
+                Assert.That(session.Expressions.Single().Rows.First(row => row.Path == "Front").Weights[0], Is.EqualTo(95));
+                Assert.That(inputs.Single().Time, Is.EqualTo(newLength));
+            }
+            finally { Object.DestroyImmediate(window); Object.DestroyImmediate(clip); }
+        }
+
         [TestCase("descriptor", false)]
         [TestCase("descriptor", true)]
         [TestCase("vrm", false)]
