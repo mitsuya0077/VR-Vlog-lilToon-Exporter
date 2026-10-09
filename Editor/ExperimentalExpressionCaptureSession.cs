@@ -158,6 +158,8 @@ namespace VRVlog.LilToonExporter
             catch { Dispose(); throw; }
         }
 
+        internal bool HasCurrentSource => !disposed && Source != null && ExportSourceFingerprint.Compute(Source) == sourceStamp;
+
         void RequireValid()
         {
             if (disposed || Copy == null) throw new InvalidOperationException(ExporterLocalization.T("表情記録のコピーがありません。"));
@@ -488,7 +490,7 @@ namespace VRVlog.LilToonExporter
                 settings.Prefab = null;
                 // Replace selectable custom faces, retaining authored functional
                 // and standard presets (mouth, gaze, blink, neutral and emotions).
-                if (Expressions.Count > 0 || settings.Expression == null)
+                if (expressions.Length > 0 || settings.Expression == null)
                 {
                     var previous = settings.Expression;
                     settings.Expression = new VRM10ObjectExpression();

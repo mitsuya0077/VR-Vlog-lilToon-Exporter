@@ -16,6 +16,72 @@ namespace VRVlog.LilToonExporter.Tests
 {
     public sealed class ExperimentalExpressionCaptureTests
     {
+        [Test]
+        public async Task RetrySnapshotReplacesTheSourceCatalogAfterLiveRowsWereRemoved()
+        {
+            using var fixture = new AttachmentConnectionTests.Fixture();
+            foreach (var skin in fixture.Source.GetComponentsInChildren<SkinnedMeshRenderer>()) skin.sharedMaterial.shader = Shader.Find("lilToon");
+            var authored = ScriptableObject.CreateInstance<VRM10Object>(); var original = ScriptableObject.CreateInstance<VRM10Expression>();
+            var clip = new AnimationClip { name = "Captured face" }; Vrm10Instance imported = null;
+            try
+            {
+                original.name = "Source face"; original.MorphTargetBindings = new[] { new MorphTargetBinding("Front", 0, .4f) };
+                authored.Expression.CustomClips.Add(original); fixture.Source.AddComponent<Vrm10Instance>().Vrm = authored;
+                AnimationUtility.SetEditorCurve(clip, EditorCurveBinding.FloatCurve("Front", typeof(SkinnedMeshRenderer), "blendShape.Hair detail"), AnimationCurve.Constant(0, 1, 80));
+                using var session = new ExperimentalExpressionCaptureSession(fixture.Source, false);
+                session.ImportClips(new[] { new ExperimentalExpressionCaptureSession.ClipInput { Clip = clip, Name = clip.name, Time = clip.length } });
+                var snapshot = session.Expressions.Select(ExperimentalExpressionCaptureSession.ClonePose).ToArray(); session.Expressions.Clear();
+                var bytes = session.Export("Retry snapshot", "Tests", blinkOptions: new BlinkExportOptions { Mode = BlinkExportMode.None }, recordedExpressions: snapshot);
+                imported = await Vrm10.LoadBytesAsync(bytes, canLoadVrm0X: false, awaitCaller: new ImmediateCaller());
+                Assert.That(imported.Vrm.Expression.CustomClips.Select(item => item.name).ToArray(), Is.EqualTo(new[] { "Captured face" }));
+                Assert.That(authored.Expression.CustomClips.Single(), Is.SameAs(original));
+            }
+            finally { if (imported != null) Object.DestroyImmediate(imported.gameObject); Object.DestroyImmediate(clip); Object.DestroyImmediate(authored); Object.DestroyImmediate(original); }
+        }
+
+        [UnityTest]
+        public IEnumerator CorrectedRecommendedAssetBecomesSelectableWithoutLosingExplicitFiles()
+        {
+            using var fixture = new AttachmentConnectionTests.Fixture();
+            var folder = "Assets/VRVlogCandidateRefresh_" + Guid.NewGuid().ToString("N"); AssetDatabase.CreateFolder("Assets", Path.GetFileName(folder));
+            var clip = new AnimationClip { name = "Repair candidate" }; var retained = new AnimationClip { name = "Keep selected face" };
+            var controller = new AnimatorController(); var machine = new AnimatorStateMachine();
+            var window = ScriptableObject.CreateInstance<ExperimentalExpressionCaptureWindow>();
+            var flags = System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic; var type = typeof(ExperimentalExpressionCaptureWindow);
+            var binding = EditorCurveBinding.FloatCurve("Front", typeof(SkinnedMeshRenderer), "blendShape.Hair detail");
+            var unsupported = EditorCurveBinding.FloatCurve("", typeof(Transform), "m_LocalPosition.x");
+            try
+            {
+                AnimationUtility.SetEditorCurve(clip, binding, AnimationCurve.Constant(0, 1, 75));
+                AnimationUtility.SetEditorCurve(clip, unsupported, AnimationCurve.Constant(0, 1, 0)); AssetDatabase.CreateAsset(clip, folder + "/Face.anim");
+                AnimationUtility.SetEditorCurve(retained, binding, AnimationCurve.Constant(0, 1, 50));
+                var state = machine.AddState("Face"); state.motion = clip; machine.defaultState = state;
+                controller.layers = new[] { new AnimatorControllerLayer { name = "Face", defaultWeight = 1, stateMachine = machine } };
+                fixture.Source.GetComponent<Animator>().runtimeAnimatorController = controller;
+                type.GetField("source", flags).SetValue(window, fixture.Source); type.GetMethod("Prepare", flags).Invoke(window, null);
+                type.GetMethod("AddClip", flags).Invoke(window, new object[] { retained });
+                window.position = new Rect(40, 40, 700, 1100); window.Show();
+                for (var frame = 0; frame < 8; frame++) { window.Repaint(); yield return null; }
+                var errors = (System.Collections.Generic.Dictionary<AnimationClip, string>)type.GetField("clipErrors", flags).GetValue(window);
+                Assert.That(errors[clip], Is.Not.Null);
+                AnimationUtility.SetEditorCurve(clip, unsupported, null); EditorUtility.SetDirty(clip); AssetDatabase.SaveAssets(); AssetDatabase.ImportAsset(folder + "/Face.anim", ImportAssetOptions.ForceUpdate);
+                for (var frame = 0; frame < 16; frame++) { window.Repaint(); yield return null; }
+                Assert.That(errors[clip], Is.Null, "Reimport refreshes validation and the disabled toggle.");
+                var inputs = (System.Collections.Generic.List<ExperimentalExpressionCaptureSession.ClipInput>)type.GetField("clipInputs", flags).GetValue(window);
+                Assert.That(inputs.Single().Clip, Is.SameAs(retained));
+                var session = (ExperimentalExpressionCaptureSession)type.GetField("session", flags).GetValue(window);
+                Assert.That(session.HasCurrentSource, Is.True);
+                var rectangles = (System.Collections.Generic.Dictionary<AnimationClip, Rect>)type.GetField("candidateRects", flags).GetValue(window);
+                Click(window, rectangles[clip]); for (var frame = 0; frame < 8; frame++) { window.Repaint(); yield return null; }
+                session = (ExperimentalExpressionCaptureSession)type.GetField("session", flags).GetValue(window);
+                Assert.That(session.Channels.Single(channel => channel.Path == "Front").Renderer.GetBlendShapeWeight(0), Is.EqualTo(75));
+                type.GetMethod("AddClip", flags).Invoke(window, new object[] { clip });
+                type.GetMethod("RecordSelectedClips", flags).Invoke(window, null);
+                Assert.That(session.Expressions.Count, Is.EqualTo(2));
+            }
+            finally { Object.DestroyImmediate(window); AssetDatabase.DeleteAsset(folder); Object.DestroyImmediate(retained); Object.DestroyImmediate(controller); Object.DestroyImmediate(machine); }
+        }
+
         [TestCase(false, "2nd")]
         [TestCase(true, "2nd")]
         [TestCase(false, "3rd")]

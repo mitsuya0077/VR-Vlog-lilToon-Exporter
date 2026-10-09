@@ -17,6 +17,7 @@ namespace VRVlog.LilToonExporter
         ExperimentalExpressionCaptureSession session;
         PreviewRenderUtility preview;
         Action pending;
+        bool candidateValidationPending;
         string error, status;
         Vector2 pageScroll;
         Vector3 center;
@@ -48,12 +49,14 @@ namespace VRVlog.LilToonExporter
             window.minSize = new Vector2(600, 760);
         }
 
-        void OnEnable() { EditorApplication.update += Advance; }
-        void OnDisable() { EditorApplication.update -= Advance; pending = null; Cleanup(); }
+        void OnEnable() { EditorApplication.update += Advance; EditorApplication.projectChanged += CandidateAssetsChanged; }
+        void OnDisable() { EditorApplication.update -= Advance; EditorApplication.projectChanged -= CandidateAssetsChanged; pending = null; Cleanup(); }
 
         void Advance()
         {
-            if (pending == null || EditorApplication.isCompiling || EditorApplication.isUpdating) return;
+            if (EditorApplication.isCompiling || EditorApplication.isUpdating) return;
+            if (pending == null && candidateValidationPending && session != null) pending = RefreshCandidateValidation;
+            if (pending == null) return;
             var action = pending; pending = null;
             try { action(); error = null; }
             catch (OperationCanceledException) { status = ExporterLocalization.T("操作をキャンセルしました。"); }
@@ -62,6 +65,34 @@ namespace VRVlog.LilToonExporter
         }
 
         void Queue(Action action) { pending = action; error = null; Repaint(); }
+
+        void CandidateAssetsChanged() { candidateValidationPending = true; Repaint(); }
+
+        void RefreshCandidateValidation()
+        {
+            candidateValidationPending = false;
+            if (session == null) return;
+            if (!session.HasCurrentSource)
+            {
+                // A changed registered clip is also part of the guarded source.
+                // Rebuild the owned preview rather than restamping stale geometry.
+                // Retain the user's explicit files and settings; save rebuilds their records.
+                if (session.Expressions.Any(pose => !fileRecords.Values.Contains(pose)))
+                    throw new InvalidOperationException(ExporterLocalization.T("元のアバターが変更されました。「変更」からアバターを指定し直してください。"));
+                var inputs = clipInputs.ToArray(); var selection = selectedClips.ToArray();
+                var poses = session.PoseOptions.Copy(); var blink = configuredBlink?.Copy(); var previousSaved = saved;
+                Prepare();
+                clipInputs.AddRange(inputs); selectedClips.UnionWith(selection);
+                session.PoseOptions.Manual.AddRange(poses.Manual); session.PoseOptions.Excluded.UnionWith(poses.Excluded);
+                foreach (var pair in poses.Names) session.PoseOptions.Names.Add(pair.Key, pair.Value);
+                configuredBlink = blink; saved = previousSaved;
+            }
+            clipErrors.Clear();
+            foreach (var pair in session.ClipErrors((recommendations ?? new System.Collections.Generic.List<ExperimentalExpressionCaptureSession.ClipRecommendation>()).Select(item => item.Clip)))
+                clipErrors[pair.Key] = pair.Value;
+            selectedClips.RemoveWhere(clip => clip == null || !clipErrors.TryGetValue(clip, out var reason) || reason != null);
+            Repaint();
+        }
 
         void OnGUI()
         {
@@ -144,6 +175,7 @@ namespace VRVlog.LilToonExporter
                 previewName = ExporterLocalization.T("基準の顔");
                 status = null;
                 saved = null;
+                candidateValidationPending = false;
             }
             catch { Cleanup(); throw; }
         }
@@ -264,7 +296,9 @@ namespace VRVlog.LilToonExporter
                         if (GUILayout.Button(new GUIContent(item.Clip.name, reason ?? ExporterLocalization.T(item.Source) + "\n" + AssetDatabase.GetAssetPath(item.Clip)), EditorStyles.label, GUILayout.Height(24)))
                         {
                             var clip = item.Clip;
-                            Queue(() => { if (reason != null) throw new InvalidOperationException(reason); session.PreviewClip(clip, DefaultTime(clip)); ShowFace(clip.name); });
+                            Queue(() => { RefreshCandidateValidation(); var currentReason = session.ClipError(clip, DefaultTime(clip));
+                                if (currentReason != null) throw new InvalidOperationException(currentReason);
+                                session.PreviewClip(clip, DefaultTime(clip)); ShowFace(clip.name); });
                         }
                         var nameRect = GUILayoutUtility.GetLastRect();
                         if (Event.current.type == EventType.Repaint) candidateRects[item.Clip] = ScreenRect(nameRect);
