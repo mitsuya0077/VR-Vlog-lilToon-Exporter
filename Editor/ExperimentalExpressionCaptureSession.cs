@@ -392,6 +392,13 @@ namespace VRVlog.LilToonExporter
         {
             RequireValid();
             ValidatePose(Baseline);
+            // Without explicit faces, retain the ordinary exporter's VRChat
+            // menu/FX, authored expressions, metadata and preparation route.
+            if (Expressions.Count == 0)
+                return InjectManualPoses(UniVrmOneClickExporter.Export(Source, avatarName, author, warnings,
+                    exporterVersion: UnityEditor.PackageManager.PackageInfo.FindForAssembly(typeof(UniVrmOneClickExporter).Assembly)?.version ?? "0.11.14",
+                    lilToonVersion: "2.3.4", blinkOptions: blinkOptions,
+                    licenseOptions: licenseOptions ?? new AvatarLicenseOptions(), disableAudioLink: true));
             foreach (var pose in Expressions)
             {
                 ValidatePose(pose);

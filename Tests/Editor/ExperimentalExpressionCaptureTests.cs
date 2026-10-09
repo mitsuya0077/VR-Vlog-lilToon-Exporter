@@ -407,6 +407,7 @@ namespace VRVlog.LilToonExporter.Tests
             finally { if (imported != null) Object.DestroyImmediate(imported.gameObject); }
         }
 
+        [TestCase("model-only")]
         [TestCase("none")]
         [TestCase("synced")]
         [TestCase("neutral")]
@@ -416,7 +417,7 @@ namespace VRVlog.LilToonExporter.Tests
         [TestCase("audio")]
         [TestCase("audio-reactive")]
         [TestCase("unknown")]
-        public void ExistingMenuCandidateCanBeDiscoveredPreviewedAndCapturedWithoutChangingItsController(string callback)
+        public async Task ExistingMenuCandidateCanBeDiscoveredPreviewedAndCapturedWithoutChangingItsController(string callback)
         {
             var descriptorType = Sdk("VRC.SDK3.Avatars.Components.VRCAvatarDescriptor");
             Assert.That(descriptorType, Is.Not.Null, "This experiment is tested with the real VRChat SDK.");
@@ -482,7 +483,30 @@ namespace VRVlog.LilToonExporter.Tests
                     Assert.That(smile.behaviours.Length, Is.EqualTo(1), "Refusing an audio-reactive face cannot remove the source callback.");
                     return;
                 }
+                if (callback == "model-only")
+                    foreach (var skin in fixture.Source.GetComponentsInChildren<SkinnedMeshRenderer>()) skin.sharedMaterial.shader = Shader.Find("lilToon");
                 using var session = new ExperimentalExpressionCaptureSession(fixture.Source);
+                if (callback == "model-only")
+                {
+                    var original = ExportSourceFingerprint.Compute(fixture.Source);
+                    var bytes = session.Export("Existing menu", "Tests", blinkOptions: new BlinkExportOptions { Mode = BlinkExportMode.None });
+                    var model = await Vrm10.LoadBytesAsync(bytes, canLoadVrm0X: false, awaitCaller: new ImmediateCaller());
+                    try
+                    {
+                        var face = model.Vrm.Expression.CustomClips.Single(item => item.name.EndsWith("Smile", StringComparison.Ordinal));
+                        var skin = model.transform.Find("Front").GetComponent<SkinnedMeshRenderer>();
+                        var key = ExpressionKey.CreateCustom(face.name);
+                        using var baked = new BlinkTestMesh();
+                        model.Runtime.Expression.SetWeight(key, 0); model.Runtime.Process(); skin.BakeMesh(baked.Mesh); var before = baked.Mesh.vertices;
+                        model.Runtime.Expression.SetWeight(key, 1); model.Runtime.Process(); skin.BakeMesh(baked.Mesh);
+                        Assert.That(baked.Mesh.vertices.Zip(before, (a,b) => (a-b).sqrMagnitude).Max(), Is.GreaterThan(1e-8f));
+                        model.Runtime.Expression.SetWeight(key, 0); model.Runtime.Process(); skin.BakeMesh(baked.Mesh);
+                        Assert.That(baked.Mesh.vertices.Zip(before, (a,b) => (a-b).sqrMagnitude).Max(), Is.LessThan(1e-8f));
+                        Assert.That(ExportSourceFingerprint.Compute(fixture.Source), Is.EqualTo(original));
+                    }
+                    finally { Object.DestroyImmediate(model.gameObject); }
+                    return;
+                }
                 session.DiscoverCandidates();
                 var candidate = session.Candidates.Entries.First(entry => entry.Name == "Smile");
                 Assert.That(smile.behaviours.Length, Is.EqualTo(callback == "audio" || callback == "unknown" ? 1 : 0), "Source callbacks remain on their original asset.");

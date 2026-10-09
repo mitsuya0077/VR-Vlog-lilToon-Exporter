@@ -507,8 +507,8 @@ namespace VRVlog.LilToonExporter.LanTransfer.Tests
                 fixture.Transport.Failure = kind;
                 try { await session.UploadAsync(); Assert.That(false, Is.True, "Must fail"); }
                 catch (InvalidOperationException exception) { Assert.That(exception.Message, Is.EqualTo(session.Message)); }
-                Assert.That(session.Message, Does.Contain(reason).And.Contain(stage));
-                Assert.That(session.Message, Does.Not.Contain("SECRET").And.Not.Contain(fixture.Path).And.Not.Contain(fixture.Transport.UploadToken).And.Not.Contain("private service failure"));
+                Assert.That(session.Message.Contains(reason) && session.Message.Contains(stage), Is.True);
+                Assert.That(new[] { "SECRET", fixture.Path, fixture.Transport.UploadToken, "private service failure" }.Any(value => session.Message.Contains(value)), Is.False);
                 Assert.That(session.Qr, Is.Null);
                 Assert.That(session.HasEncryptionKey, Is.False);
             }
