@@ -267,9 +267,14 @@ assert 'Built ZIP differs from the validated release candidate' in release_workf
 assert 'RELEASE_CHANNEL: ${{ inputs.channel }}' in release_workflow
 assert 'python3 Tools/release_policy.py > release-flags.txt' in release_workflow
 assert '"${release_flags[@]}"' in release_workflow
+import importlib.util
+runner_spec = importlib.util.spec_from_file_location("validation_runner", root / "Tools/run-validation.py")
+validation_runner = importlib.util.module_from_spec(runner_spec)
+runner_spec.loader.exec_module(validation_runner)
 for script in ("Tools/test-release-policy.py", "Tools/test-listing.py"):
-    assert f"python3 {script}" in release_workflow
-    assert f"python3 {script}" in (root / ".github/workflows/validate.yml").read_text(encoding="utf-8")
+    assert [str(__import__('sys').executable), script] in validation_runner.plan()
+for workflow_name in ("validate.yml", "release-vpm.yml", "release-candidate.yml"):
+    assert 'python3 Tools/run-validation.py --report work/validation.json' in (root / ".github/workflows" / workflow_name).read_text(encoding="utf-8")
 assert 'tag v${VERSION} already exists' in release_workflow
 assert 'git ls-remote --exit-code --tags origin' in release_workflow
 assert 'gh workflow run build-listing.yml --repo "$GITHUB_REPOSITORY" --ref main' in release_workflow

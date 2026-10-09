@@ -26,7 +26,7 @@ Ordinary bug reports and proposals are public. Do not attach purchased or privat
    ```
 
    The clone option controls the initial checkout; the local setting keeps later checkouts from converting LF to CRLF. If an existing checkout already has CRLF conversion, use a separate fresh clone with these settings and preserve your local work.
-2. For Python checks, use Python 3.12, as in [Validate CI](.github/workflows/validate.yml). These checks use the Python standard library.
+2. For Python checks, use Python 3.12, as in [Validate CI](.github/workflows/validate.yml). Install the hash-pinned workflow parser as described under local checks; the remaining Python checks use the standard library.
 3. For Unity work, use a separate Unity 2022.3 project with lilToon 2.3.4 and matching supported UniGLTF / VRM packages. Follow the exact versions and prerequisites in [Compatibility/README.md](Compatibility/README.md).
 4. Add this checkout as a local package using Unity Package Manager's **Add package from disk**, selecting the root `package.json`. Avoid also installing a release copy of the exporter in that project.
 5. For Unity tests, add `"testables": ["com.vrvlog.liltoon-vrm-exporter"]` to the test project's manifest and follow the compatibility guide's Test Framework, Collections and optional integration package requirements.
@@ -54,6 +54,8 @@ git diff --check
 Host behavior checks also use PowerShell 7. The [Validate workflow](.github/workflows/validate.yml) is the complete command reference, including dependency, exporter, transfer, pose, bake and NDMF host checks. These host checks do not prove Unity integration or device behavior.
 
 For implementation changes, run the relevant pinned Unity profiles from the [compatibility guide](Compatibility/README.md#exporter-behavior-and-integration-regression-profiles). Record the actual Editor and package versions, tested commit, results and any skips. Preserve the original avatar and its referenced assets. Do not use host adapters, relabeled dependencies or older test results as evidence of a successful Unity run.
+
+PR, main, release-candidate and publication host checks share `Tools/run-validation.py`. With Python 3.12 and PowerShell 7, install the hash-pinned parser using `python3 -m pip install --require-hashes --only-binary=:all: -r Tools/pipeline-requirements.txt`, then run `python3 Tools/run-validation.py --report work/validation.json`. This receipt covers host checks only. The [development pipeline](Documentation~/DevelopmentPipeline.md) explains triage, latest-head review, Unity acceptance, non-publishing candidates, publication approval, recovery and the Actions cost model.
 
 For documentation changes, verify relative links and examples and check that the documented behavior matches source. If a change is intended to preserve implementation, confirm that product source, dependency policy, version metadata and package tooling are unchanged.
 
