@@ -13,6 +13,7 @@ namespace VRVlog.LilToonExporter
     internal sealed class ExportRecoveryComparisonWindow : EditorWindow
     {
         private ExportRecoverySession session;
+        private IDisposable inputOwnership;
         private Action saved;
         private PreviewRenderUtility vrmRender;
         private IDisposable lilToonPreview;
@@ -35,6 +36,7 @@ namespace VRVlog.LilToonExporter
             var window = Resources.FindObjectsOfTypeAll<ExportRecoveryComparisonWindow>()
                 .FirstOrDefault(item => item.session == session) ?? CreateInstance<ExportRecoveryComparisonWindow>();
             window.session = session;
+            if (window.inputOwnership == null) window.inputOwnership = session.AcquireInputOwnership();
             window.saved = saved;
             window.titleContent = new GUIContent(ExporterLocalization.T("書き出すVRMを確認"));
             window.minSize = new Vector2(780, 580);
@@ -344,6 +346,7 @@ namespace VRVlog.LilToonExporter
         {
             EditorApplication.update -= CheckSource;
             Cleanup();
+            inputOwnership?.Dispose(); inputOwnership = null;
         }
 
         private void Cleanup()

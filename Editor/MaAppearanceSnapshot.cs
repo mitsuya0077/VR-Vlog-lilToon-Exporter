@@ -304,7 +304,17 @@ namespace VRVlog.LilToonExporter
         {
             map.Add(source.gameObject, clone.gameObject);
             var from = source.GetComponents<Component>(); var to = clone.GetComponents<Component>();
-            for (var i = 0; i < from.Length; i++) if (from[i] != null && to[i] != null) map.Add(from[i], to[i]);
+            // Callback-safe staging can remove an entire non-authoring script
+            // type. Array indices across different types are no longer identity.
+            foreach (var group in from.Where(component => component != null).GroupBy(component => component.GetType()))
+            {
+                var originals = group.ToArray();
+                var copies = to.Where(component => component != null && component.GetType() == group.Key).ToArray();
+                if (copies.Length == 0) continue;
+                if (copies.Length != originals.Length)
+                    throw new InvalidOperationException("Owned avatar components no longer match source identity.");
+                for (var i = 0; i < originals.Length; i++) map.Add(originals[i], copies[i]);
+            }
             for (var i = 0; i < source.childCount; i++) Map(source.GetChild(i), clone.GetChild(i), map);
         }
     }

@@ -59,6 +59,8 @@ namespace VRVlog.LilToonExporter.Tests
             foreach (var skin in fixture.Source.GetComponentsInChildren<SkinnedMeshRenderer>()) skin.sharedMaterial.shader = Shader.Find("lilToon");
             var material = fixture.Source.transform.Find("Front").GetComponent<SkinnedMeshRenderer>().sharedMaterial;
             var probe = fixture.Source.AddComponent<RecoveryCallbackProbe>(); probe.SharedMaterial = material;
+            AppearancePreparationTests.AddRule(fixture.Source, "ModularAvatarShapeChanger", "Shapes", "ChangedShape",
+                fixture.Source.transform.Find("Front").gameObject, ("ShapeName", "Hair detail"), ("ChangeType", 1), ("Value", 50f));
             var clip = new AnimationClip { name = "Callback-safe face" };
             try
             {
@@ -207,6 +209,8 @@ namespace VRVlog.LilToonExporter.Tests
         [TestCase(false, "2nd", "stay")]
         [TestCase(false, "2nd", "close")]
         [TestCase(true, "2nd", "close")]
+        [TestCase(false, "2nd", "comparison")]
+        [TestCase(true, "2nd", "comparison")]
         [TestCase(false, "2nd", "change")]
         [TestCase(true, "2nd", "change")]
         [TestCase(true, "2nd", "stay")]
@@ -243,11 +247,21 @@ namespace VRVlog.LilToonExporter.Tests
                 var diagnostic = recovery.Report.Diagnostics.Single(item => item.Action?.Kind == kind);
                 Assert.That(diagnostic.Action.Material, Is.SameAs(material));
                 var target = (ExperimentalExpressionCaptureSession)type.GetField("session", flags).GetValue(window);
-                if (ownerAction == "close") { Object.DestroyImmediate(window); window = null; }
+                if (ownerAction == "close" || ownerAction == "comparison") { Object.DestroyImmediate(window); window = null; }
                 if (ownerAction == "change") type.GetMethod("ChangeAvatar", flags).Invoke(window, null);
                 Assert.That(target.Copy, Is.Not.Null, "The recovery dialog retains the prepared copy after its owner closes.");
                 var options = new ExportRecoveryOptions(); options.Actions.Add(diagnostic.Action);
                 Assert.That(recovery.Attempt(options), Is.True, recovery.Failure?.ToString());
+                if (ownerAction == "comparison")
+                {
+                    ExportRecoveryComparisonWindow.Show(recovery);
+                    foreach (var failure in Resources.FindObjectsOfTypeAll<ExportFailureWindow>()) Object.DestroyImmediate(failure);
+                    Assert.That(target.Copy, Is.Not.Null, "The comparison owns the captured input after the failure window closes.");
+                    ExportFailureWindow.Show(recovery);
+                    foreach (var comparison in Resources.FindObjectsOfTypeAll<ExportRecoveryComparisonWindow>()) Object.DestroyImmediate(comparison);
+                    Assert.That(target.Copy, Is.Not.Null, "Returning to remedies transfers ownership back before closing the comparison.");
+                    Assert.That(recovery.Attempt(options), Is.True, recovery.Failure?.ToString());
+                }
                 Assert.DoesNotThrow(() => recovery.SavePending());
                 Assert.DoesNotThrow(() => LilToonGlbExtension.Validate(File.ReadAllBytes(path)));
                 Assert.That(ExportSourceFingerprint.Compute(fixture.Source), Is.EqualTo(stamp));
@@ -257,6 +271,7 @@ namespace VRVlog.LilToonExporter.Tests
             }
             finally
             {
+                foreach (var comparison in Resources.FindObjectsOfTypeAll<ExportRecoveryComparisonWindow>()) Object.DestroyImmediate(comparison);
                 foreach (var failure in Resources.FindObjectsOfTypeAll<ExportFailureWindow>()) Object.DestroyImmediate(failure);
                 if (window != null) Object.DestroyImmediate(window); Object.DestroyImmediate(clip); Object.DestroyImmediate(material); Object.DestroyImmediate(texture);
                 if (File.Exists(path)) File.Delete(path);

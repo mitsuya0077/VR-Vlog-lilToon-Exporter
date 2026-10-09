@@ -27,6 +27,7 @@ namespace VRVlog.LilToonExporter
         [SerializeField] private Vector2 scrollPosition;
         [SerializeField] private bool showTechnicalDetails;
         private ExportRecoverySession session;
+        private IDisposable inputOwnership;
         private Action saved;
         private readonly HashSet<string> selected = new HashSet<string>();
         private bool copied, busy;
@@ -50,6 +51,7 @@ namespace VRVlog.LilToonExporter
             var window = Resources.FindObjectsOfTypeAll<ExportFailureWindow>()
                 .FirstOrDefault(item => item.session == session) ?? NewWindow();
             window.session = session;
+            if (window.inputOwnership == null) window.inputOwnership = session.AcquireInputOwnership();
             window.saved = saved;
             window.hadSession = true;
             window.RefreshSession();
@@ -66,7 +68,11 @@ namespace VRVlog.LilToonExporter
         }
 
         private void OnEnable() => EditorApplication.update += CheckSource;
-        private void OnDisable() { EditorApplication.update -= CheckSource; session?.ReleaseInput(); }
+        private void OnDisable()
+        {
+            EditorApplication.update -= CheckSource;
+            inputOwnership?.Dispose(); inputOwnership = null;
+        }
 
         private void CheckSource()
         {
