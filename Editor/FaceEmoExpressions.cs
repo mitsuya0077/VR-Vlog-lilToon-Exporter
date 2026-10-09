@@ -323,6 +323,7 @@ namespace VRVlog.LilToonExporter
             }
             private readonly Dictionary<AnimationClip, Dictionary<EditorCurveBinding, Target>> targets =
                 new Dictionary<AnimationClip, Dictionary<EditorCurveBinding, Target>>();
+            internal IEnumerable<AnimationClip> RegisteredClips => targets.Keys;
 
             internal BindingSnapshot(GameObject clone, Func<string, bool> excludedPath = null, Func<string, bool> preparedExcludedPath = null,
                 bool deferPermanentOverrides = false)

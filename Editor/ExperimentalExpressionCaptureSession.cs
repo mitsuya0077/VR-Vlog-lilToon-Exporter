@@ -9,7 +9,7 @@ using Object = UnityEngine.Object;
 namespace VRVlog.LilToonExporter
 {
     // Experimental, opt-in window only. The ordinary exporter has no dependency on this session.
-    internal sealed class ExperimentalExpressionCaptureSession : IDisposable
+    internal sealed partial class ExperimentalExpressionCaptureSession : IDisposable
     {
         [Serializable]
         internal sealed class Row
@@ -34,6 +34,9 @@ namespace VRVlog.LilToonExporter
             public string[] MeshHashes;
             public Pose Baseline;
             public List<Pose> Expressions = new List<Pose>();
+            public List<PoseReference> ManualPoses = new List<PoseReference>();
+            public string[] ExcludedPoses;
+            public List<PoseNameReference> PoseNames;
         }
 
         internal sealed class Channel
@@ -50,6 +53,8 @@ namespace VRVlog.LilToonExporter
         internal readonly List<string> Warnings = new List<string>();
         internal readonly List<Channel> Channels = new List<Channel>();
         internal readonly List<Pose> Expressions = new List<Pose>();
+        internal readonly PoseExportOptions PoseOptions = new PoseExportOptions();
+        readonly Dictionary<string, SkinnedMeshRenderer> authoringRenderers = new Dictionary<string, SkinnedMeshRenderer>(StringComparer.Ordinal);
         internal VrChatExpressionMenu.Source Candidates { get; private set; }
         internal Pose Baseline { get; private set; }
         readonly List<Mesh> ownedMeshes = new List<Mesh>();
@@ -61,7 +66,9 @@ namespace VRVlog.LilToonExporter
         bool disposed;
         internal const int MaximumExpressions = 64;
 
-        internal ExperimentalExpressionCaptureSession(GameObject source)
+        internal ExperimentalExpressionCaptureSession(GameObject source) : this(source, true) { }
+
+        internal ExperimentalExpressionCaptureSession(GameObject source, bool replayInstalledDefaults)
         {
             Source = source;
             try
@@ -78,9 +85,12 @@ namespace VRVlog.LilToonExporter
                 faceEmoBindings = FaceEmoExpressions.Capture(source, Copy, deferPermanentOverrides: true);
                 faceEmoBindings.CompletedFacePlayer = (avatar, metadata, state, layer) =>
                     ExperimentalInstalledExpressionPlayer.Sample(avatar, metadata, new Dictionary<string, float>(), state, layer);
+                foreach (var group in Copy.GetComponentsInChildren<SkinnedMeshRenderer>(true).GroupBy(renderer =>
+                    AnimationUtility.CalculateTransformPath(renderer.transform, Copy.transform), StringComparer.Ordinal))
+                    if (group.Count() == 1) authoringRenderers.Add(group.Key, group.Single());
                 preparation = NdmfExportPreparation.Prepare(source, Copy, Warnings);
                 faceEmoBindings.RebindPrepared(preparation.PreparedRendererFor, preparation.ObjectRegistry, preparation.IsolatedCopyOf);
-                controllers = new ExperimentalExpressionControllerScope(Copy, Warnings);
+                if (replayInstalledDefaults) controllers = new ExperimentalExpressionControllerScope(Copy, Warnings);
                 foreach (var behaviour in Copy.GetComponentsInChildren<Behaviour>(true)) behaviour.enabled = false;
                 foreach (var skin in Copy.GetComponentsInChildren<SkinnedMeshRenderer>(true))
                 { skin.updateWhenOffscreen = true; skin.forceMatrixRecalculationPerRender = true; }
@@ -98,7 +108,7 @@ namespace VRVlog.LilToonExporter
                 }
                 if (Channels.Count == 0) throw new InvalidOperationException("表示中のメッシュにBlendShapeがありません。");
                 var installed = VrChatExpressionMenu.Read(Copy);
-                if (installed.Controller != null)
+                if (replayInstalledDefaults && installed.Controller != null)
                 {
                     NeutralInputProof.Read(Copy, installed);
                     try
@@ -132,6 +142,7 @@ namespace VRVlog.LilToonExporter
         internal void DiscoverCandidates()
         {
             RequireValid();
+            if (controllers == null) controllers = new ExperimentalExpressionControllerScope(Copy, Warnings);
             var current = Snapshot("現在の顔");
             try
             {
@@ -336,7 +347,9 @@ namespace VRVlog.LilToonExporter
             // Applying or exporting them still requires all identity checks.
             if (disposed) throw new InvalidOperationException("表情記録のコピーがありません。");
             return JsonUtility.ToJson(new Settings { MeshHashes = Channels.Select(channel => channel.MeshHash).ToArray(),
-                Baseline = ClonePose(Baseline), Expressions = Expressions.Select(ClonePose).ToList() }, true);
+                Baseline = ClonePose(Baseline), Expressions = Expressions.Select(ClonePose).ToList(),
+                ManualPoses = PoseOptions.Manual.Select(SavePoseReference).ToList(), ExcludedPoses = PoseOptions.Excluded.ToArray(),
+                PoseNames = PoseOptions.Names.Select(pair => new PoseNameReference { Id = pair.Key, Name = pair.Value }).ToList() }, true);
         }
 
         internal void LoadSettings(string json)
@@ -358,9 +371,20 @@ namespace VRVlog.LilToonExporter
                 if (ValidateName(pose.Name) != pose.Name || !names.Add(pose.Name))
                     throw new InvalidOperationException("記録設定の表情名が重複または不正です。");
             }
+            var manualPoses = (settings.ManualPoses ?? new List<PoseReference>()).Select(LoadPoseReference).ToList();
+            if (manualPoses.Count > 128) throw new InvalidOperationException("同梱ポーズは128件までです。");
+            var poseNames = new Dictionary<string, string>(StringComparer.Ordinal);
+            foreach (var reference in settings.PoseNames ?? new List<PoseNameReference>())
+                if (reference == null || string.IsNullOrEmpty(reference.Id) || poseNames.ContainsKey(reference.Id))
+                    throw new InvalidOperationException("ポーズの表示名設定が不正です。");
+                else poseNames.Add(reference.Id, ValidateName(reference.Name));
             // Publish only after validating every row and expression.
             Baseline = ClonePose(settings.Baseline);
             Expressions.Clear(); Expressions.AddRange(settings.Expressions.Select(ClonePose));
+            PoseOptions.Manual.Clear(); PoseOptions.Manual.AddRange(manualPoses);
+            PoseOptions.Excluded.Clear(); PoseOptions.Names.Clear();
+            PoseOptions.Excluded.UnionWith(settings.ExcludedPoses ?? Array.Empty<string>());
+            foreach (var pair in poseNames) PoseOptions.Names.Add(pair.Key, pair.Value);
             ApplyUnchecked(Baseline);
         }
 
@@ -445,10 +469,11 @@ namespace VRVlog.LilToonExporter
                     expression.MorphTargetBindings = bindings.ToArray();
                     settings.Expression.CustomClips.Add(expression);
                 }
-                return UniVrmOneClickExporter.Export(exportCopy, avatarName, author, warnings,
+                var bytes = UniVrmOneClickExporter.Export(exportCopy, avatarName, author, warnings,
                     exporterVersion: UnityEditor.PackageManager.PackageInfo.FindForAssembly(typeof(UniVrmOneClickExporter).Assembly)?.version ?? "0.11.14",
                     lilToonVersion: "2.3.4", gimmickOptions: new ExportGimmickOptions { AutoExclude = false }, blinkOptions: blinkOptions,
                     licenseOptions: licenseOptions ?? new AvatarLicenseOptions());
+                return InjectManualPoses(bytes);
             }
             finally
             {

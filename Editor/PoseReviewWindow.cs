@@ -28,14 +28,17 @@ namespace VRVlog.LilToonExporter
         float yaw;
         string error;
         PoseCandidate playing;
+        bool manualOnly;
         double playStarted;
 
-        internal static void Show(GameObject avatar, PoseExportOptions options, GameObject[] excluded, ExportGimmickOptions gimmicks)
+        internal static PoseReviewWindow Show(GameObject avatar, PoseExportOptions options, GameObject[] excluded, ExportGimmickOptions gimmicks, bool manualOnly = false)
         {
             var window = CreateInstance<PoseReviewWindow>(); window.source = avatar; window.options = options;
             window.excluded = excluded; window.gimmicks = gimmicks;
+            window.manualOnly = manualOnly;
             window.titleContent = new GUIContent(ExporterLocalization.T("ポーズを確認・調整")); window.minSize = new Vector2(620, 600);
             window.RequestRebuild(); window.ShowUtility();
+            return window;
         }
         void OnEnable() => EditorApplication.update += AdvanceRebuild;
         void RequestRebuild() { rebuildRequested = true; Repaint(); }
@@ -79,7 +82,9 @@ namespace VRVlog.LilToonExporter
                 using var manual = new ExportObjectExclusions(source, excluded);
                 var findings = gimmicks.AutoExclude ? ExportGimmickDetection.Analyze(source, manual.Contains) : new List<ExportGimmickFinding>();
                 using var omissions = new ExportObjectExclusions(source, excluded.Concat(ExportGimmickDetection.AutomaticRoots(findings, gimmicks)));
-                session = new PoseExportSession(source, options, omissions.Contains);
+                session = new PoseExportSession(source, options, omissions.Contains,
+                    manualOnly ? new VrChatMenuImportPolicy { SkipAll = true } : null);
+                if (manualOnly) session.Entries.RemoveAll(entry => entry.Source != "手動");
                 copy = Object.Instantiate(source); copy.hideFlags = HideFlags.HideAndDontSave;
                 copy.transform.SetPositionAndRotation(Vector3.zero, Quaternion.identity);
                 copy.transform.localScale = Vector3.one;

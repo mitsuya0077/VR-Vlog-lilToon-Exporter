@@ -1,4 +1,5 @@
 using System;
+using System.Collections;
 using System.IO;
 using System.Linq;
 using System.Threading.Tasks;
@@ -8,6 +9,7 @@ using UniVRM10;
 using UnityEditor;
 using UnityEditor.Animations;
 using UnityEngine;
+using UnityEngine.TestTools;
 using Object = UnityEngine.Object;
 
 namespace VRVlog.LilToonExporter.Tests
@@ -255,6 +257,148 @@ namespace VRVlog.LilToonExporter.Tests
                 Assert.That(fixture.Source.transform.Find("Front").GetComponent<SkinnedMeshRenderer>().GetBlendShapeWeight(0), Is.EqualTo(35));
             }
             finally { AssetDatabase.DeleteAsset(folder); }
+        }
+
+        [TestCase("constant")]
+        [TestCase("moving")]
+        [TestCase("neutral")]
+        public void ExplicitClipsMatchNativeValuesWithoutEvaluatingUnrelatedControllers(string mode)
+        {
+            using var fixture = new AttachmentConnectionTests.Fixture();
+            var clip = new AnimationClip { name = "Authored face" };
+            var controller = new AnimatorController();
+            var machine = new AnimatorStateMachine(); var state = machine.AddState("Unknown unrelated idle");
+            state.AddStateMachineBehaviour<UnknownStateCallbackProbe>();
+            controller.layers = new[] { new AnimatorControllerLayer { name = "Unrelated tail", stateMachine = machine } };
+            fixture.Source.GetComponent<Animator>().runtimeAnimatorController = controller;
+            var tail = new GameObject("Tail"); tail.transform.SetParent(fixture.Source.transform);
+            tail.transform.localRotation = Quaternion.Euler(0, 0, 359.9999f);
+            var weight = mode == "neutral" ? 35 : 75;
+            AnimationUtility.SetEditorCurve(clip, EditorCurveBinding.FloatCurve("Front", typeof(SkinnedMeshRenderer), "blendShape.Hair detail"),
+                mode == "moving" ? AnimationCurve.Linear(0, 35, 1, 75) : AnimationCurve.Constant(0, 1, weight));
+            GameObject native = null;
+            try
+            {
+                using var session = new ExperimentalExpressionCaptureSession(fixture.Source, replayInstalledDefaults: false);
+                Assert.That(session.RecommendClips(), Is.Empty, "A name does not make an unreferenced clip a recommendation.");
+                session.SetWeight(1, 0, 99);
+                session.PreviewClip(clip, .5f);
+                native = Object.Instantiate(fixture.Source); native.GetComponent<Animator>().runtimeAnimatorController = null;
+                clip.SampleAnimation(native, .5f);
+                Assert.That(session.Channels.First(channel => channel.Path == "Front").Renderer.GetBlendShapeWeight(0),
+                    Is.EqualTo(native.transform.Find("Front").GetComponent<SkinnedMeshRenderer>().GetBlendShapeWeight(0)).Within(.001));
+                Assert.That(session.Channels.First(channel => channel.Path == "Back").Renderer.GetBlendShapeWeight(0), Is.EqualTo(35), "Unspecified curves always start from the baseline.");
+                var inputs = new[] { new ExperimentalExpressionCaptureSession.ClipInput { Clip = clip, Name = "Explicit", Time = .5f } };
+                Assert.That(session.ImportClips(inputs).Imported, Is.EqualTo(new[] { "Explicit" }));
+                Assert.That(session.ImportClips(inputs).Imported, Is.Empty);
+                session.LoadSettings(session.SaveSettings()); session.PreviewRecorded(session.Expressions.Single());
+                Assert.That(fixture.Source.transform.Find("Front").GetComponent<SkinnedMeshRenderer>().GetBlendShapeWeight(0), Is.EqualTo(35));
+                Assert.That(state.behaviours.Length, Is.EqualTo(1));
+            }
+            finally { Object.DestroyImmediate(native); Object.DestroyImmediate(clip); Object.DestroyImmediate(controller); Object.DestroyImmediate(machine); }
+        }
+
+        [TestCase("bone")]
+        [TestCase("material")]
+        [TestCase("display")]
+        [TestCase("reference")]
+        [TestCase("missing")]
+        [TestCase("event")]
+        [TestCase("wrong-shape")]
+        [TestCase("bad-time")]
+        public void ExplicitClipErrorsNeverPartiallyRecordOrAlterThePreview(string mode)
+        {
+            using var fixture = new AttachmentConnectionTests.Fixture();
+            using var session = new ExperimentalExpressionCaptureSession(fixture.Source, false);
+            var valid = new AnimationClip(); var invalid = new AnimationClip();
+            var binding = EditorCurveBinding.FloatCurve("Front", typeof(SkinnedMeshRenderer), "blendShape.Hair detail");
+            AnimationUtility.SetEditorCurve(valid, binding, AnimationCurve.Constant(0, 1, 80));
+            AnimationUtility.SetEditorCurve(invalid, binding, AnimationCurve.Constant(0, 1, 65));
+            if (mode == "bone") AnimationUtility.SetEditorCurve(invalid, EditorCurveBinding.FloatCurve("Head", typeof(Transform), "localEulerAnglesRaw.x"), AnimationCurve.Constant(0, 1, 15));
+            if (mode == "material") AnimationUtility.SetEditorCurve(invalid, EditorCurveBinding.FloatCurve("Front", typeof(SkinnedMeshRenderer), "material._Color.r"), AnimationCurve.Constant(0, 1, .3f));
+            if (mode == "display") AnimationUtility.SetEditorCurve(invalid, EditorCurveBinding.FloatCurve("Front", typeof(SkinnedMeshRenderer), "m_Enabled"), AnimationCurve.Constant(0, 1, 0));
+            if (mode == "reference") AnimationUtility.SetObjectReferenceCurve(invalid, EditorCurveBinding.PPtrCurve("Front", typeof(SkinnedMeshRenderer), "m_Materials.Array.data[0]"), new[] { new ObjectReferenceKeyframe { time = 0, value = fixture.Source.transform.Find("Front").GetComponent<SkinnedMeshRenderer>().sharedMaterial } });
+            if (mode == "missing" || mode == "wrong-shape") AnimationUtility.SetEditorCurve(invalid,
+                EditorCurveBinding.FloatCurve(mode == "missing" ? "Missing" : "Front", typeof(SkinnedMeshRenderer), mode == "wrong-shape" ? "blendShape.Missing" : "blendShape.Hair detail"), AnimationCurve.Constant(0, 1, 65));
+            if (mode == "event") AnimationUtility.SetAnimationEvents(invalid, new[] { new AnimationEvent { functionName = "MustNeverRun", time = .1f } });
+            try
+            {
+                session.SetWeight(0, 0, 50);
+                var time = mode == "bad-time" ? float.NaN : 0;
+                Assert.That(session.ClipError(invalid, time), Is.Not.Null);
+                Assert.Throws<InvalidOperationException>(() => session.PreviewClip(invalid, time));
+                Assert.Throws<InvalidOperationException>(() => session.ImportClips(new[] {
+                    new ExperimentalExpressionCaptureSession.ClipInput { Clip = valid, Name = "Valid" },
+                    new ExperimentalExpressionCaptureSession.ClipInput { Clip = invalid, Name = "Invalid", Time = time } }));
+                Assert.That(session.Expressions, Is.Empty);
+                Assert.That(session.Channels[0].Renderer.GetBlendShapeWeight(0), Is.EqualTo(50));
+            }
+            finally { Object.DestroyImmediate(valid); Object.DestroyImmediate(invalid); }
+        }
+
+        [Test]
+        public void RecommendationsFollowActualMergeAnimatorReferencesInsteadOfScanningByName()
+        {
+            using var fixture = new AttachmentConnectionTests.Fixture();
+            var folderName = "__ExplicitRecommendations_" + Guid.NewGuid().ToString("N");
+            AssetDatabase.CreateFolder("Assets", folderName); var folder = "Assets/" + folderName;
+            try
+            {
+                var controller = AnimatorController.CreateAnimatorControllerAtPath(folder + "/Faces.controller");
+                var clip = new AnimationClip { name = "An arbitrary user name" };
+                AnimationUtility.SetEditorCurve(clip, EditorCurveBinding.FloatCurve("Front", typeof(SkinnedMeshRenderer), "blendShape.Hair detail"), AnimationCurve.Constant(0, 1, 70));
+                AssetDatabase.AddObjectToAsset(clip, controller); controller.layers[0].stateMachine.AddState("Face").motion = clip;
+                var mergeType = Sdk("nadena.dev.modular_avatar.core.ModularAvatarMergeAnimator");
+                Assert.That(mergeType, Is.Not.Null, "This experiment uses the real Modular Avatar integration.");
+                var merge = fixture.Source.AddComponent(mergeType);
+                using (var data = new SerializedObject(merge))
+                {
+                    data.FindProperty("animator").objectReferenceValue = controller;
+                    data.ApplyModifiedPropertiesWithoutUndo();
+                }
+                using var session = new ExperimentalExpressionCaptureSession(fixture.Source, false);
+                Assert.That(session.RecommendClips().Any(item => item.Clip == clip), Is.True);
+            }
+            finally { AssetDatabase.DeleteAsset(folder); }
+        }
+
+        [UnityTest] public IEnumerator OneExplicitClipCanBeDroppedAndPreviewed() => VerifyExplicitDrop(1);
+        [UnityTest] public IEnumerator FourExplicitClipsCanBeDroppedAndRecorded() => VerifyExplicitDrop(4);
+
+        static IEnumerator VerifyExplicitDrop(int count)
+        {
+            using var fixture = new AttachmentConnectionTests.Fixture();
+            var flags = System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic;
+            var type = typeof(ExperimentalExpressionCaptureWindow);
+            var window = ScriptableObject.CreateInstance<ExperimentalExpressionCaptureWindow>();
+            var clips = Enumerable.Range(0, count).Select(index => new AnimationClip { name = "Dropped face " + index }).ToArray();
+            for (var index = 0; index < clips.Length; index++) AnimationUtility.SetEditorCurve(clips[index],
+                EditorCurveBinding.FloatCurve("Front", typeof(SkinnedMeshRenderer), "blendShape.Hair detail"), AnimationCurve.Constant(0, 1, 70 + index));
+            try
+            {
+                window.position = new Rect(40, 40, 700, 1100); window.Show();
+                type.GetField("source", flags).SetValue(window, fixture.Source);
+                type.GetMethod("Prepare", flags).Invoke(window, null);
+                for (var frame = 0; frame < 8; frame++) { window.Repaint(); yield return null; }
+                var drop = (Rect)type.GetField("expressionDropRect", flags).GetValue(window);
+                Assert.That(drop.height, Is.EqualTo(42));
+                DragAndDrop.PrepareStartDrag(); DragAndDrop.objectReferences = clips.Cast<Object>().ToArray();
+                window.SendEvent(new Event { type = EventType.DragUpdated, mousePosition = drop.center });
+                window.SendEvent(new Event { type = EventType.DragPerform, mousePosition = drop.center });
+                for (var frame = 0; frame < 8; frame++) { window.Repaint(); yield return null; }
+                var inputs = (System.Collections.Generic.List<ExperimentalExpressionCaptureSession.ClipInput>)type.GetField("clipInputs", flags).GetValue(window);
+                Assert.That(inputs.Count, Is.EqualTo(count), "Actual IMGUI drag events must add the selected files.");
+                Assert.That(inputs.All(input => input.Error == null && input.Selected), Is.True);
+                var session = (ExperimentalExpressionCaptureSession)type.GetField("session", flags).GetValue(window);
+                Assert.That(session.Channels.First(channel => channel.Path == "Front").Renderer.GetBlendShapeWeight(0), Is.EqualTo(70 + count - 1), "Adding a valid file previews it.");
+                Assert.That(session.ImportClips(inputs).Imported.Count, Is.EqualTo(count));
+                Assert.That(fixture.Source.transform.Find("Front").GetComponent<SkinnedMeshRenderer>().GetBlendShapeWeight(0), Is.EqualTo(35));
+            }
+            finally
+            {
+                DragAndDrop.objectReferences = Array.Empty<Object>(); window.Close();
+                foreach (var clip in clips) Object.DestroyImmediate(clip);
+            }
         }
 
         [Test]
