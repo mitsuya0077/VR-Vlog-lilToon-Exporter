@@ -346,7 +346,7 @@ namespace VRVlog.LilToonExporter.LanTransfer.Tests
                     Set(window, "error", "Distinct QR rendering failure");
                     Assert.That(window.ExtraMessage, Is.EqualTo("Distinct QR rendering failure"));
                 }
-                finally { window.Close(); }
+                finally { UnityEngine.Object.DestroyImmediate(window); }
             }
         }
 

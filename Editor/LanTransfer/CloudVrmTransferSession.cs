@@ -282,7 +282,7 @@ namespace VRVlog.LilToonExporter.LanTransfer
         }
         // Only controlled text and a status code reach the UI. Exception messages,
         // paths, server bodies, QR contents and credentials never do.
-        private sealed class SafeTransferFailure : Exception
+        private sealed class SafeTransferFailure : InvalidDataException
         { internal SafeTransferFailure(string message) : base(message) { } }
         private static string SafeFailureMessage(Exception exception, string stage)
         {
