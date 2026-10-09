@@ -54,16 +54,17 @@ namespace VRVlog.LilToonExporter
         bool applied, disposed;
 
         internal static ExportOptimizationBindings Capture(GameObject clone, VrmTrackingProfile trackingProfile = null,
-            UnifiedExpressionPreparation preparation = null, object objectRegistry = null, NeutralShapeSnapshot neutral = null)
+            UnifiedExpressionPreparation preparation = null, object objectRegistry = null, NeutralShapeSnapshot neutral = null,
+            bool preservePreparedNeutral = false)
         {
             if (clone == null) throw new ArgumentNullException(nameof(clone));
             ExportRendererSelection.RequireActiveRoot(clone);
             if (EditorUtility.IsPersistent(clone)) throw new ArgumentException("An independent export copy is required.", nameof(clone));
-            return new ExportOptimizationBindings(clone, trackingProfile, preparation, objectRegistry, neutral);
+            return new ExportOptimizationBindings(clone, trackingProfile, preparation, objectRegistry, neutral, preservePreparedNeutral);
         }
 
         ExportOptimizationBindings(GameObject clone, VrmTrackingProfile trackingProfile, UnifiedExpressionPreparation preparation,
-            object objectRegistry, NeutralShapeSnapshot neutral)
+            object objectRegistry, NeutralShapeSnapshot neutral, bool preservePreparedNeutral)
         {
             avatar = clone;
             this.objectRegistry = objectRegistry;
@@ -111,7 +112,7 @@ namespace VRVlog.LilToonExporter
                 }
                 marker.Morphs = morphs.Values.ToArray();
                 marker.Materials = materials.Values.ToArray();
-                if (neutral != null) ProtectRebasedNeutral(neutral);
+                if (neutral != null) ProtectRebasedNeutral(neutral, preservePreparedNeutral);
                 marker.Dependencies = marker.Dependencies.Concat(marker.PropertyMutations
                     .Select(mutation => (Component)mutation.Renderer)).Distinct().ToArray();
             }
@@ -131,7 +132,7 @@ namespace VRVlog.LilToonExporter
             name.StartsWith("__VRVlog_Anim_", StringComparison.Ordinal) || name.StartsWith("__VRVlog_Blink_", StringComparison.Ordinal) ||
             name.StartsWith("__VRVlog_BlinkNone_", StringComparison.Ordinal) || name.StartsWith(UnifiedExpressionRegistry.RestPrefix, StringComparison.Ordinal));
 
-        internal void ProtectRebasedNeutral(NeutralShapeSnapshot neutral)
+        internal void ProtectRebasedNeutral(NeutralShapeSnapshot neutral, bool preservePreparedNeutral = false)
         {
             if (neutral == null || neutral.Root != avatar)
                 throw new ArgumentException("The neutral snapshot must belong to this export copy.", nameof(neutral));
@@ -147,7 +148,7 @@ namespace VRVlog.LilToonExporter
             foreach (var state in neutral.Renderers)
                 for (var index = 0; index < state.Weights.Length; index++)
                 {
-                    if (state.Weights[index] == 0f) continue;
+                    if (state.Weights[index] == 0f && !preservePreparedNeutral) continue;
                     var shape = state.OriginalMesh.GetBlendShapeName(index);
                     var renderer = state.Renderer;
                     var current = renderer != null && renderer.sharedMesh != null
@@ -158,7 +159,8 @@ namespace VRVlog.LilToonExporter
                     // Its committed FX curve still describes the old absolute
                     // weight. Declare our owned residual channel mutable so AAO
                     // cannot infer and bake that stale constant a second time.
-                    // Unconsumed zero channels remain eligible for auto-freeze.
+                    // Retaining prepared neutral also protects zero channels:
+                    // AAO must not reconstruct omitted startup FX via freezing.
                     Add(renderer, new[] { "blendShape." + shape });
                 }
             marker.PropertyMutations = mutations.Select(pair => new OptimizationPropertyMutation {

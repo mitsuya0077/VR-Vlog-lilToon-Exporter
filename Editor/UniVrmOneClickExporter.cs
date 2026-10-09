@@ -144,27 +144,10 @@ namespace VRVlog.LilToonExporter
                         preparedMenuBindings.ExcludesPreparedPath, faceEmoBindings);
                     poses.CollectPrepared(clone, warnings, preparedMenuPolicy);
                     recoveryReport.Stage = "基準形評価";
-                    var requiredBlinkMorphs = blinkOptions?.Mode == BlinkExportMode.Manual
-                        ? blink.Slots.SelectMany(slot => slot).Where(binding => binding.Weight > 0).Select(binding =>
-                            UnityEditor.EditorCurveBinding.FloatCurve(
-                                UnityEditor.AnimationUtility.CalculateTransformPath(binding.Renderer.transform, clone.transform),
-                                typeof(SkinnedMeshRenderer), "blendShape." + binding.Shape))
-                        : Enumerable.Empty<UnityEditor.EditorCurveBinding>();
-                    // NDMF can remove authoring markers. Keep the source's
-                    // explicit tracking obligations against prepared renderers.
-                    var requiredTrackingShapes = new HashSet<string>((trackingProfile?.expressions ?? Array.Empty<TrackingExpression>())
-                        .Where(expression => expression != null)
-                        .SelectMany(expression => expression.morphs ?? Array.Empty<TrackingMorph>())
-                        .Where(morph => morph != null && morph.weight > 0).Select(morph => morph.shape), StringComparer.Ordinal);
-                    var requiredTrackingMorphs = clone.GetComponentsInChildren<SkinnedMeshRenderer>(true)
-                        .Where(renderer => renderer.sharedMesh != null)
-                        .SelectMany(renderer => requiredTrackingShapes.Where(shape => !string.IsNullOrEmpty(shape) &&
-                            renderer.sharedMesh.GetBlendShapeIndex(shape) >= 0).Select(shape =>
-                            UnityEditor.EditorCurveBinding.FloatCurve(
-                                UnityEditor.AnimationUtility.CalculateTransformPath(renderer.transform, clone.transform),
-                                typeof(SkinnedMeshRenderer), "blendShape." + shape)));
-                    NeutralShapeSnapshot.Apply(clone, NeutralShapeSampler.Sample(clone,
-                        preparedMenuBindings.ExcludesPreparedPath, warnings, requiredBlinkMorphs.Concat(requiredTrackingMorphs)));
+                    // This beta retains the prepared copy's rest values. Selected
+                    // expressions still use their original FX evaluation above;
+                    // all endpoints below share this retained neutral snapshot.
+                    warnings?.Add(ExporterLocalization.T("このベータ版ではFXの初期状態の復元を省略し、書き出し用コピーの設定を基本の顔・体形として保存しました。VRChatでの通常時の見た目と異なる場合があります。"));
                     AvatarBaseShape.NormalizeSourceWeights(clone, UnityEditor.PlayerSettings.legacyClampBlendShapeWeights);
                     blink.ResolvePreparedNeutral(clone, suppressSharedTextureEmission: suppressSharedTextureEmission,
                         suppressHdrTextureEmission: suppressHdrTextureEmission);
@@ -181,7 +164,7 @@ namespace VRVlog.LilToonExporter
                         suppressSharedTextureEmission: suppressSharedTextureEmission, suppressHdrTextureEmission: suppressHdrTextureEmission) : null;
                     optimizerBindings = ExportOptimizationBindings.Capture(clone,
                         trackingProfile == null ? null : authoredEndpoints.TrackingProfile, unifiedPreparation,
-                        objectRegistry: transformed.ObjectRegistry, neutral: neutral);
+                        objectRegistry: transformed.ObjectRegistry, neutral: neutral, preservePreparedNeutral: true);
                 });
                 optimizerBindings.ValidateAndApply((copy, original) =>
                 {

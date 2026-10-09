@@ -1,5 +1,7 @@
 # VR Vlog lilToon VRM Exporter
 
+**0.11.15-beta.1** は初期FXの復元だけを一時的に省略するベータ版です。ALCOMの **Show pre-release packages** を有効にすると選択できます。MA/NDMFの前処理後コピーの値を通常顔・体形として保存するため、VRChat使用時と異なる場合があります。表情・瞬き・追跡用の変形は個別に評価します。Unity側で完全に閉眼していてFXで開眼するアバターは、Unity側の開眼設定を調整するか「瞬きなし」を選んでください。QR転送は含めません。
+
 正式版 **0.11.14** は、書き出し詳細とエラーの全文コピー・テキスト保存に対応した **VRM書き出し専用版** です。表情に使うパラメーターを初期値と同じ値へ戻すだけの追加Playableによって、書き出しが止まる問題の修正も含みます。全ての書き込み元と初期値のメタデータを検査し、値を変えないSDKのSet処理や、独立した通常入力で到達しない書き込みだけを扱います。QR転送の実装と転送ガイドは配布パッケージに含めません。QR転送は別のβ版 **0.11.12-beta.1** で利用できます。
 
 0.11.14では、LocomotionなどFX以外のPlayable LayerとFXが同じBlendShapeを使う場合に、初期表情の確定で書き出しが止まる問題を修正しました。影響する表情のまとまりは書き出し用コピーの現在の設定を保持し、対象と理由を警告に表示します。独立した初期表情は引き続き評価し、元のアバターやControllerは変更しません。
@@ -12,7 +14,7 @@ VCC／ALCOMのパッケージ一覧から **0.11.14** を選択してくださ�
 
 lilToonのアバターを、iPhoneのVR Vlogで使うVRM 1.0に書き出すUnity用パッケージです。
 
-PhysBoneの重複は元の静止姿勢を残して担当を分け、左右別メッシュの瞬きや最適化後の空メッシュも扱います。揺れ方はVRM向けの近似となる場合があります。[保持する内容と検証方針](../Compatibility/AvatarPreservation.md)を確認してください。
+PhysBoneの重複は元の静止姿勢を残して担当を分け、左右別メッシュの瞬きや最適化後の空メッシュも扱います。揺れ方はVRM向けの近似となる場合があります。[保持する内容と検証方針](https://github.com/mitsuya0077/VR-Vlog-lilToon-Exporter/blob/v0.11.14/Compatibility/AvatarPreservation.md)を確認してください。
 
 ## 必要な環境
 
@@ -86,3 +88,7 @@ Aim・Rotation Constraintが有効かつロックされ、回転の全軸を完�
 lilToon専用表示のレイヤー合成には、書き出し元のUnityプロジェクトの色空間も必要です。Exporterは`asset.extras.VRVLOG_lilToonColorSpace`に`linear`または`gamma`を保存します。色・画像・alpha・マスク・UVの値は変更せず、既存のschema 2.0とMToon標準表示を維持します。
 
 対応するVR Vlogでは、Linearで作った2nd／3rdの重ね合わせをGammaのアプリでもLinearで計算します。出力元の情報がない旧VRMはVRChatのLinearワークフローを前提に読み込みます。旧ExporterでGammaプロジェクトから書き出したVRMは、対応版のExporterで書き出し直す必要があります。透明材質を背景に合成する工程や照明全体をLinearへ変更する修正ではありません。
+
+## 脆弱性の報告
+
+脆弱性は[セキュリティポリシー](https://github.com/mitsuya0077/VR-Vlog-lilToon-Exporter/security/policy)に従い、[GitHubの非公開報告](https://github.com/mitsuya0077/VR-Vlog-lilToon-Exporter/security/advisories/new)から管理者へ連絡してください（GitHubへのログインが必要です）。再現手順や悪用条件を公開Issue・PRへ投稿しないでください。

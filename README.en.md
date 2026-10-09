@@ -1,3 +1,5 @@
+> **0.11.15-beta.1** temporarily skips initial FX reconstruction. Enable **Show pre-release packages** in ALCOM. The prepared MA/NDMF copy supplies the neutral face and body, which may differ from VRChat. Individual expressions, blink and tracking endpoints remain evaluated. If the saved Unity avatar has fully closed eyes that FX normally opens, adjust its saved open-eye settings or select no blink. This beta includes file export only, without QR transfer.
+
 # VR Vlog lilToon VRM Exporter
 
 [日本語](README.md) · [English](README.en.md)
@@ -79,6 +81,8 @@ Most detailed user guides are currently in Japanese. The compatibility guide and
 | Source layout and local checks | [Contributing guide](CONTRIBUTING.md) |
 
 ## Help and contributions
+
+Report vulnerabilities using the [private reporting instructions](SECURITY.md). Keep vulnerability reproduction details and exploit conditions out of public issues and pull requests.
 
 Use **VR Vlog → 動作環境を確認** to inspect installed package versions. Export details explain unsupported items and possible next steps.
 

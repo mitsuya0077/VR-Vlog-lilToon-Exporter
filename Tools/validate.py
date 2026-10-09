@@ -26,7 +26,7 @@ listing = json.loads((root / "source.json").read_text(encoding="utf-8"))
 
 assert package["name"] == "com.vrvlog.liltoon-vrm-exporter"
 assert package["unity"] == "2022.3"
-assert package["version"] == "0.11.14"
+assert package["version"] == "0.11.15-beta.1"
 assert one_click.index("AvatarBaseShape.Preserve(clone, clone,") < one_click.index("Vrm10AppearanceExporter.Export(")
 assert "foreach (var mesh in temporaryMeshes) UnityEngine.Object.DestroyImmediate(mesh);" in one_click
 assert package["vpmDependencies"] == {
@@ -197,7 +197,7 @@ assert "Vrm10AppearanceExporter.Export" in one_click
 assert one_click.index("NdmfExportPreparation.ValidateSource(source, exclusions.Contains, deferUnresolvedTargets: true)") < one_click.index("VrChatExpressionMenu.Read(source,")
 assert one_click.index("UnityEngine.Object.Instantiate(source)") < one_click.index("NdmfExportPreparation.ValidateCopy(source, clone,") < one_click.index("MaAppearanceSnapshot.Apply(source, clone,")
 assert "target => exclusions.ContainsCopyTransform(clone, target)" in one_click
-assert one_click.index("VrChatExpressionSampler.Analyze(clone,") < one_click.index("FaceEmoExpressions.ApplyPreparedDefaultFace(clone,") < one_click.index("NeutralShapeSnapshot.Apply(clone,") < one_click.index("preparedMenuBindings.Capture(menu)") < one_click.index("VrChatExpressionBaker.Bake(null, clone,") < one_click.index("ExportOptimizationBindings.Capture(clone,")
+assert one_click.index("VrChatExpressionSampler.Analyze(clone,") < one_click.index("FaceEmoExpressions.ApplyPreparedDefaultFace(clone,") < one_click.index("NeutralShapeSnapshot.Capture(clone)") < one_click.index("preparedMenuBindings.Capture(menu)") < one_click.index("VrChatExpressionBaker.Bake(null, clone,") < one_click.index("ExportOptimizationBindings.Capture(clone,")
 assert "VrChatExpressionSampler.ApplyMergedDefaults(source, clone," not in one_click
 assert one_click.index("optimizerBindings.ValidateAndApply(") < one_click.index("LilToonFullSnapshot.Capture(clone,") < one_click.index("Vrm10AppearanceExporter.Export(")
 assert one_click.index("NdmfExportPreparation.Prepare(source, clone,") < one_click.index("VrChatExpressionBaker.Bake(null, clone,")
@@ -267,9 +267,14 @@ assert 'Built ZIP differs from the validated release candidate' in release_workf
 assert 'RELEASE_CHANNEL: ${{ inputs.channel }}' in release_workflow
 assert 'python3 Tools/release_policy.py > release-flags.txt' in release_workflow
 assert '"${release_flags[@]}"' in release_workflow
+import importlib.util
+runner_spec = importlib.util.spec_from_file_location("validation_runner", root / "Tools/run-validation.py")
+validation_runner = importlib.util.module_from_spec(runner_spec)
+runner_spec.loader.exec_module(validation_runner)
 for script in ("Tools/test-release-policy.py", "Tools/test-listing.py"):
-    assert f"python3 {script}" in release_workflow
-    assert f"python3 {script}" in (root / ".github/workflows/validate.yml").read_text(encoding="utf-8")
+    assert [str(__import__('sys').executable), script] in validation_runner.plan()
+for workflow_name in ("validate.yml", "release-vpm.yml", "release-candidate.yml"):
+    assert 'python3 Tools/run-validation.py --report work/validation.json' in (root / ".github/workflows" / workflow_name).read_text(encoding="utf-8")
 assert 'tag v${VERSION} already exists' in release_workflow
 assert 'git ls-remote --exit-code --tags origin' in release_workflow
 assert 'gh workflow run build-listing.yml --repo "$GITHUB_REPOSITORY" --ref main' in release_workflow

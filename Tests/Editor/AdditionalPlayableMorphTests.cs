@@ -353,7 +353,7 @@ namespace VRVlog.LilToonExporter.Tests
                     blinkOptions: new BlinkExportOptions { Mode = BlinkExportMode.None });
                 imported = await Vrm10.LoadBytesAsync(bytes, canLoadVrm0X: false, awaitCaller: new ImmediateCaller());
                 Assert.That(imported, Is.Not.Null); Assert.That(imported.Vrm.Expression.CustomClips.Any(value => value.name == endpoint.name), Is.True);
-                Assert.That(warnings.Any(value => value.Contains("Locomotion") && value.Contains("blendShape.Mouth") && value.Contains("設定を保持")), Is.True,
+                Assert.That(warnings.Any(value => value.Contains("このベータ版ではFXの初期状態の復元を省略")), Is.True,
                     string.Join("\n", warnings));
                 var key = ExpressionKey.CreateCustom(endpoint.name);
                 foreach (var weight in new[] { 0f, 1f, 0f })
@@ -363,7 +363,7 @@ namespace VRVlog.LilToonExporter.Tests
                     {
                         var expected = reference.transform.Find(path).GetComponent<SkinnedMeshRenderer>();
                         expected.SetBlendShapeWeight(0, weight == 0 ? 17 : 80);
-                        expected.SetBlendShapeWeight(1, 23); expected.SetBlendShapeWeight(2, 100);
+                        expected.SetBlendShapeWeight(1, 23); expected.SetBlendShapeWeight(2, 31);
                         var actual = imported.GetComponentsInChildren<SkinnedMeshRenderer>().Single(value => value.name == path);
                         var expectedVertices = Vertices(expected); var actualVertices = Vertices(actual);
                         Assert.That(actualVertices.Length, Is.EqualTo(expectedVertices.Length));

@@ -92,6 +92,22 @@ class PackageTests(unittest.TestCase):
             with self.subTest(invalid=version), self.assertRaisesRegex(ValueError, "semantic version"):
                 package.prerelease(version)
 
+    def test_export_only_beta_excludes_transfer_without_changing_its_channel(self):
+        self.write("package.json", json.dumps({"name": "com.vrvlog.liltoon-vrm-exporter",
+                                             "version": "0.11.15-beta.1", "vrvlogCloudTransfer": False}))
+        names = set(package.build(self.root, self.root / "export-only-beta.zip"))
+        self.assertTrue(package.prerelease("0.11.15-beta.1"))
+        self.assertFalse(package.TRANSFER_DLL_PATHS & names)
+        self.assertNotIn("Documentation~/CloudTransfer.md", names)
+
+    def test_transfer_metadata_rejects_non_boolean_values(self):
+        for value in (None, "false", 0, 1, []):
+            with self.subTest(value=value):
+                self.write("package.json", json.dumps({"name": "com.vrvlog.liltoon-vrm-exporter",
+                                                     "version": "0.11.15-beta.1", "vrvlogCloudTransfer": value}))
+                with self.assertRaisesRegex(ValueError, "must be a boolean"):
+                    package.build(self.root, self.root / "invalid-transfer.zip")
+
     def test_stable_excludes_transfer_sources_dlls_guides_and_development_define(self):
         self.version("0.11.12")
         excluded = package.TRANSFER_FILES | {name + ".meta" for name in package.TRANSFER_FILES} | package.TRANSFER_DLL_PATHS | {

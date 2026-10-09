@@ -607,6 +607,13 @@ namespace VRVlog.LilToonExporter.Tests
 
         [Test]
         public void InstalledAvatarOptimizerPreservesRebasedNeutralAndStillFreezesUnconsumedZeroChannel()
+            => VerifyInstalledPreparedNeutral(false);
+
+        [Test]
+        public void InstalledAvatarOptimizerCannotRestoreOmittedFxOnPreparedZeroChannel()
+            => VerifyInstalledPreparedNeutral(true);
+
+        void VerifyInstalledPreparedNeutral(bool preservePreparedNeutral)
         {
             RequireInstalledAvatarOptimizer("TraceAndOptimize");
             var skin = Skin(source, "face", "Neutral opening");
@@ -638,7 +645,8 @@ namespace VRVlog.LilToonExporter.Tests
                 var neutralBinding = EditorCurveBinding.FloatCurve("face", typeof(SkinnedMeshRenderer), "blendShape.Neutral opening");
                 var zeroBinding = EditorCurveBinding.FloatCurve("face", typeof(SkinnedMeshRenderer), "blendShape.Unconsumed zero");
                 AnimationUtility.SetEditorCurve(clip, neutralBinding, AnimationCurve.Constant(0, 1, 75));
-                AnimationUtility.SetEditorCurve(clip, zeroBinding, AnimationCurve.Constant(0, 1, 0));
+                var omittedFxWeight = preservePreparedNeutral ? 100f : 0f;
+                AnimationUtility.SetEditorCurve(clip, zeroBinding, AnimationCurve.Constant(0, 1, omittedFxWeight));
                 var machine = controller.layers[0].stateMachine;
                 var state = machine.AddState("Neutral"); state.motion = clip; state.writeDefaultValues = false; machine.defaultState = state;
                 source.AddComponent<Animator>().runtimeAnimatorController = controller;
@@ -649,7 +657,7 @@ namespace VRVlog.LilToonExporter.Tests
                 {
                     var neutral = NeutralShapeSnapshot.Capture(clone);
                     AvatarBaseShape.Preserve(clone, clone, meshes, null);
-                    bindings = ExportOptimizationBindings.Capture(clone, neutral: neutral);
+                    bindings = ExportOptimizationBindings.Capture(clone, neutral: neutral, preservePreparedNeutral: preservePreparedNeutral);
                 });
                 bindings.ValidateAndApply();
                 var output = clone.GetComponentsInChildren<SkinnedMeshRenderer>().Single();
@@ -663,14 +671,18 @@ namespace VRVlog.LilToonExporter.Tests
                         "AAO must preserve native source neutral75 rather than reapply its old FX constant.");
                     unmatched.RemoveAt(index);
                 }
-                Assert.That(output.sharedMesh.GetBlendShapeIndex("Unconsumed zero"), Is.EqualTo(-1),
-                    "The unrelated constant-zero channel must still be frozen by the normal optimizer pass.");
+                if (preservePreparedNeutral)
+                    Assert.That(output.sharedMesh.GetBlendShapeIndex("Unconsumed zero"), Is.GreaterThanOrEqualTo(0),
+                        "Retained zero must not be replaced by AAO's constant FX weight100.");
+                else
+                    Assert.That(output.sharedMesh.GetBlendShapeIndex("Unconsumed zero"), Is.EqualTo(-1),
+                        "The unrelated constant-zero channel must still be frozen by the normal optimizer pass.");
                 Assert.That(output.sharedMesh.GetBlendShapeIndex("Neutral opening"), Is.GreaterThanOrEqualTo(0));
                 Assert.That(skin.sharedMesh, Is.SameAs(mesh));
                 Assert.That(skin.GetBlendShapeWeight(0), Is.EqualTo(75));
                 Assert.That(mesh.blendShapeCount, Is.EqualTo(3));
                 Assert.That(AnimationUtility.GetEditorCurve(clip, neutralBinding).Evaluate(0), Is.EqualTo(75));
-                Assert.That(AnimationUtility.GetEditorCurve(clip, zeroBinding).Evaluate(0), Is.Zero);
+                Assert.That(AnimationUtility.GetEditorCurve(clip, zeroBinding).Evaluate(0), Is.EqualTo(omittedFxWeight));
                 Assert.That(EditorJsonUtility.ToJson(controller), Is.EqualTo(sourceController));
             }
             finally
