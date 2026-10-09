@@ -10,7 +10,7 @@ permissions:
   contents: read
 
 concurrency:
-  group: listing-${{ github.event.pull_request.number || github.ref }}
+  group: listing-${{ github.event.pull_request.number || github.run_id }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 env:
@@ -205,6 +205,7 @@ jobs:
     concurrency:
       group: pages
       cancel-in-progress: false
+      queue: max
     environment:
       name: github-pages
       url: ${{ steps.deployment.outputs.page_url }}

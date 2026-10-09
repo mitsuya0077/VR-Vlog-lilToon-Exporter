@@ -26,7 +26,7 @@ Ordinary bug reports and proposals are public. Do not attach purchased or privat
    ```
 
    The clone option controls the initial checkout; the local setting keeps later checkouts from converting LF to CRLF. If an existing checkout already has CRLF conversion, use a separate fresh clone with these settings and preserve your local work.
-2. For Python checks, use Python 3.12, as in [Validate CI](.github/workflows/validate.yml). These checks use the Python standard library.
+2. For Python checks, use Python 3.12, as in [Validate CI](.github/workflows/validate.yml). Install the hash-pinned workflow parser as described under local checks; the remaining Python checks use the standard library.
 3. For Unity work, use a separate Unity 2022.3 project with lilToon 2.3.4 and matching supported UniGLTF / VRM packages. Follow the exact versions and prerequisites in [Compatibility/README.md](Compatibility/README.md).
 4. Add this checkout as a local package using Unity Package Manager's **Add package from disk**, selecting the root `package.json`. Avoid also installing a release copy of the exporter in that project.
 5. For Unity tests, add `"testables": ["com.vrvlog.liltoon-vrm-exporter"]` to the test project's manifest and follow the compatibility guide's Test Framework, Collections and optional integration package requirements.

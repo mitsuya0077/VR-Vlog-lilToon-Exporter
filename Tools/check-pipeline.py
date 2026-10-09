@@ -114,7 +114,9 @@ def check(name, workflow):
         require(inputs.get("expected_commit", {}).get("required") is True, name + ": expected commit required")
         job = jobs["release" if name == "release-vpm.yml" else "candidate"]
         require(job.get("if") == "github.ref == 'refs/heads/main'", name + ": main-only job required")
-        require(workflow["concurrency"].get("cancel-in-progress") is False, name + ": do not cancel publication/candidate generation")
+        group = "release-vpm" if name == "release-vpm.yml" else "release-candidate"
+        require(workflow["concurrency"] == {"group": group, "cancel-in-progress": False, "queue": "max"},
+                name + ": preserve and serialize queued manual runs")
     if name in {"validate.yml", "release-vpm.yml", "release-candidate.yml"}:
         job_name = {"validate.yml": "schema", "release-vpm.yml": "release", "release-candidate.yml": "candidate"}[name]
         require(any(step.get("run") == "python3 Tools/run-validation.py --report work/validation.json"
@@ -133,6 +135,10 @@ def check(name, workflow):
         gate = jobs["build-listing"].get("if", "")
         require(gate == PAGES_GATE,
                 "Pages manual deployment must target main")
+        require(workflow["concurrency"].get("group") == "listing-${{ github.event.pull_request.number || github.run_id }}",
+                "Do not replace pending publication workflows")
+        require(jobs["build-listing"].get("concurrency") == {"group": "pages", "cancel-in-progress": False, "queue": "max"},
+                "Preserve pending Pages deployments")
 
 
 def check_all(root=ROOT):

@@ -114,6 +114,17 @@ class WorkflowTrustTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             policy.check("release-vpm.yml", data)
 
+    def test_approved_manual_runs_cannot_replace_pending_runs(self):
+        for name in ("release-vpm.yml", "release-candidate.yml"):
+            data = self.workflow(name)
+            data["concurrency"].pop("queue")
+            with self.subTest(name=name), self.assertRaises(ValueError):
+                policy.check(name, data)
+        data = self.workflow("build-listing.yml")
+        data["jobs"]["build-listing"]["concurrency"].pop("queue")
+        with self.assertRaises(ValueError):
+            policy.check("build-listing.yml", data)
+
 
 class ValidationReceiptTests(unittest.TestCase):
     def test_commit_changed_during_checks_cannot_receive_a_success_receipt(self):
@@ -170,6 +181,33 @@ class ValidationReceiptTests(unittest.TestCase):
     def test_linter_archive_must_match_pinned_hash(self):
         with self.assertRaisesRegex(ValueError, "SHA-256"):
             lint.binary_from_archive(b"untrusted executable", "0" * 64)
+
+    def test_only_policy_checked_queue_diagnostics_are_compatible(self):
+        approved = lint.approved_queue_positions()
+        self.assertEqual(3, len(approved))
+        path, line, column = next(iter(approved))
+        allowed = {"message": lint.QUEUE_MESSAGE, "kind": "syntax-check", "filepath": path,
+                   "line": line, "column": column}
+        self.assertEqual([], lint.blocking_diagnostics([allowed], approved))
+        for change in ({"message": "other error"}, {"kind": "expression"}, {"line": line + 1},
+                       {"column": column + 1}, {"filepath": "unapproved.yml"}):
+            other = dict(allowed, **change)
+            self.assertEqual([other], lint.blocking_diagnostics([allowed, other], approved))
+        with self.assertRaises(ValueError):
+            lint.blocking_diagnostics("not a diagnostic list", approved)
+
+    def test_queue_compatibility_requires_valid_source_policy(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            (root / "Tools").mkdir()
+            (root / "Tools/check-pipeline.py").write_text((ROOT / "Tools/check-pipeline.py").read_text())
+            (root / ".github/workflows").mkdir(parents=True)
+            for source in (ROOT / ".github/workflows").glob("*.yml"):
+                (root / ".github/workflows" / source.name).write_text(source.read_text())
+            path = root / ".github/workflows/release-vpm.yml"
+            path.write_text(path.read_text().replace("queue: max", "queue: invalid"))
+            with self.assertRaises(ValueError):
+                lint.approved_queue_positions(root)
 
     def test_cost_model_is_bounded_and_distinguishes_billable_storage(self):
         cost = tool("estimate-pipeline-cost")

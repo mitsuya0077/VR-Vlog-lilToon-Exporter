@@ -29,6 +29,8 @@ workflowの編集では、構文チェックに加え、攻撃者のPRが書込�
 
 既存の `github-pages` environment・mainルール・配布承認を維持します。workflowや環境を新しく有効化すること、リポジトリの公開設定を変更すること、OSSを告知することは、この手順を整えただけで自動的に許可されません。
 
+公開・候補生成・Pages配置は `queue: max` と取消し無効で直列化し、新しいrunで待機中の承認済みrunを置き換えません。[GitHubのキュー](https://docs.github.com/en/actions/how-tos/write-workflows/choose-when-workflows-run/control-workflow-concurrency)は最大100 run待機で、満杯なら追加runは取消されます。実際の開始待ち順で処理され、dispatchした時刻の厳密な順序は保証されません。取消されたrunは原因・対象を確認して必要な承認条件を保った再実行を行います。
+
 ## 共通のhost検証
 
 Python 3.12とPowerShell 7を使います。workflow解析用のPyYAMLは版と配布ハッシュを固定しています。共有環境を変更したくない場合は専用venvへ導入してください。
@@ -39,7 +41,9 @@ python3 Tools/run-actionlint.py
 python3 Tools/run-validation.py --report work/validation.json
 ```
 
-`run-actionlint.py` はLinux x64またはmacOS Apple Silicon向けの公式1.7.11を固定ハッシュで一時展開し、終了時に除去します。他のhostは同じ版のactionlintを別途用意し、そのhostの実行を記録してください。共有SDKやキャッシュは削除しません。
+`run-actionlint.py` はLinux x64またはmacOS Apple Silicon向けの公式1.7.12を固定ハッシュで一時展開し、終了時に除去します。他のhostは同じ版のactionlintを別途用意し、そのhostの実行を記録してください。共有SDKやキャッシュは削除しません。
+
+この版のactionlintはGitHubの `queue` キーに未対応です。専用のworkflow検査を先に通し、公開・候補・Pagesの3箇所について `queue: max`・取消し無効・固定groupを確認します。そのソース位置の既知の未対応キー診断だけを扱い、他の構文・式・診断やツール失敗は検証失敗にします。上流対応後はこの限定的な互換処理を外してください。
 
 PR・main・候補・公開のhost検証は同じ `run-validation.py` で実行します。schema・公開内容・パッケージ・依存互換性・配布方針・listing・AAOパッチの既存Python検証、既存PowerShell検証、転送の4つのdefine構成を含み、最初の失敗で停止します。記録は開始時のコミット、作業コピーがcleanか、実行した相対コマンド、exit code、所要時間を含み、ログ全文や個人パスをartifactへ入れません。途中でHEADが変われば成功記録を出しません。未コミット変更のある参加者のhost検証は実行できますが、その記録を公開候補の証拠として使うことはできません。
 
