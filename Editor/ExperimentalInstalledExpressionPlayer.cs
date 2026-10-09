@@ -130,7 +130,7 @@ namespace VRVlog.LilToonExporter
                     previous = result;
                 }
                 if (settledFrames < 30) throw new InvalidOperationException("動く表情のため、一括収録の固定時刻を確定できません。");
-                ValidateStationary(playable, evaluation.Controller);
+                ValidateStationary(playable, evaluation.Controller, dependencies.Parameters, includedPaths);
                 var selectedAppearance = Appearance(copy);
                 var difference = selectedAppearance.Keys.Concat(appearance.Keys).Distinct().FirstOrDefault(key =>
                     !appearance.TryGetValue(key, out var neutralValue) || !selectedAppearance.TryGetValue(key, out var selectedValue) || neutralValue != selectedValue);
@@ -146,7 +146,7 @@ namespace VRVlog.LilToonExporter
             }
         }
 
-        static void ValidateStationary(AnimatorControllerPlayable playable, AnimatorController controller)
+        static void ValidateStationary(AnimatorControllerPlayable playable, AnimatorController controller, ISet<string> needed, ISet<string> includedPaths)
         {
             var parameters = new Dictionary<string, float>(StringComparer.Ordinal);
             foreach (var parameter in controller.parameters)
@@ -154,30 +154,27 @@ namespace VRVlog.LilToonExporter
                     parameters[parameter.name] = parameter.type == AnimatorControllerParameterType.Bool ? (playable.GetBool(parameter.name) ? 1 : 0) :
                         parameter.type == AnimatorControllerParameterType.Int ? playable.GetInteger(parameter.name) : playable.GetFloat(parameter.name);
             var layers = controller.layers;
+            bool Relevant(EditorCurveBinding binding) => binding.type == typeof(Animator) ? needed.Contains(binding.propertyName) :
+                binding.type != typeof(AudioSource) && (binding.type != typeof(SkinnedMeshRenderer) ||
+                    !binding.propertyName.StartsWith("blendShape.", StringComparison.Ordinal) || includedPaths.Contains(binding.path));
             for (var layer = 0; layer < layers.Length; layer++)
             {
                 if (layer != 0 && playable.GetLayerWeight(layer) == 0) continue;
                 if (playable.IsInTransition(layer)) throw new InvalidOperationException("遷移中の表情は固定収録できません。");
-                // Looking stable for two seconds cannot prove a delayed or
-                // looping clip is stationary. Inspect its complete curves.
-                foreach (var clip in playable.GetCurrentAnimatorClipInfo(layer).Where(info => info.weight > .00001f).Select(info => info.clip))
-                {
-                    if (AnimationUtility.GetAnimationEvents(clip).Length != 0)
-                        throw new InvalidOperationException("Animation Eventを含む表情は固定収録できません。");
-                    if (AnimationUtility.GetCurveBindings(clip).Any(binding => !VrChatExpressionSampler.IsConstant(AnimationUtility.GetEditorCurve(clip, binding))) ||
-                        AnimationUtility.GetObjectReferenceCurveBindings(clip).Any(binding => AnimationUtility.GetObjectReferenceCurve(clip, binding).Select(key => key.value).Distinct().Count() > 1))
-                        throw new InvalidOperationException("時間で変わる曲線を含む表情は固定収録できません。");
-                }
                 var owner = layer;
                 while (layers[owner].syncedLayerIndex >= 0) owner = layers[owner].syncedLayerIndex;
-                var hash = playable.GetCurrentAnimatorStateInfo(layer).fullPathHash;
-                var matched = false;
+                var stateInfo = playable.GetCurrentAnimatorStateInfo(layer);
+                var hash = stateInfo.fullPathHash;
+                // NDMF can retain an enabled empty FX layer. Unity reports no
+                // current state and no active clip; there is no timed state to inspect.
+                if (hash == 0 && playable.GetCurrentAnimatorClipInfo(layer).Length == 0) continue;
+                var matched = false; AnimatorState currentState = null;
                 void Visit(AnimatorStateMachine machine, string path)
                 {
                     foreach (var child in machine.states)
                         if (Animator.StringToHash(path + "." + child.state.name) == hash)
                         {
-                            matched = true;
+                            matched = true; currentState = child.state;
                             if (child.state.transitions.Concat(machine.anyStateTransitions).Any(transition => !transition.mute && transition.hasExitTime &&
                                 !ExpressionDependencies.IsFalse(transition, parameters)))
                                 throw new InvalidOperationException("時間で遷移する表情は固定収録できません。");
@@ -185,7 +182,22 @@ namespace VRVlog.LilToonExporter
                     foreach (var child in machine.stateMachines) Visit(child.stateMachine, path + "." + child.stateMachine.name);
                 }
                 foreach (var name in new[] { layers[layer].name, layers[owner].stateMachine.name }.Distinct()) Visit(layers[owner].stateMachine, name);
-                if (!matched) throw new InvalidOperationException("再生中の表情状態を特定できません。");
+                if (!matched) throw new InvalidOperationException("再生中の表情状態を特定できません: " + layers[layer].name + " / " + hash);
+                // Looking stable for two seconds cannot prove a delayed or
+                // looping clip is stationary. Inspect its complete curves.
+                foreach (var clip in playable.GetCurrentAnimatorClipInfo(layer).Where(info => info.weight > .00001f).Select(info => info.clip))
+                {
+                    if (AnimationUtility.GetAnimationEvents(clip).Length != 0)
+                        throw new InvalidOperationException("Animation Eventを含む表情は固定収録できません。");
+                    // A non-looping, unretimed single clip has a native held
+                    // endpoint after normalized time one. It is already complete.
+                    if (!stateInfo.loop && stateInfo.normalizedTime >= 1 && currentState.speed > 0 &&
+                        !currentState.speedParameterActive && !currentState.timeParameterActive &&
+                        controller.GetStateEffectiveMotion(currentState, layer) == clip && !clip.isLooping) continue;
+                    var varying = AnimationUtility.GetCurveBindings(clip).Where(Relevant).Where(binding => !VrChatExpressionSampler.IsConstant(AnimationUtility.GetEditorCurve(clip, binding)))
+                        .Concat(AnimationUtility.GetObjectReferenceCurveBindings(clip).Where(Relevant).Where(binding => AnimationUtility.GetObjectReferenceCurve(clip, binding).Select(key => key.value).Distinct().Count() > 1)).ToArray();
+                    if (varying.Length > 0) throw new InvalidOperationException("時間で変わる曲線を含む表情は固定収録できません: " + layers[layer].name + " / " + clip.name + " / " + varying[0].path + " / " + varying[0].propertyName);
+                }
             }
         }
 

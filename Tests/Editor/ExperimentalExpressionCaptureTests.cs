@@ -157,6 +157,7 @@ namespace VRVlog.LilToonExporter.Tests
         [TestCase("neutral")]
         [TestCase("display")]
         [TestCase("delayed")]
+        [TestCase("completed")]
         [TestCase("audio")]
         [TestCase("audio-reactive")]
         [TestCase("unknown")]
@@ -182,6 +183,8 @@ namespace VRVlog.LilToonExporter.Tests
                 if (callback == "display") AnimationUtility.SetEditorCurve(clip, EditorCurveBinding.FloatCurve("Front", typeof(SkinnedMeshRenderer), "m_Enabled"), AnimationCurve.Constant(0, 1, 0));
                 if (callback == "delayed") AnimationUtility.SetEditorCurve(clip, EditorCurveBinding.FloatCurve("Front", typeof(SkinnedMeshRenderer), "blendShape.Hair detail"),
                     new AnimationCurve(new Keyframe(0, 75), new Keyframe(10, 75), new Keyframe(11, 95)));
+                if (callback == "completed") AnimationUtility.SetEditorCurve(clip, EditorCurveBinding.FloatCurve("Front", typeof(SkinnedMeshRenderer), "blendShape.Hair detail"),
+                    new AnimationCurve(new Keyframe(0, 35), new Keyframe(1, 75)));
                 AssetDatabase.AddObjectToAsset(clip, controller); smile.motion = clip; machine.defaultState = neutral;
                 var transition = neutral.AddTransition(smile); transition.hasExitTime = false; transition.duration = 0;
                 transition.AddCondition(AnimatorConditionMode.Equals, 1, "Face");
