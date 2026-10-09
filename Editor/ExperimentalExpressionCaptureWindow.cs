@@ -425,7 +425,7 @@ namespace VRVlog.LilToonExporter
             blinkConfiguration?.Close();
             var options = automaticBlink ? configuredBlink?.Copy() ?? new BlinkExportOptions() : new BlinkExportOptions { Mode = BlinkExportMode.None };
             blinkConfiguration = BlinkConfigurationWindow.Show(source, options, selected => {
-                configuredBlink = selected.Mode == BlinkExportMode.Auto ? null : selected.Copy();
+                configuredBlink = selected.Mode == BlinkExportMode.Manual ? selected.Copy() : null;
                 automaticBlink = selected.Mode != BlinkExportMode.None;
                 Repaint();
             });

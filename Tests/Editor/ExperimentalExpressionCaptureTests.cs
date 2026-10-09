@@ -16,6 +16,63 @@ namespace VRVlog.LilToonExporter.Tests
 {
     public sealed class ExperimentalExpressionCaptureTests
     {
+        [TestCase(false)]
+        [TestCase(true)]
+        public async Task ReenablingBlinkAfterNoneRestoresAutomaticBlinkInSavedVrm(bool recordFace)
+        {
+            using var fixture = new AttachmentConnectionTests.Fixture();
+            foreach (var skin in fixture.Source.GetComponentsInChildren<SkinnedMeshRenderer>()) skin.sharedMaterial.shader = Shader.Find("lilToon");
+            var sourceSkin = fixture.Source.transform.Find("Front").GetComponent<SkinnedMeshRenderer>(); sourceSkin.SetBlendShapeWeight(0, 0);
+            var descriptorType = Sdk("VRC.SDK3.Avatars.Components.VRCAvatarDescriptor");
+            var descriptor = fixture.Source.AddComponent(descriptorType);
+            descriptorType.GetField("enableEyeLook").SetValue(descriptor, true);
+            var eyeField = descriptorType.GetField("customEyeLookSettings"); var eye = eyeField.GetValue(descriptor);
+            var lidType = eye.GetType().GetField("eyelidType"); lidType.SetValue(eye, Enum.Parse(lidType.FieldType, "Blendshapes"));
+            eye.GetType().GetField("eyelidsSkinnedMesh").SetValue(eye, sourceSkin);
+            eye.GetType().GetField("eyelidsBlendshapes").SetValue(eye, new[] { 0, -1, -1 }); eyeField.SetValue(descriptor, eye);
+            var sourceBefore = ExportSourceFingerprint.Compute(fixture.Source);
+            var flags = System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic;
+            var type = typeof(ExperimentalExpressionCaptureWindow);
+            var window = ScriptableObject.CreateInstance<ExperimentalExpressionCaptureWindow>();
+            var clip = new AnimationClip { name = "Selected face" };
+            var path = Path.Combine(Path.GetTempPath(), "vrvlog-reenabled-blink-" + Guid.NewGuid().ToString("N") + ".vrm");
+            Vrm10Instance imported = null;
+            try
+            {
+                type.GetField("source", flags).SetValue(window, fixture.Source); type.GetField("author", flags).SetValue(window, "Tests");
+                type.GetMethod("Prepare", flags).Invoke(window, null);
+                if (recordFace)
+                {
+                    AnimationUtility.SetEditorCurve(clip, EditorCurveBinding.FloatCurve("Front", typeof(SkinnedMeshRenderer), "blendShape.Hair detail"), AnimationCurve.Constant(0, 1, 65));
+                    type.GetMethod("AddClip", flags).Invoke(window, new object[] { clip });
+                }
+                type.GetMethod("ShowBlinkConfiguration", flags).Invoke(window, null);
+                var dialog = Resources.FindObjectsOfTypeAll<BlinkConfigurationWindow>().Single();
+                dialog.Options.SelectMode(BlinkExportMode.None); dialog.ApplySettings();
+                window.SaveVrm(path);
+                imported = await Vrm10.LoadBytesAsync(File.ReadAllBytes(path), canLoadVrm0X: false, awaitCaller: new ImmediateCaller());
+                Assert.That(imported.Vrm.Expression.Blink == null || imported.Vrm.Expression.Blink.MorphTargetBindings.Length == 0, Is.True);
+                Object.DestroyImmediate(imported.gameObject); imported = null;
+                // The primary IMGUI checkbox writes this same bool directly.
+                type.GetField("automaticBlink", flags).SetValue(window, true);
+                type.GetMethod("ShowBlinkConfiguration", flags).Invoke(window, null);
+                dialog = Resources.FindObjectsOfTypeAll<BlinkConfigurationWindow>().Single();
+                Assert.That(dialog.Options.Mode, Is.EqualTo(BlinkExportMode.Auto)); dialog.Close();
+                window.SaveVrm(path);
+                imported = await Vrm10.LoadBytesAsync(File.ReadAllBytes(path), canLoadVrm0X: false, awaitCaller: new ImmediateCaller());
+                Assert.That(imported.Vrm.Expression.Blink?.MorphTargetBindings, Is.Not.Empty);
+                var outputSkin = VrChatExpressionSampler.FindRenderer(imported.gameObject, imported.Vrm.Expression.Blink.MorphTargetBindings[0].RelativePath);
+                using var baked = new BlinkTestMesh();
+                imported.Runtime.Expression.SetWeight(ExpressionKey.Blink, 0); imported.Runtime.Process(); outputSkin.BakeMesh(baked.Mesh); var before = baked.Mesh.vertices;
+                imported.Runtime.Expression.SetWeight(ExpressionKey.Blink, 1); imported.Runtime.Process(); outputSkin.BakeMesh(baked.Mesh);
+                Assert.That(baked.Mesh.vertices.Zip(before, (a,b) => (a-b).sqrMagnitude).Max(), Is.GreaterThan(1e-8f));
+                imported.Runtime.Expression.SetWeight(ExpressionKey.Blink, 0); imported.Runtime.Process(); outputSkin.BakeMesh(baked.Mesh);
+                Assert.That(baked.Mesh.vertices.Zip(before, (a,b) => (a-b).sqrMagnitude).Max(), Is.LessThan(1e-8f));
+                Assert.That(ExportSourceFingerprint.Compute(fixture.Source), Is.EqualTo(sourceBefore));
+            }
+            finally { if (imported != null) Object.DestroyImmediate(imported.gameObject); Object.DestroyImmediate(window); Object.DestroyImmediate(clip); if (File.Exists(path)) File.Delete(path); }
+        }
+
         [TestCase(false, false)]
         [TestCase(true, false)]
         [TestCase(false, true)]
