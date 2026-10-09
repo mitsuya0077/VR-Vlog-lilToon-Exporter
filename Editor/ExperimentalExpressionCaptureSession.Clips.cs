@@ -138,6 +138,23 @@ namespace VRVlog.LilToonExporter
             return result;
         }
 
+        // Replace only records owned by this window's file list. Validate the
+        // complete batch before changing any record; manual/loaded faces stay.
+        internal Pose[] ReplaceClipRecords(IEnumerable<ClipInput> inputs, IEnumerable<Pose> previous)
+        {
+            RequireValid();
+            var replaced = new HashSet<Pose>(previous ?? Array.Empty<Pose>());
+            var retained = Expressions.Where(pose => !replaced.Contains(pose)).ToArray();
+            var staged = inputs.Select(input => BuildClipPose(input.Clip, input.Time, input.Name)).ToArray();
+            if (retained.Length + staged.Length > MaximumExpressions)
+                throw new InvalidOperationException("記録できる表情は64件までです。");
+            var names = new HashSet<string>(retained.Select(pose => pose.Name), StringComparer.Ordinal);
+            foreach (var pose in staged)
+                if (!names.Add(pose.Name)) throw new InvalidOperationException("表情名が重複しています。別の名前を付けてください: " + pose.Name);
+            Expressions.Clear(); Expressions.AddRange(retained); Expressions.AddRange(staged);
+            return staged;
+        }
+
         static PoseReference SavePoseReference(ManualPose pose)
         {
             if (pose.Clip == null || !AssetDatabase.TryGetGUIDAndLocalFileIdentifier(pose.Clip, out string guid, out long id) || string.IsNullOrEmpty(guid))

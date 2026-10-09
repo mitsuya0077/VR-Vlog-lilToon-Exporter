@@ -8,11 +8,16 @@ namespace VRVlog.LilToonExporter
 {
     internal sealed class ExperimentalExpressionCaptureWindow : EditorWindow
     {
-        GameObject source;
+        [SerializeField] GameObject source;
+        [SerializeField] string author = "";
+        SavedExpressionVrm saved;
+        bool showPoses, showRecords, showSetup;
+        readonly System.Collections.Generic.Dictionary<ExperimentalExpressionCaptureSession.ClipInput, ExperimentalExpressionCaptureSession.Pose> fileRecords =
+            new System.Collections.Generic.Dictionary<ExperimentalExpressionCaptureSession.ClipInput, ExperimentalExpressionCaptureSession.Pose>();
         ExperimentalExpressionCaptureSession session;
         PreviewRenderUtility preview;
         Action pending;
-        string error, status, author = "", expressionName = "笑顔", filter = "";
+        string error, status, expressionName = "笑顔", filter = "";
         Vector2 scroll;
         Vector2 pageScroll;
         Vector3 center;
@@ -34,12 +39,13 @@ namespace VRVlog.LilToonExporter
         Vector2 candidateScroll;
         [SerializeField] AvatarLicenseOptions licenseOptions = new AvatarLicenseOptions();
 
+        [MenuItem("VR Vlog/表情・ポーズを指定して書き出す", false, 110)]
         [MenuItem("VR Vlog/実験/表情を記録して書き出す", false, 150)]
         internal static void Open()
         {
             var window = GetWindow<ExperimentalExpressionCaptureWindow>();
-            window.titleContent = new GUIContent("表情の記録（実験）");
-            window.minSize = new Vector2(520, 720);
+            window.titleContent = new GUIContent("表情・ポーズ書き出し");
+            window.minSize = new Vector2(580, 720);
         }
 
         void OnEnable() { EditorApplication.update += Advance; }
@@ -60,21 +66,23 @@ namespace VRVlog.LilToonExporter
         void OnGUI()
         {
             pageScroll = EditorGUILayout.BeginScrollView(pageScroll);
-            EditorGUILayout.HelpBox("表情の.animを追加 → プレビュー → 表情を記録 → VRMを書き出す。ポーズも別の欄から同梱できます。", MessageType.Info);
+            EditorGUILayout.LabelField("表情・ポーズを指定してVRMを書き出す", EditorStyles.boldLabel);
+            EditorGUILayout.LabelField("① アバターを指定　→　② 表情を確認　→　③ 保存・QR転送", EditorStyles.wordWrappedLabel);
+            EditorGUILayout.Space(8);
+            if (EditorApplication.isPlayingOrWillChangePlaymode)
+                EditorGUILayout.HelpBox("Playモードを終了すると編集できます。", MessageType.Info);
             using (new EditorGUI.DisabledScope(pending != null || EditorApplication.isPlayingOrWillChangePlaymode))
             {
                 EditorGUILayout.LabelField("1. アバターを読み込む", EditorStyles.boldLabel);
                 using (new EditorGUI.DisabledScope(session != null))
                     source = (GameObject)EditorGUILayout.ObjectField("アバター", source, typeof(GameObject), true);
-                author = EditorGUILayout.TextField("作者名", author);
-                if (licenseOptions == null) licenseOptions = new AvatarLicenseOptions();
-                AvatarLicenseSettingsUi.Draw(ref showLicenseSettings, licenseOptions);
-                using (new EditorGUI.DisabledScope(source == null))
-                    if (GUILayout.Button(session == null ? "アバターを読み込む" : "コピーを作り直す"))
-                    {
-                        if (session == null || EditorUtility.DisplayDialog("コピーを作り直す", "未保存の記録がある場合は失われます。設定を保存してから作り直してください。", "作り直す", "戻る"))
-                            Queue(Prepare);
-                    }
+                if (session == null)
+                {
+                    EditorGUILayout.LabelField("Hierarchyからアバターの一番上のオブジェクトを指定します。", EditorStyles.wordWrappedMiniLabel);
+                    using (new EditorGUI.DisabledScope(source == null))
+                        if (GUILayout.Button("このアバターの表情を準備", GUILayout.Height(32))) Queue(Prepare);
+                    if (source == null) EditorGUILayout.HelpBox("アバターを指定すると次へ進めます。", MessageType.None);
+                }
                 if (session != null && preview != null)
                 {
                     if (GUILayout.Button("別のアバターを選ぶ") && (session.Expressions.Count == 0 ||
@@ -116,14 +124,15 @@ namespace VRVlog.LilToonExporter
                 preview.lights[1].intensity = .5f; preview.ambientColor = Color.gray;
                 rendererIndex = candidateIndex = 0; candidateTime = 0; yaw = 0; zoom = 1;
                 previewName = "基準の顔";
-                status = "表情の.animをドロップするか、候補ファイルの「追加」を押してください。";
+                status = "表情ファイルを追加してください。FaceEmoの候補からも選べます。";
+                saved = null;
             }
             catch { Cleanup(); throw; }
         }
 
         void DrawSession()
         {
-            var rect = GUILayoutUtility.GetRect(100, 220, GUILayout.ExpandWidth(true));
+            var rect = GUILayoutUtility.GetRect(100, 200, GUILayout.ExpandWidth(true));
             if (Event.current.type == EventType.Repaint)
             {
                 preview.BeginPreview(rect, GUIStyle.none);
@@ -142,7 +151,7 @@ namespace VRVlog.LilToonExporter
             if (GUILayout.Button("基準の顔に戻す")) Queue(() => { session.RestoreBaseline(); previewName = "基準の顔"; });
             DrawClipInputs();
             DrawPoseInputs();
-            showLegacy = EditorGUILayout.Foldout(showLegacy, "従来のメニューから自動取込（詳細）", true);
+            showLegacy = EditorGUILayout.Foldout(showLegacy, "詳細：メニュー全体から自動取込", true);
             if (showLegacy)
             {
                 EditorGUILayout.HelpBox("Animator全体の再現が必要な表情向けです。しっぽ等の回転差で取得不可になる場合は、上の表情ファイル指定を使ってください。", MessageType.Info);
@@ -173,6 +182,8 @@ namespace VRVlog.LilToonExporter
                         selectedCandidates.TryGetValue(candidate, out var selectedValue);
                         selectedCandidates[candidate] = EditorGUILayout.ToggleLeft(candidate.Name, selectedValue);
                     }
+                    if (candidate.Error != null || candidate.Unevaluated.Count != 0 || candidate.Animation.Count != 0)
+                        EditorGUILayout.LabelField(candidate.Error ?? "固定した顔として取得できません。上の表情ファイル指定を使ってください。", EditorStyles.wordWrappedMiniLabel);
                 }
                 EditorGUILayout.EndScrollView();
                 if (GUILayout.Button("選んだ表情をまとめて取り込む")) Queue(() => {
@@ -183,7 +194,7 @@ namespace VRVlog.LilToonExporter
             }
 
             }
-            showManual = EditorGUILayout.Foldout(showManual, "BlendShapeの手動調整・基準の顔（詳細）", true);
+            showManual = EditorGUILayout.Foldout(showManual, "詳細：顔の手動調整・基準の顔", true);
             if (showManual)
             {
                 if (GUILayout.Button("プレビュー中の顔を基準にする")) Queue(() => { session.CaptureBaseline(); status = "基準の顔を更新しました。未指定の変形はこの顔から補います。"; });
@@ -209,32 +220,82 @@ namespace VRVlog.LilToonExporter
 
             }
             EditorGUILayout.Space();
-            EditorGUILayout.LabelField("4. 記録した表情を確認・書き出す", EditorStyles.boldLabel);
-            EditorGUILayout.LabelField("記録した表情: " + session.Expressions.Count + "件");
-            foreach (var pose in session.Expressions.ToArray())
+            EditorGUILayout.LabelField("3. VRMを保存してスマホで使う", EditorStyles.boldLabel);
+            var chosen = clipInputs.Where(input => input.Selected).ToArray();
+            var remaining = session.Expressions.Count(pose => !fileRecords.Values.Contains(pose));
+            EditorGUILayout.LabelField("保存する表情: " + (remaining + chosen.Length) + "件　/　ポーズ: " + session.PoseOptions.Manual.Count + "件");
+            author = EditorGUILayout.TextField(new GUIContent("作者名（必須）", "VRMファイルに記録される作者名です。"), author);
+            if (licenseOptions == null) licenseOptions = new AvatarLicenseOptions();
+            AvatarLicenseSettingsUi.Draw(ref showLicenseSettings, licenseOptions);
+            automaticBlink = EditorGUILayout.Toggle("瞬きを自動設定する", automaticBlink);
+            if (remaining + chosen.Length == 0) EditorGUILayout.HelpBox("表情ファイルを追加し、保存する表情にチェックを入れてください。", MessageType.Info);
+            else if (string.IsNullOrWhiteSpace(author)) EditorGUILayout.HelpBox("作者名を入力すると保存できます。", MessageType.Info);
+            if (chosen.Any(input => input.Error != null)) EditorGUILayout.HelpBox("対応待ちの表情が選択されています。項目の理由を確認してください。", MessageType.Warning);
+            using (new EditorGUI.DisabledScope(remaining + chosen.Length == 0 || string.IsNullOrWhiteSpace(author) || chosen.Any(input => input.Error != null)))
+                if (GUILayout.Button("表情を記録してVRMを保存", GUILayout.Height(40))) Queue(Export);
+            DrawSavedResult();
+            showRecords = EditorGUILayout.Foldout(showRecords, "記録済みの表情・設定の保存（" + session.Expressions.Count + "件）", true);
+            if (showRecords)
             {
+                foreach (var pose in session.Expressions.ToArray())
+                {
+                    EditorGUILayout.BeginHorizontal();
+                    EditorGUILayout.LabelField(pose.Name);
+                    if (GUILayout.Button("顔を確認", GUILayout.Width(80))) Queue(() => { session.PreviewRecorded(pose); ShowFace(pose.Name); });
+                    if (GUILayout.Button("削除", GUILayout.Width(50))) Queue(() => {
+                        session.Expressions.Remove(pose);
+                        foreach (var input in fileRecords.Where(pair => pair.Value == pose).Select(pair => pair.Key).ToArray()) { input.Selected = false; fileRecords.Remove(input); }
+                    });
+                    EditorGUILayout.EndHorizontal();
+                }
                 EditorGUILayout.BeginHorizontal();
-                EditorGUILayout.LabelField(pose.Name);
-                if (GUILayout.Button("確認", GUILayout.Width(60))) Queue(() => { session.PreviewRecorded(pose); previewName = pose.Name; });
-                if (GUILayout.Button("削除", GUILayout.Width(60))) session.Expressions.Remove(pose);
+                if (GUILayout.Button("設定を保存")) Queue(() => { RecordSelectedClips(); SaveSettings(); });
+                if (GUILayout.Button("設定を読み込む")) Queue(LoadSettings);
                 EditorGUILayout.EndHorizontal();
             }
-            EditorGUILayout.BeginHorizontal();
-            if (GUILayout.Button("記録設定を保存")) Queue(SaveSettings);
-            if (GUILayout.Button("記録設定を読み込む")) Queue(LoadSettings);
-            EditorGUILayout.EndHorizontal();
-            if (session.Expressions.Count == 0) EditorGUILayout.HelpBox("上の「選択した表情を記録」で、書き出す表情を1件以上記録してください。", MessageType.Info);
-            else if (string.IsNullOrWhiteSpace(author)) EditorGUILayout.HelpBox("書き出すには画面上部の作者名を入力してください。", MessageType.Info);
-            automaticBlink = EditorGUILayout.Toggle("瞬きを自動設定する", automaticBlink);
-            using (new EditorGUI.DisabledScope(session.Expressions.Count == 0 || string.IsNullOrWhiteSpace(author)))
-                if (GUILayout.Button("記録した表情をlilToon VRMへ書き出す", GUILayout.Height(30))) Queue(Export);
-            EditorGUILayout.LabelField("表情は指定時刻の固定の顔として保存します。表情の材質・ボーン・表示切替は追加対応が必要です。ポーズは表情とは別に同梱します。", EditorStyles.wordWrappedMiniLabel);
+            showSetup = EditorGUILayout.Foldout(showSetup, "準備用コピーを作り直す（詳細）", true);
+            if (showSetup && GUILayout.Button("コピーを作り直す") && EditorUtility.DisplayDialog("コピーを作り直す", "未保存の記録がある場合は失われます。設定を保存してから作り直してください。", "作り直す", "戻る")) Queue(Prepare);
+            EditorGUILayout.LabelField("表情は指定時刻の固定の顔として保存します。材質・顔のボーン・表示切替を含む表情は未対応です。", EditorStyles.wordWrappedMiniLabel);
+        }
+
+        void ShowFace(string name) { previewName = name; pageScroll = Vector2.zero; Repaint(); }
+
+        void RecordSelectedClips()
+        {
+            var selected = clipInputs.Where(input => input.Selected).ToArray();
+            var poses = session.ReplaceClipRecords(selected, fileRecords.Values);
+            fileRecords.Clear();
+            for (var index = 0; index < selected.Length; index++) fileRecords.Add(selected[index], poses[index]);
+            status = "表情を記録・更新しました: " + poses.Length + "件";
+        }
+
+        void DrawSavedResult()
+        {
+            if (saved == null) return;
+            using (new EditorGUILayout.VerticalScope(EditorStyles.helpBox))
+            {
+                EditorGUILayout.LabelField("VRMを保存しました", EditorStyles.boldLabel);
+                EditorGUILayout.LabelField(Path.GetFileName(saved.Path) + "　/　表情 " + saved.Expressions + "件・ポーズ " + saved.Poses + "件", EditorStyles.wordWrappedLabel);
+                EditorGUILayout.LabelField("下の転送は最後に保存したVRMを送ります。編集した内容を送るには、もう一度保存してください。", EditorStyles.wordWrappedMiniLabel);
+                var transfer = LilToonExporterWindow.SavedVrmTransferMethod();
+                using (new EditorGUILayout.HorizontalScope())
+                {
+                    using (new EditorGUI.DisabledScope(transfer == null || !File.Exists(saved.Path)))
+                        if (GUILayout.Button("QRコードでスマホに送る", GUILayout.Height(32))) Queue(OpenSavedTransfer);
+                    using (new EditorGUI.DisabledScope(!File.Exists(saved.Path)))
+                        if (GUILayout.Button("保存先を開く", GUILayout.Height(32))) EditorUtility.RevealInFinder(saved.Path);
+                }
+                if (!File.Exists(saved.Path)) EditorGUILayout.HelpBox("保存したVRMが見つかりません。もう一度保存してください。", MessageType.Warning);
+                else if (transfer == null) EditorGUILayout.HelpBox("このパッケージにはQR転送がありません。QR対応の試験用パッケージを導入してください。", MessageType.Info);
+                else EditorGUILayout.LabelField("次の画面でアップロードを開始します。QR受信対応のiPhone版VR Vlogを使ってください。", EditorStyles.wordWrappedMiniLabel);
+            }
         }
 
         void DrawClipInputs()
         {
             EditorGUILayout.Space();
-            EditorGUILayout.LabelField("2. 表情ファイルを追加して試す", EditorStyles.boldLabel);
+            EditorGUILayout.LabelField("2. 表情ファイルを追加して顔を確認", EditorStyles.boldLabel);
+            EditorGUILayout.LabelField("保存する表情にチェックを入れます。保存時に記録するので、先にプレビューだけ試せます。", EditorStyles.wordWrappedMiniLabel);
             DropClips("UnityのProjectから表情の.animをここへドロップ（複数可）", clips => {
                 foreach (var clip in clips) AddClip(clip);
             });
@@ -269,36 +330,36 @@ namespace VRVlog.LilToonExporter
             }
             if (clipInputs.Count > 0)
             {
-                clipScroll = EditorGUILayout.BeginScrollView(clipScroll, GUILayout.Height(230));
+                clipScroll = EditorGUILayout.BeginScrollView(clipScroll, GUILayout.Height(Mathf.Min(300, clipInputs.Count * 145)));
                 foreach (var input in clipInputs.ToArray())
                 {
                     using (new EditorGUILayout.VerticalScope(EditorStyles.helpBox))
                     {
                         EditorGUILayout.BeginHorizontal();
-                        using (new EditorGUI.DisabledScope(input.Error != null)) input.Selected = EditorGUILayout.Toggle(input.Selected, GUILayout.Width(20));
+                        using (new EditorGUI.DisabledScope(input.Error != null)) input.Selected = EditorGUILayout.Toggle(new GUIContent("", input.Error == null ? "この表情をVRMに保存" : "未対応のため保存できません。下の理由を確認してください。"), input.Selected, GUILayout.Width(20));
                         input.Name = EditorGUILayout.TextField("表情名", input.Name);
-                        if (GUILayout.Button("削除", GUILayout.Width(50))) Queue(() => clipInputs.Remove(input));
+                        if (GUILayout.Button("削除", GUILayout.Width(50))) Queue(() => { if (fileRecords.TryGetValue(input, out var old)) session.Expressions.Remove(old); fileRecords.Remove(input); clipInputs.Remove(input); });
                         EditorGUILayout.EndHorizontal();
-                        using (new EditorGUI.DisabledScope(true)) EditorGUILayout.ObjectField("元ファイル", input.Clip, typeof(AnimationClip), false);
-                        var time = EditorGUILayout.Slider("収録する秒", input.Time, 0, input.Clip.length);
+                        EditorGUILayout.LabelField(new GUIContent("元ファイル: " + (input.Clip != null ? input.Clip.name : "ファイルが見つかりません"), input.Clip != null ? AssetDatabase.GetAssetPath(input.Clip) : ""), EditorStyles.miniLabel);
+                        var time = EditorGUILayout.Slider("収録する秒", input.Time, 0, input.Clip != null ? input.Clip.length : 0);
                         if (time != input.Time) { input.Time = time; Queue(() => input.Error = session.ClipError(input.Clip, input.Time)); }
                         if (input.Error == null)
                         {
-                            EditorGUILayout.LabelField("プレビュー・記録ができます", EditorStyles.miniLabel);
-                            if (GUILayout.Button("この表情をプレビュー")) Queue(() => { session.PreviewClip(input.Clip, input.Time); previewName = input.Name; });
+                            EditorGUILayout.LabelField(input.Selected ? "保存対象" : "確認のみ・保存しない", EditorStyles.miniLabel);
+                            if (GUILayout.Button("この表情をプレビュー")) Queue(() => { session.PreviewClip(input.Clip, input.Time); ShowFace(input.Name); });
                         }
-                        else EditorGUILayout.HelpBox("この表情は追加対応が必要です。\n" + input.Error, MessageType.Warning);
+                        else EditorGUILayout.HelpBox("保存できない理由:\n" + input.Error, MessageType.Warning);
                     }
                 }
                 EditorGUILayout.EndScrollView();
             }
             var selected = clipInputs.Where(input => input.Selected).ToArray();
-            using (new EditorGUI.DisabledScope(selected.Length == 0 || selected.Any(input => input.Error != null)))
-                if (GUILayout.Button("選択した " + selected.Length + " 表情を記録", GUILayout.Height(30))) Queue(() => {
-                    var result = session.ImportClips(selected);
-                    status = "記録 " + result.Imported.Count + "件。下の記録一覧で確認し、VRMを書き出せます。" +
-                        (result.Skipped.Count == 0 ? "" : "\n" + string.Join("\n", result.Skipped));
-                });
+            if (clipInputs.Count > 0)
+            {
+                EditorGUILayout.LabelField("追加済み " + clipInputs.Count + "件 / 保存対象 " + selected.Length + "件", EditorStyles.miniLabel);
+                using (new EditorGUI.DisabledScope(selected.Length == 0 || selected.Any(input => input.Error != null)))
+                    if (GUILayout.Button("選択した表情を記録・更新（確認用）")) Queue(RecordSelectedClips);
+            }
         }
 
         void AddClip(AnimationClip clip)
@@ -310,7 +371,7 @@ namespace VRVlog.LilToonExporter
             input.Error = session.ClipError(clip, 0); input.Selected = input.Error == null;
             clipInputs.Add(input);
             if (input.Error == null) { session.PreviewClip(clip); previewName = input.Name; }
-            status = input.Error == null ? "追加しました。顔を確認し「選択した表情を記録」を押してください。" : "追加しました。項目内の理由を確認してください。";
+            status = input.Error == null ? "追加しました。プレビューで顔を確認し、下の保存へ進めます。" : "追加しました。項目内の理由を確認してください。";
         }
 
         void DropClips(string label, Action<AnimationClip[]> accept)
@@ -331,7 +392,8 @@ namespace VRVlog.LilToonExporter
         void DrawPoseInputs()
         {
             EditorGUILayout.Space();
-            EditorGUILayout.LabelField("3. 全身ポーズを同梱する（任意）", EditorStyles.boldLabel);
+            showPoses = EditorGUILayout.Foldout(showPoses, "全身ポーズを追加（任意・" + session.PoseOptions.Manual.Count + "件）", true);
+            if (!showPoses) return;
             DropClips("UnityのProjectからポーズの.animをここへドロップ", clips => {
                 foreach (var clip in clips)
                     if (!session.PoseOptions.Manual.Any(pose => pose.Clip == clip))
@@ -365,18 +427,36 @@ namespace VRVlog.LilToonExporter
             if (string.IsNullOrEmpty(path)) return;
             if (new FileInfo(path).Length > 8 * 1024 * 1024) throw new InvalidOperationException("記録設定は8 MiBまでです。");
             session.LoadSettings(File.ReadAllText(path));
+            fileRecords.Clear(); clipInputs.Clear(); showRecords = true;
             status = "記録設定を読み込み、基準の顔に戻しました。";
         }
 
         void Export()
         {
-            var path = EditorUtility.SaveFilePanel("実験用VRMを保存", "", source.name + "-captured", "vrm");
+            var path = EditorUtility.SaveFilePanel("VRMの保存先", "", source.name + "-expressions", "vrm");
             if (string.IsNullOrEmpty(path)) return;
+            SaveVrm(path);
+        }
+
+        internal void SaveVrm(string path)
+        {
+            RecordSelectedClips();
             var warnings = new System.Collections.Generic.List<string>(session.Warnings);
             var bytes = session.Export(source.name, author, warnings,
                 automaticBlink ? null : new BlinkExportOptions { Mode = BlinkExportMode.None }, licenseOptions.Copy());
             AtomicWrite(path, bytes);
-            status = "VRMを保存しました。\n" + path + (warnings.Count == 0 ? "" : "\n" + string.Join("\n", warnings));
+            saved = new SavedExpressionVrm(path, bytes, session.Expressions.Count, session.PoseOptions.Manual.Count);
+            status = "VRMを保存しました。" + (warnings.Count == 0 ? "" : "\n" + string.Join("\n", warnings));
+        }
+
+        internal void OpenSavedTransfer()
+        {
+            if (saved == null) throw new InvalidOperationException("先にVRMを保存してください。");
+            var entry = LilToonExporterWindow.SavedVrmTransferMethod();
+            if (entry == null) throw new InvalidOperationException("QR対応のパッケージを導入してください。");
+            try { entry.Invoke(null, new object[] { saved.VerifiedPath() }); }
+            catch (System.Reflection.TargetInvocationException)
+            { throw new InvalidOperationException("転送用のコピーを準備できませんでした。256 MiB以下の保存済みVRMを指定してください。"); }
         }
 
         internal static void AtomicWrite(string path, byte[] bytes)
@@ -397,7 +477,7 @@ namespace VRVlog.LilToonExporter
             preview?.Cleanup(); preview = null;
             session?.Dispose(); session = null;
             poseReview?.Close(); poseReview = null;
-            selectedCandidates.Clear(); clipInputs.Clear(); recommendations = null;
+            selectedCandidates.Clear(); clipInputs.Clear(); fileRecords.Clear(); recommendations = null; saved = null;
         }
     }
 }

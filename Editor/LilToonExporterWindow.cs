@@ -98,6 +98,9 @@ namespace VRVlog.LilToonExporter
         private void DrawWindow()
         {
             EnsureStyles();
+            if (GUILayout.Button(ExporterLocalization.T("表情ファイル・ポーズを指定して書き出す")))
+                ExperimentalExpressionCaptureWindow.Open();
+            EditorGUILayout.Space(8f);
             EditorGUILayout.LabelField(ExporterLocalization.T("保存先を選ぶと、VRMの書き出しと保存まで自動で進みます。"), EditorStyles.wordWrappedLabel);
             EditorGUILayout.Space(18f);
             DrawRequiredLabel(ExporterLocalization.T("アバター"), ExporterLocalization.T("Hierarchyにあるアバターの一番上のオブジェクトを指定します。"));
@@ -518,7 +521,7 @@ namespace VRVlog.LilToonExporter
 
         // Stable packages omit this assembly. Resolve only its public optional
         // entry so exporting never requires the prerelease transfer module.
-        private static System.Reflection.MethodInfo SavedVrmTransferMethod()
+        internal static System.Reflection.MethodInfo SavedVrmTransferMethod()
         {
             try
             {

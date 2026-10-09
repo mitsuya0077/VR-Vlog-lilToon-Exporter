@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using System.IO;
+using System.Linq;
 using System.Reflection;
 using System.Threading.Tasks;
 using NUnit.Framework;
@@ -47,6 +48,53 @@ namespace VRVlog.LilToonExporter.LanTransfer.Tests
                 Assert.That(entry.Name, Is.EqualTo("OpenSavedVrmForDevelopment"));
             }
         }
+
+#if UNITY_EDITOR
+        [Test]
+        public void ExpressionCaptureSavedResultOpensAnImmutableCopyWithoutUploading()
+        {
+            var type = Type.GetType("VRVlog.LilToonExporter.ExperimentalExpressionCaptureWindow, VRVlog.LilToonExporter.Editor", true);
+            var savedType = Type.GetType("VRVlog.LilToonExporter.SavedExpressionVrm, VRVlog.LilToonExporter.Editor", true);
+            var capture = ScriptableObject.CreateInstance(type);
+            var path = Path.Combine(Path.GetTempPath(), "vrvlog-expression-qr-" + Guid.NewGuid().ToString("N") + ".vrm");
+            var bytes = new byte[] { 9, 8, 7, 6 };
+            string copyPath = null;
+            CloudVrmTransferWindow transfer = null;
+            try
+            {
+                File.WriteAllBytes(path, bytes);
+                var saved = Activator.CreateInstance(savedType, BindingFlags.Instance | BindingFlags.NonPublic, null, new object[] { path, bytes, 9, 1 }, null);
+                type.GetField("saved", Instance).SetValue(capture, saved);
+                var open = type.GetMethod("OpenSavedTransfer", Instance);
+                if (!CloudTransferAvailability.Enabled)
+                {
+                    Assert.Throws<TargetInvocationException>(() => open.Invoke(capture, null));
+                    return;
+                }
+                open.Invoke(capture, null);
+                transfer = Resources.FindObjectsOfTypeAll<CloudVrmTransferWindow>().Single();
+                Assert.That(typeof(CloudVrmTransferWindow).GetField("uploading", Instance).GetValue(transfer), Is.Null);
+                Assert.That(typeof(CloudVrmTransferWindow).GetField("session", Instance).GetValue(transfer), Is.Null, "Opening the transfer must not create remote storage.");
+                var source = (CloudVrmTransferSource)typeof(CloudVrmTransferWindow).GetField("source", Instance).GetValue(transfer);
+                copyPath = (string)typeof(CloudVrmTransferSource).GetField("path", Instance).GetValue(source);
+                Assert.That(copyPath, Is.Not.EqualTo(path));
+                Assert.That(File.ReadAllBytes(copyPath), Is.EqualTo(bytes));
+                File.WriteAllBytes(path, new byte[] { 1 });
+                Assert.That(File.ReadAllBytes(copyPath), Is.EqualTo(bytes));
+                Assert.Throws<TargetInvocationException>(() => open.Invoke(capture, null));
+                Assert.That(typeof(CloudVrmTransferWindow).GetField("source", Instance).GetValue(transfer), Is.SameAs(source));
+                transfer.Close(); transfer = null;
+                Assert.That(File.Exists(copyPath), Is.False);
+                Assert.That(File.ReadAllBytes(path), Is.EqualTo(new byte[] { 1 }));
+            }
+            finally
+            {
+                transfer?.Close(); Object.DestroyImmediate(capture);
+                if (copyPath != null && File.Exists(copyPath)) File.Delete(copyPath);
+                if (File.Exists(path)) File.Delete(path);
+            }
+        }
+#endif
 
         [Test]
         public void PublicCloudEntryCannotAdoptOrDeleteAnOrdinarySavedVrm()

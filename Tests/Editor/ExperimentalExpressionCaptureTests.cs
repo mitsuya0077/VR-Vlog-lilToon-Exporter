@@ -416,6 +416,69 @@ namespace VRVlog.LilToonExporter.Tests
             finally { Directory.Delete(directory, true); }
         }
 
+        [Test]
+        public void FileRecordsUpdateNamesAndTimeAndDeselectWithoutDeletingManualFaces()
+        {
+            using var fixture = new AttachmentConnectionTests.Fixture();
+            using var session = new ExperimentalExpressionCaptureSession(fixture.Source, false);
+            var clip = new AnimationClip();
+            AnimationUtility.SetEditorCurve(clip, EditorCurveBinding.FloatCurve("Front", typeof(SkinnedMeshRenderer), "blendShape.Hair detail"), AnimationCurve.Linear(0, 35, 1, 80));
+            try
+            {
+                session.SetWeight(0, 0, 60); session.Capture("Manual");
+                var manual = session.Expressions.Single();
+                var input = new ExperimentalExpressionCaptureSession.ClipInput { Clip = clip, Name = "Old", Time = 0 };
+                var old = session.ReplaceClipRecords(new[] { input }, null);
+                input.Name = "Updated"; input.Time = 1;
+                var updated = session.ReplaceClipRecords(new[] { input }, old);
+                Assert.That(session.Expressions.Select(pose => pose.Name), Is.EqualTo(new[] { "Manual", "Updated" }));
+                session.PreviewRecorded(updated.Single());
+                Assert.That(session.Channels.First(channel => channel.Path == "Front").Renderer.GetBlendShapeWeight(0), Is.EqualTo(80));
+                session.ReplaceClipRecords(Array.Empty<ExperimentalExpressionCaptureSession.ClipInput>(), updated);
+                Assert.That(session.Expressions, Is.EqualTo(new[] { manual }));
+            }
+            finally { Object.DestroyImmediate(clip); }
+        }
+
+        [TestCase(false)]
+        [TestCase(true)]
+        public void InvalidOrDuplicateUpdatesPreserveEveryPreviouslyRecordedFace(bool duplicate)
+        {
+            using var fixture = new AttachmentConnectionTests.Fixture();
+            using var session = new ExperimentalExpressionCaptureSession(fixture.Source, false);
+            var clip = new AnimationClip();
+            AnimationUtility.SetEditorCurve(clip, EditorCurveBinding.FloatCurve("Front", typeof(SkinnedMeshRenderer), "blendShape.Hair detail"), AnimationCurve.Constant(0, 1, 75));
+            try
+            {
+                session.SetWeight(0, 0, 60); session.Capture("Manual");
+                var input = new ExperimentalExpressionCaptureSession.ClipInput { Clip = clip, Name = "File" };
+                var previous = session.ReplaceClipRecords(new[] { input }, null);
+                var all = session.Expressions.ToArray();
+                if (duplicate) input.Name = "Manual"; else input.Time = float.NaN;
+                Assert.Throws<InvalidOperationException>(() => session.ReplaceClipRecords(new[] { input }, previous));
+                Assert.That(session.Expressions, Is.EqualTo(all));
+            }
+            finally { Object.DestroyImmediate(clip); }
+        }
+
+        [TestCase(false)]
+        [TestCase(true)]
+        public void LastSavedOutputCannotTransferAReplacedOrMissingFile(bool missing)
+        {
+            var path = Path.Combine(Path.GetTempPath(), "vrvlog-capture-output-" + Guid.NewGuid().ToString("N") + ".vrm");
+            var bytes = new byte[] { 1, 2, 3 };
+            try
+            {
+                File.WriteAllBytes(path, bytes);
+                var saved = new SavedExpressionVrm(path, bytes, 2, 1);
+                Assert.That(saved.VerifiedPath(), Is.EqualTo(path));
+                if (missing) File.Delete(path); else File.WriteAllBytes(path, new byte[] { 3, 2, 1 });
+                Assert.Throws<InvalidOperationException>(() => saved.VerifiedPath());
+                Assert.That(File.Exists(path), Is.EqualTo(!missing));
+            }
+            finally { if (File.Exists(path)) File.Delete(path); }
+        }
+
         static Type Sdk(string name) => AppDomain.CurrentDomain.GetAssemblies().Select(assembly => assembly.GetType(name)).FirstOrDefault(type => type != null);
     }
 
