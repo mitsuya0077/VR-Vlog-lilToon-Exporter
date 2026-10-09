@@ -19,6 +19,9 @@ namespace VRVlog.LilToonExporter
         }
 
         [SerializeField] private string message, technicalDetails, supportText;
+        [SerializeField] private string fullDetails, detailsFeedback;
+        [SerializeField] private bool detailsSaveFailed;
+        [SerializeField] private Vector2 detailsFeedbackScroll;
         [SerializeField] private bool hadSession;
         [SerializeField] private List<IssueView> issues = new List<IssueView>();
         [SerializeField] private Vector2 scrollPosition;
@@ -80,7 +83,7 @@ namespace VRVlog.LilToonExporter
             selected.Clear();
             foreach (var action in session.SelectedOptions.Actions) selected.Add(action.Id);
             var diagnostics = (session.Report?.Diagnostics ?? new List<ExportRecoveryDiagnostic>())
-                .Concat(session.AvailableDiagnostics).GroupBy(item => item.Action?.Id ?? item.Id).Select(group => group.First());
+                .Concat(session.AvailableDiagnostics).Distinct();
             SetIssues(diagnostics);
             // Only a single directly diagnosed material fix can be suggested.
             // Broad menu/renderer omission always requires an explicit choice.
@@ -95,8 +98,12 @@ namespace VRVlog.LilToonExporter
 
         private void SetIssues(IEnumerable<ExportRecoveryDiagnostic> diagnostics)
         {
+            var all = diagnostics.Where(issue => issue != null).ToArray();
+            fullDetails = ExportDetailsText.Failure(message, technicalDetails, all);
+            detailsFeedback = null;
+            detailsSaveFailed = false;
             issues.Clear();
-            foreach (var issue in diagnostics)
+            foreach (var issue in all.GroupBy(item => item.Action?.Id ?? item.Id).Select(group => group.First()))
             {
                 if (issue == null) continue;
                 issues.Add(new IssueView
@@ -127,6 +134,7 @@ namespace VRVlog.LilToonExporter
             {
                 EditorGUILayout.HelpBox(ExporterLocalization.T("Unityの再読み込みで確認内容が無効になりました。書き出し画面から再度書き出してください。"), MessageType.Warning);
                 if (GUILayout.Button(ExporterLocalization.T("書き出し画面を開く"))) { LilToonExporterWindow.Open(); Close(); }
+                ExportDetailsText.DrawActions(fullDetails, ref detailsFeedback, ref detailsSaveFailed, ref detailsFeedbackScroll);
                 return;
             }
             using (var scroll = new EditorGUILayout.ScrollViewScope(scrollPosition))
@@ -161,6 +169,8 @@ namespace VRVlog.LilToonExporter
                     }
                 }
             }
+            using (new EditorGUI.DisabledScope(busy))
+                ExportDetailsText.DrawActions(fullDetails, ref detailsFeedback, ref detailsSaveFailed, ref detailsFeedbackScroll);
             if (session != null)
             {
                 using (new EditorGUI.DisabledScope(busy))

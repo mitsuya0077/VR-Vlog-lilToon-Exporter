@@ -15,6 +15,16 @@ PROFILES = ('compatibility', 'exporter-behavior', 'exporter-integration')
 # Named cases also prevent a removed regression or one lost
 # parameter variant from turning a smaller, passing XML into release evidence.
 BEHAVIOR_CASES = {
+    'ExportDetailsTextTests': {
+        'AllDiagnosticFieldsAndTheExactNestedExceptionSurviveLargeReports': 1,
+        'NativeClipboardAndUtf8FileContainTheSameCompleteUnicodeText': 1,
+        'CancelDoesNotTouchAnExistingFileOrLeaveTemporaryFiles': 1,
+        'ConfirmedExistingFileIsReplacedWithCompleteTextWithoutTemporaryFiles': 1,
+        'WriteFailureIsReportedAndPreservesOtherFiles': 1,
+        'FailedReplacementOfDirectoryCleansOnlyItsOwnTemporaryFile': 1,
+        'FailureSnapshotKeepsEveryTargetSharingOneRecoveryActionAfterReload': 1,
+        'ExceptionWithoutDiagnosticsIsStillAvailableInFull': 1,
+    },
     'MissingMeshAttributesTests': {
         'AdditionalVertexStreamsPreserveAuthoredChannelInsteadOfUsingFallback': 4,
         'DegenerateGeometryReceivesFiniteUnitNormalsWithoutLosingMorphs': 2,
