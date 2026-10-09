@@ -147,6 +147,8 @@ VR Vlogアプリ内の問い合わせからもご連絡いただけます。
 
 ## 開発に参加する
 
+脆弱性は[非公開の報告窓口](SECURITY.md)へ連絡してください。再現手順や悪用条件を公開Issue・PRへ投稿しないでください。
+
 不具合報告・改善提案・文書の修正・Pull Requestを受け付けています。[投稿フォーム](https://github.com/mitsuya0077/VR-Vlog-lilToon-Exporter/issues/new/choose)から、使用環境・再現手順、または解決したいことを記載してください。変更の進め方と検証方法は[CONTRIBUTING.md](CONTRIBUTING.md)にまとめています。
 
 | ディレクトリ | 内容 |
