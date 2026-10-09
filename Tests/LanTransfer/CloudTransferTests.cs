@@ -480,7 +480,7 @@ namespace VRVlog.LilToonExporter.LanTransfer.Tests
         }
 
         [Test]
-        public async Task EncryptedSnapshotSupportsConcurrentReadersWhileRejectingExternalWriters()
+        public async Task EncryptedSnapshotSupportsConcurrentReadersAndWindowsWriterExclusion()
         {
             using (var fixture = new Fixture(101))
             using (var encrypted = await CloudEncryptedSnapshot.CreateAsync(fixture.Source, CancellationToken.None))
@@ -491,7 +491,10 @@ namespace VRVlog.LilToonExporter.LanTransfer.Tests
                 Assert.That(first.ReadByte(), Is.EqualTo(second.ReadByte()));
                 using (var digest = SHA256.Create())
                 { second.Position = 0; Assert.That(LanTransferProtocol.Hex(digest.ComputeHash(second)), Is.EqualTo(encrypted.FileHash)); }
-                Assert.Throws<IOException>(() => { using (var writer = new FileStream(encrypted.SnapshotPath, FileMode.Open, FileAccess.Write, FileShare.ReadWrite)) { } });
+                // .NET on Unix does not enforce Windows FileShare exclusions.
+                // Keep the required writer exclusion assertion on Windows CI.
+                if (Environment.OSVersion.Platform == PlatformID.Win32NT)
+                    Assert.Throws<IOException>(() => { using (var writer = new FileStream(encrypted.SnapshotPath, FileMode.Open, FileAccess.Write, FileShare.ReadWrite)) { } });
             }
         }
 
