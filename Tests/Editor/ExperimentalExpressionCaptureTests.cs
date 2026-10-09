@@ -16,6 +16,41 @@ namespace VRVlog.LilToonExporter.Tests
 {
     public sealed class ExperimentalExpressionCaptureTests
     {
+        [TestCase(false, false)]
+        [TestCase(false, true)]
+        [TestCase(true, false)]
+        [TestCase(true, true)]
+        public void ExportRetainsTheAuthoredVrmConstraintEnabledState(bool recordFace, bool enabled)
+        {
+            using var fixture = new AttachmentConnectionTests.Fixture();
+            var settings = ScriptableObject.CreateInstance<VRM10Object>();
+            fixture.Source.AddComponent<Vrm10Instance>().Vrm = settings;
+            foreach (var skin in fixture.Source.GetComponentsInChildren<SkinnedMeshRenderer>()) skin.sharedMaterial.shader = Shader.Find("lilToon");
+            var original = fixture.Source.transform.Find("Independent hair").gameObject.AddComponent<Vrm10RotationConstraint>();
+            original.Source = fixture.Source.GetComponent<Animator>().GetBoneTransform(HumanBodyBones.Head);
+            original.enabled = enabled;
+            var clip = new AnimationClip { name = "Constrained face" };
+            try
+            {
+                var stamp = ExportSourceFingerprint.Compute(fixture.Source);
+                using var session = new ExperimentalExpressionCaptureSession(fixture.Source, false);
+                Assert.That(session.Copy.GetComponentInChildren<Vrm10RotationConstraint>().enabled, Is.EqualTo(enabled));
+                if (recordFace)
+                {
+                    AnimationUtility.SetEditorCurve(clip, EditorCurveBinding.FloatCurve("Front", typeof(SkinnedMeshRenderer), "blendShape.Hair detail"), AnimationCurve.Constant(0, 1, 80));
+                    session.ImportClips(new[] { new ExperimentalExpressionCaptureSession.ClipInput { Clip = clip, Name = clip.name, Time = clip.length } });
+                }
+                var bytes = session.Export("Constraint export", "Tests", blinkOptions: new BlinkExportOptions { Mode = BlinkExportMode.None });
+                var nodes = (System.Collections.Generic.List<object>)GlbDocument.Read(bytes).Json["nodes"];
+                var count = nodes.Cast<System.Collections.Generic.Dictionary<string, object>>().Count(node =>
+                    node.TryGetValue("extensions", out var extensions) &&
+                    ((System.Collections.Generic.Dictionary<string, object>)extensions).ContainsKey("VRMC_node_constraint"));
+                Assert.That(count, Is.EqualTo(enabled ? 1 : 0));
+                Assert.That(original.enabled, Is.EqualTo(enabled)); Assert.That(ExportSourceFingerprint.Compute(fixture.Source), Is.EqualTo(stamp));
+            }
+            finally { Object.DestroyImmediate(clip); Object.DestroyImmediate(settings); }
+        }
+
         [TestCase(false)]
         [TestCase(true)]
         public void PreparingAndExportingDoNotInvokeAvatarEditorCallbacks(bool recordFace)

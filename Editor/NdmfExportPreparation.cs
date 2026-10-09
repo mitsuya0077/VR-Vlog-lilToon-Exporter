@@ -36,6 +36,14 @@ namespace VRVlog.LilToonExporter
         private const string CompatibilityMessage =
             "アバターの準備に必要な NDMF API を利用できません。NDMF " + DependencyPolicy.NdmfMinimum + " 以降の 1.x が必要です。確認済み構成: MA " + DependencyPolicy.ModularAvatarReference + " / NDMF " + DependencyPolicy.NdmfReference + "。" + DependencyPolicy.Recovery;
 
+#if UNITY_5_3_OR_NEWER
+        // The host protocol shim cannot clone Unity hierarchies; native tests
+        // exercise staging, callback suppression and authored enabled states.
+        internal static bool PreservesExportBehaviour(Behaviour behaviour) =>
+            behaviour.GetType().GetInterfaces().Any(contract => contract.FullName == "UniVRM10.IVrm10Constraint") ||
+            behaviour.GetType().FullName == PhysBoneSpringExport.PhysBoneType ||
+            behaviour.GetType().FullName == "VRC.SDK3.Dynamics.PhysBone.Components.VRCPhysBoneCollider";
+
         internal static GameObject InstantiateOwnedCopy(GameObject source)
         {
             var host = new GameObject("VRVlog inactive copy staging") { hideFlags = HideFlags.HideAndDontSave };
@@ -50,16 +58,17 @@ namespace VRVlog.LilToonExporter
                     if (behaviour == null) continue;
                     var type = behaviour.GetType();
                     var authoring = IsAuthoringTag(type) || type.GetInterfaces().Any(contract => contract.FullName == "VRC.SDKBase.IEditorOnly");
-                    if (authoring) continue;
+                    if (authoring || PreservesExportBehaviour(behaviour)) continue;
                     var editorCallbacks = false;
                     for (var current = type; current != null; current = current.BaseType)
                         editorCallbacks |= current.GetCustomAttributesData().Any(attribute => attribute.AttributeType.FullName == "UnityEngine.ExecuteAlways" ||
                             attribute.AttributeType.FullName == "UnityEngine.ExecuteInEditMode");
                     // Disabled editor scripts can still receive Awake on activation.
-                    // Keep inert runtime/metadata components, but remove editor scripts
-                    // outside the authoring contracts before the owned copy is active.
+                    // Remove editor scripts outside export/authoring contracts
+                    // before activation. Preserve inert runtime/metadata enabled
+                    // states: PhysBones and constraints use them during export.
                     if (behaviour is MonoBehaviour && editorCallbacks) Object.DestroyImmediate(behaviour);
-                    else behaviour.enabled = false;
+                    else if (behaviour is Animator) behaviour.enabled = false;
                 }
                 copy.transform.SetParent(null, true);
                 return copy;
@@ -67,6 +76,7 @@ namespace VRVlog.LilToonExporter
             catch { if (copy != null) Object.DestroyImmediate(copy); throw; }
             finally { Object.DestroyImmediate(host); }
         }
+#endif
 
         internal static bool NeedsProcessing(GameObject avatar) => avatar != null && RelevantAuthoring(avatar).Count != 0;
 
