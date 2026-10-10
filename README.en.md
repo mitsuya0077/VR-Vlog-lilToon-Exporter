@@ -1,4 +1,4 @@
-> **0.11.15-beta.1** temporarily skips initial FX reconstruction. Enable **Show pre-release packages** in ALCOM. The prepared MA/NDMF copy supplies the neutral face and body, which may differ from VRChat. Individual expressions, blink and tracking endpoints remain evaluated. If the saved Unity avatar has fully closed eyes that FX normally opens, adjust its saved open-eye settings or select no blink. This beta includes file export only, without QR transfer.
+> **0.11.15-beta.2** includes expression and pose file selection, previews, and QR transfer to a compatible iPhone version of VR Vlog. Enable **Show pre-release packages** in ALCOM to select it. QR upload requires privacy consent; your choice is remembered in Unity Editor, and uploads start only when you press the button. This beta also fixes exports failing with `The scene is invalid.` when NDMF reports notifications. Stable **0.11.14** remains available.
 
 # VR Vlog lilToon VRM Exporter
 
@@ -55,7 +55,7 @@ The stable package exports VRM files without QR transfer code or transfer guides
 
 ## Quick start
 
-The steps below describe the adopted, undistributed main UI. Published ZIPs are unchanged. The UI follows the editor locale; the labels below match the Japanese guide.
+The steps below describe the UI adopted in 0.11.15-beta.2. Previously published 0.11.14 and 0.11.15-beta.1 ZIPs are unchanged. The UI follows the editor locale; the labels below match the Japanese guide.
 
 1. Open your avatar in Unity. Enable the avatar, its parents and the outfit you want to export.
 2. Select **VR Vlog → VRMを書き出す**.
@@ -63,7 +63,7 @@ The steps below describe the adopted, undistributed main UI. Published ZIPs are 
 4. Select and add expression files, or drop multiple .anim files from Project. Click a name or **確認** to preview. Expressions are optional; model-only export is supported.
 5. Add optional body poses, set the author and original license terms under **ライセンス設定**, then select **VRMを保存**.
 
-See the [VRM export guide](Documentation~/ExperimentalExpressionCapture.md) for file support and capture ranges. A beta package containing the QR module can transfer the saved VRM from the result section.
+See the [VRM export guide](Documentation~/ExperimentalExpressionCapture.md) for file support and capture ranges. In beta.2, select **QRコードでスマホに送る** in the result section, read the linked privacy policy, check consent, then press **アップロードしてQRを表示**. Scan the QR in a compatible iPhone version of VR Vlog using **モデルを変更 → PCから受け取る**. See the [cloud transfer guide](Documentation~/CloudTransfer.md) for requirements and transfer limits. Consent persists between sessions; opening the transfer window never uploads automatically. Android receiving remains disabled.
 
 Textures retain their aspect ratio and are reduced to fit within 1024 × 1024. Smaller textures are not enlarged. The original avatar and textures remain unchanged.
 
