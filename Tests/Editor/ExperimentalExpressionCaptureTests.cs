@@ -50,14 +50,16 @@ namespace VRVlog.LilToonExporter.Tests
             }
         }
 
-        [Test]
-        public void InstalledNdmfReportRemainsSafeAfterItsOwnedCopyIsDestroyed()
+        [TestCase(false)]
+        [TestCase(true)]
+        public void InstalledNdmfReportRemainsSafeAfterItsOwnedCopyIsDestroyed(bool showPreview)
         {
             var reportType = AppDomain.CurrentDomain.GetAssemblies().Select(assembly => assembly.GetType("nadena.dev.ndmf.ErrorReport"))
                 .FirstOrDefault(type => type != null);
             if (reportType == null) Assert.Ignore("Requires the installed NDMF integration package.");
             var source = new GameObject("Owned diagnostic scene regression");
             GameObject copy = null;
+            PreviewRenderUtility preview = null;
             try
             {
                 copy = NdmfExportPreparation.InstantiateOwnedCopy(source);
@@ -67,6 +69,20 @@ namespace VRVlog.LilToonExporter.Tests
                 typeof(NdmfExportPreparation).GetMethod("RetainCopySceneForReport", flags)
                     .Invoke(null, new object[] { copy, new { ErrorReport = report } });
                 var resolve = reportType.GetMethod("TryResolveAvatar");
+                if (showPreview)
+                {
+                    preview = new PreviewRenderUtility();
+                    NdmfExportPreparation.ShowOwnedCopyInPreview(copy, preview);
+                    Assert.That(copy.scene, Is.EqualTo(scene), "Preview rendering must not move NDMF's diagnostic root.");
+                    Assert.That(preview.camera.overrideSceneCullingMask,
+                        Is.EqualTo(UnityEditor.SceneManagement.EditorSceneManager.GetSceneCullingMask(scene) |
+                            UnityEditor.SceneManagement.EditorSceneManager.GetSceneCullingMask(preview.camera.scene)));
+                }
+                var resolved = new object[] { null };
+                Assert.That(resolve.Invoke(report, resolved), Is.EqualTo(true));
+                Assert.That(resolved[0], Is.SameAs(copy), "Notifications must navigate to the live preview avatar.");
+                preview?.Cleanup(); preview = null;
+                Assert.That(copy != null, Is.True, "The session owns the avatar, independently of preview camera cleanup.");
                 Assert.That(resolve.Invoke(report, new object[] { null }), Is.EqualTo(true));
                 Object.DestroyImmediate(copy); copy = null;
                 NdmfExportPreparation.ReleaseUnusedCopyScene();
@@ -74,7 +90,7 @@ namespace VRVlog.LilToonExporter.Tests
                 Assert.That(resolve.Invoke(report, new object[] { null }), Is.EqualTo(false));
                 GC.KeepAlive(report);
             }
-            finally { if (copy != null) Object.DestroyImmediate(copy); Object.DestroyImmediate(source); }
+            finally { preview?.Cleanup(); if (copy != null) Object.DestroyImmediate(copy); Object.DestroyImmediate(source); }
         }
 
         [TestCase(true)]

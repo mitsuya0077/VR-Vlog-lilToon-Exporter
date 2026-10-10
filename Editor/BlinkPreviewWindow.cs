@@ -63,7 +63,7 @@ namespace VRVlog.LilToonExporter
                     rest.Add(renderer, Enumerable.Range(0, renderer.sharedMesh.blendShapeCount).Select(renderer.GetBlendShapeWeight).ToArray());
             }
             preview = new PreviewRenderUtility();
-            preview.AddSingleGO(copy);
+            NdmfExportPreparation.ShowOwnedCopyInPreview(copy, preview);
             var renderers = ExportRendererSelection.Enumerate(copy).ToArray();
             if (renderers.Length == 0) throw new InvalidOperationException(ExporterLocalization.T("プレビューするメッシュがありません。"));
             var bounds = renderers[0].bounds;

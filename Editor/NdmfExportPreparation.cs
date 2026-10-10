@@ -88,6 +88,18 @@ namespace VRVlog.LilToonExporter
             copyScenes.Clear();
         }
 
+        internal static void ShowOwnedCopyInPreview(GameObject copy, PreviewRenderUtility preview)
+        {
+            if (copy == null || !copyScenes.ContainsKey(copy.scene))
+                throw new InvalidOperationException("Preview requires an owned copy scene.");
+            if (preview == null) throw new ArgumentNullException(nameof(preview));
+            // AddSingleGO moves the avatar away from the scene captured by NDMF
+            // and lets utility cleanup destroy that scene. Render our scene and
+            // the utility's lights together, without moving or owning the avatar.
+            preview.camera.overrideSceneCullingMask = EditorSceneManager.GetSceneCullingMask(copy.scene) |
+                EditorSceneManager.GetSceneCullingMask(preview.camera.scene);
+        }
+
         // The host protocol shim cannot clone Unity hierarchies; native tests
         // exercise staging, callback suppression and authored enabled states.
         internal static bool PreservesExportBehaviour(Behaviour behaviour) =>

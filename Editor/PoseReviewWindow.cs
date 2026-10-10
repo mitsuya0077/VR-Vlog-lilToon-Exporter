@@ -103,7 +103,7 @@ namespace VRVlog.LilToonExporter
                 foreach (var name in VRVlog.Poses.HumanoidAnimationData.BoneNames)
                 { var bone = animator.GetBoneTransform(PoseSampling.HumanBone(name)); if (bone != null) rest[bone] = bone.rotation; }
                 hipsRest = animator.GetBoneTransform(HumanBodyBones.Hips).position;
-                preview = new PreviewRenderUtility(); preview.AddSingleGO(copy);
+                preview = new PreviewRenderUtility(); NdmfExportPreparation.ShowOwnedCopyInPreview(copy, preview);
                 preview.camera.fieldOfView = 30; preview.camera.nearClipPlane = .01f; preview.camera.farClipPlane = 100;
                 preview.lights[0].intensity = 1; preview.lights[0].transform.rotation = Quaternion.Euler(30, 150, 0);
                 preview.lights[1].intensity = .7f;
