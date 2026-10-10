@@ -1,4 +1,4 @@
-> **0.11.15-beta.2** includes expression and pose file selection, previews, and QR transfer to a compatible iPhone version of VR Vlog. Enable **Show pre-release packages** in ALCOM to select it. QR upload requires privacy consent; your choice is remembered in Unity Editor, and uploads start only when you press the button. This beta also fixes exports failing with `The scene is invalid.` when NDMF reports notifications. Stable **0.11.14** remains available.
+> Stable **0.11.15** adopts the published 0.11.15-beta.2 features: expression and pose file selection, previews, QR transfer to a compatible iPhone version of VR Vlog, remembered privacy consent, and the fix for NDMF notifications causing `The scene is invalid.`. Select it in ALCOM without enabling **Show pre-release packages**. Uploads start only when you press the button. Previously published ZIPs remain unchanged.
 
 # VR Vlog lilToon VRM Exporter
 
@@ -35,7 +35,7 @@ Install Modular Avatar and its dependencies beforehand if your avatar uses them.
 
 1. Open the [installation page](https://mitsuya0077.github.io/VR-Vlog-lilToon-Exporter/) and select **VCC / ALCOMに追加** (add to VCC / ALCOM).
 2. Open your Unity project's package manager in VCC / ALCOM.
-3. Install **VR Vlog lilToon VRM Exporter 0.11.14** from the stable versions. VPM resolves the UniVRM dependencies.
+3. Install **VR Vlog lilToon VRM Exporter 0.11.15** from the stable versions. VPM resolves the UniVRM dependencies.
 
 If the button does not open your package manager, add this repository URL manually:
 
@@ -47,15 +47,15 @@ For manual installation, use **ZIPで導入** on the installation page. Download
 
 Back up your Unity project before updating. Re-export from the original avatar to apply exporter changes to an existing VRM.
 
-Stable **0.11.14** fixes exports stopping during neutral expression sampling when FX and another Playable Layer, such as Locomotion, use the same blend shape. Affected expression groups retain their current settings on the export copy, with the targets and reasons reported as warnings. Independent neutral expressions are still evaluated; the original avatar and controllers are unchanged.
+Previous stable **0.11.14** fixes exports stopping during neutral expression sampling when FX and another Playable Layer, such as Locomotion, use the same blend shape. Affected expression groups retain their current settings on the export copy, with the targets and reasons reported as warnings. Independent neutral expressions are still evaluated; the original avatar and controllers are unchanged.
 
 The export details and failure windows offer **Copy full text** and **Save text**. Both include every diagnostic and the complete retained exception, including inner exceptions and stack traces. Text files use UTF-8. Full text includes avatar names and paths; the separate **Copy shareable diagnostics** action keeps its redacted report.
 
-The stable package exports VRM files without QR transfer code or transfer guides. QR transfer is available in a separate prerelease and requires a compatible receiving app. Check the [Japanese release guidance](README.md#インストール) and [cloud transfer guide](Documentation~/CloudTransfer.md) for the supported app and platform before using it.
+Stable 0.11.15 includes QR transfer and its guide, as adopted from beta.2. Previously published stable 0.11.14 remains export-only. QR transfer requires a compatible receiving app. Check the [Japanese release guidance](README.md#インストール) and [cloud transfer guide](Documentation~/CloudTransfer.md) for the supported app and platform before using it.
 
 ## Quick start
 
-The steps below describe the UI adopted in 0.11.15-beta.2. Previously published 0.11.14 and 0.11.15-beta.1 ZIPs are unchanged. The UI follows the editor locale; the labels below match the Japanese guide.
+The steps below describe stable 0.11.15, adopting beta.2's UI. Previously published ZIPs are unchanged. The UI follows the editor locale; the labels below match the Japanese guide.
 
 1. Open your avatar in Unity. Enable the avatar, its parents and the outfit you want to export.
 2. Select **VR Vlog → VRMを書き出す**.
@@ -63,7 +63,7 @@ The steps below describe the UI adopted in 0.11.15-beta.2. Previously published 
 4. Select and add expression files, or drop multiple .anim files from Project. Click a name or **確認** to preview. Expressions are optional; model-only export is supported.
 5. Add optional body poses, set the author and original license terms under **ライセンス設定**, then select **VRMを保存**.
 
-See the [VRM export guide](Documentation~/ExperimentalExpressionCapture.md) for file support and capture ranges. In beta.2, select **QRコードでスマホに送る** in the result section, read the linked privacy policy, check consent, then press **アップロードしてQRを表示**. Scan the QR in a compatible iPhone version of VR Vlog using **モデルを変更 → PCから受け取る**. See the [cloud transfer guide](Documentation~/CloudTransfer.md) for requirements and transfer limits. Consent persists between sessions; opening the transfer window never uploads automatically. Android receiving remains disabled.
+See the [VRM export guide](Documentation~/ExperimentalExpressionCapture.md) for file support and capture ranges. In 0.11.15, select **QRコードでスマホに送る** in the result section, read the linked privacy policy, check consent, then press **アップロードしてQRを表示**. Scan the QR in a compatible iPhone version of VR Vlog using **モデルを変更 → PCから受け取る**. See the [cloud transfer guide](Documentation~/CloudTransfer.md) for requirements and transfer limits. Consent persists between sessions; opening the transfer window never uploads automatically. Android receiving remains disabled.
 
 Textures retain their aspect ratio and are reduced to fit within 1024 × 1024. Smaller textures are not enlarged. The original avatar and textures remain unchanged.
 
@@ -92,6 +92,6 @@ Use **VR Vlog → VRMを書き出す** to inspect installed package versions. Ex
 
 ## License
 
-Exporter code is available under the [MIT License](LICENSE). Third-party notices cover [lilToon-derived shader code](ThirdPartyNotices/lilToon.md), [UniVRM / UniGLTF](ThirdPartyNotices/UniVRM.md), [Bouncy Castle / ZXing.Net for transfer](ThirdPartyNotices/LanTransfer.md), and the [explicit Avatar Optimizer correction patch](Documentation~/DependencyPatches/README.md) with its [license](Documentation~/DependencyPatches/AAO-LICENSE.txt). Transfer dependencies are excluded from stable ZIPs.
+Exporter code is available under the [MIT License](LICENSE). Third-party notices cover [lilToon-derived shader code](ThirdPartyNotices/lilToon.md), [UniVRM / UniGLTF](ThirdPartyNotices/UniVRM.md), [Bouncy Castle / ZXing.Net for transfer](ThirdPartyNotices/LanTransfer.md), and the [explicit Avatar Optimizer correction patch](Documentation~/DependencyPatches/README.md) with its [license](Documentation~/DependencyPatches/AAO-LICENSE.txt). Stable 0.11.15 includes the pinned transfer dependencies.
 
 Avatar assets and published images retain their owners' terms. See the [image sources and credits](Website/assets/README.md).

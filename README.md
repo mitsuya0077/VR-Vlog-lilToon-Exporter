@@ -26,7 +26,7 @@ lilToonのアバターを、iPhoneのVR Vlogで使う **VRM 1.0** に書き出�
 | 導入と基本操作 | このREADMEの[インストール](#インストール)・[使い方](#使い方) |
 | アバターの見た目・揺れ物の保存 | [アバターの保存](Compatibility/AvatarPreservation.md)・[PhysBone](Compatibility/PhysBone.md) |
 | 体・指のポーズとアニメーション | [ポーズ](Documentation~/HumanoidPoses.md)・[アニメーション](Documentation~/HumanoidAnimations.md) |
-| QR転送対応β版の使い方 | [クラウド転送](Documentation~/CloudTransfer.md) |
+| QR転送の使い方 | [クラウド転送](Documentation~/CloudTransfer.md) |
 | 開発環境・検証・変更の提案 | [開発参加ガイド](CONTRIBUTING.md)・[互換性の管理](Compatibility/README.md) |
 
 ## 必要な環境
@@ -54,11 +54,13 @@ https://mitsuya0077.github.io/VR-Vlog-lilToon-Exporter/index.json
 
 更新するときはUnityプロジェクトをバックアップし、パッケージ一覧を更新して最新版を適用します。変更を反映するには、元のアバターからVRMを書き出し直してください。
 
-正式版 **0.11.14** では、書き出し詳細とエラーの全文コピー・テキスト保存を利用できます。追加Playableからの値を変えない書き込みによって、表情の書き出しが止まる問題の修正も含みます。全ての書き込み元と初期値のメタデータを検査し、実際に必要なFXの状態・入力の評価を維持します。VCC／ALCOMのパッケージ一覧から選択でき、ALCOMの **Show pre-release packages** 設定を有効にする必要はありません。
+安定版 **0.11.15** は、配信済み0.11.15-beta.2の表情・ポーズ指定UI、NDMF通知による書き出し失敗の修正、QR転送と保存されるプライバシー同意チェックを採用しています。ALCOMの通常のパッケージ一覧から選択できます。
+
+従来版 **0.11.14** では、書き出し詳細とエラーの全文コピー・テキスト保存を利用できます。追加Playableからの値を変えない書き込みによって、表情の書き出しが止まる問題の修正も含みます。全ての書き込み元と初期値のメタデータを検査し、実際に必要なFXの状態・入力の評価を維持します。VCC／ALCOMのパッケージ一覧から選択でき、ALCOMの **Show pre-release packages** 設定を有効にする必要はありません。
 
 0.11.14では、LocomotionなどFX以外のPlayable LayerとFXが同じBlendShapeを使う場合に、初期表情の確定で書き出しが止まる問題を修正しました。影響する表情のまとまりは書き出し用コピーの現在の設定を保持し、対象と理由を警告に表示します。独立した初期表情は引き続き評価し、元のアバターやControllerは変更しません。
 
-安定版 **0.11.14** は **VRM書き出し専用版** です。QR転送の実装と転送ガイドは安定版の配布パッケージに含めません。書き出したVRMを端末の「ファイル」に保存し、VR Vlogから読み込んでください。QR転送は下記のβ版で利用できます。
+公開済み **0.11.14** はVRM書き出し専用版です。QR転送の実装とガイドは **0.11.15** の安定版パッケージに含めます。以前の版のZIPは変更しません。
 
 ### ZIPで手動導入する
 
@@ -66,11 +68,11 @@ https://mitsuya0077.github.io/VR-Vlog-lilToon-Exporter/index.json
 2. プロジェクトの `Packages` 内の別々のフォルダーへ展開し、それぞれの直下に `package.json` がある状態にします。
 3. Unityで読み込みが終わるのを待ちます。同じUniVRMパッケージを重複して導入しないでください。
 
-表情・ポーズ指定とQR転送に対応するβ版 **0.11.15-beta.2** はALCOMの **Show pre-release packages** を有効にして選択します。VRM保存後の **QRコードでスマホに送る** から送信し、最新のQR対応iPhone TestFlightで受信します。Android配布版の受信は無効です。安定版は **0.11.14** です。
+表情・ポーズ指定とQR転送に対応する安定版 **0.11.15** をALCOMの通常の一覧から選択してください。**Show pre-release packages** の有効化は不要です。VRM保存後の **QRコードでスマホに送る** から送信し、最新のQR対応iPhone TestFlightで受信します。Android配布版の受信は無効です。公開済み **0.11.15-beta.2** も引き続き利用できます。
 
 ## 使い方
 
-以下は0.11.15-beta.2で採用した操作です。公開済み0.11.14や0.11.15-beta.1のZIPは変更していません。
+以下は0.11.15の操作です。beta.2と同じ操作を安定版に採用し、公開済みの版のZIPは変更していません。
 
 1. Unityでアバターを開き、書き出す衣装を表示します。アバターと親オブジェクトも有効にしてください。
 2. **VR Vlog → VRMを書き出す** を開きます。
@@ -78,7 +80,7 @@ https://mitsuya0077.github.io/VR-Vlog-lilToon-Exporter/index.json
 4. 必要な表情を **候補ファイル** から複数選択して追加します。名前や **確認** を押すと顔をプレビューできます。Projectから.animを複数ドロップしても追加できます。表情を追加しない通常のVRM保存も可能です。
 5. 任意の全身ポーズと **ライセンス設定** を確認し、**作者名** を入力して **VRMを保存** を押します。
 
-詳しい操作と選べないファイルの理由は[VRM書き出しガイド](Documentation~/ExperimentalExpressionCapture.md)を参照してください。QRモジュールを含むβパッケージでは保存完了欄からQR転送を開始できます。
+詳しい操作と選べないファイルの理由は[VRM書き出しガイド](Documentation~/ExperimentalExpressionCapture.md)を参照してください。0.11.15の安定版でも保存完了欄からQR転送を開始できます。
 
 利用条件を設定する場合は、保存欄の **ライセンス設定** を開き、元の利用規約に合わせてプルダウンを選びます。規約URL（VN3等）、著作権表示、第三者ライセンスも入力できます。設定は出力VRMのメタデータに保存されます。設定を開かない場合は、従来の既定値（作者のみ・個人非営利・クレジット表記が必要・表現用途の各許可なし・再配布と改変なし）で書き出します。
 
@@ -98,7 +100,7 @@ https://mitsuya0077.github.io/VR-Vlog-lilToon-Exporter/index.json
 
 ### 従来の安定版の表情・ポーズ取り込み
 
-以下は安定版0.11.14の自動取り込みの説明です。beta.2では候補ファイルや.animのドロップで表情・ポーズを指定します。
+以下は安定版0.11.14の自動取り込みの説明です。0.11.15では候補ファイルや.animのドロップで表情・ポーズを指定します。
 
 表情の取り込みと体のポーズの取り込みは別々に判定します。`trackingLeftHand` などを含む **ポーズ未対応** は、体の固定ポーズを確定できないという診断です。顔の表情の件数は、書き出し結果の **VRChatから追加できた表情** で確認できます。連続調整のPuppetを一つの固定表情に変換することはできません。
 
@@ -108,7 +110,7 @@ https://mitsuya0077.github.io/VR-Vlog-lilToon-Exporter/index.json
 
 ## 対応範囲と制限
 
-**0.11.15-beta.2** では、指定したファイルから表情・ポーズを保存します。MA/NDMFの前処理後コピーの値を基準の顔・体形に使うため、VRChat使用時と異なる場合があります。表情はBlendShapeの固定値として保存し、対応外のファイルには理由を表示します。収録範囲と対応外の設定は[VRM書き出しガイド](Documentation~/ExperimentalExpressionCapture.md)を確認してください。このベータ版にはQR転送と保存されるプライバシー同意チェックを含みます。
+**0.11.15** では、指定したファイルから表情・ポーズを保存します。MA/NDMFの前処理後コピーの値を基準の顔・体形に使うため、VRChat使用時と異なる場合があります。表情はBlendShapeの固定値として保存し、対応外のファイルには理由を表示します。収録範囲と対応外の設定は[VRM書き出しガイド](Documentation~/ExperimentalExpressionCapture.md)を確認してください。この安定版にはQR転送と保存されるプライバシー同意チェックを含みます。
 
 PhysBoneの重複、左右別メッシュの瞬き、描画が空になったメッシュなどは、原本と静止状態を保持して変換します。揺れ方の近似や省略した未使用設定は詳細に表示します。[アバターの構成に応じた保存方法](Compatibility/AvatarPreservation.md)を確認できます。
 
@@ -179,7 +181,7 @@ VR Vlogアプリ内の問い合わせからもご連絡いただけます。
 
 - [lilToon由来のシェーダー処理](ThirdPartyNotices/lilToon.md)
 - [UniVRM／UniGLTF](ThirdPartyNotices/UniVRM.md)
-- [転送用のBouncy Castle・ZXing.Net](ThirdPartyNotices/LanTransfer.md)（安定版の配布ZIPからは除外）
+- [転送用のBouncy Castle・ZXing.Net](ThirdPartyNotices/LanTransfer.md)（0.11.15の安定版にも同梱）
 - [Avatar Optimizerの明示的な修正パッチ](Documentation~/DependencyPatches/README.md)・[同梱ライセンス](Documentation~/DependencyPatches/AAO-LICENSE.txt)
 
 アバターなどの素材・掲載画像には各権利者の利用条件が適用されます。[画像の出典・クレジット](Website/assets/README.md)

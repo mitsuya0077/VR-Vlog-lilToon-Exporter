@@ -26,7 +26,7 @@ listing = json.loads((root / "source.json").read_text(encoding="utf-8"))
 
 assert package["name"] == "com.vrvlog.liltoon-vrm-exporter"
 assert package["unity"] == "2022.3"
-assert package["version"] == "0.11.15-beta.2"
+assert package["version"] == "0.11.15"
 assert one_click.index("AvatarBaseShape.Preserve(clone, clone,") < one_click.index("Vrm10AppearanceExporter.Export(")
 assert "foreach (var mesh in temporaryMeshes) UnityEngine.Object.DestroyImmediate(mesh);" in one_click
 assert package["vpmDependencies"] == {
@@ -251,14 +251,15 @@ assert "Generate listing from a local release fixture" in listing_workflow
 assert "--package-listing-source-folder" in listing_workflow
 assert 'test -s "$fixture/output/index.json"' in listing_workflow
 assert 'Compatibility/dependencies.json' in release_workflow
-# Unreleased previews do not update the manual stable-release default. The
-# workflow separately requires its requested version to equal package.json.
-if "-" not in package["version"]:
-    assert f"default: {package['version']}" in release_workflow
+# The existing workflow may retain a historical stable UI default. Publication
+# uses the explicit input and release_policy rejects any manifest mismatch.
+assert re.search(r"version:\n\s+description: Exporter version without the v prefix\n\s+required: true\n\s+default: \d+\.\d+\.\d+\n", release_workflow)
+assert 'EXPORTER_VERSION: ${{ inputs.version }}' in release_workflow
 assert '--target "${GITHUB_SHA}"' in release_workflow
 release_policy = (root / "Tools/release_policy.py").read_text(encoding="utf-8")
 assert '"refs/heads/main"' in release_policy
 assert 'sha != expected_sha' in release_policy
+assert 'version != package["version"]' in release_policy
 assert 'compatibility["uniVrm"]["releaseVersion"]' in release_policy
 assert '["--prerelease", "--latest=false"]' in release_policy
 assert 'EXPECTED_COMMIT: ${{ inputs.expected_commit }}' in release_workflow

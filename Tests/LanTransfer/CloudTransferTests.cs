@@ -20,7 +20,7 @@ namespace VRVlog.LilToonExporter.LanTransfer.Tests
             Assert.That(CloudTransferAvailability.Enabled, Is.True);
 #elif UNITY_EDITOR
             var version = UnityEditor.PackageManager.PackageInfo.FindForAssembly(typeof(CloudTransferAvailability).Assembly)?.version;
-            Assert.That(CloudTransferAvailability.Enabled, Is.EqualTo(CloudTransferAvailability.IsPrereleaseVersion(version)));
+            Assert.That(CloudTransferAvailability.Enabled, Is.EqualTo(CloudTransferAvailability.IsSupportedVersion(version)));
 #else
             Assert.That(CloudTransferAvailability.Enabled, Is.False);
 #endif
@@ -37,6 +37,16 @@ namespace VRVlog.LilToonExporter.LanTransfer.Tests
         [TestCase(null, false)]
         public void CloudReleaseChannelRequiresAnActualPrerelease(string version, bool enabled) =>
             Assert.That(CloudTransferAvailability.IsPrereleaseVersion(version), Is.EqualTo(enabled));
+
+        [TestCase("0.11.14", false)]
+        [TestCase("0.11.15", true)]
+        [TestCase("0.11.15-beta.2", true)]
+        [TestCase("0.11.15+beta.2", false)]
+        [TestCase("0.11.16", false)]
+        [TestCase("not-a-beta", false)]
+        [TestCase(null, false)]
+        public void CloudTransferSupportsTheAdoptedStableVersion(string version, bool enabled) =>
+            Assert.That(CloudTransferAvailability.IsSupportedVersion(version), Is.EqualTo(enabled));
 
         [TestCase(false)][TestCase(true)]
         public void DevelopmentCopyPreservesTheSavedVrmAndDeletesOnlyItsOwnedCopy(bool adopt)

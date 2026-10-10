@@ -100,6 +100,17 @@ class PackageTests(unittest.TestCase):
         self.assertFalse(package.TRANSFER_DLL_PATHS & names)
         self.assertNotIn("Documentation~/CloudTransfer.md", names)
 
+    def test_adopted_stable_keeps_beta_transfer_and_honors_opt_out(self):
+        for version, enabled, expected in [("0.11.15", True, True), ("0.11.15", False, False),
+                                           ("0.11.14", True, False), ("0.11.16", True, False)]:
+            with self.subTest(version=version, enabled=enabled):
+                self.write("package.json", json.dumps({"name": "com.vrvlog.liltoon-vrm-exporter",
+                                                     "version": version, "vrvlogCloudTransfer": enabled}))
+                names = set(package.build(self.root, self.root / "adoption.zip"))
+                self.assertFalse(package.prerelease(version))
+                self.assertEqual(package.TRANSFER_DLL_PATHS <= names, expected)
+                self.assertEqual("Documentation~/CloudTransfer.md" in names, expected)
+
     def test_transfer_metadata_rejects_non_boolean_values(self):
         for value in (None, "false", 0, 1, []):
             with self.subTest(value=value):
