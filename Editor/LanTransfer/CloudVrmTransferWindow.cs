@@ -22,6 +22,17 @@ namespace VRVlog.LilToonExporter.LanTransfer
         private string error;
         private double nextPoll;
         private Vector2 scroll;
+        private GUIStyle contentStyle, cardStyle, headingStyle, bodyStyle, consentStyle, linkStyle;
+
+        internal const string PrivacyPolicyUrl = "https://vrvlog.fun/privacy/";
+        internal const string PrivacyConsentPreference = "VRVlog.CloudTransfer.PrivacyConsent.v1";
+        internal static bool PrivacyConsentAccepted
+        {
+            get => EditorPrefs.GetBool(PrivacyConsentPreference, false);
+            set => EditorPrefs.SetBool(PrivacyConsentPreference, value);
+        }
+        internal bool CanBeginTransfer => CloudTransferAvailability.Enabled && PrivacyConsentAccepted &&
+            source != null && uploading == null && (session == null || session.Terminal);
 
 #if UNITY_EDITOR
         private static void OpenDevelopmentTransfer()
@@ -82,9 +93,11 @@ namespace VRVlog.LilToonExporter.LanTransfer
                 // window/session. A failed selection leaves that session live.
                 prepared = new CloudVrmTransferSource(ownedSnapshotPath, name);
                 window = GetWindow<CloudVrmTransferWindow>(false, ExporterLocalization.T("スマホに送る"));
+                var compact = window.source == null && !window.docked;
                 window.StopAndClean();
                 window.source = prepared;
-                window.minSize = new Vector2(430, 650);
+                window.minSize = new Vector2(360, 340);
+                if (compact) window.position = new Rect(window.position.x, window.position.y, 430, 460);
                 window.Show();
             }
             catch
@@ -122,7 +135,9 @@ namespace VRVlog.LilToonExporter.LanTransfer
                 error = CloudTransferAvailability.DisabledMessage;
                 return;
             }
-            if (source == null || uploading != null || session != null && !session.Terminal) return;
+            // Recheck the saved choice at the action boundary, including retries.
+            // Remembering consent never starts an upload by itself.
+            if (!CanBeginTransfer) return;
             session?.Dispose();
             session = new CloudVrmTransferSession(source);
             error = null; ClearQr();
@@ -190,37 +205,121 @@ namespace VRVlog.LilToonExporter.LanTransfer
             using (var scrolling = new EditorGUILayout.ScrollViewScope(scroll))
             {
                 scroll = scrolling.scrollPosition;
-                EditorGUILayout.HelpBox(ExporterLocalization.T("アバターをPCで暗号化してからクラウドに一時保存し、スマホで復号します。復号鍵はQRにだけ含まれ、転送サービスには送りません。受取期限は転送作成時から3分です。アップロード中も期限が進みます。完了・中止・期限切れで暗号化コピーを削除します。"), MessageType.Info);
-                EditorGUILayout.LabelField(source?.Name ?? ExporterLocalization.T("メニューから書き出し済みVRMを選択してください。"), EditorStyles.wordWrappedLabel);
-                EditorGUILayout.HelpBox(ExporterLocalization.T("PCとスマホにインターネット接続が必要です。同じWi-Fiは不要です。QRを持つ人はアバターを受け取れるため、共有・撮影しないでください。スマホではVR Vlog内のカメラで読み取ります。"), MessageType.None);
-                if (ExtraMessage != null) EditorGUILayout.HelpBox(ExporterLocalization.T(ExtraMessage), MessageType.Error);
-                using (new EditorGUI.DisabledScope(source == null || uploading != null || session != null && !session.Terminal))
-                    if (GUILayout.Button(ExporterLocalization.T(session == null ? "アップロードしてQRを表示" : "新しいQRを作成"), GUILayout.Height(32))) Begin();
-                if (session != null)
+                EnsureStyles();
+                using (new EditorGUILayout.HorizontalScope())
                 {
-                    EditorGUILayout.Space();
-                    EditorGUILayout.HelpBox(session.DisplayMessage(ExporterLocalization.T), session.State == CloudTransferState.Failed ? MessageType.Error : MessageType.Info);
-                    if (session.State == CloudTransferState.Uploading && source != null)
+                    GUILayout.FlexibleSpace();
+                    using (new EditorGUILayout.VerticalScope(contentStyle, GUILayout.Width(Mathf.Min(position.width - 22, 560))))
                     {
-                        var rect = EditorGUILayout.GetControlRect(false, 20);
-                        EditorGUI.ProgressBar(rect, (float)session.Transferred / Math.Max(1, session.UploadSize), string.Format(ExporterLocalization.T("{0:N0} / {1:N0} バイト（暗号化済み）"), session.Transferred, session.UploadSize));
+                        GUILayout.Label(ExporterLocalization.T("QRコードでスマホに送る"), headingStyle);
+                        EditorGUILayout.Space(14);
+                        using (new EditorGUILayout.VerticalScope(cardStyle))
+                        {
+                            GUILayout.Label(ExporterLocalization.T("送るアバター"), EditorStyles.miniLabel);
+                            GUILayout.Label(source?.Name ?? ExporterLocalization.T("VRMを保存してから、この画面を開いてください。"), bodyStyle);
+                            if (source != null) GUILayout.Label(EditorUtility.FormatBytes(source.Size), EditorStyles.miniLabel);
+                        }
+                        EditorGUILayout.Space(12);
+                        GUILayout.Label(ExporterLocalization.T("アバターを暗号化してクラウドに一時保存し、スマホのVR Vlogで受け取ります。"), bodyStyle);
+                        GUILayout.Label(ExporterLocalization.T("受取期限は作成から3分。同じWi-Fiは不要です。"), bodyStyle);
+                        EditorGUILayout.Space(16);
+                        if (session != null) DrawTransferStatus();
+                        if (ExtraMessage != null)
+                        {
+                            EditorGUILayout.HelpBox(ExporterLocalization.T(ExtraMessage), MessageType.Warning);
+                            EditorGUILayout.Space(8);
+                        }
+                        if (session == null || session.Terminal)
+                        {
+                            DrawConsent();
+                            using (new EditorGUI.DisabledScope(!CanBeginTransfer))
+                                if (GUILayout.Button(ExporterLocalization.T(session == null ? "アップロードしてQRを表示" : "新しいQRを作成"), GUILayout.Height(36))) Begin();
+                        }
+                        else if (GUILayout.Button(ExporterLocalization.T("転送を中止"), GUILayout.Height(32)))
+                        {
+                            _ = session.CancelAsync(); ClearQr();
+                            error = "中止通知が届かない場合も、受取期限でクラウドのコピーは削除されます。";
+                        }
                     }
-                    if (!session.Terminal && session.ExpiresAt != 0)
-                        EditorGUILayout.LabelField(ExporterLocalization.T("残り時間"), string.Format(ExporterLocalization.T("{0} 秒"), Math.Max(0, session.ExpiresAt - DateTimeOffset.UtcNow.ToUnixTimeSeconds())));
-                    if (qrTexture != null)
-                    {
-                        var available = Mathf.Min(position.width - 48, 380);
-                        var size = Mathf.Floor(available / qrTexture.width) * qrTexture.width;
-                        var rect = GUILayoutUtility.GetRect(size, size, GUILayout.ExpandWidth(false));
-                        GUI.DrawTexture(rect, qrTexture, ScaleMode.StretchToFill);
-                    }
-                    if (!session.Terminal && GUILayout.Button(ExporterLocalization.T("転送を中止"), GUILayout.Height(32)))
-                    {
-                        _ = session.CancelAsync(); ClearQr();
-                        error = "中止通知が届かない場合も、受取期限でクラウドのコピーは削除されます。";
-                    }
+                    GUILayout.FlexibleSpace();
                 }
             }
+        }
+
+        private void EnsureStyles()
+        {
+            if (contentStyle != null) return;
+            contentStyle = new GUIStyle { padding = new RectOffset(16, 16, 16, 16) };
+            cardStyle = new GUIStyle(EditorStyles.helpBox) { padding = new RectOffset(12, 12, 10, 10) };
+            headingStyle = new GUIStyle(EditorStyles.boldLabel) { fontSize = 18, wordWrap = true };
+            bodyStyle = new GUIStyle(EditorStyles.wordWrappedLabel) { fontSize = 12 };
+            consentStyle = new GUIStyle(bodyStyle);
+            linkStyle = new GUIStyle(EditorStyles.linkLabel) { wordWrap = true, alignment = TextAnchor.MiddleLeft };
+        }
+
+        private void DrawConsent()
+        {
+            if (GUILayout.Button(ExporterLocalization.T("プライバシーポリシーを開く"), linkStyle))
+                Application.OpenURL(PrivacyPolicyUrl);
+            EditorGUILayout.Space(8);
+            var label = ExporterLocalization.T("プライバシーポリシーに同意する");
+            var height = Mathf.Max(EditorGUIUtility.singleLineHeight, consentStyle.CalcHeight(new GUIContent(label), Mathf.Max(100, position.width - 80)));
+            var accepted = EditorGUILayout.ToggleLeft(label, PrivacyConsentAccepted, consentStyle, GUILayout.Height(height));
+            if (accepted != PrivacyConsentAccepted) PrivacyConsentAccepted = accepted;
+            if (!accepted) GUILayout.Label(ExporterLocalization.T("同意すると、QRコードを作成できます。"), bodyStyle);
+            EditorGUILayout.Space(12);
+        }
+
+        private void DrawTransferStatus()
+        {
+            using (new EditorGUILayout.VerticalScope(cardStyle))
+            {
+                var state = session.State;
+                var title = state == CloudTransferState.Ready ? "QRを読み取ってください"
+                    : state == CloudTransferState.Completed ? "スマホに保存しました"
+                    : state == CloudTransferState.Canceled ? "転送を中止しました"
+                    : state == CloudTransferState.Expired ? "QRの期限が切れました"
+                    : state == CloudTransferState.Failed ? "転送できませんでした"
+                    : state == CloudTransferState.Uploading ? "アップロード中" : "転送を準備しています";
+                GUILayout.Label(ExporterLocalization.T(title), EditorStyles.boldLabel);
+                EditorGUILayout.Space(6);
+                if (state == CloudTransferState.Failed)
+                    EditorGUILayout.HelpBox(session.DisplayMessage(ExporterLocalization.T), MessageType.Error);
+                else if (state == CloudTransferState.Ready)
+                    GUILayout.Label(ExporterLocalization.T("VR Vlogの「モデルを変更 → PCから受け取る」で読み取ります。"), bodyStyle);
+                else if (state == CloudTransferState.Completed)
+                    GUILayout.Label(ExporterLocalization.T("スマホのVR Vlogでアバターを確認できます。"), bodyStyle);
+                else if (!session.Terminal)
+                    GUILayout.Label(ExporterLocalization.T("このまま少しお待ちください。"), bodyStyle);
+                if (state == CloudTransferState.Uploading && source != null)
+                {
+                    EditorGUILayout.Space(8);
+                    var rect = EditorGUILayout.GetControlRect(false, 20);
+                    EditorGUI.ProgressBar(rect, (float)session.Transferred / Math.Max(1, session.UploadSize),
+                        string.Format(ExporterLocalization.T("{0:N0} / {1:N0} バイト（暗号化済み）"), session.Transferred, session.UploadSize));
+                }
+                if (qrTexture != null)
+                {
+                    EditorGUILayout.Space(12);
+                    var available = Mathf.Min(position.width - 88, 340);
+                    var size = available >= qrTexture.width ? Mathf.Floor(available / qrTexture.width) * qrTexture.width : available;
+                    using (new EditorGUILayout.HorizontalScope())
+                    {
+                        GUILayout.FlexibleSpace();
+                        var rect = GUILayoutUtility.GetRect(size, size, GUILayout.ExpandWidth(false));
+                        GUI.DrawTexture(rect, qrTexture, ScaleMode.StretchToFill);
+                        GUILayout.FlexibleSpace();
+                    }
+                    EditorGUILayout.Space(8);
+                    GUILayout.Label(ExporterLocalization.T("QRコードは共有・撮影しないでください。"), bodyStyle);
+                }
+                if (!session.Terminal && session.ExpiresAt != 0)
+                {
+                    var seconds = Math.Max(0, session.ExpiresAt - DateTimeOffset.UtcNow.ToUnixTimeSeconds());
+                    GUILayout.Label(string.Format(ExporterLocalization.T("残り {0}:{1:00}"), seconds / 60, seconds % 60), EditorStyles.miniLabel);
+                }
+            }
+            EditorGUILayout.Space(14);
         }
         // Session failures already have one message below the retry button.
         internal string ExtraMessage => string.IsNullOrEmpty(error) || error == session?.Message ? null : error;
