@@ -17,10 +17,14 @@ env:
   listPublishDirectory: Website
   pathToCi: ci
 
+defaults:
+  run:
+    shell: bash
+
 jobs:
   changes:
     if: github.event_name == 'pull_request'
-    runs-on: ubuntu-latest
+    runs-on: exporter-general-mac-arm64
     timeout-minutes: 2
     permissions:
       pull-requests: read
@@ -87,7 +91,7 @@ jobs:
   check-listing-builder:
     if: github.event_name == 'pull_request' && needs.changes.outputs.relevant == 'true'
     needs: changes
-    runs-on: ubuntu-latest
+    runs-on: exporter-general-mac-arm64
     timeout-minutes: 15
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
@@ -172,7 +176,7 @@ jobs:
   listing-validation:
     if: ${{ always() && github.event_name == 'pull_request' }}
     needs: [changes, check-listing-builder]
-    runs-on: ubuntu-latest
+    runs-on: exporter-general-mac-arm64
     timeout-minutes: 2
     steps:
       - name: Require successful listing validation for changed listing files
@@ -209,7 +213,7 @@ jobs:
     environment:
       name: github-pages
       url: ${{ steps.deployment.outputs.page_url }}
-    runs-on: ubuntu-latest
+    runs-on: exporter-general-mac-arm64
     timeout-minutes: 15
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4

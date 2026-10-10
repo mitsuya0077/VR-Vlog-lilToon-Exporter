@@ -73,7 +73,7 @@ class WorkflowTrustTests(unittest.TestCase):
                 policy.check("validate.yml", data)
 
     def test_resource_changes_and_ignored_failures_fail(self):
-        for change in ({"runs-on": "self-hosted"}, {"runs-on": "ubuntu-8-core"},
+        for change in ({"runs-on": "self-hosted"}, {"runs-on": "ubuntu-latest"}, {"runs-on": "macos-latest"}, {"runs-on": "vrvlog-general-mac-arm64"}, {"runs-on": "ubuntu-8-core"},
                        {"timeout-minutes": 0}, {"timeout-minutes": 360},
                        {"continue-on-error": True}):
             data = self.workflow()

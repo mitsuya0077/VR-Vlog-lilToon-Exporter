@@ -34,10 +34,14 @@ concurrency:
   cancel-in-progress: false
   queue: max
 
+defaults:
+  run:
+    shell: bash
+
 jobs:
   release:
     if: github.ref == 'refs/heads/main'
-    runs-on: ubuntu-latest
+    runs-on: exporter-general-mac-arm64
     timeout-minutes: 30
     permissions:
       contents: write
@@ -136,7 +140,10 @@ jobs:
               raise SystemExit("Release notes must not be empty")
           Path("artifacts/release-notes.md").write_text(notes, encoding="utf-8")
           PY
-          mapfile -t release_flags < release-flags.txt
+          release_flags=()
+          while IFS= read -r flag || [ -n "$flag" ]; do
+            release_flags+=("$flag")
+          done < release-flags.txt
           gh release create "v${VERSION}" \
             "artifacts/com.vrvlog.liltoon-vrm-exporter-${VERSION}.zip" \
             "artifacts/com.vrmc.gltf-${UNIVRM_VERSION}.zip" \
@@ -148,7 +155,7 @@ jobs:
   dispatch-listing:
     needs: release
     if: github.ref == 'refs/heads/main'
-    runs-on: ubuntu-latest
+    runs-on: exporter-general-mac-arm64
     timeout-minutes: 2
     permissions:
       contents: read

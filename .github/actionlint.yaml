@@ -1,0 +1,3 @@
+self-hosted-runner:
+  labels:
+    - exporter-general-mac-arm64
