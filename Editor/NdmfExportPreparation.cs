@@ -41,44 +41,51 @@ namespace VRVlog.LilToonExporter
             "アバターの準備に必要な NDMF API を利用できません。NDMF " + DependencyPolicy.NdmfMinimum + " 以降の 1.x が必要です。確認済み構成: MA " + DependencyPolicy.ModularAvatarReference + " / NDMF " + DependencyPolicy.NdmfReference + "。" + DependencyPolicy.Recovery;
 
 #if UNITY_5_3_OR_NEWER
-        private static Scene ownedCopyScene;
-        private static readonly List<WeakReference> copySceneReports = new List<WeakReference>();
+        private static readonly Dictionary<Scene, List<WeakReference>> copyScenes =
+            new Dictionary<Scene, List<WeakReference>>();
 
         static NdmfExportPreparation()
         {
             EditorApplication.update += ReleaseUnusedCopyScene;
-            AssemblyReloadEvents.beforeAssemblyReload += CloseCopyScene;
-            EditorApplication.quitting += CloseCopyScene;
+            AssemblyReloadEvents.beforeAssemblyReload += CloseCopyScenes;
+            EditorApplication.quitting += CloseCopyScenes;
         }
 
         private static Scene CopyScene()
         {
-            if (!ownedCopyScene.IsValid()) ownedCopyScene = EditorSceneManager.NewPreviewScene();
-            return ownedCopyScene;
+            var scene = EditorSceneManager.NewPreviewScene();
+            copyScenes.Add(scene, new List<WeakReference>());
+            return scene;
         }
 
         private static void RetainCopySceneForReport(GameObject clone, object context)
         {
-            if (clone.scene != ownedCopyScene) return;
+            if (!copyScenes.TryGetValue(clone.scene, out var reports)) return;
             var report = ReadDiagnosticMember(context, "ErrorReport") ?? ReadDiagnosticMember(context, "_report");
             // NDMF's console retains the scene even after its avatar copy is
             // destroyed. Keep that empty scene valid while the report lives;
             // weak references neither erase other reports nor retain them.
-            if (report != null) copySceneReports.Add(new WeakReference(report));
+            if (report != null) reports.Add(new WeakReference(report));
         }
 
         internal static void ReleaseUnusedCopyScene()
         {
-            copySceneReports.RemoveAll(reference => !reference.IsAlive);
-            if (ownedCopyScene.IsValid() && ownedCopyScene.rootCount == 0 && copySceneReports.Count == 0)
-                CloseCopyScene();
+            foreach (var entry in copyScenes.ToArray())
+            {
+                entry.Value.RemoveAll(reference => !reference.IsAlive);
+                if (!entry.Key.IsValid() || (entry.Key.rootCount == 0 && entry.Value.Count == 0))
+                {
+                    if (entry.Key.IsValid()) EditorSceneManager.ClosePreviewScene(entry.Key);
+                    copyScenes.Remove(entry.Key);
+                }
+            }
         }
 
-        private static void CloseCopyScene()
+        private static void CloseCopyScenes()
         {
-            if (ownedCopyScene.IsValid()) EditorSceneManager.ClosePreviewScene(ownedCopyScene);
-            ownedCopyScene = default;
-            copySceneReports.Clear();
+            foreach (var scene in copyScenes.Keys)
+                if (scene.IsValid()) EditorSceneManager.ClosePreviewScene(scene);
+            copyScenes.Clear();
         }
 
         // The host protocol shim cannot clone Unity hierarchies; native tests

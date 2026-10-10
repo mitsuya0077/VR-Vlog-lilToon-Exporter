@@ -22,7 +22,7 @@ namespace VRVlog.LilToonExporter.Tests
             using var fixture = new AttachmentConnectionTests.Fixture();
             var originalScene = fixture.Source.scene;
             var stamp = ExportSourceFingerprint.Compute(fixture.Source);
-            GameObject copy = null;
+            GameObject copy = null, otherCopy = null;
             try
             {
                 copy = NdmfExportPreparation.InstantiateOwnedCopy(fixture.Source);
@@ -31,10 +31,23 @@ namespace VRVlog.LilToonExporter.Tests
                 Assert.That(UnityEditor.SceneManagement.EditorSceneManager.IsPreviewScene(copy.scene), Is.True);
                 Assert.That(copy.scene, Is.Not.EqualTo(originalScene));
                 Assert.That(copy.scene.GetRootGameObjects(), Does.Contain(copy));
+                otherCopy = NdmfExportPreparation.InstantiateOwnedCopy(fixture.Source);
+                Assert.That(otherCopy.name, Is.EqualTo(copy.name));
+                Assert.That(otherCopy.scene, Is.Not.EqualTo(copy.scene), "Concurrent copies must not share ambiguous diagnostic roots.");
+                var releasedScene = otherCopy.scene;
+                Object.DestroyImmediate(otherCopy); otherCopy = null;
+                NdmfExportPreparation.ReleaseUnusedCopyScene();
+                Assert.That(releasedScene.IsValid(), Is.False, "A copy without retained diagnostics releases its scene.");
+                Assert.That(copy.scene.IsValid(), Is.True, "Another live copy retains only its own scene.");
                 Assert.That(fixture.Source.scene, Is.EqualTo(originalScene));
                 Assert.That(ExportSourceFingerprint.Compute(fixture.Source), Is.EqualTo(stamp));
             }
-            finally { if (copy != null) Object.DestroyImmediate(copy); NdmfExportPreparation.ReleaseUnusedCopyScene(); }
+            finally
+            {
+                if (copy != null) Object.DestroyImmediate(copy);
+                if (otherCopy != null) Object.DestroyImmediate(otherCopy);
+                NdmfExportPreparation.ReleaseUnusedCopyScene();
+            }
         }
 
         [Test]
