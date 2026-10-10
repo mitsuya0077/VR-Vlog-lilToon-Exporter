@@ -90,8 +90,8 @@ namespace VRVlog.LilToonExporter
         internal bool RetainPreviewForRecovery(PreviewRenderUtility preview)
         {
             if (recoveryUsers == 0) return false;
-            // PreviewRenderUtility also owns its registered GameObjects, so a
-            // scene move cannot detach their lifetime from Cleanup().
+            // Keep the preview camera available until recovery users release
+            // the session; the avatar remains in its own diagnostic scene.
             retainedPreview = preview; return true;
         }
         internal const int MaximumExpressions = 64;
@@ -107,7 +107,6 @@ namespace VRVlog.LilToonExporter
                 CaptureClipRoots();
                 Copy = NdmfExportPreparation.InstantiateOwnedCopy(source);
                 Copy.name = source.name;
-                Copy.hideFlags = HideFlags.HideAndDontSave;
                 foreach (var renderer in source.GetComponentsInChildren<Renderer>(true))
                 {
                     var mapped = ExportRecoveryCopySession.Resolve(renderer.transform, source.transform, Copy.transform);
@@ -464,7 +463,7 @@ namespace VRVlog.LilToonExporter
             // menu/FX, authored expressions, metadata and preparation route.
             if (expressions.Length == 0)
                 return UniVrmOneClickExporter.Export(Source, avatarName, author, warnings,
-                    exporterVersion: UnityEditor.PackageManager.PackageInfo.FindForAssembly(typeof(UniVrmOneClickExporter).Assembly)?.version ?? "0.11.14",
+                    exporterVersion: LilToonExporterWindow.PackageVersion(),
                     lilToonVersion: "2.3.4", blinkOptions: blinkOptions, poseOptions: poses,
                     licenseOptions: licenseOptions ?? new AvatarLicenseOptions(), disableAudioLink: true,
                     recoveryOptions: recoveryOptions, recoveryReport: recoveryReport);
@@ -476,7 +475,6 @@ namespace VRVlog.LilToonExporter
             }
             var exportCopy = NdmfExportPreparation.InstantiateOwnedCopy(Copy);
             exportCopy.name = Copy.name;
-            exportCopy.hideFlags = HideFlags.HideAndDontSave;
             var meshes = new List<Mesh>();
             var assets = new List<Object>();
             try
@@ -605,7 +603,7 @@ namespace VRVlog.LilToonExporter
                         Renderer = renderer, MenuRoot = action.MenuRoot, MenuOwner = action.MenuOwner, MenuPath = action.MenuPath });
                 }
                 var bytes = UniVrmOneClickExporter.Export(exportCopy, avatarName, author, warnings,
-                    exporterVersion: UnityEditor.PackageManager.PackageInfo.FindForAssembly(typeof(UniVrmOneClickExporter).Assembly)?.version ?? "0.11.14",
+                    exporterVersion: LilToonExporterWindow.PackageVersion(),
                     lilToonVersion: "2.3.4", blinkOptions: exportBlinkOptions,
                     licenseOptions: licenseOptions ?? new AvatarLicenseOptions(), disableAudioLink: true,
                     recoveryOptions: mappedRecovery, recoveryReport: recoveryReport, recoverySource: Source,

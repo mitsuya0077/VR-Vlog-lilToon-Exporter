@@ -16,6 +16,83 @@ namespace VRVlog.LilToonExporter.Tests
 {
     public sealed class ExperimentalExpressionCaptureTests
     {
+        [Test]
+        public void OwnedCopyKeepsAValidIsolatedSceneAndPreservesSource()
+        {
+            using var fixture = new AttachmentConnectionTests.Fixture();
+            var originalScene = fixture.Source.scene;
+            var stamp = ExportSourceFingerprint.Compute(fixture.Source);
+            GameObject copy = null, otherCopy = null;
+            try
+            {
+                copy = NdmfExportPreparation.InstantiateOwnedCopy(fixture.Source);
+                Assert.That(copy.scene.IsValid(), Is.True);
+                Assert.That(copy.scene.isLoaded, Is.True);
+                Assert.That(UnityEditor.SceneManagement.EditorSceneManager.IsPreviewScene(copy.scene), Is.True);
+                Assert.That(copy.scene, Is.Not.EqualTo(originalScene));
+                Assert.That(copy.scene.GetRootGameObjects(), Does.Contain(copy));
+                otherCopy = NdmfExportPreparation.InstantiateOwnedCopy(fixture.Source);
+                Assert.That(otherCopy.name, Is.EqualTo(copy.name));
+                Assert.That(otherCopy.scene, Is.Not.EqualTo(copy.scene), "Concurrent copies must not share ambiguous diagnostic roots.");
+                var releasedScene = otherCopy.scene;
+                Object.DestroyImmediate(otherCopy); otherCopy = null;
+                NdmfExportPreparation.ReleaseUnusedCopyScene();
+                Assert.That(releasedScene.IsValid(), Is.False, "A copy without retained diagnostics releases its scene.");
+                Assert.That(copy.scene.IsValid(), Is.True, "Another live copy retains only its own scene.");
+                Assert.That(fixture.Source.scene, Is.EqualTo(originalScene));
+                Assert.That(ExportSourceFingerprint.Compute(fixture.Source), Is.EqualTo(stamp));
+            }
+            finally
+            {
+                if (copy != null) Object.DestroyImmediate(copy);
+                if (otherCopy != null) Object.DestroyImmediate(otherCopy);
+                NdmfExportPreparation.ReleaseUnusedCopyScene();
+            }
+        }
+
+        [TestCase(false)]
+        [TestCase(true)]
+        public void InstalledNdmfReportRemainsSafeAfterItsOwnedCopyIsDestroyed(bool showPreview)
+        {
+            var reportType = AppDomain.CurrentDomain.GetAssemblies().Select(assembly => assembly.GetType("nadena.dev.ndmf.ErrorReport"))
+                .FirstOrDefault(type => type != null);
+            if (reportType == null) Assert.Ignore("Requires the installed NDMF integration package.");
+            var source = new GameObject("Owned diagnostic scene regression");
+            GameObject copy = null;
+            PreviewRenderUtility preview = null;
+            try
+            {
+                copy = NdmfExportPreparation.InstantiateOwnedCopy(source);
+                var scene = copy.scene;
+                var flags = System.Reflection.BindingFlags.Static | System.Reflection.BindingFlags.NonPublic;
+                var report = reportType.GetMethod("Create", flags).Invoke(null, new object[] { copy, true });
+                typeof(NdmfExportPreparation).GetMethod("RetainCopySceneForReport", flags)
+                    .Invoke(null, new object[] { copy, new { ErrorReport = report } });
+                var resolve = reportType.GetMethod("TryResolveAvatar");
+                if (showPreview)
+                {
+                    preview = new PreviewRenderUtility();
+                    NdmfExportPreparation.ShowOwnedCopyInPreview(copy, preview);
+                    Assert.That(copy.scene, Is.EqualTo(scene), "Preview rendering must not move NDMF's diagnostic root.");
+                    Assert.That(preview.camera.overrideSceneCullingMask,
+                        Is.EqualTo(UnityEditor.SceneManagement.EditorSceneManager.GetSceneCullingMask(scene) |
+                            UnityEditor.SceneManagement.EditorSceneManager.GetSceneCullingMask(preview.camera.scene)));
+                }
+                var resolved = new object[] { null };
+                Assert.That(resolve.Invoke(report, resolved), Is.EqualTo(true));
+                Assert.That(resolved[0], Is.SameAs(copy), "Notifications must navigate to the live preview avatar.");
+                preview?.Cleanup(); preview = null;
+                Assert.That(copy != null, Is.True, "The session owns the avatar, independently of preview camera cleanup.");
+                Assert.That(resolve.Invoke(report, new object[] { null }), Is.EqualTo(true));
+                Object.DestroyImmediate(copy); copy = null;
+                NdmfExportPreparation.ReleaseUnusedCopyScene();
+                Assert.That(scene.IsValid(), Is.True, "The console can still retain this report after export cleanup.");
+                Assert.That(resolve.Invoke(report, new object[] { null }), Is.EqualTo(false));
+                GC.KeepAlive(report);
+            }
+            finally { preview?.Cleanup(); if (copy != null) Object.DestroyImmediate(copy); Object.DestroyImmediate(source); }
+        }
+
         [TestCase(true)]
         [TestCase(false)]
         public void AuxiliaryPreviewsDoNotInvokeAvatarEditorCallbacks(bool blinkPreview)

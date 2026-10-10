@@ -170,7 +170,7 @@ namespace VRVlog.LilToonExporter
                 recommendations = session.RecommendClips();
                 foreach (var item in session.ClipErrors(recommendations.Select(item => item.Clip))) clipErrors[item.Key] = item.Value;
                 preview = new PreviewRenderUtility();
-                preview.AddSingleGO(session.Copy);
+                NdmfExportPreparation.ShowOwnedCopyInPreview(session.Copy, preview);
                 var renderers = ExportRendererSelection.Enumerate(session.Copy).ToArray();
                 if (renderers.Length == 0) throw new InvalidOperationException(ExporterLocalization.T("表示するメッシュがありません。"));
                 var bounds = renderers[0].bounds;
@@ -531,7 +531,7 @@ namespace VRVlog.LilToonExporter
         void Cleanup()
         {
             blinkConfiguration?.Close(); blinkConfiguration = null; configuredBlink = null;
-            // PreviewRenderUtility owns the preview scene; session owns prepared assets.
+            // The utility owns its lights/camera; session owns the avatar and assets.
             if (session?.RetainPreviewForRecovery(preview) == true) preview = null;
             preview?.Cleanup(); preview = null;
             session?.Dispose(); session = null;

@@ -50,7 +50,6 @@ namespace VRVlog.LilToonExporter
             var resolved = BlinkExportSession.Resolve(source, options, exclusions.Contains);
             copy = NdmfExportPreparation.InstantiateOwnedCopy(source);
             blink = resolved.ForClone(source, copy);
-            copy.hideFlags = HideFlags.HideAndDontSave;
             var warnings = new List<string>();
             MaAppearanceSnapshot.Apply(source, copy, meshes, exclusions, warnings);
             preparation = NdmfExportPreparation.Prepare(source, copy, warnings);
@@ -64,7 +63,7 @@ namespace VRVlog.LilToonExporter
                     rest.Add(renderer, Enumerable.Range(0, renderer.sharedMesh.blendShapeCount).Select(renderer.GetBlendShapeWeight).ToArray());
             }
             preview = new PreviewRenderUtility();
-            preview.AddSingleGO(copy);
+            NdmfExportPreparation.ShowOwnedCopyInPreview(copy, preview);
             var renderers = ExportRendererSelection.Enumerate(copy).ToArray();
             if (renderers.Length == 0) throw new InvalidOperationException(ExporterLocalization.T("プレビューするメッシュがありません。"));
             var bounds = renderers[0].bounds;

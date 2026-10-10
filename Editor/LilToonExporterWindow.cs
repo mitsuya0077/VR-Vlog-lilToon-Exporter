@@ -513,10 +513,10 @@ namespace VRVlog.LilToonExporter
             resultWindow.Repaint();
         }
 
-        private static string PackageVersion()
+        internal static string PackageVersion()
         {
             var info = PackageManagerPackageInfo.FindForAssembly(typeof(LilToonExporterWindow).Assembly);
-            return info != null && !string.IsNullOrWhiteSpace(info.version) ? info.version : "0.11.15-beta.1";
+            return info != null && !string.IsNullOrWhiteSpace(info.version) ? info.version : "0.11.15-beta.2";
         }
 
         // Stable packages omit this assembly. Resolve only its public optional

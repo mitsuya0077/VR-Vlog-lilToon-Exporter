@@ -8,6 +8,10 @@ using UnityEditor;
 using UnityEngine;
 using Object = UnityEngine.Object;
 using PackageInfo = UnityEditor.PackageManager.PackageInfo;
+#if UNITY_5_3_OR_NEWER
+using UnityEditor.SceneManagement;
+using UnityEngine.SceneManagement;
+#endif
 
 namespace VRVlog.LilToonExporter
 {
@@ -37,6 +41,65 @@ namespace VRVlog.LilToonExporter
             "アバターの準備に必要な NDMF API を利用できません。NDMF " + DependencyPolicy.NdmfMinimum + " 以降の 1.x が必要です。確認済み構成: MA " + DependencyPolicy.ModularAvatarReference + " / NDMF " + DependencyPolicy.NdmfReference + "。" + DependencyPolicy.Recovery;
 
 #if UNITY_5_3_OR_NEWER
+        private static readonly Dictionary<Scene, List<WeakReference>> copyScenes =
+            new Dictionary<Scene, List<WeakReference>>();
+
+        static NdmfExportPreparation()
+        {
+            EditorApplication.update += ReleaseUnusedCopyScene;
+            AssemblyReloadEvents.beforeAssemblyReload += CloseCopyScenes;
+            EditorApplication.quitting += CloseCopyScenes;
+        }
+
+        private static Scene CopyScene()
+        {
+            var scene = EditorSceneManager.NewPreviewScene();
+            copyScenes.Add(scene, new List<WeakReference>());
+            return scene;
+        }
+
+        private static void RetainCopySceneForReport(GameObject clone, object context)
+        {
+            if (!copyScenes.TryGetValue(clone.scene, out var reports)) return;
+            var report = ReadDiagnosticMember(context, "ErrorReport") ?? ReadDiagnosticMember(context, "_report");
+            // NDMF's console retains the scene even after its avatar copy is
+            // destroyed. Keep that empty scene valid while the report lives;
+            // weak references neither erase other reports nor retain them.
+            if (report != null) reports.Add(new WeakReference(report));
+        }
+
+        internal static void ReleaseUnusedCopyScene()
+        {
+            foreach (var entry in copyScenes.ToArray())
+            {
+                entry.Value.RemoveAll(reference => !reference.IsAlive);
+                if (!entry.Key.IsValid() || (entry.Key.rootCount == 0 && entry.Value.Count == 0))
+                {
+                    if (entry.Key.IsValid()) EditorSceneManager.ClosePreviewScene(entry.Key);
+                    copyScenes.Remove(entry.Key);
+                }
+            }
+        }
+
+        private static void CloseCopyScenes()
+        {
+            foreach (var scene in copyScenes.Keys)
+                if (scene.IsValid()) EditorSceneManager.ClosePreviewScene(scene);
+            copyScenes.Clear();
+        }
+
+        internal static void ShowOwnedCopyInPreview(GameObject copy, PreviewRenderUtility preview)
+        {
+            if (copy == null || !copyScenes.ContainsKey(copy.scene))
+                throw new InvalidOperationException("Preview requires an owned copy scene.");
+            if (preview == null) throw new ArgumentNullException(nameof(preview));
+            // AddSingleGO moves the avatar away from the scene captured by NDMF
+            // and lets utility cleanup destroy that scene. Render our scene and
+            // the utility's lights together, without moving or owning the avatar.
+            preview.camera.overrideSceneCullingMask = EditorSceneManager.GetSceneCullingMask(copy.scene) |
+                EditorSceneManager.GetSceneCullingMask(preview.camera.scene);
+        }
+
         // The host protocol shim cannot clone Unity hierarchies; native tests
         // exercise staging, callback suppression and authored enabled states.
         internal static bool PreservesExportBehaviour(Behaviour behaviour) =>
@@ -46,13 +109,18 @@ namespace VRVlog.LilToonExporter
 
         internal static GameObject InstantiateOwnedCopy(GameObject source)
         {
-            var host = new GameObject("VRVlog inactive copy staging") { hideFlags = HideFlags.HideAndDontSave };
+            if (source == null) throw new ArgumentNullException(nameof(source));
+            var host = new GameObject("VRVlog inactive copy staging");
             host.SetActive(false);
             GameObject copy = null;
             try
             {
+                SceneManager.MoveGameObjectToScene(host, CopyScene());
                 copy = Object.Instantiate(source, host.transform, true);
-                copy.name = source.name; copy.hideFlags = HideFlags.HideAndDontSave;
+                // HideAndDontSave removes GameObjects from their native scene.
+                // A preview scene provides isolation without invalidating the
+                // scene captured by NDMF diagnostics.
+                copy.name = source.name; copy.hideFlags = HideFlags.None;
                 foreach (var behaviour in copy.GetComponentsInChildren<Behaviour>(true))
                 {
                     if (behaviour == null) continue;
@@ -74,7 +142,7 @@ namespace VRVlog.LilToonExporter
                 return copy;
             }
             catch { if (copy != null) Object.DestroyImmediate(copy); throw; }
-            finally { Object.DestroyImmediate(host); }
+            finally { Object.DestroyImmediate(host); ReleaseUnusedCopyScene(); }
         }
 #endif
 
@@ -293,6 +361,9 @@ namespace VRVlog.LilToonExporter
                         Invoke(() => bridge.GenericPlatform.GetValue(null));
                     if (platform == null) throw new InvalidOperationException(CompatibilityMessage);
                     context = Invoke(() => bridge.Context.Invoke(new object[] { clone, lease.temporaryAssetPath, platform, true }));
+#if UNITY_5_3_OR_NEWER
+                    RetainCopySceneForReport(clone, context);
+#endif
                     lease.ObjectRegistry = context.GetType().GetProperty("ObjectRegistry", BindingFlags.Public | BindingFlags.Instance)?.GetValue(context);
                     try
                     {

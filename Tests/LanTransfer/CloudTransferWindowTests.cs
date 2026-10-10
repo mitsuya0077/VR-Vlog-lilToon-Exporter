@@ -170,6 +170,136 @@ namespace VRVlog.LilToonExporter.LanTransfer.Tests
 
 #if UNITY_EDITOR
         [Test]
+        public void PrivacyChoiceDefaultsOffAndSurvivesClosingAndReopeningTheWindow()
+        {
+            WithPrivacyPreference(() =>
+            {
+                EditorPrefs.DeleteKey(CloudVrmTransferWindow.PrivacyConsentPreference);
+                Assert.That(CloudVrmTransferWindow.PrivacyConsentAccepted, Is.False);
+                var first = ScriptableObject.CreateInstance<CloudVrmTransferWindow>();
+                CloudVrmTransferWindow.PrivacyConsentAccepted = true;
+                Object.DestroyImmediate(first);
+                var next = ScriptableObject.CreateInstance<CloudVrmTransferWindow>();
+                try
+                {
+                    Assert.That(EditorPrefs.GetBool(CloudVrmTransferWindow.PrivacyConsentPreference), Is.True);
+                    Assert.That(CloudVrmTransferWindow.PrivacyConsentAccepted, Is.True);
+                    Assert.That(next.CanBeginTransfer, Is.False, "Remembering consent must not invent a saved VRM.");
+                    Assert.That(Get(next, "session"), Is.Null);
+                    Assert.That(Get(next, "uploading"), Is.Null);
+                    CloudVrmTransferWindow.PrivacyConsentAccepted = false;
+                }
+                finally { Object.DestroyImmediate(next); }
+                Assert.That(EditorPrefs.GetBool(CloudVrmTransferWindow.PrivacyConsentPreference), Is.False);
+            });
+        }
+
+        [TestCase(false)]
+        [TestCase(true)]
+        public void MissingPrivacyConsentBlocksInitialUploadAndNewQrCreation(bool retry)
+        {
+            WithPrivacyPreference(() =>
+            {
+                EditorPrefs.DeleteKey(CloudVrmTransferWindow.PrivacyConsentPreference);
+                var window = ScriptableObject.CreateInstance<CloudVrmTransferWindow>();
+                var path = Path.Combine(Path.GetTempPath(), "vrvlog-consent-" + Guid.NewGuid().ToString("N") + ".vrm");
+                File.WriteAllBytes(path, new byte[] { 7, 8, 9 });
+                var source = new CloudVrmTransferSource(path, "fixture.vrm");
+                CloudVrmTransferSession previous = null;
+                try
+                {
+                    Set(window, "source", source);
+                    if (retry)
+                    {
+                        previous = new CloudVrmTransferSession(source);
+                        previous.Dispose();
+                        Assert.That(previous.Terminal, Is.True);
+                        Set(window, "session", previous);
+                    }
+                    Assert.That(window.CanBeginTransfer, Is.False);
+                    typeof(CloudVrmTransferWindow).GetMethod("Begin", Instance).Invoke(window, null);
+                    Assert.That(Get(window, "session"), Is.SameAs(previous));
+                    Assert.That(Get(window, "uploading"), Is.Null, "No worker may begin encryption or remote creation before consent.");
+                    Assert.That(File.ReadAllBytes(path), Is.EqualTo(new byte[] { 7, 8, 9 }));
+                }
+                finally { Object.DestroyImmediate(window); previous?.Dispose(); source.Dispose(); if (File.Exists(path)) File.Delete(path); }
+            });
+        }
+
+        [TestCase(false)]
+        [TestCase(true)]
+        public void RememberedPrivacyChoiceNeverUploadsWhenOpeningASavedVrm(bool accepted)
+        {
+            WithPrivacyPreference(() =>
+            {
+                CloudVrmTransferWindow.PrivacyConsentAccepted = accepted;
+                var path = Path.Combine(Path.GetTempPath(), "vrvlog-consent-open-" + Guid.NewGuid().ToString("N") + ".vrm");
+                File.WriteAllBytes(path, new byte[] { 3, 4, 5 });
+                CloudVrmTransferWindow window = null;
+                try
+                {
+                    if (!CloudTransferAvailability.Enabled)
+                    {
+                        Assert.Throws<NotSupportedException>(() => CloudVrmTransferWindow.OpenSavedVrmForDevelopment(path));
+                        return;
+                    }
+                    CloudVrmTransferWindow.OpenSavedVrmForDevelopment(path);
+                    window = EditorWindow.GetWindow<CloudVrmTransferWindow>();
+                    Assert.That(CloudVrmTransferWindow.PrivacyConsentAccepted, Is.EqualTo(accepted));
+                    Assert.That(window.CanBeginTransfer, Is.EqualTo(accepted));
+                    Assert.That(Get(window, "session"), Is.Null);
+                    Assert.That(Get(window, "uploading"), Is.Null);
+                    Assert.That(File.ReadAllBytes(path), Is.EqualTo(new byte[] { 3, 4, 5 }));
+                }
+                finally { if (window != null) Object.DestroyImmediate(window); File.Delete(path); }
+            });
+        }
+
+        [Test]
+        public void WithdrawingConsentAndBusyTransfersPreventNewQrCreation()
+        {
+            WithPrivacyPreference(() =>
+            {
+                var window = ScriptableObject.CreateInstance<CloudVrmTransferWindow>();
+                var path = Path.Combine(Path.GetTempPath(), "vrvlog-consent-busy-" + Guid.NewGuid().ToString("N") + ".vrm");
+                File.WriteAllBytes(path, new byte[] { 1, 2, 3 });
+                var source = new CloudVrmTransferSource(path, "fixture.vrm");
+                var session = new CloudVrmTransferSession(source);
+                try
+                {
+                    Set(window, "source", source);
+                    CloudVrmTransferWindow.PrivacyConsentAccepted = true;
+                    Assert.That(window.CanBeginTransfer, Is.EqualTo(CloudTransferAvailability.Enabled));
+                    Set(window, "session", session);
+                    Assert.That(window.CanBeginTransfer, Is.False);
+                    session.Dispose();
+                    Set(window, "uploading", new TaskCompletionSource<bool>().Task);
+                    Assert.That(window.CanBeginTransfer, Is.False);
+                    Set(window, "uploading", null);
+                    Assert.That(window.CanBeginTransfer, Is.EqualTo(CloudTransferAvailability.Enabled));
+                    CloudVrmTransferWindow.PrivacyConsentAccepted = false;
+                    Assert.That(window.CanBeginTransfer, Is.False);
+                    typeof(CloudVrmTransferWindow).GetMethod("Begin", Instance).Invoke(window, null);
+                    Assert.That(Get(window, "session"), Is.SameAs(session));
+                    Assert.That(Get(window, "uploading"), Is.Null);
+                }
+                finally { Object.DestroyImmediate(window); session.Dispose(); source.Dispose(); if (File.Exists(path)) File.Delete(path); }
+            });
+        }
+
+        private static void WithPrivacyPreference(Action test)
+        {
+            var exists = EditorPrefs.HasKey(CloudVrmTransferWindow.PrivacyConsentPreference);
+            var saved = EditorPrefs.GetBool(CloudVrmTransferWindow.PrivacyConsentPreference, false);
+            try { test(); }
+            finally
+            {
+                if (exists) EditorPrefs.SetBool(CloudVrmTransferWindow.PrivacyConsentPreference, saved);
+                else EditorPrefs.DeleteKey(CloudVrmTransferWindow.PrivacyConsentPreference);
+            }
+        }
+
+        [Test]
         public void DevelopmentFileSelectionCopiesTheVrmWithoutStartingAnUploadAndClosureDeletesOnlyTheCopy()
         {
             var path = Path.Combine(Path.GetTempPath(), "vrvlog-dev-selected-" + Guid.NewGuid().ToString("N") + ".vrm");

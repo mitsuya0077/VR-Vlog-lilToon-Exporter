@@ -85,7 +85,7 @@ namespace VRVlog.LilToonExporter
                 session = new PoseExportSession(source, options, omissions.Contains,
                     manualOnly ? new VrChatMenuImportPolicy { SkipAll = true } : null);
                 if (manualOnly) session.Entries.RemoveAll(entry => entry.Source != "手動");
-                copy = NdmfExportPreparation.InstantiateOwnedCopy(source); copy.hideFlags = HideFlags.HideAndDontSave;
+                copy = NdmfExportPreparation.InstantiateOwnedCopy(source);
                 copy.transform.SetPositionAndRotation(Vector3.zero, Quaternion.identity);
                 copy.transform.localScale = Vector3.one;
                 MaAppearanceSnapshot.Apply(source, copy, meshes, omissions);
@@ -103,7 +103,7 @@ namespace VRVlog.LilToonExporter
                 foreach (var name in VRVlog.Poses.HumanoidAnimationData.BoneNames)
                 { var bone = animator.GetBoneTransform(PoseSampling.HumanBone(name)); if (bone != null) rest[bone] = bone.rotation; }
                 hipsRest = animator.GetBoneTransform(HumanBodyBones.Hips).position;
-                preview = new PreviewRenderUtility(); preview.AddSingleGO(copy);
+                preview = new PreviewRenderUtility(); NdmfExportPreparation.ShowOwnedCopyInPreview(copy, preview);
                 preview.camera.fieldOfView = 30; preview.camera.nearClipPlane = .01f; preview.camera.farClipPlane = 100;
                 preview.lights[0].intensity = 1; preview.lights[0].transform.rotation = Quaternion.Euler(30, 150, 0);
                 preview.lights[1].intensity = .7f;
