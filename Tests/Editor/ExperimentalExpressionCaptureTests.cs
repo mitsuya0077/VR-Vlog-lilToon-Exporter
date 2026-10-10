@@ -16,6 +16,54 @@ namespace VRVlog.LilToonExporter.Tests
 {
     public sealed class ExperimentalExpressionCaptureTests
     {
+        [Test]
+        public void OwnedCopyKeepsAValidIsolatedSceneAndPreservesSource()
+        {
+            using var fixture = new AttachmentConnectionTests.Fixture();
+            var originalScene = fixture.Source.scene;
+            var stamp = ExportSourceFingerprint.Compute(fixture.Source);
+            GameObject copy = null;
+            try
+            {
+                copy = NdmfExportPreparation.InstantiateOwnedCopy(fixture.Source);
+                Assert.That(copy.scene.IsValid(), Is.True);
+                Assert.That(copy.scene.isLoaded, Is.True);
+                Assert.That(UnityEditor.SceneManagement.EditorSceneManager.IsPreviewScene(copy.scene), Is.True);
+                Assert.That(copy.scene, Is.Not.EqualTo(originalScene));
+                Assert.That(copy.scene.GetRootGameObjects(), Does.Contain(copy));
+                Assert.That(fixture.Source.scene, Is.EqualTo(originalScene));
+                Assert.That(ExportSourceFingerprint.Compute(fixture.Source), Is.EqualTo(stamp));
+            }
+            finally { if (copy != null) Object.DestroyImmediate(copy); NdmfExportPreparation.ReleaseUnusedCopyScene(); }
+        }
+
+        [Test]
+        public void InstalledNdmfReportRemainsSafeAfterItsOwnedCopyIsDestroyed()
+        {
+            var reportType = AppDomain.CurrentDomain.GetAssemblies().Select(assembly => assembly.GetType("nadena.dev.ndmf.ErrorReport"))
+                .FirstOrDefault(type => type != null);
+            if (reportType == null) Assert.Ignore("Requires the installed NDMF integration package.");
+            var source = new GameObject("Owned diagnostic scene regression");
+            GameObject copy = null;
+            try
+            {
+                copy = NdmfExportPreparation.InstantiateOwnedCopy(source);
+                var scene = copy.scene;
+                var flags = System.Reflection.BindingFlags.Static | System.Reflection.BindingFlags.NonPublic;
+                var report = reportType.GetMethod("Create", flags).Invoke(null, new object[] { copy, true });
+                typeof(NdmfExportPreparation).GetMethod("RetainCopySceneForReport", flags)
+                    .Invoke(null, new object[] { copy, new { ErrorReport = report } });
+                var resolve = reportType.GetMethod("TryResolveAvatar");
+                Assert.That(resolve.Invoke(report, new object[] { null }), Is.EqualTo(true));
+                Object.DestroyImmediate(copy); copy = null;
+                NdmfExportPreparation.ReleaseUnusedCopyScene();
+                Assert.That(scene.IsValid(), Is.True, "The console can still retain this report after export cleanup.");
+                Assert.That(resolve.Invoke(report, new object[] { null }), Is.EqualTo(false));
+                GC.KeepAlive(report);
+            }
+            finally { if (copy != null) Object.DestroyImmediate(copy); Object.DestroyImmediate(source); }
+        }
+
         [TestCase(true)]
         [TestCase(false)]
         public void AuxiliaryPreviewsDoNotInvokeAvatarEditorCallbacks(bool blinkPreview)

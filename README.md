@@ -66,11 +66,11 @@ https://mitsuya0077.github.io/VR-Vlog-lilToon-Exporter/index.json
 2. プロジェクトの `Packages` 内の別々のフォルダーへ展開し、それぞれの直下に `package.json` がある状態にします。
 3. Unityで読み込みが終わるのを待ちます。同じUniVRMパッケージを重複して導入しないでください。
 
-QR転送対応のβ版 **0.11.12-beta.1** はALCOMの **Show pre-release packages** を有効にして選択します。VRM保存後の **スマホに送る** 又は **VR Vlog → スマホに送る...** から送信し、最新のQR対応iPhone TestFlightで受信します。Android配布版の受信は無効です。全文コピー・テキスト保存や表情の書き出し修正は安定版 **0.11.14** を選択してください。
+表情・ポーズ指定とQR転送に対応するβ版 **0.11.15-beta.2** はALCOMの **Show pre-release packages** を有効にして選択します。VRM保存後の **QRコードでスマホに送る** から送信し、最新のQR対応iPhone TestFlightで受信します。Android配布版の受信は無効です。安定版は **0.11.14** です。
 
 ## 使い方
 
-以下は未配信のmainで採用した操作です。公開済み0.11.14や0.11.15-beta.1のZIPは変更していません。
+以下は0.11.15-beta.2で採用した操作です。公開済み0.11.14や0.11.15-beta.1のZIPは変更していません。
 
 1. Unityでアバターを開き、書き出す衣装を表示します。アバターと親オブジェクトも有効にしてください。
 2. **VR Vlog → VRMを書き出す** を開きます。

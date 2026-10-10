@@ -107,7 +107,6 @@ namespace VRVlog.LilToonExporter
                 CaptureClipRoots();
                 Copy = NdmfExportPreparation.InstantiateOwnedCopy(source);
                 Copy.name = source.name;
-                Copy.hideFlags = HideFlags.HideAndDontSave;
                 foreach (var renderer in source.GetComponentsInChildren<Renderer>(true))
                 {
                     var mapped = ExportRecoveryCopySession.Resolve(renderer.transform, source.transform, Copy.transform);
@@ -476,7 +475,6 @@ namespace VRVlog.LilToonExporter
             }
             var exportCopy = NdmfExportPreparation.InstantiateOwnedCopy(Copy);
             exportCopy.name = Copy.name;
-            exportCopy.hideFlags = HideFlags.HideAndDontSave;
             var meshes = new List<Mesh>();
             var assets = new List<Object>();
             try

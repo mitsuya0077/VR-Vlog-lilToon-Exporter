@@ -50,7 +50,6 @@ namespace VRVlog.LilToonExporter
             var resolved = BlinkExportSession.Resolve(source, options, exclusions.Contains);
             copy = NdmfExportPreparation.InstantiateOwnedCopy(source);
             blink = resolved.ForClone(source, copy);
-            copy.hideFlags = HideFlags.HideAndDontSave;
             var warnings = new List<string>();
             MaAppearanceSnapshot.Apply(source, copy, meshes, exclusions, warnings);
             preparation = NdmfExportPreparation.Prepare(source, copy, warnings);

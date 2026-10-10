@@ -85,7 +85,7 @@ namespace VRVlog.LilToonExporter
                 session = new PoseExportSession(source, options, omissions.Contains,
                     manualOnly ? new VrChatMenuImportPolicy { SkipAll = true } : null);
                 if (manualOnly) session.Entries.RemoveAll(entry => entry.Source != "手動");
-                copy = NdmfExportPreparation.InstantiateOwnedCopy(source); copy.hideFlags = HideFlags.HideAndDontSave;
+                copy = NdmfExportPreparation.InstantiateOwnedCopy(source);
                 copy.transform.SetPositionAndRotation(Vector3.zero, Quaternion.identity);
                 copy.transform.localScale = Vector3.one;
                 MaAppearanceSnapshot.Apply(source, copy, meshes, omissions);
