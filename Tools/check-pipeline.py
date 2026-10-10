@@ -75,7 +75,7 @@ def check(name, workflow):
     require("secrets." not in json.dumps(workflow.get("env", {})), name + ": global secrets are not approved")
     for job_name, job in jobs.items():
         prefix = name + ": " + job_name
-        require(job.get("runs-on") == "ubuntu-latest", prefix + ": only standard hosted Ubuntu is approved")
+        require(job.get("runs-on") == "exporter-general-mac-arm64", prefix + ": only the isolated Exporter Mac runner is approved")
         timeout = job.get("timeout-minutes")
         require(type(timeout) is int and 1 <= timeout <= 30, prefix + ": bounded timeout required")
         require(job.get("continue-on-error", False) is False, prefix + ": job failures must block")
@@ -151,4 +151,4 @@ def check_all(root=ROOT):
 
 if __name__ == "__main__":
     check_all()
-    print("Workflow trust/resource policy passed; standard Ubuntu, bounded jobs, pinned actions.")
+    print("Workflow trust/resource policy passed; isolated self-hosted Mac, bounded jobs, pinned actions.")

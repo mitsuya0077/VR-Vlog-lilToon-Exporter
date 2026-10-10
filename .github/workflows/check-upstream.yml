@@ -10,9 +10,13 @@ concurrency:
   group: upstream-dependency-check
   cancel-in-progress: true
 
+defaults:
+  run:
+    shell: bash
+
 jobs:
   inspect:
-    runs-on: ubuntu-latest
+    runs-on: exporter-general-mac-arm64
     timeout-minutes: 2
     steps:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09

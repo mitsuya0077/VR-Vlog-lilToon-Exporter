@@ -1,4 +1,4 @@
-"""Estimate this public, standard-runner pipeline's additional Actions cost.
+"""Estimate this public, self-hosted pipeline's additional Actions cost.
 
 Candidate storage uses the maximum 20 MiB package plus 256 KiB JSON budget,
 seven-day retention, and steady monthly arrivals. The upper bound assumes
@@ -18,7 +18,7 @@ def estimate(pr_runs, candidate_runs, package_mib=CANDIDATE_MIB):
     if not 0 < package_mib <= CANDIDATE_MIB:
         raise ValueError("Candidate size exceeds the reviewed budget")
     average_gib = candidate_runs * package_mib / 1024 * RETENTION_DAYS / 30
-    return {"repository_visibility": "public", "runner": "standard Ubuntu",
+    return {"repository_visibility": "public", "runner": "isolated self-hosted Mac",
             "monthly_pr_workflow_runs": pr_runs, "monthly_candidate_runs": candidate_runs,
             "candidate_size_mib": package_mib, "candidate_retention_days": RETENTION_DAYS,
             "incremental_runner_cost_usd": 0,
