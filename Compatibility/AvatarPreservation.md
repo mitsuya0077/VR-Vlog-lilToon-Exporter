@@ -1,6 +1,6 @@
 # 多様なアバターの書き出しと見た目の保持
 
-**0.11.15-beta.2** では、候補ファイルや.animのドロップで表情・ポーズを指定します。MA/NDMFの前処理後コピーの値を基準の顔・体形に使うため、VRChat使用時と異なる場合があります。対応するファイルと収録範囲は[VRM書き出しガイド](../Documentation~/ExperimentalExpressionCapture.md)を確認してください。保存後は[クラウドQR転送](../Documentation~/CloudTransfer.md)を利用でき、送信には保存されるプライバシー同意チェックが必要です。ALCOMでは **Show pre-release packages** を有効にして選択します。
+安定版 **0.11.15** では、候補ファイルや.animのドロップで表情・ポーズを指定します。MA/NDMFの前処理後コピーの値を基準の顔・体形に使うため、VRChat使用時と異なる場合があります。対応するファイルと収録範囲は[VRM書き出しガイド](../Documentation~/ExperimentalExpressionCapture.md)を確認してください。保存後は[クラウドQR転送](../Documentation~/CloudTransfer.md)を利用でき、送信には保存されるプライバシー同意チェックが必要です。ALCOMの通常の一覧から選択でき、**Show pre-release packages** の有効化は不要です。
 
 ## 旧0.11.15-beta.1の仕様
 

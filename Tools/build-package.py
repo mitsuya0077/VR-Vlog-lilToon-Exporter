@@ -111,7 +111,9 @@ def build(root, output):
     cloud_transfer = manifest.get("vrvlogCloudTransfer", True)
     if type(cloud_transfer) is not bool:
         raise ValueError("vrvlogCloudTransfer must be a boolean")
-    transfer = prerelease(manifest["version"]) and cloud_transfer
+    # Stable 0.11.15 adopts beta.2's transfer module. Preserve export-only
+    # historical stable packages and the explicit opt-out for any channel.
+    transfer = (prerelease(manifest["version"]) or manifest["version"] == "0.11.15") and cloud_transfer
     names = [name for name in tracked_files(root) if included(name, transfer)]
     required = ROOT_FILES | LOCALE_FILES | DEPENDENCY_PATCH_FILES
     if transfer:

@@ -516,11 +516,11 @@ namespace VRVlog.LilToonExporter
         internal static string PackageVersion()
         {
             var info = PackageManagerPackageInfo.FindForAssembly(typeof(LilToonExporterWindow).Assembly);
-            return info != null && !string.IsNullOrWhiteSpace(info.version) ? info.version : "0.11.15-beta.2";
+            return info != null && !string.IsNullOrWhiteSpace(info.version) ? info.version : "0.11.15";
         }
 
         // Stable packages omit this assembly. Resolve only its public optional
-        // entry so exporting never requires the prerelease transfer module.
+        // entry so exporting also works in packages without the transfer module.
         internal static System.Reflection.MethodInfo SavedVrmTransferMethod()
         {
             try
