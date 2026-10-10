@@ -23,6 +23,7 @@ namespace VRVlog.LilToonExporter.LanTransfer
         private double nextPoll;
         private Vector2 scroll;
         private GUIStyle contentStyle, cardStyle, headingStyle, bodyStyle, consentStyle, linkStyle;
+        [NonSerialized] private float heightBeforeQr, expandedQrHeight;
 
         internal const string PrivacyPolicyUrl = "https://vrvlog.fun/privacy/";
         internal const string PrivacyConsentPreference = "VRVlog.CloudTransfer.PrivacyConsent.v1";
@@ -161,7 +162,7 @@ namespace VRVlog.LilToonExporter.LanTransfer
                 uploading = null;
                 if (session?.State == CloudTransferState.Ready)
                 {
-                    try { qrTexture = RenderQr(session.Qr); }
+                    try { qrTexture = RenderQr(session.Qr); FitQrWindow(); }
                     catch { session.Dispose(); error = "QRを表示できませんでした。新しいQRを作成してください。"; }
                     nextPoll = EditorApplication.timeSinceStartup;
                 }
@@ -220,9 +221,12 @@ namespace VRVlog.LilToonExporter.LanTransfer
                             if (source != null) GUILayout.Label(EditorUtility.FormatBytes(source.Size), EditorStyles.miniLabel);
                         }
                         EditorGUILayout.Space(12);
-                        GUILayout.Label(ExporterLocalization.T("アバターを暗号化してクラウドに一時保存し、スマホのVR Vlogで受け取ります。"), bodyStyle);
-                        GUILayout.Label(ExporterLocalization.T("受取期限は作成から3分。同じWi-Fiは不要です。"), bodyStyle);
-                        EditorGUILayout.Space(16);
+                        if (session == null || session.Terminal)
+                        {
+                            GUILayout.Label(ExporterLocalization.T("アバターを暗号化してクラウドに一時保存し、スマホのVR Vlogで受け取ります。"), bodyStyle);
+                            GUILayout.Label(ExporterLocalization.T("受取期限は作成から3分。同じWi-Fiは不要です。"), bodyStyle);
+                            EditorGUILayout.Space(16);
+                        }
                         if (session != null) DrawTransferStatus();
                         if (ExtraMessage != null)
                         {
@@ -301,8 +305,7 @@ namespace VRVlog.LilToonExporter.LanTransfer
                 if (qrTexture != null)
                 {
                     EditorGUILayout.Space(12);
-                    var available = Mathf.Min(position.width - 88, 340);
-                    var size = available >= qrTexture.width ? Mathf.Floor(available / qrTexture.width) * qrTexture.width : available;
+                    var size = QrDisplaySize();
                     using (new EditorGUILayout.HorizontalScope())
                     {
                         GUILayout.FlexibleSpace();
@@ -321,9 +324,33 @@ namespace VRVlog.LilToonExporter.LanTransfer
             }
             EditorGUILayout.Space(14);
         }
-        // Session failures already have one message below the retry button.
+        private float QrDisplaySize()
+        {
+            var available = Mathf.Min(position.width - 88, 340);
+            return available >= qrTexture.width ? Mathf.Floor(available / qrTexture.width) * qrTexture.width : available;
+        }
+        private void FitQrWindow()
+        {
+            if (docked || qrTexture == null) return;
+            var rect = position;
+            var height = Mathf.Max(rect.height, QrDisplaySize() + 360);
+            if (height <= rect.height) return;
+            heightBeforeQr = rect.height; expandedQrHeight = height;
+            position = new Rect(rect.x, rect.y, rect.width, height);
+        }
+        // Session failures already have one message in the status card.
         internal string ExtraMessage => string.IsNullOrEmpty(error) || error == session?.Message ? null : error;
-        private void ClearQr() { if (qrTexture != null) DestroyImmediate(qrTexture); qrTexture = null; }
+        private void ClearQr()
+        {
+            if (qrTexture != null) DestroyImmediate(qrTexture); qrTexture = null;
+            // Restore only the height we expanded; preserve a user's later resize or docking.
+            if (heightBeforeQr > 0 && !docked && Math.Abs(position.height - expandedQrHeight) < 1)
+            {
+                var rect = position;
+                position = new Rect(rect.x, rect.y, rect.width, heightBeforeQr);
+            }
+            heightBeforeQr = expandedQrHeight = 0;
+        }
         private void StopAndClean()
         {
             session?.Dispose(); session = null;
